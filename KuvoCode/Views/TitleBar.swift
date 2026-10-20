@@ -220,11 +220,11 @@ struct TabStrip: View {
 
     private func menu(for tab: TabItem) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        if let openBeside, tab.id != selection, SidebarView.draftDirectory(from: tab.id) == nil, BotGroups.groupID(fromTab: tab.id) == nil {
+        if let openBeside, tab.id != selection, SidebarView.draftDirectory(from: tab.id) == nil, BotGroups.groupID(fromTab: tab.id) == nil, !MainTerminals.isTerminal(tab.id) {
             items += [ActionItem("Open Beside") { openBeside(tab.id) }]
         }
         // A bot or a group chat is renamed in its editor, not here.
-        if let rename, SidebarView.draftDirectory(from: tab.id) == nil, tab.bot == nil, BotGroups.groupID(fromTab: tab.id) == nil {
+        if let rename, SidebarView.draftDirectory(from: tab.id) == nil, tab.bot == nil, BotGroups.groupID(fromTab: tab.id) == nil, !MainTerminals.isTerminal(tab.id) {
             items += [ActionItem("Rename…") { rename(tab.id) }, .separator()]
         }
         let others = ActionItem("Close Other Tabs") { closeAll(tab.id) }

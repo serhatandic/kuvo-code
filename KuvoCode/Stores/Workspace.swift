@@ -203,6 +203,9 @@ final class Workspace {
         var folders: [String] = []
         /// What Run (⌘R) runs in a terminal: a dev server, say.
         var run: String?
+        /// A command that stands in for the chat: a new session in the project opens a terminal
+        /// running it (an agent's own interface, like `omp` or `opencode`) instead of a conversation.
+        var terminal: String?
     }
 
     /// A copy of a project for sessions to work in apart from the rest: a git worktree of its
@@ -648,6 +651,8 @@ final class Workspace {
         if project.name?.isEmpty == true || project.name == (directory as NSString).lastPathComponent { project.name = nil }
         project.folders = project.folders.filter { $0 != directory }
         project.run = project.run?.trimmingCharacters(in: .whitespacesAndNewlines)
+        project.terminal = project.terminal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if project.terminal?.isEmpty == true { project.terminal = nil }
         if project.run?.isEmpty == true { project.run = nil }
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()

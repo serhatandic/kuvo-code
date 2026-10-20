@@ -199,3 +199,43 @@ private struct TerminalRepresentable: NSViewRepresentable {
         session.apply(dark: dark, focused: focused)
     }
 }
+
+/// Terminals that are tabs of the window, in place of a conversation: a project's own terminal
+/// command (`omp`, `opencode`…), or a plain shell. Tab keys are `terminal:<id>`, kept with the
+/// window's other tabs; the shells themselves don't outlive the app, so a key restored at launch
+/// has none and its tab goes.
+@Observable
+final class MainTerminals {
+    struct Entry {
+        let session: TerminalSession
+        let directory: String
+        /// The tab's name until the program in the terminal names itself.
+        let label: String
+    }
+
+    private(set) var entries: [String: Entry] = [:]
+
+    private static let prefix = "terminal:"
+
+    static func isTerminal(_ key: String) -> Bool { key.hasPrefix(prefix) }
+
+    func entry(_ key: String) -> Entry? { entries[key] }
+
+    /// Starts a terminal in `directory`, typing `command` in it, and returns its tab's key.
+    func open(in directory: String, command: String?, environment: [String: String]) -> String {
+        let key = Self.prefix + UUID().uuidString
+        let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)
+        return key
+    }
+
+    /// Ends the terminal's shell and whatever runs in it.
+    func close(_ key: String) {
+        entries.removeValue(forKey: key)?.session.terminate()
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}

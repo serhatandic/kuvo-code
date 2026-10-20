@@ -56,6 +56,8 @@ struct MainView: View {
     @State private var showsOpenQuickly = false
     /// The command palette (⌘K) is showing.
     @State private var showsPalette = false
+    /// Terminals open as tabs, standing in for a conversation.
+    @State private var terminals = MainTerminals()
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
     /// The window's content width; the title bar is sized from it.
@@ -106,7 +108,7 @@ struct MainView: View {
     private var utilities: Utilities { app.utilities }
 
     private var sessionID: String? {
-        selection.flatMap { SidebarView.draftDirectory(from: $0) == nil && BotGroups.groupID(fromTab: $0) == nil ? $0 : nil }
+        selection.flatMap { SidebarView.draftDirectory(from: $0) == nil && BotGroups.groupID(fromTab: $0) == nil && !MainTerminals.isTerminal($0) ? $0 : nil }
     }
 
     /// The group chat in view.
@@ -173,7 +175,7 @@ struct MainView: View {
 
     /// The active tab's project folder.
     private var activeDirectory: String? {
-        activeModel?.session.location.directory ?? draftDirectory
+        activeModel?.session.location.directory ?? draftDirectory ?? selection.flatMap { terminals.entry($0)?.directory }
     }
 
     /// The active tab's folder when it's a project's: not the chats' folder or a bot's own.
@@ -487,6 +489,7 @@ struct MainView: View {
                 settings.name = given(settings.name) ?? existing.name
                 settings.folders = existing.folders + settings.folders.filter { !existing.folders.contains($0) }
                 settings.run = given(settings.run) ?? existing.run
+                settings.terminal = given(settings.terminal) ?? existing.terminal
             }
             let primary = workspace.saveProject(primary, settings: settings)
             if request.project == nil { newSession(in: primary) }
@@ -641,6 +644,9 @@ struct MainView: View {
         do {
             if let directory = SidebarView.draftDirectory(from: key) {
                 return TabItem(id: key, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
+            }
+            if let entry = terminals.entry(key) {
+                return TabItem(id: key, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
             }
             if workspace.waitingMachine(for: key) != nil {
                 return TabItem(id: key, title: workspace.remoteTitle(key) ?? "Session", logo: nil, status: .idle)
@@ -849,6 +855,7 @@ struct MainView: View {
                     }
                 }
                 .id(request.id)
+
             } else if let request = botEditor {
                 Card(title: request.bot.map { "Edit \($0.name)" } ?? "New Bot", isFocused: focus == .conversation) {
                     if let bot = request.bot { BotAvatar(look: bot.look, size: 18, animates: false) } else { Image(systemName: "face.smiling") }
@@ -865,6 +872,16 @@ struct MainView: View {
                     }
                 }
                 .id(request.id)
+            } else if let key = selection, let entry = terminals.entry(key) {
+                Card(title: entry.session.title == "Terminal" ? entry.label : entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
+                    Image(systemName: "apple.terminal")
+                } actions: {
+                    Button("Close Tab", systemImage: "xmark") { closeTab(key) }
+                        .help("Close Tab")
+                } content: {
+                    TerminalHost(session: entry.session)
+                }
+                .id(key)
             } else if let id = groupID, let group = groups.group(id) {
                 Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
                     GroupAvatar(faces: faces(of: group), size: 20)
@@ -1178,7 +1195,8 @@ struct MainView: View {
             Analytics.shared.sessionEnded(beside)
             splitPairs[key] = nil
         }
-        if remember { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
+        if remember && !MainTerminals.isTerminal(key) { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
+        terminals.close(key)
         withAnimation(.ui) {
             self.tabs = tabs
             if selection == key {
@@ -1191,9 +1209,10 @@ struct MainView: View {
     private func closeTabs(except key: String?) {
         // Reopened last first, so the leftmost comes back last.
         let pairs = splitPairs
-        rememberClosed(tabs.enumerated().filter { $0.element != key }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
+        rememberClosed(tabs.enumerated().filter { $0.element != key && !MainTerminals.isTerminal($0.element) }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
         for closed in tabs where closed != key {
             Analytics.shared.sessionEnded(closed)
+            terminals.close(closed)
             if let beside = splitPairs[closed] { Analytics.shared.sessionEnded(beside) }
         }
         withAnimation(.ui) {
@@ -1335,6 +1354,12 @@ struct MainView: View {
         // A machine's sessions wait for it to connect.
         func isGone(_ key: String) -> Bool { !known.contains(key) && workspace.waitingMachine(for: key) == nil }
         for key in tabs where SidebarView.draftDirectory(from: key) == nil && isGone(key) {
+            // A terminal's tab stays while its shell runs; one restored at launch has none.
+            if MainTerminals.isTerminal(key) {
+                if terminals.entry(key) != nil { continue }
+                closeTab(key, remember: false)
+                continue
+            }
             // A group chat's tab stays as long as the chat does.
             if let id = BotGroups.groupID(fromTab: key), groups.group(id) != nil { continue }
             if let beside = splitPairs[key], !isGone(beside), !tabs.contains(beside) {
@@ -1365,6 +1390,7 @@ struct MainView: View {
             canStop: model?.isRunning == true,
             canReopenTab: closedTabs.contains(where: canReopen),
             newSession: { newSession(in: nil) },
+            newTerminalTab: { openTerminalTab(command: nil) },
             openFolder: openFolder,
             newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
             newBot: { openBotEditor(bot: nil) },
@@ -1437,6 +1463,7 @@ struct MainView: View {
             add("Run", "play.fill", "⌘R", detail: runCommand, actions.run)
         }
         add("New Terminal", "terminal", "⌃`", actions.newTerminal)
+        add("New Terminal Tab", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
         if actions.hasProject {
@@ -1505,7 +1532,20 @@ struct MainView: View {
     private func newSession(in directory: String?) {
         let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
         let directory = directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.chatsFolder
+        // A project that has a terminal command for its sessions opens that, not a conversation.
+        if let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
+            openTerminalTab(command: command, in: directory)
+            return
+        }
         openTab(SidebarView.draftTag(directory))
+    }
+
+    /// A terminal as a tab, in the folder of the tab in view (or the one given), typing `command`
+    /// in it. Without one, a plain shell: where you start `omp` or any agent yourself.
+    private func openTerminalTab(command: String?, in directory: String? = nil) {
+        let directory = directory ?? activeDirectory ?? NSHomeDirectory()
+        Analytics.shared.track("panel_opened", ["tool": command == nil ? "terminal_tab" : "terminal_session"])
+        openTab(terminals.open(in: directory, command: command, environment: app.shellEnvironment))
     }
 
     private func openFolder() {
