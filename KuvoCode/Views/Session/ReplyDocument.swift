@@ -13,6 +13,8 @@ struct ReplyDocument {
         case code(code: String, language: String?, marks: [ReplyCodeMark])
         /// A formula on its own line (`$$…$$`).
         case math(latex: String)
+        /// A Mermaid diagram (` ```mermaid `), where the document is asked to draw them.
+        case diagram(source: String)
     }
 
     var segments: [Segment] = []
@@ -207,7 +209,8 @@ struct ReplyDocument {
 
     /// `images`: the folder a file's own pictures are looked for in (a Markdown file's); none from
     /// the web (a README's badges and tracking pixels would reach their hosts as it opens).
-    init(markdown: String, parser: some MarkupParser, style: Style, images: URL? = nil) {
+    /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a file's preview), not shown as code.
+    init(markdown: String, parser: some MarkupParser, style: Style, images: URL? = nil, diagrams: Bool = false) {
         let parsed = (try? parser.attributedString(for: markdown)) ?? AttributedString(markdown)
         let findsMarks = (parser as? FileLinkingParser).map { $0.highlight != nil } ?? false
         let context = Context()
@@ -238,6 +241,8 @@ struct ReplyDocument {
                 if code.hasSuffix("\n") { code.removeLast() }
                 if language == MathText.blockLanguage || language?.lowercased() == "math" {
                     segments.append(.math(latex: code.trimmingCharacters(in: .whitespacesAndNewlines)))
+                } else if diagrams, language?.lowercased() == "mermaid" {
+                    segments.append(.diagram(source: code))
                 } else {
                     // Find's marks only while Find has some: looking through every run of a
                     // code block for them was a good part of reading one.
@@ -665,6 +670,7 @@ enum PartsCheck {
                     return "text gap \(gap): \(text.string.debugDescription) | \(paragraphs.joined(separator: ", ")) | \(fonts.joined(separator: ", "))"
                 case .code(let code, let language, _): return "code gap \(gap) \(language ?? "-"): \(code.count)"
                 case .math(let latex): return "math gap \(gap): \(latex)"
+                case .diagram(let source): return "diagram gap \(gap): \(source.count)"
                 }
             }
         }

@@ -10,6 +10,8 @@ struct ReplyView: NSViewRepresentable {
     /// A reply's (with file links), or another's (a Markdown file's, with `images`).
     let parser: any MarkupParser
     var images: URL? = nil
+    /// ` ```mermaid ` blocks are drawn as diagrams (a Markdown file's preview).
+    var diagrams = false
     var openURL: (URL) -> Bool = { _ in false }
     @Environment(\.messageFont) private var font
     @Environment(\.colorScheme) private var scheme
@@ -42,7 +44,7 @@ struct ReplyView: NSViewRepresentable {
         let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents)) }
         view.show(markdown, document: {
             if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style) }
-            return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images)
+            return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images, diagrams: diagrams)
         }, style: style, marks: marks)
     }
 
@@ -128,12 +130,25 @@ final class ReplyPieceView: NSView {
                 let view = existing as? NSHostingView<AnyView> ?? NSHostingView(rootView: AnyView(EmptyView()))
                 view.rootView = AnyView(MathBlockView(latex: drawn).environment(\.messageFont, MessageFont(size: style.size)))
                 views.append(view)
+            case .diagram(let source):
+                let view = existing as? MermaidView ?? MermaidView()
+                view.cardIsFocused = cardIsFocused
+                view.onHeightChange = { [weak self] in self?.diagramChangedHeight() }
+                view.show(source: source, style: style)
+                views.append(view)
             }
         }
         for view in segmentViews where !views.contains(where: { $0 === view }) { view.removeFromSuperview() }
         for view in views where view.superview !== self { addSubview(view) }
         segmentViews = views
         gaps = document.gaps
+        heights = nil
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+    }
+
+    /// A diagram came back from drawing (or showed its code instead) at another height.
+    private func diagramChangedHeight() {
         heights = nil
         needsLayout = true
         invalidateIntrinsicContentSize()
@@ -150,6 +165,7 @@ final class ReplyPieceView: NSView {
             switch view {
             case let text as ReplyTextView: text.height(for: width)
             case let code as ReplyCodeView: code.height(for: width)
+            case let diagram as MermaidView: diagram.height(for: width)
             case let hosting as NSHostingView<AnyView>: hosting.fittingSize.height
             default: 0
             }

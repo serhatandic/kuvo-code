@@ -279,7 +279,7 @@ replies are laid out in one pass (its README says what's different and how to
 bring in upstream's changes).
 
 If you add or update a package, or change code copied from another project
-(`prism-bundle.js`, `buildDomTree.js`, UsageKit, Textual), run
+(`prism-bundle.js`, `mermaid.min.js`, `buildDomTree.js`, UsageKit, Textual), run
 `./scripts/third-party-licenses.sh` and commit the updated
 `THIRD_PARTY_LICENSES.txt`; CI checks that it's current.
 

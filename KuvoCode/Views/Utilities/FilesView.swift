@@ -373,7 +373,7 @@ private struct FileViewer: View {
                         // Drawn as replies are (TextKit), so a long file opens at once. Its own
                         // pictures, beside it; none from the web (a README's badges and tracking
                         // pixels would reach their hosts as you open it).
-                        ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent()) { link in
+                        ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
                             // Another file of the project's, here; web links in the browser.
                             let file = link.isFileURL ? link : link.scheme == nil && !link.path.isEmpty
                                 ? URL(filePath: link.path(percentEncoded: false), relativeTo: url.deletingLastPathComponent()).standardizedFileURL : nil

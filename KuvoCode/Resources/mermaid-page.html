@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Mermaid and this page only: nothing is fetched, nothing is sent. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src file: 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  #diagram { display: flex; justify-content: center; }
+  #diagram svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<div id="diagram"></div>
+<script src="mermaid.min.js"></script>
+<script>
+  const host = document.getElementById('diagram');
+  const send = message => window.webkit.messageHandlers.mermaid.postMessage(message);
+  let count = 0;
+
+  new ResizeObserver(() => send({ height: Math.ceil(host.getBoundingClientRect().height) })).observe(host);
+
+  // Draws `code`: its diagram, or what's wrong with it.
+  window.draw = async (code, dark) => {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: dark ? 'dark' : 'default',
+      fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+    });
+    try {
+      const { svg } = await mermaid.render('diagram-' + count++, code);
+      host.innerHTML = svg;
+      send({ drawn: true });
+    } catch (error) {
+      host.innerHTML = '';
+      send({ error: String((error && error.message) || error) });
+    }
+    // Mermaid leaves its measuring element in the page when a diagram fails.
+    document.querySelectorAll('body > [id^="ddiagram-"]').forEach(element => element.remove());
+  };
+
+  send({ ready: true });
+</script>
+</body>
+</html>

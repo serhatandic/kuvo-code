@@ -5,6 +5,7 @@ Unreleased, in plain words about what they'll see, as part of the change itself.
 release, Unreleased is renamed to the version; the release notes come from that section.
 
 ## Unreleased
+- A Markdown file's rendered view in Files draws ```` ```mermaid ```` blocks as diagrams (flowcharts, Gantt charts, sequence diagrams and the rest), in light or dark, offline. A button shows a diagram's code, and one Mermaid can't read shows as code with what's wrong.
 
 - Undo in a Claude Code, Codex or other coding agent's session works right after its turn ends or after Kuvo Code opens again; for a moment it said "Stop the agent first" while nothing was working.
 - Text on the window's cards (conversations, the side panel, Settings) is crisp in light mode: it was drawn see-through over the window's glass, which turned black a washed-out gray. The sidebar keeps the glass look.

@@ -43,6 +43,9 @@ HEADER
     section Prism 1.29.0 https://prismjs.com \
         "KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh." \
         Licenses/Prism.txt
+    section Mermaid 11.17.2 https://github.com/mermaid-js/mermaid \
+        "KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar." \
+        Licenses/mermaid.txt
     section browser-use 0.4.2 https://github.com/browser-use/browser-use \
         "KuvoCode/Resources/buildDomTree.js, unchanged." \
         Licenses/browser-use.txt
