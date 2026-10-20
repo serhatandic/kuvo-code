@@ -150,18 +150,34 @@ struct ProjectEditor: View {
                 }
             }
 
-            section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, in place of a conversation. Leave empty for the usual chat.") {
-                WellGroup(isActive: isTerminalFocused) {
-                    WellRow(isActive: isTerminalFocused) {
-                        Image(systemName: "apple.terminal")
-                            .font(.system(size: 13))
-                    } content: {
-                        TextField("Terminal", text: $terminal, prompt: Text(verbatim: "omp"), axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 14, design: .monospaced))
-                            .lineLimit(1...8)
-                            .focused($isTerminalFocused)
-                            .padding(.vertical, 12)
+            section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, in place of a conversation. It's typed in your shell, so flags and arguments work (`claude --continue`, `codex --model gpt-5`). Leave empty for the usual chat.") {
+                VStack(alignment: .leading, spacing: 10) {
+                    WellGroup(isActive: isTerminalFocused) {
+                        WellRow(isActive: isTerminalFocused) {
+                            Image(systemName: "apple.terminal")
+                                .font(.system(size: 13))
+                        } content: {
+                            TextField("Terminal", text: $terminal, prompt: Text(verbatim: "omp"), axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 14, design: .monospaced))
+                                .lineLimit(1...8)
+                                .focused($isTerminalFocused)
+                                .padding(.vertical, 12)
+                        }
+                    }
+                    Flow(spacing: 6) {
+                        ForEach(Self.terminalSuggestions, id: \.self) { command in
+                            Button {
+                                terminal = command
+                            } label: {
+                                Text(verbatim: command)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
@@ -185,6 +201,9 @@ struct ProjectEditor: View {
             }
         }
     }
+
+    /// Terminal coding agents to start from; any command, with its flags, can be typed instead.
+    private static let terminalSuggestions = ["omp", "claude", "codex", "opencode", "pi", "gemini", "aider", "amp"]
 
     private func saveProject() {
         guard let primary = folders.first else { return }
