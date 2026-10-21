@@ -8,15 +8,29 @@ struct TerminalToolsNotice: View {
     let close: () -> Void
     @State private var showsSetup = false
 
+    /// The message, with "MCP" as the link that opens how to set it up.
+    private var message: AttributedString {
+        var text = AttributedString("Agents in this terminal can't use the browser or show you files on their own. Fix it by setting up this ")
+        var link = AttributedString("MCP")
+        link.link = URL(string: "kuvo-setup:mcp")
+        link.underlineStyle = .single
+        text.append(link)
+        text.append(AttributedString("."))
+        return text
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("The agent in this terminal can't use the browser or show you files here until you give it Kuvo Code's tools.")
+            Text(message)
                 .font(.callout)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("How") { showsSetup.toggle() }
-                .buttonStyle(.link)
+                .environment(\.openURL, OpenURLAction { url in
+                    guard url.scheme == "kuvo-setup" else { return .systemAction }
+                    showsSetup = true
+                    return .handled
+                })
                 .popover(isPresented: $showsSetup, arrowEdge: .bottom) { TerminalToolsSetup() }
             Button(action: close) {
                 Label("Close", systemImage: "xmark")

@@ -10,6 +10,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Text on the window's cards (conversations, the side panel, Settings) is crisp in light mode: it was drawn see-through over the window's glass, which turned black a washed-out gray. The sidebar keeps the glass look.
 - Buttons and menus in Settings are readable again: 0.6.5 drew them pale behind white labels. Text areas in Settings (commit instructions, an agent's instructions) are the group itself, without a box inside it.
 - Settings › Accounts uses the same quiet gray groups as the other pages, rather than a yellowish one.
+- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Chat** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
+- Terminals have `KUVO_MCP_URL`, `KUVO_MCP_TOKEN` and `KUVO_MCP_SCRIPT` in their environment, and a bar over the panel while a project's command runs in one says how to give that agent Kuvo Code's tools (an MCP server over stdio, `kuvo-mcp.sh`): then it can browse in the panel's browser and open files and folders there with `show_in_panel`. The bar goes once an agent has used them, or when you close it.
 
 ## 0.6.5
 
@@ -37,8 +39,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The context ring of a Claude Code session counts against the window Claude Code gives the model on your plan, 1M tokens for Opus 5.5, rather than 200K for every model it didn't call 1M, which showed a long session full ("218K / 200K") with most of its room left.
 - The context ring of a Grok or Antigravity session counts against the window the agent says its model has, once it has answered, rather than 256K for every Grok model and 1M for every Antigravity one.
 - The context ring of a model whose provider takes less than its whole window in one request (OpenAI's GPT-5 models take 272K of 400K, and most of GitHub Copilot's take less too) counts against what it takes: the conversation was summarized while the ring still showed room left.
-- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Chat** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
-- Terminals have `KUVO_MCP_URL`, `KUVO_MCP_TOKEN` and `KUVO_MCP_SCRIPT` in their environment, and a bar over the panel while a project's command runs in one says how to give that agent Kuvo Code's tools (an MCP server over stdio, `kuvo-mcp.sh`): then it can browse in the panel's browser and open files and folders there with `show_in_panel`. The bar goes once an agent has used them, or when you close it.
 
 ## 0.6.4
 
