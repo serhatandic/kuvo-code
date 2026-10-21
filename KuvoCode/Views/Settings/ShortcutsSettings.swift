@@ -43,6 +43,7 @@ struct ShortcutsSettings: View {
             Shortcut(keys: ["⌥", "⌘", "I"], title: "Changes"),
             Shortcut(keys: ["⌥", "⌘", "F"], title: "Files"),
             Shortcut(keys: ["⌃", "`"], title: "New terminal"),
+            Shortcut(keys: ["⌃", "⇧", "`"], title: "New terminal tab"),
             Shortcut(keys: ["⌘", "R"], title: "Run the project’s run command"),
             Shortcut(keys: ["⌥", "⌘", "B"], title: "New browser tab"),
             Shortcut(keys: ["⌘", "+ / −"], title: "Zoom a machine's page in or out"),

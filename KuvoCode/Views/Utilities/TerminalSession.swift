@@ -211,9 +211,15 @@ final class MainTerminals {
         let directory: String
         /// The tab's name until the program in the terminal names itself.
         let label: String
+        let opened = Date()
     }
 
     private(set) var entries: [String: Entry] = [:]
+
+    /// The terminals, in the order they were opened.
+    var opened: [(key: String, entry: Entry)] {
+        entries.sorted { $0.value.opened < $1.value.opened }.map { (key: $0.key, entry: $0.value) }
+    }
 
     private static let prefix = "terminal:"
 
@@ -233,6 +239,12 @@ final class MainTerminals {
     /// Ends the terminal's shell and whatever runs in it.
     func close(_ key: String) {
         entries.removeValue(forKey: key)?.session.terminate()
+    }
+
+    /// Ends every terminal: the window closed, and its tabs with it.
+    func closeAll() {
+        for entry in entries.values { entry.session.terminate() }
+        entries = [:]
     }
 }
 

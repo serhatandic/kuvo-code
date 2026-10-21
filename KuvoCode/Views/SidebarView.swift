@@ -19,6 +19,10 @@ struct SidebarView: View {
     let editBot: (Bot) -> Void
     let newGroup: () -> Void
     let editGroup: (BotGroup) -> Void
+    /// A conversation in the project, where its new sessions open a terminal instead.
+    let newConversation: (String) -> Void
+    /// Ends a terminal tab.
+    let closeTerminal: (String) -> Void
     /// Bots moving in the main card; their rows hold still.
     var stagedBots: Set<String> = []
     /// Shows a session beside the one in view (split view).
@@ -178,6 +182,11 @@ struct SidebarView: View {
                     }
                     }
                     chatsSection
+                    let loose = terminals(in: nil)
+                    if !loose.isEmpty {
+                        SectionHeader(title: "Terminals") { EmptyView() }
+                        terminalRows(loose, indented: false)
+                    }
                     SectionHeader(title: "Projects", isFolded: folded("projects")) {
                         Button(action: newProject) {
                             Image(systemName: "plus")
@@ -378,6 +387,10 @@ struct SidebarView: View {
         }
         .contextMenu {
             Button("New Session") { newSession(project.directory) }
+            if workspace.settings[project.directory]?.terminal != nil {
+                // Its sessions open a terminal; this still starts a conversation.
+                Button("New Chat") { newConversation(project.directory) }
+            }
             Button("Edit Project…") { editProject(project) }
             if let engine = app.machines.engine(RemoteFolder.machine(of: project.directory)) {
                 if !engine.isReady {
@@ -402,6 +415,7 @@ struct SidebarView: View {
                     Text("New Session")
                 }
             }
+            terminalRows(terminals(in: project.directory), indented: true)
             let all = showsAll.contains(project.directory)
             ForEach(all ? project.sessions : Array(project.sessions.prefix(Self.sessionsPerProject))) { session in
                 sessionRow(session, in: .project)
@@ -418,6 +432,28 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    /// The terminal tabs of the project at `directory`, or (nil) of no project, each a row that
+    /// shows it, so one is never out of reach with the tab bar hidden.
+    private func terminals(in directory: String?) -> [(key: String, entry: MainTerminals.Entry)] {
+        let known = Set(workspace.projects.map(\.directory))
+        return app.mainTerminals.opened.filter { terminal in
+            let project = workspace.projectDirectory(terminal.entry.directory)
+            return directory.map { project == $0 } ?? !known.contains(project)
+        }
+    }
+
+    @ViewBuilder private func terminalRows(_ terminals: [(key: String, entry: MainTerminals.Entry)], indented: Bool) -> some View {
+        ForEach(terminals, id: \.key) { terminal in
+            TerminalRow(
+                title: terminal.entry.session.title == "Terminal" ? terminal.entry.label : terminal.entry.session.title,
+                isSelected: selection == terminal.key,
+                indented: indented,
+                action: { selection = terminal.key },
+                end: { closeTerminal(terminal.key) }
+            )
         }
     }
 
@@ -873,6 +909,42 @@ private struct ProjectRow: View {
         .help(project.allFolders.map { folder in
             RemoteFolder.parse(folder).map { "\($0.machine):\($0.path)" } ?? (folder as NSString).abbreviatingWithTildeInPath
         }.joined(separator: "\n"))
+    }
+}
+
+/// A terminal tab in the sidebar: its name, with a way to end it under the pointer.
+private struct TerminalRow: View {
+    let title: String
+    let isSelected: Bool
+    let indented: Bool
+    let action: () -> Void
+    let end: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        SidebarRow(isSelected: isSelected, indented: indented, action: action) {
+            EmptyView()
+        } title: {
+            HStack(spacing: 6) {
+                Image(systemName: "apple.terminal")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text(title)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            Button(action: end) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(width: 22, height: 22))
+            .padding(.trailing, 4)
+            .opacity(isHovering ? 1 : 0)
+            .help("End Terminal")
+            .accessibilityLabel("End Terminal")
+        }
+        .onHover { isHovering = $0 }
+        .contextMenu { Button("End Terminal", action: end) }
     }
 }
 

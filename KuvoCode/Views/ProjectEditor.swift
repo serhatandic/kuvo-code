@@ -150,7 +150,7 @@ struct ProjectEditor: View {
                 }
             }
 
-            section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, in place of a conversation. It's typed in your shell, so flags and arguments work (`claude --continue`, `codex --model gpt-5`). Leave empty for the usual chat.") {
+            section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, in place of a conversation. It's typed in your shell, so flags and arguments work (`claude --continue`, `opencode --continue`). Leave empty for the usual chat. A conversation can still be started from the project's menu in the sidebar, with New Chat.") {
                 VStack(alignment: .leading, spacing: 10) {
                     WellGroup(isActive: isTerminalFocused) {
                         WellRow(isActive: isTerminalFocused) {

@@ -57,7 +57,7 @@ struct MainView: View {
     /// The command palette (⌘K) is showing.
     @State private var showsPalette = false
     /// Terminals open as tabs, standing in for a conversation.
-    @State private var terminals = MainTerminals()
+    private var terminals: MainTerminals { app.mainTerminals }
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
     /// The window's content width; the title bar is sized from it.
@@ -713,6 +713,8 @@ struct MainView: View {
                 editBot: { openBotEditor(bot: $0) },
                 newGroup: { openGroupEditor(group: nil) },
                 editGroup: { openGroupEditor(group: $0) },
+                newConversation: { openTab(SidebarView.draftTag($0)) },
+                closeTerminal: { closeTab($0) },
                 stagedBots: stagedBots,
                 openBeside: besideOpener
             )
@@ -855,7 +857,6 @@ struct MainView: View {
                     }
                 }
                 .id(request.id)
-
             } else if let request = botEditor {
                 Card(title: request.bot.map { "Edit \($0.name)" } ?? "New Bot", isFocused: focus == .conversation) {
                     if let bot = request.bot { BotAvatar(look: bot.look, size: 18, animates: false) } else { Image(systemName: "face.smiling") }
@@ -1544,7 +1545,7 @@ struct MainView: View {
     /// in it. Without one, a plain shell: where you start `omp` or any agent yourself.
     private func openTerminalTab(command: String?, in directory: String? = nil) {
         let directory = directory ?? activeDirectory ?? NSHomeDirectory()
-        Analytics.shared.track("panel_opened", ["tool": command == nil ? "terminal_tab" : "terminal_session"])
+        Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
         openTab(terminals.open(in: directory, command: command, environment: app.shellEnvironment))
     }
 

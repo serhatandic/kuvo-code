@@ -24,6 +24,8 @@ final class AppModel {
     let catalog = Catalog(isMac: true)
     /// The right panel's tools; one window, so one set.
     let utilities = Utilities()
+    /// Terminals that are tabs of the window, in place of a conversation; they end with it.
+    let mainTerminals = MainTerminals()
     /// What the agent asks you for while it browses: sign-ins, codes, steps only you can do.
     let browserAsks = BrowserAsks()
     /// The panel's browser as MCP tools for the agent.
