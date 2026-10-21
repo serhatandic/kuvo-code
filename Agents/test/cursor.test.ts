@@ -7,10 +7,15 @@ import { join } from "node:path"
 import type { TurnHooks } from "../src/agent"
 import { CursorAgent } from "../src/agents/cursor"
 import { setToolServer } from "../src/kuvotools"
+import { Auto } from "../src/auto"
+import type { Roster } from "../src/roster"
+import { Sessions } from "../src/sessions"
+import { Store } from "../src/store"
 import { noTokens, type Session } from "../src/wire"
 
-/** Cursor's SDK as far as starting an agent goes: each agent's options, as it was made. */
-function fakeSDK() {
+/** Cursor's SDK as far as starting an agent goes: each agent's options, as it was made; a run
+ *  sends `updates`, then ends with `result`. */
+function fakeSDK(updates: any[] = [], result: any = { status: "finished" }) {
   const made: any[] = []
   let next = 1
   const sdk = {
@@ -18,7 +23,14 @@ function fakeSDK() {
     Agent: {
       create: async (options: any) => {
         made.push(options)
-        return { agentId: `agent-${next++}`, close() {} }
+        return {
+          agentId: `agent-${next++}`,
+          close() {},
+          send: async (_message: any, options: { onDelta: (event: { update: any }) => Promise<void> }) => {
+            for (const update of updates) await options.onDelta({ update })
+            return { wait: async () => result, cancel: async () => {} }
+          },
+        }
       },
       resume: async () => undefined,
     },
@@ -74,5 +86,38 @@ describe("Cursor", () => {
     await thread.prepare?.(input, hooks(state))
     expect(sdk.made.length).toBe(2)
     expect(sdk.made.at(-1)?.mcpServers?.["kuvo-browser"]?.url).toBe("http://127.0.0.1:47001/mcp")
+  })
+})
+
+describe("Cursor's context", () => {
+  test("how full it is is its last turn's request, not the run's turns added up", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kuvo-cursor-"))
+    folders.push(home)
+    const turnEnded = (input: number, cached: number, output: number) => ({ type: "turn-ended", usage: { inputTokens: input, outputTokens: output, cacheReadTokens: cached, cacheWriteTokens: 0, reasoningTokens: 40 } })
+    const sdk = fakeSDK([{ type: "text-delta", text: "Looking." }, turnEnded(2_000, 20_000, 300), { type: "text-delta", text: " Done." }, turnEnded(1_500, 23_000, 200)], {
+      status: "finished",
+      usage: { inputTokens: 3_500, outputTokens: 500, cacheReadTokens: 43_000, cacheWriteTokens: 0 },
+    })
+    process.env.CURSOR_API_KEY = "key_test"
+    class TestCursor extends CursorAgent {
+      override async account() {
+        return { installed: true, signedIn: true }
+      }
+    }
+    const agent = new TestCursor({ home, temporary: home, deps: { ensure: async () => home, load: async () => sdk } as any })
+    const sessions = new Sessions(new Store(join(home, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(home))
+    try {
+      const id = sessions.create({ model: { providerID: agent.providerID, id: "composer-2" }, location: { directory: home } }).id
+      sessions.prompt(id, { id: "msg_cursor_test_01", text: "go", files: [], delivery: "steer" })
+      const start = Date.now()
+      while (!sessions.messages(id).some((message) => message.type === "idle")) {
+        if (Date.now() - start > 10_000) throw new Error("timed out")
+        await Bun.sleep(10)
+      }
+      const last = sessions.messages(id).filter((message: any) => message.type === "assistant").at(-1) as any
+      expect(last.tokens).toEqual({ input: 1_500, output: 200, reasoning: 40, cache: { read: 23_000, write: 0 } })
+    } finally {
+      sessions.closeAll()
+    }
   })
 })

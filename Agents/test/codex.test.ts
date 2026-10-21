@@ -36,7 +36,8 @@ process.stdin.on("data", (chunk) => {
       send({ method: "turn/started", params: { threadId: "t1", turn: { id: "u1" } } })
       for (const [method, params] of events) send({ method, params: { threadId: "t1", turnId: "u1", ...params } })
       send({ method: "turn/completed", params: { threadId: "t1", turn: { id: "u1", status: "completed" } } })
-    } else if (message.id !== undefined) send({ id: message.id, result: {} })
+    } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }] } })
+    else if (message.id !== undefined) send({ id: message.id, result: {} })
   }
 })
 `,
@@ -216,5 +217,20 @@ describe("Codex's agents in the background", () => {
     codex!.shutdown()
     await until(() => sessions.messages(child).some((message) => message.type === "idle"))
     expect(sessions.messages(child).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
+  })
+})
+
+describe("Codex's context", () => {
+  test("how full it is, as its last request was, against the window Codex says its model has", async () => {
+    const id = await run([
+      ["item/started", { item: { type: "agentMessage", id: "m1", text: "" } }],
+      ["item/agentMessage/delta", { itemId: "m1", delta: "Done." }],
+      ["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }],
+      ["thread/tokenUsage/updated", { tokenUsage: { modelContextWindow: 258_400, last: { inputTokens: 52_000, cachedInputTokens: 48_000, outputTokens: 900, reasoningOutputTokens: 300 } } }],
+    ])
+    const last = sessions.messages(id).filter((message: any) => message.type === "assistant").at(-1) as any
+    expect(last.tokens).toMatchObject({ input: 4_000, output: 600, reasoning: 300, cache: { read: 48_000 } })
+    const models = await codex!.models()
+    expect(models.find((model) => model.id === "gpt-test")?.limit.context).toBe(258_400)
   })
 })

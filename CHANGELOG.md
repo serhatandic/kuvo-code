@@ -6,12 +6,16 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Chat** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
+- Terminals have `KUVO_MCP_URL`, `KUVO_MCP_TOKEN` and `KUVO_MCP_SCRIPT` in their environment, and a bar over the panel while a project's command runs in one says how to give that agent Kuvo Code's tools (an MCP server over stdio, `kuvo-mcp.sh`): then it can browse in the panel's browser and open files and folders there with `show_in_panel`. The bar goes once an agent has used them, or when you close it.
+- The context ring of a Cursor session counts the last request Cursor reports, rather than all of a reply's requests added up.
+
+## 0.6.6
+
 - Undo in a Claude Code, Codex or other coding agent's session works right after its turn ends or after Kuvo Code opens again; for a moment it said "Stop the agent first" while nothing was working.
 - Text on the window's cards (conversations, the side panel, Settings) is crisp in light mode: it was drawn see-through over the window's glass, which turned black a washed-out gray. The sidebar keeps the glass look.
 - Buttons and menus in Settings are readable again: 0.6.5 drew them pale behind white labels. Text areas in Settings (commit instructions, an agent's instructions) are the group itself, without a box inside it.
 - Settings › Accounts uses the same quiet gray groups as the other pages, rather than a yellowish one.
-- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Chat** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
-- Terminals have `KUVO_MCP_URL`, `KUVO_MCP_TOKEN` and `KUVO_MCP_SCRIPT` in their environment, and a bar over the panel while a project's command runs in one says how to give that agent Kuvo Code's tools (an MCP server over stdio, `kuvo-mcp.sh`): then it can browse in the panel's browser and open files and folders there with `show_in_panel`. The bar goes once an agent has used them, or when you close it.
 
 ## 0.6.5
 

@@ -94,9 +94,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private static let permissionCategory = "permission"
     private static let replyCategory = "reply"
-    private nonisolated static let replyAction = "reply"
-    private nonisolated static let answerAction = "answer"
-    private nonisolated static let choicePrefix = "choice."
+    nonisolated static let replyAction = "reply"
+    nonisolated static let answerAction = "answer"
+    nonisolated static let choicePrefix = "choice."
     /// The categories every notification can have, and each waiting question's own.
     private var categories: [UNNotificationCategory] = []
     private var questionCategories: [String: UNNotificationCategory] = [:]
@@ -322,19 +322,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.body = body
             if Self.playsSound { content.sound = .default }
             content.threadIdentifier = session
-            content.userInfo = ["session": session]
+            content.userInfo = Self.info(session: session, permission: permission, question: question)
             // A browser's ask: cleared as it's answered, or goes unanswered.
             if let ask = push?.ask { content.userInfo["ask"] = ask }
-            if let permission {
+            if permission != nil {
                 content.categoryIdentifier = Self.permissionCategory
-                content.userInfo["requestSession"] = permission.session
-                content.userInfo["request"] = permission.request
             } else if let question {
                 content.categoryIdentifier = category(for: question)
-                content.userInfo["requestSession"] = question.session
-                content.userInfo["form"] = question.form
-                content.userInfo["key"] = question.key
-                content.userInfo["choices"] = question.choices.prefix(4).map(\.value)
             } else if replies, !session.isEmpty {
                 content.categoryIdentifier = Self.replyCategory
             }
@@ -401,32 +395,59 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let info = response.notification.request.content.userInfo
-        if let answer = PermissionAnswer(rawValue: response.actionIdentifier), let session = info["requestSession"] as? String, let request = info["request"] as? String {
-            await MainActor.run { Notifier.shared.answer?(session, request, answer) }
-            return
+        let done = Self.response(to: response.actionIdentifier, info: response.notification.request.content.userInfo,
+                                 text: (response as? UNTextInputNotificationResponse)?.userText)
+        await MainActor.run {
+            switch done {
+            case .permission(let session, let request, let answer): Notifier.shared.answer?(session, request, answer)
+            case .question(let session, let form, let key, let answer): Notifier.shared.answerQuestion?(session, form, key, answer)
+            case .reply(let session, let text): Notifier.shared.reply?(session, text)
+            case .open(let session):
+                NSApp.activate()
+                if !session.isEmpty { Notifier.shared.open?(session) }
+            case nil: break
+            }
+        }
+    }
+
+    /// What a notification about `session` carries for its buttons: the permission or question
+    /// they answer, and its choices.
+    static func info(session: String, permission: (session: String, request: String)?, question: Question?) -> [AnyHashable: Any] {
+        var info: [AnyHashable: Any] = ["session": session]
+        if let permission {
+            info["requestSession"] = permission.session
+            info["request"] = permission.request
+        } else if let question {
+            info["requestSession"] = question.session
+            info["form"] = question.form
+            info["key"] = question.key
+            info["choices"] = question.choices.prefix(4).map(\.value)
+        }
+        return info
+    }
+
+    /// What a notification's button or reply does.
+    nonisolated enum Response: Equatable {
+        case permission(session: String, request: String, PermissionAnswer)
+        case question(session: String, form: String, key: String, String)
+        case reply(session: String, String)
+        /// Clicked: its conversation opens ("" for none, the app alone).
+        case open(session: String)
+    }
+
+    /// What `action` on a notification with `info` (and the words typed in it) does.
+    nonisolated static func response(to action: String, info: [AnyHashable: Any], text: String?) -> Response? {
+        if let answer = PermissionAnswer(rawValue: action), let session = info["requestSession"] as? String, let request = info["request"] as? String {
+            return .permission(session: session, request: request, answer)
         }
         if let form = info["form"] as? String, let session = info["requestSession"] as? String, let key = info["key"] as? String {
-            let action = response.actionIdentifier
-            var answer: String?
-            if action.hasPrefix(Self.choicePrefix), let index = Int(action.dropFirst(Self.choicePrefix.count)), let values = info["choices"] as? [String], values.indices.contains(index) {
-                answer = values[index]
-            } else if action == Self.answerAction {
-                answer = (response as? UNTextInputNotificationResponse)?.userText
+            if action.hasPrefix(choicePrefix), let index = Int(action.dropFirst(choicePrefix.count)), let values = info["choices"] as? [String], values.indices.contains(index) {
+                return .question(session: session, form: form, key: key, values[index])
             }
-            if let answer {
-                await MainActor.run { Notifier.shared.answerQuestion?(session, form, key, answer) }
-                return
-            }
+            if action == answerAction, let text { return .question(session: session, form: form, key: key, text) }
         }
-        guard let session = info["session"] as? String else { return }
-        if response.actionIdentifier == Self.replyAction, let text = (response as? UNTextInputNotificationResponse)?.userText {
-            await MainActor.run { Notifier.shared.reply?(session, text) }
-            return
-        }
-        await MainActor.run {
-            NSApp.activate()
-            if !session.isEmpty { Notifier.shared.open?(session) }
-        }
+        guard let session = info["session"] as? String else { return nil }
+        if action == replyAction, let text { return .reply(session: session, text) }
+        return .open(session: session)
     }
 }

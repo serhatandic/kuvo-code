@@ -158,14 +158,26 @@ private struct BackgroundJobRow: View {
 }
 
 /// The end of what a command has printed, read again every moment while it shows.
-private struct ShellOutputView: View {
+struct ShellOutputView: View {
     let job: ShellJob
     let api: OpenCodeAPI?
     let directory: String
     @State private var text = ""
 
     /// How much of the end it shows, in bytes.
-    private static let tail = 24_000
+    static let tail = 24_000
+
+    /// The end of what command `id` has printed: its last `tail` bytes, from the first whole line
+    /// in them (a progress line that redraws itself ends in a return); all of them when there's no
+    /// line end in them.
+    static func end(of id: String, api: OpenCodeAPI, directory: String) async -> String? {
+        guard let size = try? await api.shellOutput(id, limit: 1, directory: directory).size else { return nil }
+        let start = max(0, size - tail)
+        guard let read = try? await api.shellOutput(id, from: start, limit: tail, directory: directory) else { return nil }
+        let lineEnd = start > 0 ? read.output.firstIndex(where: \.isNewline) : nil
+        let output = lineEnd.map { read.output[read.output.index(after: $0)...] } ?? Substring(read.output)
+        return String(output).trimmingCharacters(in: .newlines)
+    }
 
     var body: some View {
         ScrollView {
@@ -180,17 +192,7 @@ private struct ShellOutputView: View {
         .frame(width: 520, height: 300)
         .task {
             while !Task.isCancelled {
-                if let api, let size = try? await api.shellOutput(job.id, limit: 1, directory: directory).size {
-                    let start = max(0, size - Self.tail)
-                    if let read = try? await api.shellOutput(job.id, from: start, limit: Self.tail, directory: directory) {
-                        // Begun partway: from the first whole line (a progress line that redraws
-                        // itself ends in a return); all of it when there's no line end in it.
-                        let lineEnd = start > 0 ? read.output.firstIndex(where: \.isNewline) : nil
-                        let output = lineEnd.map { read.output[read.output.index(after: $0)...] } ?? Substring(read.output)
-                        let trimmed = String(output).trimmingCharacters(in: .newlines)
-                        if trimmed != text { text = trimmed }
-                    }
-                }
+                if let api, let end = await Self.end(of: job.id, api: api, directory: directory), end != text { text = end }
                 try? await Task.sleep(for: .seconds(1.5))
             }
         }

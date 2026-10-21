@@ -7426,13 +7426,13 @@ ${text}`;
         instructionsTaken();
       if (!active.sawText && typeof result?.result === "string" && result.result.trim())
         turn.text(result.result);
-      const usage = result?.usage;
+      const usage = active.usage ?? result?.usage;
       if (active.listed > active.told)
         turn.notice(`Cursor used ${active.listed - active.told} more ${active.listed - active.told === 1 ? "tool" : "tools"} than it reports to Kuvo Code.`);
       for (const lane of active.subagents.values())
         lane.run.end(result?.status === "error" ? "interrupted" : "succeeded");
       turn.endStep({
-        tokens: usage ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0, reasoning: active.reasoningTokens ?? 0, cache: { read: usage.cacheReadTokens ?? 0, write: usage.cacheWriteTokens ?? 0 } } : undefined
+        tokens: usage ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0, reasoning: usage.reasoningTokens ?? 0, cache: { read: usage.cacheReadTokens ?? 0, write: usage.cacheWriteTokens ?? 0 } } : undefined
       });
       if (hooks.signal.aborted || result?.status === "cancelled")
         return { outcome: "interrupted" };
@@ -7541,8 +7541,8 @@ ${text}`;
         turn.notice("Cursor summarized the conversation to make room.");
         return;
       case "turn-ended":
-        if (lane === active && typeof update2.usage?.reasoningTokens === "number")
-          active.reasoningTokens = update2.usage.reasoningTokens;
+        if (lane === active && update2.usage)
+          active.usage = update2.usage;
         return;
       case "tool-requests-listed":
         if (lane === active && typeof update2.callCount === "number")
@@ -11260,4 +11260,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 291f5f96228541d9ea6dc6b8c4f03c1ed1ade235f07143d58b3df88233b920ba
+// Built from Agents/src 92df3fa005dc39eebccaaa96960a3e45286eb8b45d8c3b82335a634a3391d716

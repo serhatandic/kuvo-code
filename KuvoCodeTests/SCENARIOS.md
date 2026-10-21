@@ -23,7 +23,7 @@ end-to-end runs' alone, as are those that need a real machine over SSH (F9, L46,
 | B8 A session in a worktree, merged back | WorktreeSessionTests, GitBranchesTests | |
 | B9 Plan first, then Build It | AgentAsksTests | |
 | B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |
-| B11 The agent asks questions, answered in the card | AgentAsksTests | |
+| B11, L38 The agent asks questions, answered in the card | AgentAsksTests | |
 | B12 Queue while it works, Stop, Resume | ComposerReturnsTests, QueueTests | |
 | B13 Two sessions at once, each with its own asks | AgentAsksTests | |
 | B14 Switch model mid-conversation, or elsewhere, to a coding agent too | SessionsTests, MoveToAgentsTests | |
@@ -62,10 +62,11 @@ end-to-end runs' alone, as are those that need a real machine over SSH (F9, L46,
 | I4 What machines share with this Mac, and what's their own | MachineSettingsTests, CustomAutoPlacesTests, SignInSyncTests | a connected machine's engine starting over with new settings (needs SSH) |
 | J1 The network goes away mid-reply | NetworkDropTests | |
 | J3 The engine stops; the app brings it back | EngineRestartTests | |
-| J4 A huge file, a binary file in the changes | ChangesDiscardTests, ChangesBinaryTests | very large command output (the engine keeps it) |
+| J4 A huge file, a binary file in the changes; a command that prints a lot | ChangesDiscardTests, ChangesBinaryTests, CommandOutputTests | how much output the engine keeps (its own) |
 | K1 Settings keep what you change; its tabs | EngineSettingsFileTests, SettingsTabsTests | |
 | L42 Web search works from the start (the engine has no search chosen; every search failed) | EngineSettingsFileTests | |
-| K3 Notifications | NotificationMaskingTests | |
+| K3, L41 Notifications, and answering from one | NotificationMaskingTests, NotificationRepliesTests | macOS showing them (Notification Center) |
+| ⌘K: find a session in any project, a file in this one, or an action | CommandPaletteTests | its window and keys (UI) |
 | K2 Menu commands and shortcuts | | menus and keys (UI; the end-to-end runs check each against Settings › Keyboard Shortcuts) |
 | K4 The menu bar's usage panel: which accounts count there | UsageAccountsTests, UsageKit's own tests | the panel asking the providers' services (UsageKit's own tests, against a fake of each) |
 | K5 Storage: what takes room | StorageReportTests | |
@@ -73,5 +74,6 @@ end-to-end runs' alone, as are those that need a real machine over SSH (F9, L46,
 | The panel's terminal | TerminalColorsTests | |
 | The context ring: how full, of what the model takes | ContextRingTests | the coding agents' windows, as each says (Agents/test) |
 | Export a conversation | ConversationExportTests | |
+| Updates: only a release build updates itself | UpdatesTests; the release bundle's feed in CI ("Check the app bundle") | Sparkle's own window and install |
 | Move to Applications (to update itself) | AppLocationTests | the offer, a modal alert, and a disk image's read-only copy |
 | Anonymous usage stays anonymous | AnalyticsPrivacyTests | |
