@@ -239,7 +239,8 @@ interface Active extends Lane {
   /** Tool calls it said it would make, and those it told: one its SDK leaves out is said. */
   listed: number
   told: number
-  reasoningTokens?: number
+  /** What its last turn sent and got back, as it said when the turn ended. */
+  usage?: any
 }
 
 class CursorThread implements Thread {
@@ -398,13 +399,15 @@ class CursorThread implements Thread {
       await chain
       if (result?.status !== "error" || active.sawText || active.output.size) instructionsTaken()
       if (!active.sawText && typeof result?.result === "string" && result.result.trim()) turn.text(result.result)
-      const usage = result?.usage
+      // Its last turn's: the request that's in its context now, which the run's own count (all
+      // its turns added up) isn't.
+      const usage = active.usage ?? result?.usage
       // Tools its SDK didn't tell (it reports only the kinds it knows): said, so they aren't a mystery.
       if (active.listed > active.told) turn.notice(`Cursor used ${active.listed - active.told} more ${active.listed - active.told === 1 ? "tool" : "tools"} than it reports to Kuvo Code.`)
       for (const lane of active.subagents.values()) lane.run.end(result?.status === "error" ? "interrupted" : "succeeded")
       turn.endStep({
         tokens: usage
-          ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0, reasoning: active.reasoningTokens ?? 0, cache: { read: usage.cacheReadTokens ?? 0, write: usage.cacheWriteTokens ?? 0 } }
+          ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0, reasoning: usage.reasoningTokens ?? 0, cache: { read: usage.cacheReadTokens ?? 0, write: usage.cacheWriteTokens ?? 0 } }
           : undefined,
       })
       if (hooks.signal.aborted || result?.status === "cancelled") return { outcome: "interrupted" }
@@ -503,7 +506,7 @@ class CursorThread implements Thread {
         turn.notice("Cursor summarized the conversation to make room.")
         return
       case "turn-ended":
-        if (lane === active && typeof update.usage?.reasoningTokens === "number") active.reasoningTokens = update.usage.reasoningTokens
+        if (lane === active && update.usage) active.usage = update.usage
         return
       case "tool-requests-listed":
         if (lane === active && typeof update.callCount === "number") active.listed += update.callCount

@@ -34,13 +34,19 @@ struct CommandPalette: View {
     @State private var selected = 0
     @FocusState private var isFocused: Bool
 
-    private struct Section: Identifiable {
+    struct Section: Identifiable {
         var title: String
         var items: [PaletteItem]
         var id: String { title }
     }
 
     private var sections: [Section] {
+        Self.sections(for: query, actions: actions, sessions: sessions, files: files, openFile: openFile)
+    }
+
+    /// What the palette lists for `query`: before anything's typed, the latest sessions and the
+    /// usual actions; then the best actions, sessions and files.
+    static func sections(for query: String, actions: [PaletteItem], sessions: [PaletteItem], files: [ProjectFiles.File], openFile: @escaping (URL) -> Void) -> [Section] {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
             return [Section(title: "Recent Sessions", items: Array(sessions.prefix(5))), Section(title: "Actions", items: Array(actions.prefix(7)))]
