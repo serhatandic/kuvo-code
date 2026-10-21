@@ -668,49 +668,46 @@ final class SidewaysScrollView: NSScrollView {
     }
 }
 
-/// Copy, as TextButtonStyle looks: a soft fill when the pointer's over it.
-final class ReplyCopyButton: NSButton {
+/// A small text button with an icon in a code block's bar, as TextButtonStyle looks: secondary ink,
+/// and a soft fill when the pointer's over it.
+class ReplyChipButton: NSButton {
     private var isHovering = false { didSet { needsDisplay = true } }
     private var tracking: NSTrackingArea?
-    private var reset: Task<Void, Never>?
+    /// What it says now and its icon, and the longest it ever says (it's as wide as that, so what's
+    /// beside it stays put).
+    private(set) var current: (title: String, symbol: String)
+    private let widest: String
 
-    init() {
+    init(title: String, symbol: String, widest: String? = nil) {
+        current = (title, symbol)
+        self.widest = widest ?? title
         super.init(frame: .zero)
         isBordered = false
         setButtonType(.momentaryChange)
         font = .systemFont(ofSize: 11, weight: .medium)
         imagePosition = .imageLeading
         imageHugsTitle = true
-        toolTip = "Copy Code"
-        show(copied: false)
+        show(title: title, symbol: symbol)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func show(copied: Bool) {
-        title = copied ? "Copied" : "Copy"
-        image = NSImage(systemSymbolName: copied ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)?
+    func show(title: String, symbol: String) {
+        current = (title, symbol)
+        let ink = isHovering ? NSColor.labelColor : NSColor.secondaryLabelColor
+        self.title = title
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
-        contentTintColor = isHovering ? .labelColor : .secondaryLabelColor
-        attributedTitle = NSAttributedString(string: title, attributes: [.font: font!, .foregroundColor: isHovering ? NSColor.labelColor : NSColor.secondaryLabelColor])
-    }
-
-    func showCopied() {
-        show(copied: true)
-        reset?.cancel()
-        reset = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            self?.show(copied: false)
-        }
+        contentTintColor = ink
+        attributedTitle = NSAttributedString(string: title, attributes: [.font: font!, .foregroundColor: ink])
+        invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: NSSize {
         let size = super.intrinsicContentSize
-        // As wide as "Copied", so the language beside it stays put.
-        let copiedWidth = NSAttributedString(string: "Copied", attributes: [.font: font!]).size().width + 10 + 4
-        return NSSize(width: max(size.width, copiedWidth) + 12, height: size.height + 6)
+        let widestWidth = NSAttributedString(string: widest, attributes: [.font: font!]).size().width + 10 + 4
+        return NSSize(width: max(size.width, widestWidth) + 12, height: size.height + 6)
     }
 
     override var fittingSize: NSSize { intrinsicContentSize }
@@ -725,12 +722,12 @@ final class ReplyCopyButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         isHovering = true
-        show(copied: title == "Copied")
+        show(title: current.title, symbol: current.symbol)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
-        show(copied: title == "Copied")
+        show(title: current.title, symbol: current.symbol)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -739,6 +736,29 @@ final class ReplyCopyButton: NSButton {
             NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
         }
         super.draw(dirtyRect)
+    }
+}
+
+/// Copy, in a code block's bar; "Copied" for a moment after.
+final class ReplyCopyButton: ReplyChipButton {
+    private var reset: Task<Void, Never>?
+
+    init() {
+        super.init(title: "Copy", symbol: "doc.on.doc", widest: "Copied")
+        toolTip = "Copy Code"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func showCopied() {
+        show(title: "Copied", symbol: "checkmark")
+        reset?.cancel()
+        reset = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self?.show(title: "Copy", symbol: "doc.on.doc")
+        }
     }
 }
 

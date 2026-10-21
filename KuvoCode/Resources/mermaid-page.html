@@ -15,12 +15,9 @@
 <script src="mermaid.min.js"></script>
 <script>
   const host = document.getElementById('diagram');
-  const send = message => window.webkit.messageHandlers.mermaid.postMessage(message);
   let count = 0;
 
-  new ResizeObserver(() => send({ height: Math.ceil(host.getBoundingClientRect().height) })).observe(host);
-
-  // Draws `code`: its diagram, or what's wrong with it.
+  // Draws `code`, and says how tall its diagram is, or what's wrong with it.
   window.draw = async (code, dark) => {
     mermaid.initialize({
       startOnLoad: false,
@@ -28,19 +25,19 @@
       theme: dark ? 'dark' : 'default',
       fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     });
+    let outcome;
     try {
       const { svg } = await mermaid.render('diagram-' + count++, code);
       host.innerHTML = svg;
-      send({ drawn: true });
+      outcome = { height: Math.ceil(host.getBoundingClientRect().height) };
     } catch (error) {
       host.innerHTML = '';
-      send({ error: String((error && error.message) || error) });
+      outcome = { error: String((error && error.message) || error) };
     }
     // Mermaid leaves its measuring element in the page when a diagram fails.
     document.querySelectorAll('body > [id^="ddiagram-"]').forEach(element => element.remove());
+    return outcome;
   };
-
-  send({ ready: true });
 </script>
 </body>
 </html>
