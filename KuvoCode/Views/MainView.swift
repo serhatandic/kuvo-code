@@ -1048,6 +1048,16 @@ struct MainView: View {
         givesWay.append(pane)
     }
 
+    /// Closing the bar that says an agent in a terminal needs Kuvo Code's tools (see `TerminalToolsNotice`) keeps it closed.
+    @AppStorage("terminalToolsNoticeClosed") private var terminalNoticeClosed = false
+
+    /// How to close that bar, while it shows: with a project's command running in the tab in view, and
+    /// until an agent there has used the tools.
+    private var closeTerminalNotice: (() -> Void)? {
+        guard !terminalNoticeClosed, !app.terminalToolsUsed, let key = selection, terminals.entry(key)?.runsCommand == true else { return nil }
+        return { withAnimation(.ui) { terminalNoticeClosed = true } }
+    }
+
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
         // files and terminals.
@@ -1056,9 +1066,10 @@ struct MainView: View {
             directory: focusedDirectory,
             folders: focusedDirectory.map { [$0] + workspace.extraFolders($0) } ?? [],
             model: focusedModel,
-            environment: app.shellEnvironment,
+            environment: app.terminalEnvironment,
             isExpanded: $panelExpanded,
-            isFocused: focus == .changes
+            isFocused: focus == .changes,
+            closeTerminalNotice: closeTerminalNotice
         )
         .environment(catalog(for: focusedDirectory))
         .simultaneousGesture(TapGesture().onEnded { focus = .changes })
@@ -1403,7 +1414,7 @@ struct MainView: View {
             togglePanel: { withAnimation(.ui) { showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },
-            newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment) } },
+            newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.terminalEnvironment) } },
             run: runProject,
             newBrowser: { showInPanel { utilities.newBrowser() } },
             toggleSidebar: { withAnimation(.ui) { showSidebar(!sidebarOnScreen) } },
@@ -1524,7 +1535,7 @@ struct MainView: View {
             openProjectEditor(ProjectEditorRequest(project: project, focusesRun: true))
             return
         }
-        showInPanel { utilities.run(command, in: directory, environment: app.shellEnvironment) }
+        showInPanel { utilities.run(command, in: directory, environment: app.terminalEnvironment) }
     }
 
     /// Starts a draft in `directory`, or in the current project (a worktree's, for a session in one).
@@ -1546,7 +1557,7 @@ struct MainView: View {
     private func openTerminalTab(command: String?, in directory: String? = nil) {
         let directory = directory ?? activeDirectory ?? NSHomeDirectory()
         Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        openTab(terminals.open(in: directory, command: command, environment: app.shellEnvironment))
+        openTab(terminals.open(in: directory, command: command, environment: app.terminalEnvironment))
     }
 
     private func openFolder() {
@@ -1647,7 +1658,7 @@ struct MainView: View {
         for item in (environment["KUVO_DEMO_PANEL"] ?? "").split(separator: ",").map(String.init) {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
             switch parts.first {
-            case "terminal": utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment)
+            case "terminal": utilities.newTerminal(in: focusedDirectory, environment: app.terminalEnvironment)
             case "browser": utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
             case "machine" where parts.count > 1:
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)

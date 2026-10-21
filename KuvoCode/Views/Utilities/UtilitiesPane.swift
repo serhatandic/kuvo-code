@@ -13,6 +13,8 @@ struct UtilitiesPane: View {
     let environment: [String: String]
     @Binding var isExpanded: Bool
     var isFocused = true
+    /// Closes the notice about giving a terminal's agent Kuvo Code's tools; nil when it isn't shown.
+    var closeTerminalNotice: (() -> Void)?
     @Environment(\.windowControlsInset) private var windowControlsInset
     @Environment(\.windowControlsTrailingInset) private var windowControlsTrailingInset
     @Environment(AppModel.self) private var app
@@ -24,6 +26,7 @@ struct UtilitiesPane: View {
         } content: {
             VStack(spacing: 0) {
                 tabStrip
+                if let closeTerminalNotice { TerminalToolsNotice(close: closeTerminalNotice) }
                 // A tab whose content can't shrink to the panel is cut off at its edges rather
                 // than drawn over the conversation.
                 content

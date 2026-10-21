@@ -14,6 +14,11 @@ final class BrowserToolServer {
     /// The session a caller works for, when it isn't one you see: an engine run in a session with
     /// the coding agents (Auto's, say) is that session's.
     var owner: ((String) async -> String?)?
+    /// A terminal's agent (see `terminalVariables`) used the tools: the panel's notice about
+    /// setting them up can go.
+    var onTerminalCall: (() -> Void)?
+    /// A terminal's agent shows you a file or folder: the panel in view opens it.
+    var showForTerminal: ((URL, Bool) -> Void)?
 
     init(agent: BrowserAgent) {
         self.agent = agent
@@ -22,6 +27,14 @@ final class BrowserToolServer {
     /// Where the coding agents reach it (the bridge gives it to each with its session's header).
     var agentsServer: OutsideAgents.ToolServer? {
         url.map { OutsideAgents.ToolServer(url: $0.absoluteString, token: token, timeout: BrowserTools.executionTimeout) }
+    }
+
+    /// What every terminal in the app has in its environment, for an agent running there to
+    /// reach these tools through `kuvo-mcp.sh` (an MCP server over stdio, which it adds to its
+    /// own settings).
+    var terminalVariables: [String: String] {
+        guard let url, let script = Bundle.main.url(forResource: "kuvo-mcp", withExtension: "sh") else { return [:] }
+        return ["KUVO_MCP_URL": url.absoluteString, "KUVO_MCP_TOKEN": token, "KUVO_MCP_SCRIPT": script.path]
     }
 
     /// The engine's config entry for this server, as `OPENCODE_CONFIG_CONTENT` takes it.
@@ -103,13 +116,15 @@ final class BrowserToolServer {
         let client = request.headers["mcp-session-id"]
         // A coding agent's: its session, as the bridge named it.
         let session = request.headers["x-kuvo-session"]
+        // An agent in one of the app's terminals, which has no session of the engine's.
+        let terminal = request.headers["x-kuvo-terminal"] != nil
         if let batch = body as? [[String: Any]] {
             var replies: [[String: Any]] = []
-            for message in batch { if let reply = await handle(message, from: client, session: session) { replies.append(reply) } }
+            for message in batch { if let reply = await handle(message, from: client, session: session, terminal: terminal) { replies.append(reply) } }
             return replies.isEmpty ? .init(status: 202) : .json(replies)
         }
         guard let message = body as? [String: Any] else { return .init(status: 400) }
-        guard let reply = await handle(message, from: client, session: session) else { return .init(status: 202) }
+        guard let reply = await handle(message, from: client, session: session, terminal: terminal) else { return .init(status: 202) }
         var response = HTTPResponse.json(reply)
         if message["method"] as? String == "initialize" { response.headers["Mcp-Session-Id"] = UUID().uuidString }
         return response
@@ -127,7 +142,7 @@ final class BrowserToolServer {
     private static func key(_ id: Any, client: String?) -> String { (client ?? "") + "|" + String(describing: id) }
 
     /// The reply to one message, or nil for a notification.
-    private func handle(_ message: [String: Any], from client: String?, session: String? = nil) async -> [String: Any]? {
+    private func handle(_ message: [String: Any], from client: String?, session: String? = nil, terminal: Bool = false) async -> [String: Any]? {
         guard let method = message["method"] as? String else { return nil }
         let params = message["params"] as? [String: Any] ?? [:]
         guard let id = message["id"] else {
@@ -137,21 +152,28 @@ final class BrowserToolServer {
         func reply(_ result: [String: Any]) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": result] }
         switch method {
         case "initialize":
+            if terminal { onTerminalCall?() }
             let requested = params["protocolVersion"] as? String
             let supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
             return reply([
                 "protocolVersion": requested.flatMap { supported.contains($0) ? $0 : nil } ?? "2025-06-18",
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
-                "instructions": BrowserTools.instructions(machine: false),
+                "instructions": terminal ? BrowserTools.terminalInstructions : BrowserTools.instructions(machine: false),
             ])
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": BrowserTools.definitions])
+            return reply(["tools": terminal ? BrowserTools.terminalDefinitions : BrowserTools.definitions])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
+            if terminal {
+                guard BrowserTools.terminalTools.contains(name) else {
+                    return reply(["content": [["type": "text", "text": "\(name) needs a conversation in Kuvo Code; from a terminal, use the browser tools and show_in_panel."]], "isError": true])
+                }
+                if name == BrowserTools.showInPanel { return reply(BrowserTools.showInPanelFromTerminal(arguments, show: showForTerminal)) }
+            }
             // The engine names the session calling, so an ask goes to the right conversation; the
             // agents bridge, in a header.
             var caller = (params["_meta"] as? [String: Any])?["ai.opencode/sessionID"] as? String ?? session
@@ -347,11 +369,11 @@ enum BrowserTools {
         return nil
     }
 
-    /// Checks the path, here, and says whether the user sees it now. The window shows it once the
-    /// call succeeds (see `Workspace.onShowInPanel`).
-    static func showInPanelCall(_ arguments: [String: Any], caller: String?) -> [String: Any] {
-        func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
-        guard let raw = arguments["path"] as? String, !raw.isEmpty else { return text("Missing path.", error: true) }
+    private struct PathProblem: Error { let message: String }
+
+    /// The full path a show_in_panel call names, and whether it's a folder; or what's wrong with it.
+    private static func checkedPath(_ arguments: [String: Any], caller: String?) -> Result<(path: String, isFolder: Bool), PathProblem> {
+        guard let raw = arguments["path"] as? String, !raw.isEmpty else { return .failure(PathProblem(message: "Missing path.")) }
         // A relative one is in the folder the conversation works in.
         let expanded = (raw as NSString).expandingTildeInPath
         let base = caller.flatMap(sessionFolder) ?? FileManager.default.currentDirectoryPath
@@ -362,11 +384,41 @@ enum BrowserTools {
         // A folder's path may end in "/", which expanding drops.
         var given = raw
         while given.count > 1, given.hasSuffix("/") { given.removeLast() }
-        guard full == given else { return text("Give the full path: \(full)", error: true) }
+        guard full == given else { return .failure(PathProblem(message: "Give the full path: \(full)")) }
         var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder) else { return text("There's nothing at \(full).", error: true) }
-        return text(shown(full, isFolder: isFolder.boolValue, inView: caller.map(isInView)))
+        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder) else { return .failure(PathProblem(message: "There's nothing at \(full).")) }
+        return .success((full, isFolder.boolValue))
     }
+
+    private static func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
+
+    /// Checks the path, here, and says whether the user sees it now. The window shows it once the
+    /// call succeeds (see `Workspace.onShowInPanel`).
+    static func showInPanelCall(_ arguments: [String: Any], caller: String?) -> [String: Any] {
+        switch checkedPath(arguments, caller: caller) {
+        case .failure(let problem): return text(problem.message, error: true)
+        case .success(let found): return text(shown(found.path, isFolder: found.isFolder, inView: caller.map(isInView)))
+        }
+    }
+
+    /// An agent in a terminal shows a file or folder: it's opened now, in the panel in view, which
+    /// is the one beside that terminal (it has no conversation to keep it for).
+    static func showInPanelFromTerminal(_ arguments: [String: Any], show: ((URL, Bool) -> Void)?) -> [String: Any] {
+        switch checkedPath(arguments, caller: nil) {
+        case .failure(let problem): return text(problem.message, error: true)
+        case .success(let found):
+            show?(URL(filePath: found.path, directoryHint: found.isFolder ? .isDirectory : .notDirectory), found.isFolder)
+            return text("Shown: the \(found.isFolder ? "folder" : "file") \(found.path) is open in Kuvo Code's side panel, beside this terminal.")
+        }
+    }
+
+    /// What an agent in a terminal can use: the panel's browser and show_in_panel. The rest needs a
+    /// conversation of Kuvo Code's (a widget is drawn in one, messages and wake-ups belong to one).
+    static let terminalTools: Set<String> = Set(definitions.compactMap { $0["name"] as? String }.filter { $0.hasPrefix("browser_") }).union([showInPanel])
+
+    static let terminalDefinitions: [[String: Any]] = definitions.filter { terminalTools.contains($0["name"] as? String ?? "") }
+
+    static let terminalInstructions = "You're running in a terminal inside Kuvo Code, the Mac app. These tools use its side panel, which the user sees beside you. The browser_ tools drive its browser: start with browser_navigate, read pages with browser_snapshot, and act on elements by their number. To sign in, use browser_sign_in; for a one-time code, browser_ask_code; for anything only the user can do (a CAPTCHA, approving on their phone), browser_ask_user: they answer in a card in Kuvo Code, so never ask for a password or a code in the terminal. To show the user a file or folder (one they ask to see or open, or what you made), use show_in_panel with its full path: it opens in the side panel."
 
     /// How long the engine lets a tool run: longer than the agent waits for the user.
     static let executionTimeout = 960_000

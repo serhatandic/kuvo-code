@@ -211,6 +211,8 @@ final class MainTerminals {
         let directory: String
         /// The tab's name until the program in the terminal names itself.
         let label: String
+        /// It started a project's command (an agent, say), not a plain shell.
+        let runsCommand: Bool
         let opened = Date()
     }
 
@@ -232,7 +234,7 @@ final class MainTerminals {
         let key = Self.prefix + UUID().uuidString
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
-        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label, runsCommand: command != nil)
         return key
     }
 
