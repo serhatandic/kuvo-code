@@ -20,6 +20,8 @@ final class AppModel {
 
     /// The login shell's environment (PATH and the like), for the engine and terminals.
     private(set) var shellEnvironment = ProcessInfo.processInfo.environment
+    /// The terminals whose agent has used Kuvo Code's tools (see `BrowserToolServer.terminalVariables`).
+    var terminalsUsingTools: Set<String> = []
 
     let catalog = Catalog(isMac: true)
     /// The right panel's tools; one window, so one set.
@@ -271,6 +273,11 @@ final class AppModel {
                 if let config = browserTools.engineConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(config, into: shell["OPENCODE_CONFIG_CONTENT"]) }
                 agents.toolServer = browserTools.agentsServer
                 browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
+                browserTools.isTerminal = { [weak self] key in self?.utilities.terminalPanel(key) != nil }
+                browserTools.onTerminalCall = { [weak self] key in self?.terminalsUsingTools.insert(key) }
+                browserTools.showForTerminal = { [weak self] url, isFolder, key in self?.utilities.showInPanel(url, isFolder: isFolder, for: key) }
+                utilities.toolVariables = { [weak self] in self?.browserTools.terminalVariables ?? [:] }
+                mainTerminals.toolVariables = { [weak self] in self?.browserTools.terminalVariables ?? [:] }
             } catch {
                 log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
             }

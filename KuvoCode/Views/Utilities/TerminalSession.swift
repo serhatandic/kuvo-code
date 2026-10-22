@@ -222,10 +222,16 @@ final class MainTerminals {
         let directory: String
         /// The tab's name until the program in the terminal names itself.
         let label: String
+        /// It started a project's command (an agent, say), not a plain shell.
+        let runsCommand: Bool
         let opened = Date()
     }
 
     private(set) var entries: [String: Entry] = [:]
+
+    /// What an agent in a terminal needs to reach Kuvo Code's tools (see `BrowserToolServer.terminalVariables`).
+    /// The app sets it.
+    @ObservationIgnored var toolVariables: () -> [String: String] = { [:] }
 
     /// The terminals, in the order they were opened.
     var opened: [(key: String, entry: Entry)] {
@@ -243,7 +249,8 @@ final class MainTerminals {
         let key = Self.prefix + UUID().uuidString
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
-        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)
+        let environment = environment.merging(toolVariables()) { _, new in new }.merging(["KUVO_TERMINAL": key]) { _, new in new }
+        entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label, runsCommand: command != nil)
         return key
     }
 
