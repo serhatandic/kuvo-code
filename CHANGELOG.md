@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- GitHub Copilot can be signed in to on a machine, in its own Accounts page. A new machine signs in to integrations like Notion and Linear itself, rather than sharing your Mac's sign-in, which two computers renewing would end.
 - Worktrees on a machine are kept by the machine itself, and its page in Settings › Worktrees shows how much room each takes there.
 - Switching an MCP server to On the web no longer writes it to the engine's settings until you give it a URL, which the engine needs.
 - A bot on a machine keeps its own keys on that machine, not in your Mac's Keychain, so you can give it one from your iPhone with your Mac closed, and they move with it to another computer. Keys your Mac kept for such bots move to their machine the next time Kuvo Code connects.
