@@ -73,6 +73,19 @@ import Testing
         #expect(IntegrationKeys.value(IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) == nil, "its key goes with it")
     }
 
+    /// What a machine noted it removed with a phone, as this Mac reads it with its settings: those
+    /// not added back since are taken in; with its settings unreadable, nothing is, and the note
+    /// stays for next time.
+    @Test func whatAMachineRemovedIsTakenInOnlyWhenItCanBeTold() {
+        let note = #"{"removed":["todoist","linear"]}"#
+        let settings = #"{"mcp":{"servers":{"linear":{"type":"remote","url":"https://mcp.linear.app/mcp"}}}}"#
+        let read = AppModel.removedToTakeIn(note + "\n--kuvo-settings--\n" + settings, mark: "--kuvo-settings--")
+        #expect(read?.note == note)
+        #expect(read?.ids == ["todoist"], "Linear was added back since")
+        #expect(AppModel.removedToTakeIn(note + "\n--kuvo-settings--\n" + "// mine\n" + settings, mark: "--kuvo-settings--") == nil)
+        #expect(AppModel.removedToTakeIn(note, mark: "--kuvo-settings--") == nil)
+    }
+
     /// What a machine gets: those it can run (not this Mac's own apps'), each with its settings
     /// there, its keys named in the machine's keys folder.
     @Test func aMachinesCatalog() throws {

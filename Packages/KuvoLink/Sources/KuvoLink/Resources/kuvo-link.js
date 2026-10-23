@@ -787,6 +787,11 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn;
     if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.(each => each?.name === entry.id)?.integrationID;
+    // Noted for the Mac first: it reads the note as it hears the settings change.
+    let removed = [];
+    try { removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? []; } catch {}
+    fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
+    writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: [...new Set([...removed, entry.id])] }));
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     if (engine && signIn) {
@@ -798,10 +803,6 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     for (const variable of Object.values(entry.variables ?? {})) setBoxKey(variable, null);
     for (const name of [entry.id, `${entry.id}.json`]) fs.rmSync(path.join(INTEGRATION_DATA, name), { recursive: true, force: true });
     dropBotsIntegration(entry);
-    let removed = [];
-    try { removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? []; } catch {}
-    fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
-    writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: [...new Set([...removed, entry.id])] }));
     return { status: 200, value: {} };
   }
   return { status: 405, value: {} };

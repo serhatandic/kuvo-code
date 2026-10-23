@@ -80,24 +80,33 @@ extension AppModel {
     /// Bots' own keys for integrations a machine removed by itself (from a phone), as it noted
     /// them (`box/integrations-removed.json`): gone from your Keychain too, so they don't come back
     /// to it. Read as it connects, and as its settings change there. One its settings have again
-    /// (added back since) keeps them.
+    /// (added back since) keeps them. The note goes once it's been acted on, unless the machine
+    /// noted more meanwhile; with its settings unreadable, it stays for next time.
     func takeInRemovedIntegrations(on machine: String) async {
         guard let connection = machines.engine(machine)?.machine.connection else { return }
         let box = "\"$HOME/\(RemoteEngineInstaller.root)/box"
         let mark = "--kuvo-settings--"
-        guard let output = try? await connection.run("[ -f \(box)/integrations-removed.json\" ] && cat \(box)/integrations-removed.json\" && echo && echo \(mark) && cat \(box)/opencode.json\" 2>/dev/null; rm -f \(box)/integrations-removed.json\"; true") else { return }
-        let parts = output.components(separatedBy: "\n\(mark)\n")
-        guard let removed = (try? JSONSerialization.jsonObject(with: Data(parts[0].utf8)) as? [String: Any])?["removed"] as? [String] else { return }
-        let settings = parts.count > 1 ? try? JSONDecoder().decode([String: JSONValue].self, from: Data(parts[1].utf8)) : nil
-        for id in removed {
+        guard let output = try? await connection.run("f=\(box)/integrations-removed.json\"; [ -f \"$f\" ] || exit 0; cat \"$f\"; echo; echo \(mark); cat \(box)/opencode.json\""),
+              let read = Self.removedToTakeIn(output, mark: mark) else { return }
+        for id in read.ids {
             guard let service = Integrations.service(id) else { continue }
-            // Added back since (or its settings couldn't be read, so it can't be told): kept.
-            if settings == nil || EngineConfig.value(at: MCPSettings.path + [id], in: settings ?? [:]) != nil { continue }
             for bot in bots.list where bot.machine == machine {
                 let theirs = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) }
                 await Task.detached { for variable in theirs { IntegrationKeys.set(nil, for: variable) } }.value
             }
         }
+        _ = try? await connection.run("f=\(box)/integrations-removed.json\"; printf '%s' \(SSHConnection.quoted(read.note)) | cmp -s - \"$f\" && rm -f \"$f\"; true")
+    }
+
+    /// A machine's note of what it removed and its settings, as `takeInRemovedIntegrations` reads
+    /// them (`mark` between): the note as read, and the integrations it names that the settings
+    /// don't have again. Nil when either can't be read.
+    static func removedToTakeIn(_ output: String, mark: String) -> (note: String, ids: [String])? {
+        let parts = output.components(separatedBy: "\n\(mark)\n")
+        guard parts.count == 2,
+              let removed = (try? JSONSerialization.jsonObject(with: Data(parts[0].utf8)) as? [String: Any])?["removed"] as? [String],
+              let settings = try? JSONDecoder().decode([String: JSONValue].self, from: Data(parts[1].utf8)) else { return nil }
+        return (parts[0], removed.filter { EngineConfig.value(at: MCPSettings.path + [$0], in: settings) == nil })
     }
 
     enum IntegrationFailure: LocalizedError {
