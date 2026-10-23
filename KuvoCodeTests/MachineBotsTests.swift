@@ -20,6 +20,7 @@ import Testing
 
     private func done() {
         try? FileManager.default.removeItem(at: botsFile)
+        try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "machine-bots.json"))
         // What waited for a machine that never connected.
         UserDefaults.standard.removeObject(forKey: "botEditsWaiting")
     }
@@ -108,14 +109,18 @@ import Testing
         let later = made.addingTimeInterval(3600)
         let sol = ModelRef(id: "sol", providerID: "anthropic")
         let changed = try descriptor("bot_herald0001", name: "Herald Prime", model: sol, personality: nil, look: BotLook(color: .mint, shape: .gem, face: .wink), updated: later)
-        let older = try descriptor("bot_scout00001", name: "Scout Old", updated: made.addingTimeInterval(-60))
-        await app.bots.takeIn([found("bot_herald0001", changed), found("bot_scout00001", older), found("bot_stays00001", try descriptor("bot_stays00001", name: "Stays"))],
+        // Scout: renamed here since; its description there is as this Mac last saw it.
+        var scout = try #require(app.bots.bot("bot_scout00001"))
+        scout.name = "Scout Here"
+        await app.bots.update(scout)
+        await app.bots.takeIn([found("bot_herald0001", changed), found("bot_scout00001", try descriptor("bot_scout00001", name: "Scout")),
+                               found("bot_stays00001", try descriptor("bot_stays00001", name: "Stays"))],
                               deleted: ["bot_gone000001", "bot_stays00001", "bot_never00001"], on: "box")
 
         let herald = try #require(app.bots.bot("bot_herald0001"))
         #expect(herald.name == "Herald Prime" && herald.look == BotLook(color: .mint, shape: .gem, face: .wink))
-        #expect(herald.personality == nil && herald.model == sol && herald.updated == later)
-        #expect(app.bots.bot("bot_scout00001")?.name == "Scout", "this Mac's is the newer")
+        #expect(herald.personality == nil && herald.model == sol)
+        #expect(app.bots.bot("bot_scout00001")?.name == "Scout Here", "nothing changed there: this Mac's edit stays")
         #expect(app.bots.bot("bot_gone000001") == nil, "deleted there")
         #expect(app.bots.bot("bot_stays00001") != nil, "its folder is there")
         #expect(Bots().list.map(\.id).sorted() == ["bot_herald0001", "bot_scout00001", "bot_stays00001"])
@@ -127,5 +132,33 @@ import Testing
         // Another machine's word about it counts for nothing.
         await app.bots.takeIn([], deleted: ["bot_herald0001"], on: "other")
         #expect(app.bots.bot("bot_herald0001") != nil)
+    }
+
+    /// A machine whose clock is behind this Mac's (by an hour here): a rename made there from a
+    /// phone, after this Mac last saw the bot, is still taken in, though its time reads earlier
+    /// than this Mac's last edit; what was changed here and not there (its look) stays.
+    @Test func aChangeOnAMachineWhoseClockIsBehindIsStillTakenIn() async throws {
+        defer { done() }
+        let made = Date(timeIntervalSince1970: 1_792_000_000)
+        func found(_ data: Data) -> Bots.Found {
+            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_herald0001", descriptor: data, session: "ses_bot_herald0001", via: "")
+        }
+        app.bots.adopt([found(try descriptor("bot_herald0001", updated: made))], on: "box")
+        // Here, by this Mac's clock: a new look.
+        var herald = try #require(app.bots.bot("bot_herald0001"))
+        herald.look = BotLook(color: .coral, shape: .gem, face: .happy)
+        await app.bots.update(herald, at: made.addingTimeInterval(600))
+        // There, from a phone, ten minutes later by this Mac's clock, but an hour behind it.
+        let renamed = try descriptor("bot_herald0001", name: "Herald Prime", updated: made.addingTimeInterval(1200 - 3600))
+        await app.bots.takeIn([found(renamed)], deleted: [], on: "box")
+        let now = try #require(app.bots.bot("bot_herald0001"))
+        #expect(now.name == "Herald Prime", "the rename there, whatever its clock says")
+        #expect(now.look == BotLook(color: .coral, shape: .gem, face: .happy), "the look changed here stays")
+        // Seen now: the same again changes nothing, even after another edit here.
+        var again = now
+        again.name = "Herald Here"
+        await app.bots.update(again)
+        await app.bots.takeIn([found(renamed)], deleted: [], on: "box")
+        #expect(app.bots.bot("bot_herald0001")?.name == "Herald Here")
     }
 }

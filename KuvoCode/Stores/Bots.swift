@@ -464,6 +464,7 @@ final class Bots {
         await app?.machineGroups.remove(bot)
         list.removeAll { $0.id == bot.id }
         described[bot.id] = nil
+        if seenThere[bot.id] != nil { seenThere[bot.id] = nil }
         save()
         app?.wakeUps.forget(key: bot.id)
         app?.utilities.closeTabs(of: bot.id)
@@ -1004,13 +1005,22 @@ final class Bots {
         let away = Dictionary(grouping: changed.filter { $0.bot.machine != nil }) { $0.bot.machine ?? "" }
         for (machine, entries) in away {
             guard let engine = app?.machines.engine(machine), engine.isReady else { continue }
-            guard let kept = await Self.write(entries, on: engine.machine.connection) else {
+            guard let kept = await Self.write(entries.map { ($0.bot, $0.data, seenThere[$0.bot.id]) }, on: engine.machine.connection) else {
                 log.error("Bots' descriptions weren't written on a machine")
                 continue
             }
-            for (bot, data) in entries where !kept.contains(bot.folder) { described[bot.id] = data }
+            for (bot, data) in entries where !kept.contains(bot.folder) {
+                described[bot.id] = data
+                seenThere[bot.id] = data
+            }
             // Edited there since (from a phone, through its bridge): taken in, then written again.
-            if !kept.isEmpty { Task { [weak self] in await self?.adoptMade(on: machine) } }
+            let again = entries.filter { kept.contains($0.bot.folder) }.map(\.bot.id)
+            if !again.isEmpty {
+                Task { [weak self] in
+                    await self?.adoptMade(on: machine)
+                    await self?.describe(again, force: true)
+                }
+            }
         }
     }
 
@@ -1024,10 +1034,11 @@ final class Bots {
     /// Writes descriptions on a machine, through one connection: each folder and description, on
     /// its input (a command line has a size limit), each written whole, never into a folder
     /// that isn't there.
-    /// Writes them on a machine, but for one whose description there is newer (edited there since,
-    /// from a phone): kept, and named in what this answers (its folder). Nil: not written.
-    private static func write(_ entries: [(bot: Bot, data: Data)], on connection: SSHConnection) async -> Set<String>? {
-        let lines = entries.map { Data($0.bot.folder.utf8).base64EncodedString() + "\t" + $0.data.base64EncodedString() }.joined(separator: "\n") + "\n"
+    /// Writes them on a machine, but for one whose description there changed since this Mac last
+    /// saw it (`seen`; edited there, from a phone): kept, and named in what this answers (its
+    /// folder). Nil: not written.
+    private static func write(_ entries: [(bot: Bot, data: Data, seen: Data?)], on connection: SSHConnection) async -> Set<String>? {
+        let lines = entries.map { [Data($0.bot.folder.utf8), $0.data, $0.seen ?? Data()].map { $0.base64EncodedString() }.joined(separator: "\t") }.joined(separator: "\n") + "\n"
         let folder = FileManager.default.temporaryDirectory.appending(path: AppInfo.bundleID)
         let input = folder.appending(path: "bot-descriptions-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: input) }
@@ -1036,16 +1047,16 @@ final class Bots {
             try Data(lines.utf8).write(to: input)
             let output = try await connection.run("""
                 t="$(printf '\\t')"
-                updated() { sed -n 's/.*"updated" *: *"\\([^"]*\\)".*/\\1/p' "$1" 2>/dev/null | head -n 1; }
-                while IFS="$t" read -r f j; do
+                while IFS="$t" read -r f j w; do
                   d="$(printf '%s' "$f" | base64 -d)" || exit 1
                   [ -d "$d" ] || continue
-                  printf '%s' "$j" | base64 -d >"$d/\(Bot.Descriptor.file).new" || { rm -f "$d/\(Bot.Descriptor.file).new"; exit 1; }
-                  old="$(updated "$d/\(Bot.Descriptor.file)")"; new="$(updated "$d/\(Bot.Descriptor.file).new")"
-                  if [ -n "$old" ] && [ "$old" != "$new" ] && [ "$(printf '%s\\n%s\\n' "$old" "$new" | sort | tail -n 1)" = "$old" ]; then
-                    rm -f "$d/\(Bot.Descriptor.file).new"; printf 'kept\\t%s\\n' "$f"; continue
+                  b="$d/\(Bot.Descriptor.file)"
+                  if [ -n "$w" ] && [ -f "$b" ]; then
+                    printf '%s' "$w" | base64 -d >"$b.was" || exit 1
+                    if ! cmp -s "$b" "$b.was"; then rm -f "$b.was"; printf 'kept\\t%s\\n' "$f"; continue; fi
+                    rm -f "$b.was"
                   fi
-                  mv -f "$d/\(Bot.Descriptor.file).new" "$d/\(Bot.Descriptor.file)" || { rm -f "$d/\(Bot.Descriptor.file).new"; exit 1; }
+                  printf '%s' "$j" | base64 -d >"$b.new" && mv -f "$b.new" "$b" || { rm -f "$b.new"; exit 1; }
                 done
                 echo written
                 """, input: input)
@@ -1066,6 +1077,14 @@ final class Bots {
     private static func load() -> [Bot] {
         JSONFile.read([Bot].self, from: file, isoDates: true) ?? []
     }
+
+    /// Each machine bot's description as this Mac last saw it there (wrote it, or took it in), as
+    /// it was written: what changed there since is what differs from it, whatever the two clocks
+    /// say (`takeIn`, and a description written there keeps one changed since).
+    @ObservationIgnored private var seenThere: [String: Data] = JSONFile.read([String: Data].self, from: Bots.seenFile) ?? [:] {
+        didSet { _ = JSONFile.write(seenThere, to: Self.seenFile) }
+    }
+    private static var seenFile: URL { AppInfo.supportDirectory.appending(path: "machine-bots.json") }
 
     private func save() {
         JSONFile.write(list, to: Self.file, isoDates: true, readable: true)
@@ -1197,6 +1216,7 @@ extension Bots {
             if entry.via == "bridge" { bot.agents = true }
             bot.updated = described.updated
             adopted.append(bot)
+            seenThere[described.id] = entry.descriptor
         }
         guard !adopted.isEmpty else { return [] }
         list.append(contentsOf: adopted)
@@ -1238,24 +1258,34 @@ extension Bots {
     static let deletedFile = "deleted.json"
 
     /// What was changed or deleted on a machine while this Mac was away (from a phone, through its
-    /// bridge), taken in as it connects: a bot whose description there is newer than this Mac's
-    /// takes its name, look, personality and model, as Edit Bot gives them; one deleted there,
-    /// whose folder has gone, goes here too, as Delete Bot… leaves it. One on its way to another
-    /// computer is left as it is.
+    /// bridge), taken in as it connects: of a bot's description there, what changed since this Mac
+    /// last saw it (its name, look, personality or model, as Edit Bot gives them) is taken in, and
+    /// what didn't stays as this Mac has it, however the two computers' clocks differ; one deleted
+    /// there, whose folder has gone, goes here too, as Delete Bot… leaves it. One on its way to
+    /// another computer is left as it is.
     func takeIn(_ found: [Found], deleted: Set<String>, on machine: String) async {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         for entry in found {
             guard let described = try? decoder.decode(Bot.Descriptor.self, from: entry.descriptor), described.kuvo == Bot.Descriptor.version,
                   (entry.folder as NSString).lastPathComponent == described.id, let known = bot(described.id), known.machine == machine,
-                  !Moves.isFrozen(known.id), described.updated > (known.updated ?? known.created) else { continue }
+                  !Moves.isFrozen(known.id) else { continue }
+            let seen = seenThere[known.id]
+            guard seen != entry.descriptor else { continue }
+            let before = seen.flatMap { try? decoder.decode(Bot.Descriptor.self, from: $0) }
+            // Never seen there by this Mac (an older Kuvo Code took it in): the newer, by the clocks.
+            if before == nil, described.updated <= (known.updated ?? known.created) {
+                seenThere[known.id] = entry.descriptor
+                continue
+            }
             var edited = known
             let name = Self.oneLine(described.name)
-            if !name.isEmpty { edited.name = name }
-            edited.look = described.look
-            edited.personality = described.personality
-            edited.model = described.model
-            if edited != known { await update(edited, at: described.updated) }
+            if !name.isEmpty, described.name != before?.name { edited.name = name }
+            if described.look != before?.look { edited.look = described.look }
+            if described.personality != before?.personality { edited.personality = described.personality }
+            if described.model != before?.model { edited.model = described.model }
+            seenThere[known.id] = entry.descriptor
+            if edited != known { await update(edited) }
         }
         let there = Set(found.map { ($0.folder as NSString).lastPathComponent })
         for id in deleted where !there.contains(id) {
