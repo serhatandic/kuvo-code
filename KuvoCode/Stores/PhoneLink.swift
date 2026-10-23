@@ -990,16 +990,10 @@ final class PhoneLink {
             return (200, (try? JSONEncoder().encode(["providers": endedSignIns()])) ?? Data())
         case let path where path.hasPrefix("kuvo/accounts/") && path.hasSuffix("/forget") && request.method.uppercased() == "POST":
             // Disconnect, as Settings › Accounts does it: its sign-ins and keys here, and the copies on your machines.
+            // Any name a plan has (one you added before their names became plain letters keeps the
+            // name it was given): `forgetSignIn` signs out only your plans.
             let provider = String(path.dropFirst("kuvo/accounts/".count).dropLast("/forget".count)).removingPercentEncoding ?? ""
-            // A plain name, or one of the providers you added here (one added before their names
-            // became plain letters keeps the name it was given).
-            let added = { () -> Bool in
-                guard let config = self.engineConfig else { return false }
-                config.reload()
-                return config.value(at: ["providers", provider]) != nil
-            }
-            guard !provider.isEmpty, !provider.contains("/"),
-                  provider.range(of: #"^[A-Za-z0-9_@.-]+$"#, options: .regularExpression) != nil || added() else { return (404, Data()) }
+            guard !provider.isEmpty, !provider.contains("/") else { return (404, Data()) }
             return forgetSignIn(provider) ? (200, Data("{}".utf8)) : (404, Data())
         case "kuvo/usage":
             guard let usage = usageJSON() else { return (404, Data()) }

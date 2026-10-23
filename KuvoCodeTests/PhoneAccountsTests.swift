@@ -103,17 +103,9 @@ import Testing
         #expect(try await ask("kuvo/accounts/\(id)/forget", method: "POST").status == 200)
         #expect(forgotten == ["sirket-proxy"])
 
-        let folder = AppInfo.testRoot.appending(path: "PhoneAccounts/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        try Data(#"{"providers": {"şirket-proxy": {"npm": "@ai-sdk/openai-compatible"}}}"#.utf8).write(to: folder.appending(path: "opencode.json"))
-        let config = EngineConfig(file: folder.appending(path: "opencode.json"))
-        link.engineConfig = config
         let older = "şirket-proxy".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/")))!
         #expect(try await ask("kuvo/accounts/\(older)/forget", method: "POST").status == 200)
         #expect(forgotten == ["sirket-proxy", "şirket-proxy"])
-        let unknown = "kırmızı".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
-        #expect(try await ask("kuvo/accounts/\(unknown)/forget", method: "POST").status == 404, "only one you added")
     }
 
     /// OpenCode's sign-in page, started as the Mac starts it: with its method's hidden answer (the

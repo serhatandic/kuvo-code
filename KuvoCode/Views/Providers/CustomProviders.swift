@@ -111,6 +111,7 @@ struct CustomProviderEditor: View {
                     SettingsTextRow(title: "Name") {
                         TextField("Name", text: $name, prompt: Text("My Company, or Local Server"))
                             .onSubmit(create)
+                            .onChange(of: name) { problem = nil }
                     }
                 } footer: {
                     if let problem {
