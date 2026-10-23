@@ -13,12 +13,47 @@ enum AlsoApply {
         case unread(connected: Bool)
         case refused(String)
 
+        /// Why, for several computers at once.
+        var plural: String {
+            switch self {
+            case .unread(let connected): connected ? "their settings couldn’t be read." : "they aren’t connected."
+            case .refused(let why): why
+            }
+        }
+
         var errorDescription: String? {
             switch self {
             case .unread(let connected): connected ? "its settings couldn’t be read." : "it isn’t connected."
             case .refused(let why): why
             }
         }
+    }
+
+    /// Where a change wasn't made and why, as the bar says it, computers with the same reason
+    /// together: "Not applied on A and B: they aren't connected." `titled`: the bar's title says
+    /// where already, so only why ("A and B aren't connected.").
+    static func failures(_ missed: [(name: String, error: any Error)], titled: Bool) -> String {
+        var reasons: [(error: any Error, names: [String])] = []
+        for (name, error) in missed {
+            if let at = reasons.firstIndex(where: { $0.error.localizedDescription == error.localizedDescription }) {
+                reasons[at].names.append(name)
+            } else {
+                reasons.append((error, [name]))
+            }
+        }
+        return reasons.map { error, names in
+            let who = names.formatted(.list(type: .and))
+            let one = names.count == 1
+            guard titled else {
+                let why = one ? error.localizedDescription : (error as? Failure)?.plural ?? error.localizedDescription
+                return "Not applied on \(who): \(why)"
+            }
+            return switch error as? Failure {
+            case .unread(connected: false): "\(who) \(one ? "isn’t" : "aren’t") connected."
+            case .unread(connected: true): one ? "\(who)’s settings couldn’t be read." : "The settings of \(who) couldn’t be read."
+            default: "\(who): \(error.localizedDescription)"
+            }
+        }.joined(separator: " ")
     }
 
     /// The changes as one: each place's first value before and last after, in the order they were

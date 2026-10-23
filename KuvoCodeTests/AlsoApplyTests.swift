@@ -185,6 +185,16 @@ import Testing
         #expect(AlsoApply.translated(AlsoApply.net(apps.changes), onto: [:], to: nil).count == 1, "another Mac runs it")
     }
 
+    /// Where a change couldn't be made, said once per reason, with the computers it's the reason
+    /// for; only why when the title says where already.
+    @Test func whereItWasntMadeIsSaidOncePerReason() {
+        let away = AlsoApply.Failure.unread(connected: false)
+        let missed: [(name: String, error: any Error)] = [("lab", away), ("box", away), ("pi", AlsoApply.Failure.unread(connected: true))]
+        #expect(AlsoApply.failures(missed, titled: false) == "Not applied on lab and box: they aren’t connected. Not applied on pi: its settings couldn’t be read.")
+        #expect(AlsoApply.failures(missed, titled: true) == "lab and box aren’t connected. pi’s settings couldn’t be read.")
+        #expect(AlsoApply.failures([("lab", away)], titled: false) == "Not applied on lab: it isn’t connected.")
+    }
+
     @Test func whatsAppliedIsntOfferedBack() throws {
         let there = try config([:])
         there.set([(["model"], .string("anthropic/sonnet"))], noted: false)

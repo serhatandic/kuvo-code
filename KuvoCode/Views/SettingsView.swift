@@ -652,17 +652,18 @@ private struct AlsoApplyBar: View {
     @State private var seen: Int?
     @State private var applying: String?
     @State private var applied: Applied?
-    @State private var failure: String?
 
     /// How it went: where it's made now, and what stayed here because a computer doesn't have it
     /// (an agent, a command, a server) or keeps its own (its shell), which stays said until Done.
-    /// `failure`: where it couldn't be made, said in red, with Try Again for `missed`.
+    /// `failure`: where it couldn't be made, said in red, with Try Again for `missed`. `through`:
+    /// the last change it was about, put away with Done (one made since is offered after).
     private struct Applied: Equatable {
         var title: String
         var note: String?
         var anywhere: Bool
         var failure: String?
         var missed: [SidebarBox] = []
+        var through: Int
     }
 
     private var config: EngineConfig { app.config(for: box) }
@@ -672,7 +673,7 @@ private struct AlsoApplyBar: View {
     var body: some View {
         // Always there (with nothing in it, no room), so it notes what was there as it opened.
         VStack(spacing: 0) {
-            if applied != nil || applying != nil || failure != nil || !AlsoApply.net(fresh).isEmpty {
+            if applied != nil || applying != nil || !AlsoApply.net(fresh).isEmpty {
                 HStack(spacing: 12) {
                     if let applying {
                         Spinner(size: 13)
@@ -702,13 +703,13 @@ private struct AlsoApplyBar: View {
                         if applied.note != nil || applied.failure != nil {
                             Spacer(minLength: 8)
                             if !applied.missed.isEmpty {
-                                Button("Try Again") { apply(to: applied.missed) }
+                                Button("Try Again") { apply(to: applied.missed, through: applied.through) }
                                     .fixedSize()
                             }
                             Button("Done") {
                                 withAnimation(.ui) {
+                                    seen = max(seen ?? 0, applied.through)
                                     self.applied = nil
-                                    dismiss()
                                 }
                             }
                         }
@@ -720,9 +721,9 @@ private struct AlsoApplyBar: View {
                             Text("Changed on \(app.name(of: box)) only")
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(2)
-                            Text(failure ?? "Each computer keeps its own settings.")
+                            Text("Each computer keeps its own settings.")
                                 .font(.system(size: 12))
-                                .foregroundStyle(failure == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
+                                .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
                         Spacer(minLength: 8)
@@ -784,19 +785,20 @@ private struct AlsoApplyBar: View {
 
     private func dismiss() {
         seen = config.changes.last?.id ?? seen
-        failure = nil
     }
 
-    private func apply(to targets: [SidebarBox]) {
-        let changes = fresh
-        guard let last = changes.last?.id else { return }
-        failure = nil
+    /// The changes not dealt with yet (up to `through`, for Try Again), made on `targets`.
+    private func apply(to targets: [SidebarBox], through: Int? = nil) {
+        let changes = fresh.filter { $0.id <= through ?? .max }
+        guard let last = changes.last?.id, let first = targets.first else { return }
+        // Straight to what it's doing: never a moment of the bar it came from.
+        applying = app.name(of: first)
         applied = nil
         Task {
             var done: [String] = []
             var notDone: [String] = []
             var notes: [String] = []
-            var failures: [String] = []
+            var failures: [(name: String, error: any Error)] = []
             var missed: [SidebarBox] = []
             for target in targets {
                 let name = app.name(of: target)
@@ -809,7 +811,7 @@ private struct AlsoApplyBar: View {
                         notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
                     }
                 } catch {
-                    failures.append("Not applied on \(name): \(error.localizedDescription)")
+                    failures.append((name, error))
                     missed.append(target)
                 }
             }
@@ -825,22 +827,18 @@ private struct AlsoApplyBar: View {
             if !macOnly.isEmpty {
                 notes.append("\(macOnly.formatted(.list(type: .and))) \(macOnly.count == 1 ? "stays on Macs: it uses" : "stay on Macs: they use") a Mac’s own apps.")
             }
+            // Where it was made, or else where it wasn't (and below, why).
+            let title = done.isEmpty
+                ? "Not applied on \((notDone + failures.map(\.name)).formatted(.list(type: .and)))"
+                : "Also applied on \(done.formatted(.list(type: .and)))"
             guard failures.isEmpty else {
-                if done.isEmpty && notDone.isEmpty {
-                    // Made nowhere: said where the change is offered from, to try again.
-                    failure = failures.joined(separator: " ")
-                } else {
-                    applied = Applied(title: done.isEmpty ? "Not applied on \(notDone.formatted(.list(type: .and)))" : "Also applied on \(done.formatted(.list(type: .and)))",
-                                      note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: !done.isEmpty,
-                                      failure: failures.joined(separator: " "), missed: missed)
-                }
+                // Offered again with Try Again, until Done.
+                applied = Applied(title: title, note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: !done.isEmpty,
+                                  failure: AlsoApply.failures(failures, titled: done.isEmpty), missed: missed, through: last)
                 return
             }
             seen = max(seen ?? 0, last)
-            let result = Applied(
-                title: done.isEmpty ? "Not applied on \(notDone.formatted(.list(type: .and)))" : "Also applied on \(done.formatted(.list(type: .and)))",
-                note: notes.isEmpty ? nil : notes.joined(separator: " "),
-                anywhere: !done.isEmpty)
+            let result = Applied(title: title, note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: !done.isEmpty, through: last)
             applied = result
             // Said and gone, unless something stayed here: that waits for Done.
             guard result.note == nil else { return }
