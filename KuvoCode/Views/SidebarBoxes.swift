@@ -151,8 +151,10 @@ struct BoxPager<Page: View>: View {
                         page(box)
                             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                             // Clipped out of sight, a page beside still takes clicks where it lies
-                            // (over the conversation): only the one in view does.
+                            // (over the conversation): only the one in view does, and only it is
+                            // there for VoiceOver and the keyboard.
                             .allowsHitTesting(box == selected)
+                            .accessibilityHidden(box != selected)
                     }
                 }
             }

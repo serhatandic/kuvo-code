@@ -231,6 +231,8 @@ private struct GroupMessageRow: View, Equatable {
                     .buttonStyle(.plain)
                     .clickablePointer()
                     .help("Open \(author.name)’s Conversation")
+                    // Its name beside it opens the same, and says so.
+                    .accessibilityHidden(true)
                 } else {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.system(size: 22))
@@ -457,6 +459,7 @@ private struct TypingRow: View {
                 .buttonStyle(.plain)
                 .clickablePointer()
                 .help("Open \(bot.name)’s Conversation")
+                .accessibilityLabel("Open \(bot.name)’s Conversation")
                 ShimmerText(text: "\(bot.name) is thinking…")
                     .font(.callout)
             }
