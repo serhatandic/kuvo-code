@@ -46,8 +46,42 @@ extension AppModel {
         [.mac] + machines.list.map { .machine($0.id) }
     }
 
+    /// Coding agents with a newer version that their installer can update to, on every computer
+    /// whose agents are up (this Mac, and each machine connected now), one per program: what
+    /// Update All updates.
+    var outdatedAgents: [OutdatedAgent] {
+        boxes.flatMap { box -> [OutdatedAgent] in
+            if let machine = box.machine, machines.engine(machine) == nil { return [] }
+            let agents = agents(for: box)
+            guard agents.api != nil else { return [] }
+            var seen = Set<String>()
+            return catalog(for: box).codingAgents.compactMap { integration in
+                let metadata = integration.metadata
+                guard metadata?["outdated"]?.bool == true, metadata?["updates"]?.bool == true,
+                      let kind = metadata?["agent"]?.string, seen.insert(kind).inserted else { return nil }
+                return OutdatedAgent(box: box, integration: integration)
+            }
+        }
+    }
+
+    /// Updates each of them, on its own computer, through the installer that owns it.
+    func updateAllAgents() {
+        for outdated in outdatedAgents {
+            let agents = agents(for: outdated.box)
+            let catalog = catalog(for: outdated.box)
+            if agents.updating.contains(outdated.integration.id) { continue }
+            agents.update(outdated.integration.id) { await catalog.refreshAgents(fresh: true) }
+        }
+    }
+
     /// A machine that isn't added any more: nothing there to show or change.
     private static let noSettings = EngineConfig(draft: [:])
+}
+
+/// A coding agent that can be updated, on the computer it's on.
+struct OutdatedAgent {
+    let box: SidebarBox
+    let integration: Integration
 }
 
 extension EnvironmentValues {

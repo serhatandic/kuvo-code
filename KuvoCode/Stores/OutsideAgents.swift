@@ -388,6 +388,33 @@ final class OutsideAgents {
         }
     }
 
+    /// Agents whose program is installing, by the account it was asked for.
+    private(set) var installing: Set<String> = []
+    /// Why an install didn't work, until you've seen it.
+    var installFailures: [String: String] = [:]
+
+    /// Installs an agent's program (Claude Code, Codex, Grok's CLI) with its maker's own installer,
+    /// the command it shows, on the computer its bridge is on, as you'd run it in a terminal there;
+    /// then `refresh`es what the app shows of it. Whether it's there after (`then` gets true) is
+    /// what counts.
+    func install(_ providerID: String, then refresh: @escaping (Bool) async -> Void) {
+        guard let api, !installing.contains(providerID) else { return }
+        installing.insert(providerID)
+        installFailures[providerID] = nil
+        Task {
+            var installed = false
+            do {
+                let result = try await api.installAgent(providerID)
+                installed = result.installed
+                if !result.installed { installFailures[providerID] = result.message ?? "It isn't installed." }
+            } catch {
+                installFailures[providerID] = error.localizedDescription
+            }
+            await refresh(installed)
+            installing.remove(providerID)
+        }
+    }
+
     /// Signs out of an agent, where the agent lets an app do that (Cursor's browser sign-in).
     func signOut(_ providerID: String) async throws {
         guard let api else { return }
@@ -569,6 +596,12 @@ extension OpenCodeAPI {
         return try await client.send(request, as: DataEnvelope<AgentUpdate>.self).data
     }
 
+    func installAgent(_ providerID: String) async throws -> AgentInstall {
+        var request = try client.request("POST", "api/integration/\(providerID.pathComponentEscaped)/install")
+        request.timeoutInterval = 15 * 60
+        return try await client.send(request, as: DataEnvelope<AgentInstall>.self).data
+    }
+
     func removeAgentAccount(_ providerID: String) async throws {
         _ = try await client.send(try client.request("DELETE", "api/kuvo/accounts/\(providerID.pathComponentEscaped)"), as: Empty.self)
     }
@@ -582,6 +615,13 @@ extension OpenCodeAPI {
 /// How updating an agent's program went.
 nonisolated struct AgentUpdate: Decodable, Sendable {
     var updated: Bool
+    var version: String?
+    /// What went wrong, in the installer's words.
+    var message: String?
+}
+
+nonisolated struct AgentInstall: Decodable, Sendable {
+    var installed: Bool
     var version: String?
     /// What went wrong, in the installer's words.
     var message: String?

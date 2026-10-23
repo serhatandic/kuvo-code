@@ -44,6 +44,15 @@ struct SubscriptionsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
+                if shows == .agents, !updatable.isEmpty {
+                    Button(action: app.updateAllAgents) {
+                        Label("Update All", systemImage: "arrow.down.circle")
+                            .font(.callout)
+                            .fixedSize()
+                    }
+                    .buttonStyle(TextButtonStyle())
+                    .help("Updates \(updatable.formatted(.list(type: .and))), each through the installer that owns it")
+                }
                 if shows == .agents {
                     // You installed one or signed in to one elsewhere: asked anew (so is
                     // everything when you come back to the app).
@@ -99,6 +108,15 @@ struct SubscriptionsSection: View {
         }
         .task(id: agents.api != nil) {
             if shows == .agents { await catalog.refreshAgents(fresh: true) }
+        }
+    }
+
+    /// What Update All updates, on this Mac and your machines, not updating already: each named
+    /// with where it is.
+    private var updatable: [String] {
+        app.outdatedAgents.compactMap { outdated in
+            guard !app.agents(for: outdated.box).updating.contains(outdated.integration.id) else { return nil }
+            return "\(OutsideAgents.name(outdated.integration.id)) on \(app.name(of: outdated.box))"
         }
     }
 
@@ -229,7 +247,6 @@ private struct ProductBlock: View {
     @Environment(\.agentsBridge) private var bridge
     private var agents: OutsideAgents { bridge ?? app.agents }
     @Environment(Catalog.self) private var catalog
-    @State private var copied = false
     /// Naming an account you're adding (an agent's: each gets a folder and a name of its own).
     @State private var naming = false
     @State private var name = ""
@@ -246,6 +263,8 @@ private struct ProductBlock: View {
     private var updateCommand: String? { main.metadata?["updateCommand"]?.string }
     private var isUpdating: Bool { agents.updating.contains(main.id) }
     private var updateFailure: String? { agents.updateFailures[main.id] }
+    private var isInstalling: Bool { agents.installing.contains(main.id) }
+    private var installFailure: String? { agents.installFailures[main.id] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -296,23 +315,34 @@ private struct ProductBlock: View {
         } message: {
             Text(updateFailure ?? "")
         }
+        .alert("Couldn't Install \(title)", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { agents.installFailures[main.id] = nil } })) {
+            if let installCommand {
+                Button("Copy Command") { Clipboard.copy(installCommand) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(installFailure ?? "")
+        }
     }
 
     /// What it needs from you, on the product's line: installing again, or an update; and another account.
     private var actions: some View {
         HStack(spacing: 10) {
-            if isAgent, !isInstalled, let installCommand {
-                Button(copied ? "Copied" : "Copy Install Command", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                    Clipboard.copy(installCommand)
-                    withAnimation(.ui) { copied = true }
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        withAnimation(.ui) { copied = false }
-                    }
+            if isInstalling {
+                HStack(spacing: 6) {
+                    Spinner(size: 12)
+                    Text("Installing…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .help("It isn't installed now. Run this in Terminal, then click Refresh.")
+            } else if isAgent, !isInstalled, let installCommand {
+                Button(action: install) {
+                    Label("Install", systemImage: "arrow.down.circle")
+                        .font(.callout)
+                }
+                .buttonStyle(TextButtonStyle())
+                .disabled(agents.api == nil)
+                .help("It isn't installed. Runs \(installCommand), its maker's installer.")
             } else if isUpdating {
                 HStack(spacing: 6) {
                     Spinner(size: 12)
@@ -375,10 +405,15 @@ private struct ProductBlock: View {
         let catalog = catalog
         agents.update(main.id) { await catalog.refreshAgents(fresh: true) }
     }
+
+    private func install() {
+        let catalog = catalog
+        agents.install(main.id) { _ in await catalog.refreshAgents(fresh: true) }
+    }
 }
 
-/// A product you haven't signed in to: a click signs in (or, for an agent that isn't installed,
-/// copies the command that installs it). The same tile as the page's popular providers.
+/// A product you haven't signed in to: a click signs in (an agent that isn't installed, installed
+/// first with its maker's installer). The same tile as the page's popular providers.
 private struct SubscriptionTile: View {
     let product: Product
     let connect: (Integration) -> Void
@@ -386,18 +421,21 @@ private struct SubscriptionTile: View {
     /// The agents shown: this Mac's, or a machine's (`agentsBridge`).
     @Environment(\.agentsBridge) private var bridge
     private var agents: OutsideAgents { bridge ?? app.agents }
+    @Environment(Catalog.self) private var catalog
     @Environment(\.colorScheme) private var scheme
     @State private var isHovering = false
-    @State private var copied = false
 
     private var installCommand: String? {
         guard product.isAgent, product.main.metadata?["installed"]?.bool == false else { return nil }
         return product.main.metadata?["install"]?.string
     }
 
+    private var isInstalling: Bool { agents.installing.contains(product.main.id) }
+    private var installFailure: String? { agents.installFailures[product.main.id] }
+
     private var hint: String {
-        if copied { return "Copied: run it in Terminal" }
-        if installCommand != nil { return "Install first" }
+        if isInstalling { return "Installing…" }
+        if installCommand != nil { return "Installs, then signs in" }
         return product.isAgent ? "Coding agent" : "Your plan's models"
     }
 
@@ -416,6 +454,7 @@ private struct SubscriptionTile: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if isInstalling { Spinner(size: 12) }
         }
         .padding(10)
         .background(SettingsMetrics.groupFill(scheme), in: .rect(cornerRadius: SettingsMetrics.groupRadius))
@@ -429,24 +468,31 @@ private struct SubscriptionTile: View {
         .onTapGesture(perform: open)
         .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovering = hovering } }
         .pointerStyle(.link)
-        .help(installCommand.map { "Copies \($0): run it in Terminal, then click Refresh" } ?? product.main.metadata?["message"]?.string ?? "Sign in to \(product.title)")
+        .help(installCommand.map { "Runs \($0), its maker's installer, then signs in" } ?? product.main.metadata?["message"]?.string ?? "Sign in to \(product.title)")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+        .alert("Couldn't Install \(product.title)", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { agents.installFailures[product.main.id] = nil } })) {
+            if let installCommand {
+                Button("Copy Command") { Clipboard.copy(installCommand) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(installFailure ?? "")
+        }
     }
 
     private func open() {
-        if let installCommand {
-            Clipboard.copy(installCommand)
-            withAnimation(.ui) { copied = true }
-            Task {
-                try? await Task.sleep(for: .seconds(3))
-                withAnimation(.ui) { copied = false }
-            }
-            return
+        if isInstalling || (product.isAgent && agents.api == nil) { return }
+        guard installCommand != nil else { return connect(product.main) }
+        // Installed, it signs in as it is now.
+        let catalog = catalog
+        let id = product.main.id
+        let connect = connect
+        agents.install(id) { installed in
+            await catalog.refreshAgents(fresh: true)
+            if installed, let agent = catalog.codingAgents.first(where: { $0.id == id }) { connect(agent) }
         }
-        if product.isAgent, agents.api == nil { return }
-        connect(product.main)
     }
 }
 
