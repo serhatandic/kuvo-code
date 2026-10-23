@@ -434,7 +434,7 @@ final class Bots {
             let script = """
                 T="$HOME/\(RemoteEngineInstaller.root)/trash/$(date +%Y%m%d-%H%M%S)-$$"
                 [ ! -e \(folder) ] || { mkdir -p "$T" && mv -- \(folder) "$T/"; }
-                rm -f "$HOME/\(RemoteEngineInstaller.root)/keys/"KUVO_KEY_*\(IntegrationKeys.botSuffix(bot.id))
+                rm -f "$HOME/\(RemoteEngineInstaller.root)/box/bot-keys/"KUVO_KEY_*\(IntegrationKeys.botSuffix(bot.id))
                 D="\(deleted)"; I='"\(bot.id)"'; mkdir -p "$(dirname "$D")"
                 items=""; [ -s "$D" ] && items="$(sed -n 's/^{"deleted":\\[\\(.*\\)\\]}$/\\1/p' "$D" | tr ',' '\\n' | grep -vxF "$I" | head -n 499 | paste -sd, -)"
                 { if [ -n "$items" ]; then printf '{"deleted":[%s,%s]}' "$I" "$items"; else printf '{"deleted":[%s]}' "$I"; fi; } >"$D.new" && mv -f "$D.new" "$D"

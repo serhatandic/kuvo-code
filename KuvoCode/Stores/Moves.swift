@@ -583,8 +583,9 @@ final class Moves {
             }
         }
         guard done else { return }
-        if let place { try? await transport.trash(place, on: record.from) }
+        // Its keys where it was, while that computer still finds it there.
         if let bot { await BotKeys.leave(bot, app: app) }
+        if let place { try? await transport.trash(place, on: record.from) }
         for session in record.sessions { left[session] = .some(record.from) }
         forget(record)
     }

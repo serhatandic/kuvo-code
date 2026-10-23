@@ -53,7 +53,7 @@ for Linux's tools).
 | F3–F5, L15–L19, L26, L43 Wake-ups and watches | WakeUpsTests, StepSummariesTests; OpenCodeKit's WakesTests (a watch wakes only on a change, keeping its last value) | |
 | F7 Export and import a bot | AgentMessagesTests | |
 | F8 Delete a bot | BotDeletionTests, GroupChatTests | |
-| A bot's own keys for integrations stay its own | BotKeysTests | a bot on a machine (its keys' files there, over SSH) |
+| A bot's own keys for integrations stay its own, where it lives | BotKeysTests (and keys this Mac kept for a machine's bot going to it), PhoneBotsTests; the bridge's bot-keys tests (a machine's bots', with the Mac closed or through `box route`); OpenCodeKit's RemoteEngineTests (a start from the Mac leaves them) | the hand-over over real SSH (by hand, with the demo copy) |
 | F10, L39, L40 Agents writing to each other | AgentMessagesTests, AgentReferencesTests | |
 | G1–G4 Group chats, meetings on a schedule | BotsTests, AgentMessagesTests, GroupChatTests | |
 | H1, H2, H5 MCP servers and integrations, before and after their keys | MCPCommandTests, ChromeDevToolsUpgradeTests, IntegrationsTests | an integration's card in Settings (UI) |

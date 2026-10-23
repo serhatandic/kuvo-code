@@ -8,16 +8,13 @@ struct BotKeysSection: View {
     /// Opens the key entry for an integration, in the editor's place.
     let edit: (Integrations.Service) -> Void
     @Environment(AppModel.self) private var app
-    /// Nil until read; read, or not readable (its machine isn't connected).
-    @State private var status: (own: Set<String>, shared: Set<String>)??
+    /// Nil while it's read.
+    @State private var status: BotKeys.Status?
     @State private var removing: Set<String> = []
     @State private var failure: String?
 
-    private var own: Set<String> { (status ?? nil)?.own ?? [] }
-    private var shared: Set<String> { (status ?? nil)?.shared ?? [] }
-    private var isReadable: Bool { (status ?? nil) != nil }
-    /// Where it lives, for what's said: this Mac, or its machine.
-    private var place: String { bot.machine ?? "this Mac" }
+    private var own: Set<String> { if case .read(let own, _) = status { own } else { [] } }
+    private var shared: Set<String> { if case .read(_, let shared) = status { shared } else { [] } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -26,6 +23,13 @@ struct BotKeysSection: View {
                     if index > 0 { WellDivider() }
                     row(service)
                 }
+            }
+            // Why they can't be seen or changed now, once, under them all.
+            if case .unreadable(let why) = status {
+                Text(why)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let failure {
                 Text(failure)
@@ -39,12 +43,13 @@ struct BotKeysSection: View {
         .task(id: bot.machine.flatMap { app.machines.engine($0)?.isReady }) { if status != nil { await reload() } }
     }
 
-    /// What its row says of it now.
+    /// What its row says of it now. While it's read: on this Mac, at once, so nothing (rather than
+    /// a moment of "Checking…"); on a machine, that it's being checked.
     private func state(of service: Integrations.Service) -> String {
         switch status {
-        case nil: "Checking…"
-        case .some(nil): "\(place) isn’t connected, so it can’t be checked now"
-        case .some(.some): own.contains(service.id) ? "Its own key" : shared.contains(service.id) ? (bot.machine == nil ? "Your shared key, from Settings › Integrations" : "\(place)’s shared key, from its Settings › Integrations") : "No key"
+        case nil: bot.machine == nil ? " " : "Checking…"
+        case .unreadable: "Can’t be checked now"
+        case .read: own.contains(service.id) ? "Its own key" : shared.contains(service.id) ? (bot.machine.map { "\($0)’s shared key, from its Settings › Integrations" } ?? "Your shared key, from Settings › Integrations") : "No key"
         }
     }
 
@@ -60,9 +65,9 @@ struct BotKeysSection: View {
                         .foregroundStyle(own.contains(service.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 }
                 Spacer(minLength: 8)
-                if removing.contains(service.id) || status == nil {
+                if removing.contains(service.id) || (status == nil && bot.machine != nil) {
                     Spinner(size: 14)
-                } else if !isReadable {
+                } else if status?.own == nil {
                     EmptyView()
                 } else if own.contains(service.id) {
                     Menu {
@@ -88,15 +93,18 @@ struct BotKeysSection: View {
     }
 
     private func reload() async {
-        status = .some(await BotKeys.status(of: bot, app: app))
+        status = await BotKeys.status(of: bot, app: app)
+        // What went wrong before is past.
+        if case .read = status { failure = nil }
     }
 
     private func remove(_ service: Integrations.Service) {
         removing.insert(service.id)
         failure = nil
         Task {
-            failure = await BotKeys.remove(service, bot: bot, app: app)
+            let why = await BotKeys.remove(service, bot: bot, app: app)
             await reload()
+            failure = why
             removing.remove(service.id)
         }
     }

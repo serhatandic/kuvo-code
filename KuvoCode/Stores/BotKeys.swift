@@ -5,7 +5,8 @@ import os
 /// Keys a bot has of its own for integrations you bring a key for (a GitHub token of its own),
 /// used only in its conversation and kept on the computer it lives on: for a bot on this Mac, in
 /// your Keychain beside the shared ones; for one on a machine, on that machine (its bridge's
-/// `kuvo/bots/<id>/keys`, which a phone reaches too), never on this Mac. Where it works, a settings
+/// `kuvo/bots/<id>/keys`, which a phone reaches too, in `~/.kuvo-code/box/bot-keys`), never on
+/// this Mac. Where it works, a settings
 /// file of its folder's own, `.opencode/opencode.json`, names each such integration's server with
 /// its keys over the shared ones, and no other bot's or session's settings name them. A bot that
 /// works in a project shares that folder with your sessions there, so it uses the keys they do.
@@ -25,14 +26,32 @@ enum BotKeys {
         }
     }
 
-    /// The integrations `bot` has every key of its own for, and those with a shared key, where it
-    /// lives; nil for a machine that can't be asked now.
-    static func status(of bot: Bot, app: AppModel) async -> (own: Set<String>, shared: Set<String>)? {
-        guard let machine = bot.machine else { return await keychainStatus(of: bot.id) }
-        guard let (status, body) = try? await onMachine(machine, "GET", path(bot), app: app), status == 200,
-              let listed = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [[String: Any]] else { return nil }
-        let ids = { (flag: String) in Set(listed.filter { $0[flag] as? Bool == true }.compactMap { $0["integration"] as? String }) }
-        return (ids("own"), ids("shared"))
+    /// What can be told of a bot's own keys where it lives.
+    enum Status {
+        /// The integrations it has every key of its own for, and those with a shared key.
+        case read(own: Set<String>, shared: Set<String>)
+        /// Its machine couldn't be asked, and why.
+        case unreadable(String)
+
+        var own: Set<String>? { if case .read(let own, _) = self { own } else { nil } }
+    }
+
+    static func status(of bot: Bot, app: AppModel) async -> Status {
+        guard let machine = bot.machine else {
+            let (own, shared) = await keychainStatus(of: bot.id)
+            return .read(own: own, shared: shared)
+        }
+        do {
+            let (status, body) = try await onMachine(machine, "GET", path(bot), app: app)
+            if let failure = refusal(status, body) { return .unreadable(failure) }
+            guard let listed = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [[String: Any]] else {
+                return .unreadable("\(machine) didn’t say which keys it has. Its Kuvo Code may be older than this Mac’s.")
+            }
+            let ids = { (flag: String) in Set(listed.filter { $0[flag] as? Bool == true }.compactMap { $0["integration"] as? String }) }
+            return .read(own: ids("own"), shared: ids("shared"))
+        } catch {
+            return .unreadable(error.localizedDescription)
+        }
     }
 
     /// The same for a bot on this Mac, from your Keychain. (Read off the main thread: it can wait on you.)
@@ -54,7 +73,9 @@ enum BotKeys {
         if let machine = bot.machine {
             do {
                 let (status, body) = try await onMachine(machine, "PUT", path(bot, service), body: ["keys": values], app: app)
-                return refusal(status, body)
+                if let failure = refusal(status, body) { return failure }
+                reconnect(service, bot: bot, app: app)
+                return nil
             } catch {
                 return error.localizedDescription
             }
@@ -74,7 +95,10 @@ enum BotKeys {
             do {
                 let (status, body) = try await onMachine(machine, "DELETE", path(bot, service), app: app)
                 // Gone already: nothing to take away.
-                return status == 404 ? nil : refusal(status, body)
+                if status == 404 { return nil }
+                if let failure = refusal(status, body) { return failure }
+                reconnect(service, bot: bot, app: app)
+                return nil
             } catch {
                 return error.localizedDescription
             }
@@ -96,7 +120,7 @@ enum BotKeys {
     /// Its own keys where it lives now, by integration, each by its keys' names: to give it where
     /// it's going (`Moves`). Nil when they can't be read (its machine can't be asked).
     static func carried(_ bot: Bot, app: AppModel) async -> [String: [String: String]]? {
-        guard let (own, _) = await status(of: bot, app: app) else { return nil }
+        guard let own = await status(of: bot, app: app).own else { return nil }
         var keys: [String: [String: String]] = [:]
         for service in services where own.contains(service.id) {
             if let machine = bot.machine {
@@ -133,7 +157,7 @@ enum BotKeys {
     /// keys where it was go, those it has where it lives now, so none is lost on the way.
     static func leave(_ bot: Bot, app: AppModel?) async {
         guard let app, let now = app.bots.bot(bot.id), now.machine != bot.machine,
-              let (there, _) = await status(of: now, app: app) else { return }
+              let there = await status(of: now, app: app).own else { return }
         for service in services where there.contains(service.id) {
             if let machine = bot.machine {
                 _ = try? await onMachine(machine, "DELETE", path(bot, service), app: app)
@@ -184,6 +208,17 @@ enum BotKeys {
                       let (status, _) = try? await ask("PUT", path(bot, service), ["keys": values]), status == 200 else { continue }
                 await Task.detached { for key in variables { IntegrationKeys.set(nil, for: key.variable) } }.value
             }
+        }
+    }
+
+    /// Its server connected again in its folder a moment after its keys changed on its machine,
+    /// once the engine there has read them. (What the machine does for a phone ends with the
+    /// SSH command that asked it.)
+    private static func reconnect(_ service: Integrations.Service, bot: Bot, app: AppModel) {
+        guard let machine = bot.machine, let api = app.machines.engine(machine)?.api else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            try? await api.connectMCP(service.id, directory: bot.directory)
         }
     }
 
