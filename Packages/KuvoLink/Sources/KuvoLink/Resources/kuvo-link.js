@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.22";
+export const BRIDGE_VERSION = "0.9.23";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -940,6 +940,165 @@ export async function answerBotKeys(method, requestPath, body, engine, file = IN
   }
 }
 
+// MARK: Worktrees (PROTOCOL.md, "Worktrees"): the git worktrees sessions here run in, each on a
+// branch of its own, kept by this box (`box/worktrees.json`): made, named after their session,
+// listed and removed here, from a Mac (through `box route`) or a phone, with the Mac closed too.
+
+const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
+
+/** git in `folder`: what it printed (trimmed), or null when it failed. */
+function gitIn(folder, args) {
+  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
+  return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
+}
+
+/** The worktrees this box keeps: `{project, root, folder, branch, base?}` each (`folder`: where
+ * its session runs, the project's place in its repository). */
+export function readWorktrees() {
+  try {
+    const list = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).worktrees;
+    return Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string" && typeof each?.branch === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+const writeWorktrees = list => writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: list }, null, 2));
+
+/** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
+function freeBranch(folder, name) {
+  for (let suffix = 1; suffix <= 20; suffix++) {
+    const candidate = suffix === 1 ? name : `${name}-${suffix}`;
+    if (gitIn(folder, ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`]) === null) return candidate;
+  }
+  return null;
+}
+
+/** Its engine's project for a folder, as it names projects. */
+async function projectOf(engine, folder, signal) {
+  const located = await call(engine, "GET", `/api/location?directory=${encodeURIComponent(folder)}`, undefined, signal);
+  const id = located?.project?.id;
+  if (typeof id !== "string") throw new Error("The engine didn't say which project that is.");
+  return id;
+}
+
+/** Sessions by the folder they run in, and which are at work, as its engine has them; none when it can't say. */
+async function sessionsHere(engine, signal) {
+  if (!engine?.port) return { sessions: [], active: new Set() };
+  const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
+  try {
+    const listed = await fetch(`http://127.0.0.1:${engine.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
+    const sessions = listed.ok ? (await listed.json())?.data ?? [] : [];
+    const busy = await fetch(`http://127.0.0.1:${engine.port}/api/session/active`, { headers, signal: AbortSignal.timeout(10_000) });
+    const active = new Set(Object.keys(busy.ok ? (await busy.json())?.data ?? {} : {}));
+    return { sessions, active };
+  } catch {
+    return { sessions: [], active: new Set() };
+  }
+}
+
+const inside = (folder, root) => folder === root || folder?.startsWith(root + "/");
+
+/** `kuvo/worktrees…`, for this box's own. */
+export async function answerWorktrees(method, requestPath, body, engine, signal) {
+  const route = requestPath.split("?")[0];
+  const message = text => ({ message: text });
+  const list = readWorktrees();
+  if (route === "kuvo/worktrees" && method === "GET") {
+    // As a Mac reads them as it connects; `kept`: whether this box keeps them yet (a Mac that
+    // made some before hands them over once).
+    if (/(^|[?&])records=1(&|$)/.test(requestPath.split("?")[1] ?? "")) return { status: 200, value: { worktrees: list, kept: fs.existsSync(WORKTREES_FILE) } };
+    const { sessions, active } = await sessionsHere(engine, signal);
+    return { status: 200, value: { worktrees: list.map(tree => {
+      const here = sessions.filter(session => inside(session.location?.directory ?? session.directory, tree.root));
+      const entry = { path: tree.root, project: tree.project, projectName: path.basename(tree.project), branch: tree.branch, sessions: here.length, working: here.some(session => active.has(session.id)) };
+      if (tree.base) entry.base = tree.base;
+      if (fs.existsSync(tree.root)) {
+        const status = gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
+        if (status !== null) {
+          entry.uncommitted = status.length > 0;
+          const ahead = tree.base ? gitIn(tree.root, ["rev-list", "--count", `${tree.base}..HEAD`]) : null;
+          if (ahead !== null && /^\d+$/.test(ahead)) entry.ahead = Number(ahead);
+        }
+        const size = spawnSync("du", ["-sk", tree.root], { encoding: "utf8", timeout: 60_000 });
+        const kilobytes = Number(String(size.stdout ?? "").split(/\s/)[0]);
+        if (size.status === 0 && Number.isFinite(kilobytes)) entry.size = kilobytes * 1024;
+      }
+      return entry;
+    }) } };
+  }
+  if (method !== "POST") return { status: route.startsWith("kuvo/worktrees") ? 405 : 404, value: {} };
+  if (route === "kuvo/worktrees") {
+    // A new one of a project's repository, on a branch of its own, for a session to run in.
+    const project = body?.project;
+    if (typeof project !== "string" || !path.isAbsolute(project) || !fs.existsSync(project)) return { status: 400, value: message("Send the project's folder on this machine as {\"project\"}.") };
+    if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : "kuvo/";
+    const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    const top = gitIn(project, ["rev-parse", "--show-toplevel"]);
+    if (top === null) return { status: 409, value: message("That folder isn't in a git repository.") };
+    const subpath = path.relative(top, project);
+    let id, root;
+    try {
+      id = await projectOf(engine, project, signal);
+      root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal))?.directory;
+    } catch (error) {
+      return { status: 502, value: message(error?.message ?? String(error)) };
+    }
+    if (typeof root !== "string") return { status: 502, value: message("The engine didn't make it.") };
+    // The engine leaves it on no branch; one of its own makes the work easy to commit, push and merge.
+    const branch = freeBranch(root, prefix + path.basename(root));
+    if (!branch || gitIn(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
+      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal).catch(() => {});
+      return { status: 502, value: message("Its branch couldn't be made.") };
+    }
+    const tree = { project, root, folder: subpath ? path.join(root, subpath) : root, branch, ...(base ? { base } : {}) };
+    writeWorktrees([...list.filter(each => each.root !== root), tree]);
+    return { status: 200, value: tree };
+  }
+  const tree = list.find(each => each.root === body?.path);
+  if (route === "kuvo/worktrees/record") {
+    // One a Mac made before this box kept them: kept here from now on.
+    const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...(typeof body?.base === "string" ? { base: body.base } : {}) };
+    if (![given.project, given.root, given.branch].every(each => typeof each === "string" && each)) return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
+    writeWorktrees([...list.filter(each => each.root !== given.root), given]);
+    return { status: 200, value: {} };
+  }
+  if (!tree) return { status: 404, value: {} };
+  if (route === "kuvo/worktrees/rename") {
+    // Named after its session once that has a title, unless it's been pushed.
+    if (typeof body?.branch !== "string" || !body.branch.trim()) return { status: 400, value: message("Send the branch's new name as {\"branch\"}.") };
+    if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return { status: 409, value: message(`${tree.branch} has been pushed, so it keeps its name.`) };
+    const name = freeBranch(tree.root, body.branch.trim());
+    if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) return { status: 409, value: message("It couldn't be renamed.") };
+    writeWorktrees(list.map(each => (each.root === tree.root ? { ...each, branch: name } : each)));
+    return { status: 200, value: { branch: name } };
+  }
+  if (route === "kuvo/worktrees/remove") {
+    // Not while an agent works there; with changes not committed only when they're to go.
+    const { sessions, active } = await sessionsHere(engine, signal);
+    if (sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
+      return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
+    }
+    const discard = body?.discard !== false;
+    if (!discard && fs.existsSync(tree.root) && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
+      return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
+    }
+    if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
+    try {
+      const id = await projectOf(engine, tree.project, signal);
+      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal);
+    } catch (error) {
+      return { status: 502, value: message(error?.message ?? String(error)) };
+    }
+    // Its branch goes only if it's merged (made for nothing, it goes whatever: `forget`).
+    gitIn(tree.project, ["branch", body?.forget === true ? "-D" : "-d", tree.branch]);
+    writeWorktrees(list.filter(each => each.root !== tree.root));
+    return { status: 200, value: {} };
+  }
+  return { status: 404, value: {} };
+}
+
 // MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
 
 const SKILLS = path.join(K, "config", "opencode", "skills");
@@ -1419,6 +1578,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     if (request.method.toUpperCase() === "POST" && route === "kuvo/bots") {
       const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
+      return yield* json(status, value);
+    }
+    // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
+    if (/^kuvo\/worktrees(\/(remove|rename|record))?$/.test(route)) {
+      let engine = null;
+      try { engine = readEngine(); } catch {}
+      const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
     // A bot's keys of its own, as Edit Bot shows and changes them.

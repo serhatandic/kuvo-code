@@ -625,19 +625,28 @@ itself. A host serves:
     of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when
     `other` isn't another of the Mac's machines; `409 {"message"}` when the two told Kuvo Code
     different names and stay two machines.
-- On a Mac, Settings › Worktrees: the worktrees its sessions run in, on it and on your machines.
-  - `GET kuvo/worktrees` → `{"worktrees": [{path, project, projectName, branch, base?, machine?,
-    sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder (a
-    machine's as its sessions name their folders, with `machine`), `project` its project's,
-    `sessions` how many run there and `working` whether an agent is at work in one. What git says,
-    left out when it can't say (a machine that isn't connected, a folder deleted by hand):
-    `uncommitted`, changes not committed, which go when it's removed; `ahead`, commits `base`
-    doesn't have, whose branch stays when it's removed. `size` in bytes, on the Mac only. Where
-    new ones go is `kuvo/config`'s `worktree.directory`.
-  - `POST kuvo/worktrees/remove {"path"}` removes it as Remove… does: its folder and anything in
-    it not committed; its branch stays unless it's merged. `200 {}`; `404` for none; `409
-    {"message"}` while an agent works there, or its machine isn't connected; `502 {"message"}`
-    when the engine couldn't remove it.
+- Settings › Worktrees: the git worktrees sessions run in, each computer its own (a Mac for its
+  own; a machine's bridge from 0.9.23 for the machine's, kept in `~/.kuvo-code/box/worktrees.json`,
+  with the Mac closed too). A Mac makes, names and removes a machine's through the machine's
+  routes (`box route`), and reads them from it as it connects.
+  - `GET kuvo/worktrees` → `{"worktrees": [{path, project, projectName, branch, base?, sessions,
+    working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `project` its
+    project's, `sessions` how many run there and `working` whether an agent is at work in one.
+    What git says, left out when it can't say (a folder deleted by hand): `uncommitted`, changes
+    not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
+    stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
+    `worktree.directory`. On a machine, `?records=1` → `{"worktrees": [{project, root, folder,
+    branch, base?}], "kept"}`, as it keeps them (`kept`: whether it keeps them yet).
+  - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
+    anything in it not committed (`"discard": false`: one with changes stays, `409`); its branch
+    stays unless it's merged (`"forget": true`, on a machine: it goes anyway, for one made for a
+    session that never started). `200 {}`; `404` for none; `409 {"message"}` while an agent works
+    there; `502 {"message"}` when the engine couldn't remove it.
+  - On a machine, for a new session's worktree: `POST kuvo/worktrees {"project", "branchPrefix"?}`
+    makes one of the project's repository on a branch of its own → `{project, root, folder,
+    branch, base?}` (`folder`: where its session runs); `POST kuvo/worktrees/rename {"path",
+    "branch"}` names its branch (once its session has a title; `409` once it's pushed) →
+    `{"branch"}`, the name it got.
 - On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
   awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
   while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;
