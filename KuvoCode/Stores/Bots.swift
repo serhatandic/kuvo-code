@@ -430,9 +430,11 @@ final class Bots {
             // Noted there too (`deletedFile`, as its bridge notes one deleted from a phone), so
             // another Mac lets the bot go as well. A bot's ID is letters and numbers only.
             let deleted = "$HOME/\(RemoteEngineInstaller.root)/bots/\(Self.deletedFile)"
+            // Its keys of its own there go too (`BotKeys`), as its bridge's Delete takes them.
             let script = """
                 T="$HOME/\(RemoteEngineInstaller.root)/trash/$(date +%Y%m%d-%H%M%S)-$$"
                 [ ! -e \(folder) ] || { mkdir -p "$T" && mv -- \(folder) "$T/"; }
+                rm -f "$HOME/\(RemoteEngineInstaller.root)/keys/"KUVO_KEY_*\(IntegrationKeys.botSuffix(bot.id))
                 D="\(deleted)"; I='"\(bot.id)"'; mkdir -p "$(dirname "$D")"
                 items=""; [ -s "$D" ] && items="$(sed -n 's/^{"deleted":\\[\\(.*\\)\\]}$/\\1/p' "$D" | tr ',' '\\n' | grep -vxF "$I" | head -n 499 | paste -sd, -)"
                 { if [ -n "$items" ]; then printf '{"deleted":[%s,%s]}' "$I" "$items"; else printf '{"deleted":[%s]}' "$I"; fi; } >"$D.new" && mv -f "$D.new" "$D"

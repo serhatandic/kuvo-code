@@ -239,13 +239,15 @@ final class Moves {
     }
 
     /// From here on the bot lives where it went: its group chats' seats, its row and tabs, its
-    /// record, and its keys there.
+    /// record, and its keys there (read where it was, given where it is; those where it was go as
+    /// the move finishes).
     private func switchBot(_ bot: Bot, record: Record, sessions: [Session], target: OpenCodeAPI) async {
         guard let app, let folder = record.copy, let session = sessions.first else { return }
         await app.groups.botMoving(bot)
+        let keys = await BotKeys.carried(bot, app: app) ?? [:]
         app.workspace.moved(sessions, api: target)
         await app.bots.moved(bot.id, to: record.to, folder: folder, session: session, api: target)
-        if let now = app.bots.bot(bot.id) { await BotKeys.apply(to: now, app: app) }
+        if let now = app.bots.bot(bot.id) { await BotKeys.give(keys, to: now, app: app) }
         if bot.machine == nil { app.utilities.closeTabs(of: bot.id) }
     }
 

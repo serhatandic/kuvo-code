@@ -45,7 +45,7 @@ import Testing
         try #"{"instructions": ["notes.md"]}"#.write(to: own.appending(path: "opencode.json"), atomically: true, encoding: .utf8)
 
         let token = "ada-secret-" + UUID().uuidString
-        #expect(await BotKeys.save(Dictionary(uniqueKeysWithValues: names.map { ($0, token) }), for: service, bot: ada, app: app))
+        #expect(await BotKeys.save(Dictionary(uniqueKeysWithValues: names.map { ($0, token) }), for: service, bot: ada, app: app) == nil)
 
         let written = try #require(settings(of: ada))
         let server = try #require((written["mcp"] as? [String: Any])?["servers"] as? [String: Any])[service.id]
@@ -67,6 +67,45 @@ import Testing
         let after = try #require(settings(of: ada))
         #expect(after["mcp"] == nil)
         #expect(after["instructions"] as? [String] == ["notes.md"])
+    }
+
+    /// Keys this Mac kept for a machine's bots (as an earlier Kuvo Code did, for every bot) go to
+    /// the machine as it connects, then from your Keychain; one the machine didn't take stays here
+    /// for next time. The machine is a stand-in (its own side has the bridge's tests).
+    @Test func keysThisMacKeptForAMachinesBotGoToIt() async throws {
+        TestEnvironment.prepare()
+        app.bots.app = app
+        defer { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "bots.json")) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let made = Date(timeIntervalSince1970: 1_792_000_000)
+        func descriptor(_ id: String) throws -> Data {
+            try encoder.encode(Bot.Descriptor(id: id, name: id, job: "", look: BotLook(color: .sky, shape: .round, face: .happy), personality: nil,
+                                              model: nil, project: nil, created: made, updated: made))
+        }
+        _ = app.bots.adopt([
+            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_scout00001", descriptor: try descriptor("bot_scout00001"), session: "ses_scout", via: ""),
+            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_herald0001", descriptor: try descriptor("bot_herald0001"), session: "ses_herald", via: ""),
+        ], on: "box")
+        let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
+        let name = try #require(Integrations.keys(of: service.way).first?.name)
+        let scout = IntegrationKeys.variable(service.id, name, bot: "bot_scout00001")
+        let herald = IntegrationKeys.variable(service.id, name, bot: "bot_herald0001")
+        defer { for variable in [scout, herald] { _ = IntegrationKeys.set(nil, for: variable) } }
+        #expect(IntegrationKeys.set("tok_scout", for: scout) && IntegrationKeys.set("tok_herald", for: herald))
+
+        // The machine takes Scout's, and turns Herald's away (its folder's settings by hand, say).
+        nonisolated final class Asked: @unchecked Sendable { var puts: [(path: String, body: [String: Any]?)] = [] }
+        let asked = Asked()
+        await BotKeys.handOver(on: "box", app: app) { method, path, body in
+            #expect(method == "PUT")
+            asked.puts.append((path, body))
+            return (path.contains("bot_scout00001") ? 200 : 409, Data("{}".utf8))
+        }
+        #expect(asked.puts.map(\.path).sorted() == ["kuvo/bots/bot_herald0001/keys/\(service.id)", "kuvo/bots/bot_scout00001/keys/\(service.id)"])
+        #expect((asked.puts.first { $0.path.contains("scout") }?.body?["keys"] as? [String: String]) == [name: "tok_scout"])
+        #expect(IntegrationKeys.value(scout) == nil, "the machine has it: gone from your Keychain")
+        #expect(IntegrationKeys.value(herald) == "tok_herald", "not taken: kept for next time")
     }
 
     /// A bot that works in a project shares its folder with your sessions there: its keys are

@@ -27,7 +27,7 @@ extension PhoneLink {
             config.reload()
             if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
             guard config.value(at: MCPSettings.path + [service.id]) != nil else { return (404, Data("{}".utf8)) }
-            await app.removeIntegration(service, on: .mac)
+            if let why = await app.removeIntegration(service, on: .mac) { return (409, Self.message(why)) }
             return (200, Data("{}".utf8))
         default: return (405, Data("{}".utf8))
         }

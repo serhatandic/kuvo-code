@@ -60,6 +60,35 @@ import Testing
 
     private func message(_ answer: (status: Int, json: [String: Any]?)) -> String? { answer.json?["message"] as? String }
 
+    /// A bot on this Mac given a key of its own from a phone, as Edit Bot gives one: in your
+    /// Keychain, its folder's settings naming its server with it; read back, and taken away.
+    @Test func aPhoneGivesABotHereAKeyOfItsOwn() async throws {
+        defer { done() }
+        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
+        let name = try #require(Integrations.keys(of: service.way).first?.name)
+        let variable = IntegrationKeys.variable(service.id, name, bot: ada.id)
+        defer { _ = IntegrationKeys.set(nil, for: variable) }
+        let path = "kuvo/bots/\(ada.id)/keys"
+
+        let listed = try #require(try await ask(path).json?["keys"] as? [[String: Any]])
+        #expect(listed.map { $0["integration"] as? String } == BotKeys.services.map(\.id))
+        #expect(listed.first { $0["integration"] as? String == service.id }?["own"] as? Bool == false)
+        #expect(try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [:]]).status == 400)
+
+        let given = try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [name: " tok_ada "]])
+        #expect(given.status == 200)
+        #expect(IntegrationKeys.value(variable) == "tok_ada")
+        let settings = try String(contentsOf: URL(filePath: ada.directory).appending(path: ".opencode/opencode.json"), encoding: .utf8)
+        #expect(settings.contains(variable), "her folder's settings name her server with it")
+        #expect((try await ask(path + "/\(service.id)").json?["keys"] as? [String: String]) == [name: "tok_ada"])
+
+        #expect(try await ask(path + "/\(service.id)", method: "DELETE").status == 200)
+        #expect(IntegrationKeys.value(variable) == nil)
+        #expect(try await ask(path + "/\(service.id)", method: "DELETE").status == 404)
+        #expect(try await ask("kuvo/bots/bot_nobody/keys").status == 404)
+    }
+
     @Test func whatNewBotOffers() async throws {
         defer { done() }
         let offered = try #require(try await ask("kuvo/bots/templates").json)

@@ -43,70 +43,43 @@ extension AppModel {
     }
 
     /// Out of `box`'s settings, with its keys there, its sign-in, what its server kept, and its
-    /// bots' own keys for it. `signIn`: its sign-in as last seen, if known (else it's asked).
-    func removeIntegration(_ service: Integrations.Service, on box: SidebarBox, signIn listed: String? = nil) async {
+    /// bots' own keys for it. A machine does it itself, as it does for a phone (its bridge's
+    /// `DELETE kuvo/integrations/<id>`). `signIn`: its sign-in as last seen here, if known (else
+    /// it's asked). Why not, when it couldn't be.
+    @discardableResult
+    func removeIntegration(_ service: Integrations.Service, on box: SidebarBox, signIn listed: String? = nil) async -> String? {
         // Its keys and sign-in stay while it stays in a settings file that can't be changed.
         let config = config(for: box)
-        guard config.problem == nil else { return }
+        if let problem = config.problem { return "The engine's settings file can't be changed: \(problem)" }
+        if let machine = box.machine {
+            guard let engine = machines.engine(machine), engine.isReady else { return "\(machine) isn’t connected." }
+            defer { config.reload() }
+            do {
+                let (status, body) = try await MachineBox.route("DELETE", "kuvo/integrations/\(service.id)", on: engine.machine.connection)
+                // Not there any more: nothing to take away.
+                guard status >= 400, status != 404 else { return nil }
+                return (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["message"] as? String ?? "\(machine) said no (\(status))."
+            } catch {
+                return error.localizedDescription
+            }
+        }
         let api = api(for: box)
         // Its sign-in as the engine has it now, asked before it leaves the settings.
         var signIn = listed
         if signIn == nil, let api { signIn = (try? await api.mcpServers())?.first { $0.name == service.id }?.integrationID }
         config.set(nil, at: MCPSettings.path + [service.id])
         if let signIn { forgetSignIn(signIn, on: box) }
-        let variables = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name) }
-        // Bots there with keys of their own for it stop using it too: their keys go, and their
+        // Bots here with keys of their own for it stop using it too: their keys go, and their
         // folders' settings stop naming its server.
-        for bot in bots.list where bot.machine == box.machine {
+        for bot in bots.list where bot.machine == nil {
             let theirs = Set(Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) })
             let held = await Task.detached { IntegrationKeys.variables(ofBot: bot.id) }.value
             if !theirs.isDisjoint(with: held) { await BotKeys.remove(service, bot: bot, app: self) }
         }
-        guard let machine = box.machine else {
-            for variable in variables { IntegrationKeys.set(nil, for: variable) }
-            // What its server kept: its own folder (and the file it once kept).
-            for name in [service.id, "\(service.id).json"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "integrations/\(name)")) }
-            return
-        }
-        // On the machine: its keys and what its server kept there, now or the next time it answers.
-        let root = "\"$HOME/\(RemoteEngineInstaller.root)"
-        let script = (["rm -rf \(root)/integrations/\(service.id)\""] + variables.map { "rm -f \(root)/box/keys/\($0)\"" }).joined(separator: "; ")
-        let later = Machines.integrationMark(service.id) + script
-        guard machines.engine(machine)?.isReady == true else { machines.runLater(later, on: machine); return }
-        let done = await Task.detached { RemoteShell.run(script, on: machine) != nil }.value
-        if !done { machines.runLater(later, on: machine) }
-    }
-
-    /// Bots' own keys for integrations a machine removed by itself (from a phone), as it noted
-    /// them (`box/integrations-removed.json`): gone from your Keychain too, so they don't come back
-    /// to it. Read as it connects, and as its settings change there. One its settings have again
-    /// (added back since) keeps them. The note goes once it's been acted on, unless the machine
-    /// noted more meanwhile; with its settings unreadable, it stays for next time.
-    func takeInRemovedIntegrations(on machine: String) async {
-        guard let connection = machines.engine(machine)?.machine.connection else { return }
-        let box = "\"$HOME/\(RemoteEngineInstaller.root)/box"
-        let mark = "--kuvo-settings--"
-        guard let output = try? await connection.run("f=\(box)/integrations-removed.json\"; [ -f \"$f\" ] || exit 0; cat \"$f\"; echo; echo \(mark); cat \(box)/opencode.json\""),
-              let read = Self.removedToTakeIn(output, mark: mark) else { return }
-        for id in read.ids {
-            guard let service = Integrations.service(id) else { continue }
-            for bot in bots.list where bot.machine == machine {
-                let theirs = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) }
-                await Task.detached { for variable in theirs { IntegrationKeys.set(nil, for: variable) } }.value
-            }
-        }
-        _ = try? await connection.run("f=\(box)/integrations-removed.json\"; printf '%s' \(SSHConnection.quoted(read.note)) | cmp -s - \"$f\" && rm -f \"$f\"; true")
-    }
-
-    /// A machine's note of what it removed and its settings, as `takeInRemovedIntegrations` reads
-    /// them (`mark` between): the note as read, and the integrations it names that the settings
-    /// don't have again. Nil when either can't be read.
-    static func removedToTakeIn(_ output: String, mark: String) -> (note: String, ids: [String])? {
-        let parts = output.components(separatedBy: "\n\(mark)\n")
-        guard parts.count == 2,
-              let removed = (try? JSONSerialization.jsonObject(with: Data(parts[0].utf8)) as? [String: Any])?["removed"] as? [String],
-              let settings = try? JSONDecoder().decode([String: JSONValue].self, from: Data(parts[1].utf8)) else { return nil }
-        return (parts[0], removed.filter { EngineConfig.value(at: MCPSettings.path + [$0], in: settings) == nil })
+        for variable in Integrations.keys(of: service.way).map({ IntegrationKeys.variable(service.id, $0.name) }) { IntegrationKeys.set(nil, for: variable) }
+        // What its server kept: its own folder (and the file it once kept).
+        for name in [service.id, "\(service.id).json"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "integrations/\(name)")) }
+        return nil
     }
 
     enum IntegrationFailure: LocalizedError {

@@ -18,7 +18,12 @@ nonisolated enum IntegrationKeys {
 
     /// A bot's own key, which only its conversation uses: KUVO_KEY_<ID>_<NAME>__<BOT>.
     static func variable(_ integration: String, _ name: String, bot: String) -> String {
-        variable(integration, name) + "__" + plain(bot)
+        variable(integration, name) + botSuffix(bot)
+    }
+
+    /// How each of a bot's own keys ends: __<BOT>.
+    static func botSuffix(_ bot: String) -> String {
+        "__" + plain(bot)
     }
 
     /// Whether `variable` is a bot's own key.
@@ -38,7 +43,7 @@ nonisolated enum IntegrationKeys {
 
     /// Those of `names` that are `bot`'s own keys.
     static func variables(ofBot bot: String, in names: [String]) -> [String] {
-        names.filter { $0.hasSuffix("__" + plain(bot)) }.sorted()
+        names.filter { $0.hasSuffix(botSuffix(bot)) }.sorted()
     }
 
     private static func plain(_ text: String) -> String {

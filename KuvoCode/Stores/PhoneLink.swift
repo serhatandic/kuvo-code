@@ -651,6 +651,17 @@ final class PhoneLink {
                 }
             }
         }
+        // A bot's keys of its own, as Edit Bot shows and changes them.
+        if Self.isBotKeys(request.path) {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.answerBotKeys(request) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         // A bot changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
         if let id = Self.botID(in: request.path), ["PATCH", "DELETE"].contains(request.method.uppercased()) {
             return AsyncThrowingStream { continuation in
@@ -1700,6 +1711,12 @@ final class PhoneLink {
         let parts = path.split(separator: "/")
         guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
         return String(parts[2]).removingPercentEncoding
+    }
+
+    /// `kuvo/bots/<id>/keys`, or one integration's.
+    nonisolated private static func isBotKeys(_ path: String) -> Bool {
+        let parts = (path.split(separator: "?").first ?? "").split(separator: "/", omittingEmptySubsequences: false)
+        return (parts.count == 4 || parts.count == 5) && parts[0] == "kuvo" && parts[1] == "bots" && parts[3] == "keys"
     }
 
     nonisolated private static func botID(in path: String) -> String? {

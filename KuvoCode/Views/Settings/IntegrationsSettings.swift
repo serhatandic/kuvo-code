@@ -15,6 +15,8 @@ struct IntegrationsSettings: View {
     /// do), then turn every call down.
     @State private var signedIn: Set<String> = []
     @State private var removing: Integrations.Service?
+    /// One that couldn't be removed, and why.
+    @State private var notRemoved: (service: Integrations.Service, why: String)?
 
     private var config: EngineConfig { app.config(for: box) }
     private var api: OpenCodeAPI? { app.api(for: box) }
@@ -49,6 +51,11 @@ struct IntegrationsSettings: View {
             Button("Remove", role: .destructive) { remove(service) }
         } message: { _ in
             Text("The agent and your bots stop using it, and your sign-in or key goes with it.")
+        }
+        .alert("\(notRemoved?.service.title ?? "") wasn’t removed", isPresented: Binding(get: { notRemoved != nil }, set: { if !$0 { notRemoved = nil } })) {
+            Button("OK") { notRemoved = nil }
+        } message: {
+            Text(notRemoved?.why ?? "")
         }
         #if DEBUG
         // KUVO_DEMO_ADD_INTEGRATION=<id>: added, as Connect does.
@@ -230,7 +237,9 @@ struct IntegrationsSettings: View {
     /// Out of the engine's settings, with its keys, its sign-in and what its server kept.
     private func remove(_ service: Integrations.Service) {
         let listed = live.first { $0.name == service.id }?.integrationID
-        Task { await app.removeIntegration(service, on: box, signIn: listed) }
+        Task {
+            if let why = await app.removeIntegration(service, on: box, signIn: listed) { notRemoved = (service, why) }
+        }
     }
 
     private func refresh() async {

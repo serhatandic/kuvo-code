@@ -307,9 +307,6 @@ extension AppModel {
             self?.workspace.handle(event, machine: machine)
             // It signed in again, or a sign-in ran out and was renewed there: here too.
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
-            // An integration removed there (from a phone): its bots' keys here go now, not at the
-            // next connection, by when Edit Bot could have put them back.
-            if event.type == "config.updated" { Task { await self?.takeInRemovedIntegrations(on: machine) } }
         }
         engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
         // Its Settings › Permissions changed: its open sessions follow, and what its group chats
@@ -403,9 +400,8 @@ extension AppModel {
         // Bots it made, changed or deleted while this Mac was away, taken in (first, so a deleted
         // one's keys don't go back); and what it needs to make them itself.
         if live(engine) { await bots.adoptMade(on: engine.machine.id) }
-        // Integrations it removed while this Mac was away: its bots' own keys for them go here too.
-        if live(engine) { await takeInRemovedIntegrations(on: engine.machine.id) }
-        // Its bots' keys of their own, which may have changed while it was away.
+        // Its bots' keys of their own are its own: any this Mac kept from before go to it, and its
+        // bots' folders' settings follow its integrations as they are now.
         if live(engine) { await BotKeys.applyAll(on: engine.machine.id, app: self) }
         // Your personalities, its copy and this Mac's met, before its kit says what they are.
         if live(engine) { await syncPersonalities(with: engine) }

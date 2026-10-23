@@ -173,8 +173,35 @@ enum MachineBox {
         try JSONDecoder().decode(Answer.self, from: try await answer(arguments, input: input, on: connection))
     }
 
+    /// A client's request to the machine's box, answered as its bridge answers a phone's (`box
+    /// route`), over SSH: the status and body. Only for routes that answer once, never a stream.
+    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, on connection: SSHConnection) async throws -> (status: Int, body: Data) {
+        var request: [String: Any] = ["method": method, "path": path]
+        if let body { request["body"] = body }
+        let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), on: connection)
+        struct Routed: Decodable { var status: Int; var body: String }
+        guard let routed = try? JSONDecoder().decode(Routed.self, from: Data(output.utf8)) else { throw Failure.refused("The machine didn't answer: \(output.prefix(200))") }
+        return (routed.status, Data(routed.body.utf8))
+    }
+
+    /// Its bots' folders' settings as their keys and the machine's integrations are now (after the
+    /// integrations' catalog changed, or a bot moved there).
+    static func refreshBotKeys(on connection: SSHConnection) async throws {
+        _ = try await run("bot-keys-refresh", input: nil, on: connection)
+    }
+
     /// What `kuvo-link.js box <arguments>` answered (its last line, JSON), or why not.
     private static func answer(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Data {
+        let output = try await lastLine(arguments, input: input, on: connection)
+        let line = Data(output.utf8)
+        guard let answer = try? JSONDecoder().decode(Answer.self, from: line) else { throw Failure.refused("The machine's settings couldn't be read: \(output.prefix(200))") }
+        if case .number(let status)? = answer.status, status >= 400 { throw Failure.refused(answer.message ?? "The machine said no (\(Int(status))).") }
+        return line
+    }
+
+    /// The last line `kuvo-link.js box <arguments>` printed, with whichever engine runtime the
+    /// machine has.
+    private static func lastLine(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> String {
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-box-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: file.path, contents: input ?? Data(), attributes: [.posixPermissions: 0o600])
         defer { try? FileManager.default.removeItem(at: file) }
@@ -182,9 +209,6 @@ enum MachineBox {
             [ -x "$E" ] || E=$(for d in "$K"/engine/*/; do [ -x "${d}opencode" ] && printf '%s\\n' "${d}opencode"; done | tail -n 1)
             KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" box \(arguments)
             """), input: file)
-        let line = Data((output.split(separator: "\n").last.map(String.init) ?? "").utf8)
-        guard let answer = try? JSONDecoder().decode(Answer.self, from: line) else { throw Failure.refused("The machine's settings couldn't be read: \(output.prefix(200))") }
-        if case .number(let status)? = answer.status, status >= 400 { throw Failure.refused(answer.message ?? "The machine said no (\(Int(status))).") }
-        return line
+        return output.split(separator: "\n").last.map(String.init) ?? ""
     }
 }

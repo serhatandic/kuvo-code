@@ -557,10 +557,26 @@ itself. A host serves:
     `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
     changed; on a Mac, `500 {"message"}` when the Keychain wouldn't keep its keys.
   - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: its keys, its sign-in, what its
-    server kept, and bots' own keys for it there. `200 {}`, `404` for one not added, `409
-    {"message"}` for a settings file that can't be changed. A machine notes what it removes
-    (`box/integrations-removed.json`), and its Mac takes its bots' keys for it from your Keychain
-    as it hears (the machine's settings change, or it connects), unless it's been added back.
+    server kept, and bots' own keys for it there (each computer keeps its bots' keys itself: "Bots'
+    own keys"). `200 {}`, `404` for one not added, `409 {"message"}` for a settings file that can't
+    be changed. A Mac's Remove… for a machine is the machine's own, through `box route`.
+- Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
+  integration you bring a key for, used only in its conversation, kept on the computer the bot
+  lives on (a Mac's bots' in its Keychain; a machine's in `~/.kuvo-code/keys`, from bridge 0.9.22,
+  with the Mac closed too). Each computer answers for its own bots; a Mac asked about a machine's
+  bot answers `409 {"message"}`. A bot that works in a project uses that project's keys, and
+  answers `409 {"message"}`.
+  - `GET kuvo/bots/<id>/keys` → `{"keys": [{integration, own, shared}]}`: each integration a bot can
+    have a key of its own for (those you bring a key for, `token` and `package` ones with keys),
+    whether it has its own, and whether the computer has a shared one.
+  - `kuvo/bots/<id>/keys/<integration>`: `GET` → `{"keys": {"<name>": "<value>"}}`, its own (`404`
+    for none); `PUT {"keys": {"<name>": "<value>"}}` gives it its own, all of them (`400
+    {"message"}` without), and its folder's settings name the integration's server with them, which
+    connects again a moment later in its folder: `200 {integration, own, shared}`; `DELETE` takes
+    them away (`404` for none). `409 {"message"}` when its folder's settings aren't plain JSON.
+  - `DELETE kuvo/bots/<id>/keys` takes away every one, as it moves off the computer.
+  - Moving a bot (Move to Computer), its keys go with it: read where it lived, given where it
+    goes, then taken away where it was.
 - Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
   bridge from 0.9.21 for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
   engine lists them (`api/skill`) and finds a change within a moment.
@@ -863,7 +879,10 @@ the machine's own the first time it connects (from 0.9.11): what the machine run
 settings an older Mac's start left) goes in its box, or, on a machine with none, the Mac's. From
 then on a Mac's start sends none of its own, and a machine's settings are changed through its
 bridge's script, the same way from a Mac (`kuvo-link.js box read | change | key`, over SSH) and
-from a phone (`kuvo/config`), one change at a time under `run/.config.lock`.
+from a phone (`kuvo/config`), one change at a time under `run/.config.lock`. A Mac reaches any of
+a machine's routes that answer once (never a stream) the same way: `kuvo-link.js box route` takes
+`{method, path, body?}` on stdin and prints `{status, body}`, answered as a phone's request is
+(from 0.9.22).
 
 ### Personalities
 

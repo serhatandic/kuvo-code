@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A bot on a machine keeps its own keys on that machine, not in your Mac's Keychain, so you can give it one from your iPhone with your Mac closed, and they move with it to another computer. Keys your Mac kept for such bots move to their machine the next time Kuvo Code connects.
 - Swiping between computers works in Settings' sidebar too, and Settings › General sets which way a swipe turns them.
 - Coding agents on your machines are the machine's own: Kuvo Code uses the Claude Code, Codex and Grok installed there, as its terminal finds them, rather than copies of its own. Install one from Accounts, on your Mac or a machine, and it runs its maker's installer; Update updates one on a machine too. Machines that had Kuvo Code's copies need Install once (your sign-ins stay).
 - Update All, at the top of Coding Agents in Accounts, updates every coding agent that's out of date, on your Mac and your machines.
