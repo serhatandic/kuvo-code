@@ -21,6 +21,14 @@ extension AppModel {
         return true
     }
 
+    /// Its server connected again a moment after its keys changed: the engine reads them as it
+    /// reads its settings again, which adding it (again) has it do. For Settings and a phone alike.
+    func reconnectAfterKeys(_ service: Integrations.Service, on box: SidebarBox) async {
+        guard let api = api(for: box) else { return }
+        try? await Task.sleep(for: .seconds(2))
+        await reconnect(service.id, api: api, machine: box.machine)
+    }
+
     /// Its keys (by their names, `CLIENT_ID`, `API_KEY`…), where `box` keeps them: this Mac's
     /// Keychain, or a machine's own keys' folder.
     func saveIntegrationKeys(_ service: Integrations.Service, _ values: [String: String], on box: SidebarBox) async throws {
@@ -69,16 +77,22 @@ extension AppModel {
         if !done { machines.runLater(later, on: machine) }
     }
 
-    /// Bots' own keys for integrations a machine removed by itself (from a phone, with this Mac
-    /// closed), as it noted them (`box/integrations-removed.json`): gone from your Keychain too,
-    /// so they don't come back to it. Read once, as it connects.
+    /// Bots' own keys for integrations a machine removed by itself (from a phone), as it noted
+    /// them (`box/integrations-removed.json`): gone from your Keychain too, so they don't come back
+    /// to it. Read as it connects, and as its settings change there. One its settings have again
+    /// (added back since) keeps them.
     func takeInRemovedIntegrations(on machine: String) async {
         guard let connection = machines.engine(machine)?.machine.connection else { return }
-        let file = "\"$HOME/\(RemoteEngineInstaller.root)/box/integrations-removed.json\""
-        guard let output = try? await connection.run("[ -f \(file) ] && cat \(file) && rm -f \(file); true"),
-              let removed = (try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])?["removed"] as? [String] else { return }
+        let box = "\"$HOME/\(RemoteEngineInstaller.root)/box"
+        let mark = "--kuvo-settings--"
+        guard let output = try? await connection.run("[ -f \(box)/integrations-removed.json\" ] && cat \(box)/integrations-removed.json\" && echo && echo \(mark) && cat \(box)/opencode.json\" 2>/dev/null; rm -f \(box)/integrations-removed.json\"; true") else { return }
+        let parts = output.components(separatedBy: "\n\(mark)\n")
+        guard let removed = (try? JSONSerialization.jsonObject(with: Data(parts[0].utf8)) as? [String: Any])?["removed"] as? [String] else { return }
+        let settings = parts.count > 1 ? try? JSONDecoder().decode([String: JSONValue].self, from: Data(parts[1].utf8)) : nil
         for id in removed {
             guard let service = Integrations.service(id) else { continue }
+            // Added back since (or its settings couldn't be read, so it can't be told): kept.
+            if settings == nil || EngineConfig.value(at: MCPSettings.path + [id], in: settings ?? [:]) != nil { continue }
             for bot in bots.list where bot.machine == machine {
                 let theirs = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) }
                 await Task.detached { for variable in theirs { IntegrationKeys.set(nil, for: variable) } }.value

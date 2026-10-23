@@ -204,13 +204,10 @@ nonisolated enum Integrations {
 
     static func service(_ id: String) -> Service? { all.first { $0.id == id } }
 
-    /// How an added integration is doing on a computer, worst last, as Settings › Integrations
+    /// How an added integration is doing on a computer, as Settings › Integrations
     /// says it: its server's status, then whether it waits for you.
-    enum Health: String, Comparable, Sendable {
+    enum Health: String, Sendable {
         case connected, starting, waitsForCode, needsSignIn, failed
-
-        private static let order: [Health] = [.connected, .starting, .waitsForCode, .needsSignIn, .failed]
-        static func < (a: Health, b: Health) -> Bool { order.firstIndex(of: a)! < order.firstIndex(of: b)! }
     }
 
     /// `server`, its server as the engine lists it; `signedIn`, the integrations the engine keeps

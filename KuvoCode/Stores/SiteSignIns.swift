@@ -18,11 +18,16 @@ final class SiteSignIns {
 
     /// Reads the cookies again: this Mac's, and each connected machine's browser that's live.
     func refresh(_ app: AppModel) async {
-        let mac = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        record("", mac.map { (domain: $0.domain, name: $0.name, expires: $0.expiresDate) })
+        await refreshMac()
         for engine in app.machines.engines.values where engine.isReady {
             if let cookies = await engine.browser.cookies() { record(engine.machine.id, cookies) }
         }
+    }
+
+    /// This Mac's alone.
+    func refreshMac() async {
+        let mac = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+        record("", mac.map { (domain: $0.domain, name: $0.name, expires: $0.expiresDate) })
     }
 
     private func record(_ place: String, _ cookies: [(domain: String, name: String, expires: Date?)]) {

@@ -345,7 +345,8 @@ final class EngineConfig {
         changes.reduce(settings) { setting($1.value, at: $1.path[...], in: $0) }
     }
 
-    private static func value(at path: [String], in settings: [String: JSONValue]) -> JSONValue? {
+    /// What's at `path` in `settings`, as a computer's settings file has them.
+    static func value(at path: [String], in settings: [String: JSONValue]) -> JSONValue? {
         var current: JSONValue? = .object(settings)
         for key in path { current = current?[key] }
         return current

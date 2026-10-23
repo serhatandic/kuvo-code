@@ -49,7 +49,7 @@ enum AlsoApply {
                Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) { continue }
             // A field of a server, agent or command the target doesn't have: none made there with
             // only that (adding or removing a whole one still goes).
-            if let entry = Self.entry(of: change.path), Self.value(at: entry, in: settings) == nil { continue }
+            if let entry = Self.entry(of: change.path), EngineConfig.value(at: entry, in: settings) == nil { continue }
             var value = change.after.map { keysNamed($0, on: machine) }
             // Rules: none is an empty list, so the first one added (or the last taken out) joins
             // (or leaves) the other's, rather than standing in for them.
@@ -57,7 +57,7 @@ enum AlsoApply {
                change.before == nil || change.before?.array != nil, change.after == nil || change.after?.array != nil {
                 let before = change.before?.array ?? []
                 let after = change.after?.array ?? []
-                let there = Self.value(at: change.path, in: settings)?.array ?? []
+                let there = EngineConfig.value(at: change.path, in: settings)?.array ?? []
                 let removed = before.filter { !after.contains($0) }
                 let added = after.filter { !before.contains($0) }.map { keysNamed($0, on: machine) }
                 let kept = there.filter { !removed.contains($0) }
@@ -145,12 +145,6 @@ enum AlsoApply {
         case .array(let array): return .array(array.map { keysNamed($0, on: machine) })
         default: return value
         }
-    }
-
-    private static func value(at path: [String], in settings: [String: JSONValue]) -> JSONValue? {
-        var current: JSONValue? = .object(settings)
-        for key in path { current = current?[key] }
-        return current
     }
 
     private static func setting(_ value: JSONValue?, at path: ArraySlice<String>, in object: [String: JSONValue]) -> [String: JSONValue] {

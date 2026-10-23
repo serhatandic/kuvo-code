@@ -722,6 +722,13 @@ final class Machines {
     /// The mark on an integration's clean-up, to drop if it's added again.
     static func integrationMark(_ id: String) -> String { "# Kuvo Code: integration \(id)\n" }
 
+    /// The integration a waiting script was marked with, if any.
+    static func integration(markedIn script: String) -> String? {
+        let prefix = "# Kuvo Code: integration "
+        guard script.hasPrefix(prefix), let end = script.firstIndex(of: "\n") else { return nil }
+        return String(script[script.index(script.startIndex, offsetBy: prefix.count)..<end])
+    }
+
     /// Runs `script` on the machine the next time it answers (tried at once too).
     func runLater(_ script: String, on machine: String) {
         Self.waiting[machine, default: []].append(script)
@@ -785,7 +792,12 @@ final class Machines {
             while let script = Self.waiting[machine]?.first {
                 let listed = list.contains { $0.id == machine }
                 let removal = script.hasPrefix(Self.removalMark)
-                if !(removal && listed) {
+                // An integration's removal, added back there since (from a phone, with this Mac
+                // away): what it has now stays.
+                let addedBack = Self.integration(markedIn: script).map { id in
+                    engines[machine].map { $0.config.isLoaded && $0.config.value(at: MCPSettings.path + [id]) != nil } ?? false
+                } ?? false
+                if !(removal && listed) && !addedBack {
                     // A removal under way: one added again meanwhile waits for it to end (see
                     // `waitForRemoval`) rather than starting while it signs out and stops.
                     if removal { removing.insert(machine) }

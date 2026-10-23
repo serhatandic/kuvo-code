@@ -711,15 +711,22 @@ function dropBotsIntegration(entry) {
   const own = Object.values(entry.variables ?? {});
   for (const name of listOf(BOT_KEYS)) if (own.some(variable => name.startsWith(`${variable}__`))) fs.rmSync(path.join(BOT_KEYS, name), { force: true });
   for (const bot of listOf(BOTS)) {
-    const file = path.join(BOTS, bot, "workspace", ".opencode", "opencode.json");
+    const folder = path.join(BOTS, bot, "workspace", ".opencode");
+    const file = path.join(folder, "opencode.json");
     let settings;
     try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
-    if (!settings?.mcp?.servers?.[entry.id]) continue;
+    // Only its server as the bot's own keys made it, as the Mac's BotKeys has it: one written
+    // there by hand stays.
+    const server = settings?.mcp?.servers?.[entry.id];
+    if (!server || !own.some(variable => JSON.stringify(server).includes(`${variable}__`))) continue;
     delete settings.mcp.servers[entry.id];
     if (!Object.keys(settings.mcp.servers).length) delete settings.mcp.servers;
     if (!Object.keys(settings.mcp).length) delete settings.mcp;
     if (Object.keys(settings).length) writePrivate(file, JSON.stringify(settings));
-    else fs.rmSync(file, { force: true });
+    else {
+      fs.rmSync(file, { force: true });
+      try { fs.rmdirSync(folder); } catch {}
+    }
   }
 }
 
@@ -742,12 +749,14 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     const variables = entry.variables ?? {};
     const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
     const names = Object.keys(variables);
+    let newKeys = false;
     if (names.length) {
       if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
         for (const name of names) {
           const saved = setBoxKey(variables[name], given[name].trim());
           if (saved.status !== 200) return { status: saved.status, value: { message: saved.message } };
         }
+        newKeys = true;
       } else if (!names.every(name => fs.existsSync(path.join(BOX_KEYS, variables[name])))) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
@@ -762,6 +771,11 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
       const removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? [];
       if (removed.includes(entry.id)) writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: removed.filter(id => id !== entry.id) }));
     } catch {}
+    // The engine reads its keys as it reads its settings again: its server connects again a
+    // moment later, with the new ones, as Settings does it.
+    if (newKeys && engine) {
+      setTimeout(() => call(engine, "POST", `/api/experimental/mcp/${encodeURIComponent(entry.id)}/connect`).catch(() => {}), 2_000).unref?.();
+    }
     const [listed] = await integrationEntries([entry], engine, signal);
     return { status: 200, value: { integration: listed } };
   }

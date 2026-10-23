@@ -59,6 +59,15 @@ import Testing
         #expect(try await ask("kuvo/integrations/\(browser.id)", method: "POST", body: [:]).status == 409)
         #expect(try await ask("kuvo/integrations/nothing", method: "POST", body: [:]).status == 404)
 
+        // A settings file changed by hand so it can't be changed here: nothing's removed, and it says so.
+        let written = try String(contentsOf: config.file, encoding: .utf8)
+        try ("// mine\n" + written).write(to: config.file, atomically: true, encoding: .utf8)
+        let refused = try await ask("kuvo/integrations/todoist", method: "DELETE")
+        #expect(refused.status == 409)
+        try written.write(to: config.file, atomically: true, encoding: .utf8)
+        config.reload()
+        #expect(IntegrationKeys.value(IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) == "tok_123")
+
         #expect(try await ask("kuvo/integrations/todoist", method: "DELETE").status == 200)
         #expect(config.value(at: MCPSettings.path + ["todoist"]) == nil)
         #expect(IntegrationKeys.value(IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) == nil, "its key goes with it")

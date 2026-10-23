@@ -83,8 +83,7 @@ struct IntegrationsSettings: View {
                 // adding the integration has it do: its server connects again once it has.
                 add(request.service)
                 Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    if let api { await app.reconnect(request.service.id, api: api, machine: box.machine) }
+                    await app.reconnectAfterKeys(request.service, on: box)
                     await refresh()
                 }
             }
@@ -416,7 +415,8 @@ private struct KeyEntry: View {
                 try await app.saveIntegrationKeys(service, values, on: box)
                 done(true)
             } catch {
-                failed = box.machine == nil ? error.localizedDescription : "Couldn’t save it on \(app.name(of: box)): \(error.localizedDescription)"
+                // (One that's no longer a machine here says so itself.)
+                failed = box.machine == nil || error is AppModel.IntegrationFailure ? error.localizedDescription : "Couldn’t save it on \(app.name(of: box)): \(error.localizedDescription)"
             }
             isSaving = false
         }

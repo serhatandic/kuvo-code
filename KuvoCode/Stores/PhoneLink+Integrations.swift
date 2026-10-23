@@ -12,21 +12,24 @@ extension PhoneLink {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map { String($0).removingPercentEncoding ?? String($0) }
         let method = request.method.uppercased()
         if parts.count == 2 {
-            guard method == "GET" else { return (405, Data()) }
+            guard method == "GET" else { return (405, Data("{}".utf8)) }
             let config = app.config(for: .mac)
             config.reload()
             var answer: [String: Any] = ["integrations": await Self.entries(Integrations.all, app: app)]
             if let problem = config.problem { answer["problem"] = problem }
             return (200, Self.json(answer))
         }
-        guard parts.count == 3, let service = Integrations.service(parts[2]) else { return (404, Data()) }
+        guard parts.count == 3, let service = Integrations.service(parts[2]) else { return (404, Data("{}".utf8)) }
         switch method {
         case "POST": return await add(service, request.body, app: app)
         case "DELETE":
-            guard app.config(for: .mac).value(at: MCPSettings.path + [service.id]) != nil else { return (404, Data()) }
+            let config = app.config(for: .mac)
+            config.reload()
+            if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
+            guard config.value(at: MCPSettings.path + [service.id]) != nil else { return (404, Data("{}".utf8)) }
             await app.removeIntegration(service, on: .mac)
             return (200, Data("{}".utf8))
-        default: return (405, Data())
+        default: return (405, Data("{}".utf8))
         }
     }
 
@@ -54,13 +57,7 @@ extension PhoneLink {
             }
         }
         guard app.addIntegration(service, on: .mac) else { return (409, Self.message(config.problem ?? "It couldn't be added.")) }
-        // The engine reads its keys as it reads its settings again: its server connects again then.
-        if !keys.isEmpty, let api = app.api(for: .mac) {
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                await app.reconnect(service.id, api: api, machine: nil)
-            }
-        }
+        if !keys.isEmpty { Task { await app.reconnectAfterKeys(service, on: .mac) } }
         let entry = await Self.entries([service], app: app).first ?? [:]
         return (200, Self.json(["integration": entry]))
     }
@@ -71,17 +68,20 @@ extension PhoneLink {
         let api = app.api(for: .mac)
         let servers = (try? await api?.mcpServers()) ?? []
         let signedIn = Set(((try? await api?.credentialEntries()) ?? []).filter { $0.active && $0.isOAuth }.map(\.integrationID))
-        let kinds = Integrations.Kind.allCases
-        let ordered = services.enumerated().sorted { a, b in
-            let (ka, kb) = (kinds.firstIndex(of: a.element.kind) ?? 0, kinds.firstIndex(of: b.element.kind) ?? 0)
-            return ka != kb ? ka < kb : a.offset < b.offset
-        }.map(\.element)
-        return ordered.map { service in
+        // Which keys this Mac has, off the main thread: the Keychain can wait on you.
+        let saved = await Task.detached {
+            Set(services.flatMap { service in Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name) } }
+                .filter { IntegrationKeys.value($0) != nil })
+        }.value
+        // Whether the browser here is signed in to the sites the agent uses, read now.
+        if services.contains(where: { if case .browser = $0.way { true } else { false } }) { await SiteSignIns.shared.refreshMac() }
+        // (`Integrations.all` is in the page's order, by kind.)
+        return services.map { service in
             var entry = described(service)
             let added = config.value(at: MCPSettings.path + [service.id]) != nil
             entry["added"] = added
             let keys = Integrations.keys(of: service.way)
-            if !keys.isEmpty { entry["keysSaved"] = keys.allSatisfy { IntegrationKeys.value(IntegrationKeys.variable(service.id, $0.name)) != nil } }
+            if !keys.isEmpty { entry["keysSaved"] = keys.allSatisfy { saved.contains(IntegrationKeys.variable(service.id, $0.name)) } }
             if added {
                 let server = servers.first { $0.name == service.id }
                 entry["health"] = Integrations.health(service, server: server, signedIn: signedIn, waitsForCode: Integrations.waitsForCode(service)).rawValue

@@ -306,6 +306,9 @@ extension AppModel {
             self?.workspace.handle(event, machine: machine)
             // It signed in again, or a sign-in ran out and was renewed there: here too.
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
+            // An integration removed there (from a phone): its bots' keys here go now, not at the
+            // next connection, by when Edit Bot could have put them back.
+            if event.type == "config.updated" { Task { await self?.takeInRemovedIntegrations(on: machine) } }
         }
         engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
         // Its Settings › Permissions changed: its open sessions follow, and what its group chats

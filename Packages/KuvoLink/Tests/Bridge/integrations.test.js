@@ -54,7 +54,11 @@ test("removed with its keys, what its server kept, and its bots' own keys and fo
   fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "stays");
   const own = path.join(home, "bots", "bot_scout", "workspace", ".opencode");
   fs.mkdirSync(own, { recursive: true });
-  fs.writeFileSync(path.join(own, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "local" } } } }));
+  fs.writeFileSync(path.join(own, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "local", environment: { API_KEY: "{file:~/.kuvo-code/keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" } } } } }));
+  // Another bot's, written by hand without keys of its own: it stays, as the Mac leaves it.
+  const theirs = path.join(home, "bots", "bot_atlas", "workspace", ".opencode");
+  fs.mkdirSync(theirs, { recursive: true });
+  fs.writeFileSync(path.join(theirs, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "remote", url: "https://example.com/mcp" } } } }));
 
   assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 200);
   assert.equal(settings().mcp?.servers?.todoist, undefined);
@@ -62,11 +66,35 @@ test("removed with its keys, what its server kept, and its bots' own keys and fo
   assert.equal(fs.existsSync(path.join(home, "integrations", "todoist")), false);
   assert.equal(fs.existsSync(path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT")), false);
   assert.equal(fs.readFileSync(path.join(home, "keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "utf8"), "stays");
-  assert.equal(fs.existsSync(path.join(own, "opencode.json")), false, "a bot's settings naming only it go");
+  assert.equal(fs.existsSync(own), false, "a bot's settings naming only it go, with their folder");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(theirs, "opencode.json"), "utf8")).mcp.servers.todoist.type, "remote");
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "box", "integrations-removed.json"), "utf8")), { removed: ["todoist"] });
   assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 404);
 
   // Added again: its bots' keys aren't to go after all.
   await ask("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_456" } });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "box", "integrations-removed.json"), "utf8")), { removed: [] });
+});
+
+test("new keys: its server connects again a moment later, as Settings has it", async () => {
+  const asked = [];
+  const http = await import("node:http");
+  const server = http.createServer((request, response) => {
+    asked.push(`${request.method} ${request.url}`);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  after(() => { server.closeAllConnections(); server.close(); });
+  const engine = { port: server.address().port, password: "pw" };
+  const added = await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_789" } }, engine, undefined);
+  assert.equal(added.status, 200);
+  assert.ok(!asked.some(each => each.includes("/connect")), "not before the engine has read them");
+  await new Promise(resolve => setTimeout(resolve, 2_300));
+  assert.ok(asked.includes("POST /api/experimental/mcp/todoist/connect"));
+  // Without new keys, nothing to connect again for.
+  asked.length = 0;
+  await link.answerIntegrations("POST", "kuvo/integrations/todoist", {}, engine, undefined);
+  await new Promise(resolve => setTimeout(resolve, 2_300));
+  assert.ok(!asked.some(each => each.includes("/connect")));
 });
