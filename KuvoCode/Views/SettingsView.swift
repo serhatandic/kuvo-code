@@ -656,13 +656,13 @@ private struct AlsoApplyBar: View {
 
     /// How it went: where it's made now, and what stayed here because a computer doesn't have it
     /// (an agent, a command, a server) or keeps its own (its shell), which stays said until Done.
-    /// `failure`: where it couldn't be made, said in red; the change is offered again after
-    /// Done, to try once more.
+    /// `failure`: where it couldn't be made, said in red, with Try Again for `missed`.
     private struct Applied: Equatable {
         var title: String
         var note: String?
         var anywhere: Bool
         var failure: String?
+        var missed: [SidebarBox] = []
     }
 
     private var config: EngineConfig { app.config(for: box) }
@@ -679,13 +679,13 @@ private struct AlsoApplyBar: View {
                         Text("Applying to \(applying)…")
                             .font(.system(size: 13))
                     } else if let applied {
-                        Image(systemName: applied.anywhere ? "checkmark.circle.fill" : "info.circle")
+                        Image(systemName: applied.failure != nil ? "exclamationmark.triangle.fill" : applied.anywhere ? "checkmark.circle.fill" : "info.circle")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(applied.anywhere ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(applied.failure != nil ? AnyShapeStyle(.orange) : applied.anywhere ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
                         VStack(alignment: .leading, spacing: 1) {
                             Text(applied.title)
                                 .font(.system(size: 13, weight: applied.note == nil && applied.failure == nil ? .regular : .medium))
-                                .lineLimit(1)
+                                .lineLimit(2)
                             if let failure = applied.failure {
                                 Text(failure)
                                     .font(.system(size: 12))
@@ -701,7 +701,16 @@ private struct AlsoApplyBar: View {
                         }
                         if applied.note != nil || applied.failure != nil {
                             Spacer(minLength: 8)
-                            Button("Done") { withAnimation(.ui) { self.applied = nil } }
+                            if !applied.missed.isEmpty {
+                                Button("Try Again") { apply(to: applied.missed) }
+                                    .fixedSize()
+                            }
+                            Button("Done") {
+                                withAnimation(.ui) {
+                                    self.applied = nil
+                                    dismiss()
+                                }
+                            }
                         }
                     } else {
                         Image(systemName: box.symbol)
@@ -710,7 +719,7 @@ private struct AlsoApplyBar: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Changed on \(app.name(of: box)) only")
                                 .font(.system(size: 13, weight: .medium))
-                                .lineLimit(1)
+                                .lineLimit(2)
                             Text(failure ?? "Each computer keeps its own settings.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(failure == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
@@ -782,11 +791,13 @@ private struct AlsoApplyBar: View {
         let changes = fresh
         guard let last = changes.last?.id else { return }
         failure = nil
+        applied = nil
         Task {
             var done: [String] = []
             var notDone: [String] = []
             var notes: [String] = []
             var failures: [String] = []
+            var missed: [SidebarBox] = []
             for target in targets {
                 let name = app.name(of: target)
                 applying = name
@@ -797,24 +808,31 @@ private struct AlsoApplyBar: View {
                         let what = outcome.leftOut.formatted(.list(type: .or))
                         notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
                     }
-                    if !outcome.keptOwn.isEmpty {
-                        notes.append("\(name) keeps \(outcome.keptOwn.formatted(.list(type: .and))), so \(outcome.keptOwn.count == 1 ? "that" : "those") stayed here.")
-                    }
-                } catch AlsoApply.Failure.unread(let away, let connected) {
-                    failures.append(AlsoApply.Failure.unread(away, connected: connected).localizedDescription)
                 } catch {
                     failures.append("Not applied on \(name): \(error.localizedDescription)")
+                    missed.append(target)
                 }
             }
             applying = nil
             Analytics.shared.track("settings_also_applied", ["computers": done.count])
+            // What stays with every computer, said once.
+            let net = AlsoApply.net(changes)
+            let own = AlsoApply.keptOwn(net)
+            if !own.isEmpty {
+                notes.append("Each computer keeps its own \(own.formatted(.list(type: .and))), so \(own.count == 1 ? "that" : "those") stayed here.")
+            }
+            let macOnly = targets.contains { $0.machine != nil } ? AlsoApply.macOnly(net) : []
+            if !macOnly.isEmpty {
+                notes.append("\(macOnly.formatted(.list(type: .and))) \(macOnly.count == 1 ? "stays on Macs: it uses" : "stay on Macs: they use") a Mac’s own apps.")
+            }
             guard failures.isEmpty else {
-                if done.isEmpty {
-                    failure = (failures + notes).joined(separator: " ")
+                if done.isEmpty && notDone.isEmpty {
+                    // Made nowhere: said where the change is offered from, to try again.
+                    failure = failures.joined(separator: " ")
                 } else {
-                    // Made on some: said, with where it wasn't; offered again after Done.
-                    applied = Applied(title: "Also applied on \(done.formatted(.list(type: .and)))", note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: true,
-                                      failure: failures.joined(separator: " "))
+                    applied = Applied(title: done.isEmpty ? "Not applied on \(notDone.formatted(.list(type: .and)))" : "Also applied on \(done.formatted(.list(type: .and)))",
+                                      note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: !done.isEmpty,
+                                      failure: failures.joined(separator: " "), missed: missed)
                 }
                 return
             }

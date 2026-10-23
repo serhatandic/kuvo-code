@@ -10,12 +10,12 @@ import OpenCodeKit
 enum AlsoApply {
     enum Failure: LocalizedError {
         /// Its settings couldn't be read: `connected`, though it's connected.
-        case unread(String, connected: Bool)
+        case unread(connected: Bool)
         case refused(String)
 
         var errorDescription: String? {
             switch self {
-            case .unread(let name, let connected): "Not applied on \(name): \(connected ? "its settings couldn’t be read." : "it isn’t connected.")"
+            case .unread(let connected): connected ? "its settings couldn’t be read." : "it isn’t connected."
             case .refused(let why): why
             }
         }
@@ -46,10 +46,22 @@ enum AlsoApply {
     }
 
     /// What `target` doesn't have that `changes` are to (an agent, a command, a server, a
-    /// provider; on a machine, a server that uses a Mac's own apps), so they aren't made there: by
-    /// entry (`describe` says each), once each.
+    /// provider), so they aren't made there: by entry (`describe` says each), once each.
     static func leftOut(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [[String]] {
         translation(changes, onto: target, to: machine).leftOut
+    }
+
+    /// The servers among `changes` that use a Mac's own apps (Apple Calendar & Reminders, Chrome's
+    /// tools), which stay on Macs: as the bar names them.
+    static func macOnly(_ changes: [EngineConfig.Change]) -> [String] {
+        var named: [String] = []
+        for change in changes where change.path.count >= 3 && change.path[0] == "mcp" && change.path[1] == "servers" {
+            let id = change.path[2]
+            guard Integrations.macOnly.contains(id) || MCPCatalog.macOnly.contains(id) else { continue }
+            let name = Integrations.service(id)?.title ?? MCPCatalog.servers.first { $0.id == id }?.title ?? id
+            if !named.contains(name) { named.append(name) }
+        }
+        return named
     }
 
     /// What each computer keeps its own, as the bar says it, among `changes`: its shell (each
@@ -63,9 +75,9 @@ enum AlsoApply {
     }
 
     private static func ownSetting(_ change: EngineConfig.Change) -> String? {
-        if change.path == ["shell"] { return "its shell" }
+        if change.path == ["shell"] { return "shell" }
         if change.path == ["worktree", "directory"], let folder = change.after?.string ?? change.before?.string,
-           folder.hasPrefix("/") || folder.hasPrefix("~") { return "its worktrees folder" }
+           folder.hasPrefix("/") || folder.hasPrefix("~") { return "worktrees folder" }
         return nil
     }
 
@@ -87,11 +99,7 @@ enum AlsoApply {
         for change in changes {
             // Integrations that use a Mac's own apps stay on Macs.
             if machine != nil, change.path.count >= 3, change.path[0] == "mcp", change.path[1] == "servers",
-               Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) {
-                let entry = Array(change.path.prefix(3))
-                if !leftOut.contains(entry) { leftOut.append(entry) }
-                continue
-            }
+               Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) { continue }
             // What each computer keeps its own (`keptOwn`).
             if ownSetting(change) != nil { continue }
             // A field of a server, agent or command the target doesn't have, or the mode new
@@ -156,8 +164,6 @@ enum AlsoApply {
     /// what it doesn't have that some of the changes were to (`describe`d).
     struct Outcome {
         var leftOut: [String] = []
-        /// What it keeps its own (`keptOwn`), so stayed here.
-        var keptOwn: [String] = []
         /// Something was made there, or every change was already so.
         var applied = true
     }
@@ -170,12 +176,14 @@ enum AlsoApply {
             config.reload()
             for _ in 0..<150 where !config.isLoaded && config.problem == nil { try await Task.sleep(for: .milliseconds(100)) }
             guard config.isLoaded else {
-                throw Failure.unread(app.name(of: target), connected: target.machine.map { app.machines.engine($0)?.isReady == true } ?? true)
+                throw Failure.unread(connected: target.machine.map { app.machines.engine($0)?.isReady == true } ?? true)
             }
         }
         let (made, missing) = translation(net(changes), onto: config.settings, to: target.machine)
-        let own = keptOwn(net(changes))
-        let outcome = Outcome(leftOut: missing.map(describe), keptOwn: own, applied: !made.isEmpty || (missing.isEmpty && own.isEmpty))
+        // Nothing made, and nothing said of what it doesn't have: what stays with every computer
+        // (its shell, a server only Macs run) is said once, by the bar.
+        let stays = !keptOwn(net(changes)).isEmpty || (target.machine != nil && !macOnly(net(changes)).isEmpty)
+        let outcome = Outcome(leftOut: missing.map(describe), applied: !made.isEmpty || (missing.isEmpty && !stays))
         guard !made.isEmpty else { return outcome }
         // The keys first, so the settings that name them find them there; one the other computer
         // has of its own (another account's token, say) stays.

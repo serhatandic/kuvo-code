@@ -169,7 +169,7 @@ import Testing
         let changes = AlsoApply.net(here.changes)
         #expect(AlsoApply.translated(changes, onto: [:], to: "lab").isEmpty, "no half provider, nor this Mac's shell or folder")
         #expect(AlsoApply.leftOut(changes, onto: [:], to: "lab").map(AlsoApply.describe) == ["the provider acme"])
-        #expect(AlsoApply.keptOwn(changes) == ["its shell", "its worktrees folder"])
+        #expect(AlsoApply.keptOwn(changes) == ["shell", "worktrees folder"])
 
         let relative = try config([:])
         relative.set(.string("../worktrees"), at: ["worktree", "directory"])
@@ -180,7 +180,8 @@ import Testing
         let apps = try config([:])
         apps.set(.object(["type": .string("local"), "command": .array([.string("x")])]), at: ["mcp", "servers", macOnly])
         #expect(AlsoApply.translated(AlsoApply.net(apps.changes), onto: [:], to: "lab").isEmpty)
-        #expect(AlsoApply.leftOut(AlsoApply.net(apps.changes), onto: [:], to: "lab").map(AlsoApply.describe) == [Integrations.service(macOnly)?.title ?? macOnly])
+        #expect(AlsoApply.leftOut(AlsoApply.net(apps.changes), onto: [:], to: "lab").isEmpty, "not something the machine lacks")
+        #expect(AlsoApply.macOnly(AlsoApply.net(apps.changes)) == [Integrations.service(macOnly)?.title ?? macOnly], "said apart: it stays on Macs")
         #expect(AlsoApply.translated(AlsoApply.net(apps.changes), onto: [:], to: nil).count == 1, "another Mac runs it")
     }
 
