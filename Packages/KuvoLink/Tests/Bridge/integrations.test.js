@@ -1,7 +1,7 @@
 // Settings › Integrations on a machine, from a phone with the Mac closed: from the catalog the Mac
 // leaves there, one added with its keys (or the keys it has), one used on its site turned away,
 // and one removed with everything that goes with it: its keys, what its server kept, its bots'
-// own keys and folder settings, noted for the Mac.
+// own keys and folder settings, all on the machine itself.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -47,7 +47,7 @@ test("listed from the Mac's catalog, added with its keys or the ones it has, nev
   assert.equal((await ask("POST", "kuvo/integrations/nothing", {})).status, 404);
 });
 
-test("removed with its keys, what its server kept, and its bots' own keys and folder settings, noted for the Mac", async () => {
+test("removed with its keys, what its server kept, and its bots' own keys and folder settings", async () => {
   fs.mkdirSync(path.join(home, "integrations", "todoist"), { recursive: true });
   fs.mkdirSync(path.join(home, "keys"), { recursive: true });
   fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT"), "theirs");
@@ -68,12 +68,8 @@ test("removed with its keys, what its server kept, and its bots' own keys and fo
   assert.equal(fs.readFileSync(path.join(home, "keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "utf8"), "stays");
   assert.equal(fs.existsSync(own), false, "a bot's settings naming only it go, with their folder");
   assert.equal(JSON.parse(fs.readFileSync(path.join(theirs, "opencode.json"), "utf8")).mcp.servers.todoist.type, "remote");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "box", "integrations-removed.json"), "utf8")), { removed: ["todoist"] });
+  assert.equal(fs.existsSync(path.join(home, "box", "integrations-removed.json")), false, "nothing for a Mac to see to: the machine has done it all");
   assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 404);
-
-  // Added again: its bots' keys aren't to go after all.
-  await ask("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_456" } });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "box", "integrations-removed.json"), "utf8")), { removed: [] });
 });
 
 test("new keys: its server connects again a moment later, as Settings has it", async () => {

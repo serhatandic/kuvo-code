@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.21";
+export const BRIDGE_VERSION = "0.9.22";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -666,10 +666,8 @@ async function* forward(target, path, request, signal, allows) {
 // MARK: Integrations (PROTOCOL.md, "Integrations"), as the Mac's Settings › Integrations has them.
 
 const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
-// What this machine removed by itself, for the Mac to drop its bots' own keys for them too.
-const REMOVED_INTEGRATIONS = path.join(K, "box", "integrations-removed.json");
 const INTEGRATION_DATA = path.join(K, "integrations");
-// A bot's own keys, which the Mac puts here (BotKeys), apart from the machine's shared ones.
+// Bots' own keys (`answerBotKeys`), apart from the machine's shared ones.
 const BOT_KEYS = path.join(K, "keys");
 
 function integrationCatalog(file = INTEGRATIONS_FILE) {
@@ -769,11 +767,6 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
-    // Back again: its bots' keys aren't to go after all.
-    try {
-      const removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? [];
-      if (removed.includes(entry.id)) writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: removed.filter(id => id !== entry.id) }));
-    } catch {}
     // The engine reads its keys as it reads its settings again: its server connects again a
     // moment later, with the new ones, as Settings does it.
     if (newKeys && engine) {
@@ -787,11 +780,6 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn;
     if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.(each => each?.name === entry.id)?.integrationID;
-    // Noted for the Mac first: it reads the note as it hears the settings change.
-    let removed = [];
-    try { removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? []; } catch {}
-    fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
-    writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: [...new Set([...removed, entry.id])] }));
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     if (engine && signIn) {
@@ -806,6 +794,150 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     return { status: 200, value: {} };
   }
   return { status: 405, value: {} };
+}
+
+// MARK: Bots' own keys (PROTOCOL.md, "Bots' own keys"): keys a bot here has of its own for the
+// integrations you bring a key for, kept on this machine (`keys/<variable>__<BOT>`) and named by a
+// settings file of its folder's own, so only its conversation uses them. A bot that works in a
+// project uses that project's.
+
+/** A bot's own variable for one of an integration's, as the Mac's IntegrationKeys names it. */
+export const botVariable = (variable, bot) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;
+
+/** The integrations a bot can have keys of its own for: those you bring a key for. */
+const botKeyed = catalog => catalog.filter(entry => ["token", "package"].includes(entry.way) && entry.settings && Object.keys(entry.variables ?? {}).length);
+
+/** Whether `bot` has every key of its own for `entry`. */
+const hasOwnKeys = (bot, entry) => Object.values(entry.variables).every(variable => fs.existsSync(path.join(BOT_KEYS, botVariable(variable, bot))));
+
+/** `entry`'s server as `bot`'s conversation runs it: its own keys in place of the shared ones. */
+function botServer(entry, bot) {
+  let text = JSON.stringify(entry.settings);
+  for (const variable of Object.values(entry.variables)) text = text.split(`/box/keys/${variable}}`).join(`/keys/${botVariable(variable, bot)}}`);
+  return JSON.parse(text);
+}
+
+/** Its folder's settings as they are, and where; `problem` when they aren't plain JSON (left alone). */
+function botSettings(bot) {
+  const folder = path.join(BOTS, bot, "workspace", ".opencode");
+  const file = path.join(folder, "opencode.json");
+  const text = textOf(file);
+  if (text === null || !text.trim()) return { folder, file, settings: {} };
+  let settings;
+  try { settings = JSON.parse(text); } catch {}
+  const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!isObject(settings) || (settings.mcp !== undefined && !isObject(settings.mcp)) || (settings.mcp?.servers !== undefined && !isObject(settings.mcp.servers))) {
+    return { folder, file, problem: "Its folder's settings aren't plain JSON, so its own keys can't be named there." };
+  }
+  return { folder, file, settings };
+}
+
+/** Its folder's settings naming a server for each integration it has its own keys for, and no
+ * longer one for those it had them for; the rest of the file as it was (the Mac's BotKeys.change). */
+function writeBotSettings(bot, catalog) {
+  const { folder, file, settings: old, problem } = botSettings(bot);
+  if (problem) return { status: 409, message: problem };
+  const suffix = botVariable("", bot);
+  const usesOwn = server => (JSON.stringify(server).match(/KUVO_KEY_[A-Z0-9_]+/g) ?? []).some(name => name.endsWith(suffix));
+  const servers = Object.fromEntries(Object.entries(old.mcp?.servers ?? {}).filter(([, server]) => !usesOwn(server)));
+  for (const entry of botKeyed(catalog)) if (hasOwnKeys(bot, entry)) servers[entry.id] = botServer(entry, bot);
+  const mcp = { ...(old.mcp ?? {}) };
+  if (Object.keys(servers).length) mcp.servers = servers;
+  else delete mcp.servers;
+  const next = { ...old };
+  if (Object.keys(mcp).length) next.mcp = mcp;
+  else delete next.mcp;
+  if (JSON.stringify(next) === JSON.stringify(old)) return { status: 200 };
+  if (Object.keys(next).length) {
+    writePrivate(file, JSON.stringify(next, null, 2) + "\n");
+  } else {
+    fs.rmSync(file, { force: true });
+    try { fs.rmdirSync(folder); } catch {}
+  }
+  return { status: 200 };
+}
+
+/** Each bot here that has keys of its own: its folder's settings as its keys and this machine's
+ * integrations are now (a server's newer version, say). As the bridge starts, and from a Mac. */
+export function refreshBotsKeys(file = INTEGRATIONS_FILE) {
+  const catalog = integrationCatalog(file);
+  const suffixes = listOf(BOT_KEYS).filter(name => name.includes("__"));
+  for (const bot of listOf(BOTS)) {
+    const here = botHere(bot);
+    if (!here || here.described.project || !suffixes.some(name => name.endsWith(botVariable("", bot)))) continue;
+    writeBotSettings(bot, catalog);
+  }
+}
+
+/** Its server, connected again in the bot's folder a moment later, with the keys it has now. */
+function reconnectForBot(engine, id, bot, later) {
+  if (!engine?.port) return;
+  const folder = path.join(BOTS, bot, "workspace");
+  later(() => fetch(`http://127.0.0.1:${engine.port}/api/experimental/mcp/${encodeURIComponent(id)}/connect`, {
+    method: "POST",
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) },
+  }).catch(() => {}), 2_000);
+}
+
+/** `kuvo/bots/<id>/keys…`, for a bot that lives on this machine. `later` runs what waits a moment (a test's own). */
+export async function answerBotKeys(method, requestPath, body, engine, file = INTEGRATIONS_FILE, later = soon) {
+  const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
+  const message = text => ({ message: text });
+  const bot = parts[2];
+  const here = botHere(bot);
+  if (!here) return { status: 404, value: message("That bot isn't on this machine.") };
+  if (here.described.project) return { status: 409, value: message(`${here.described.name} works in a project, so it uses the keys that project's sessions use.`) };
+  const catalog = integrationCatalog(file);
+  const keyed = botKeyed(catalog);
+  const shared = entry => Object.values(entry.variables).every(variable => fs.existsSync(path.join(BOX_KEYS, variable)));
+  const drop = entries => {
+    for (const entry of entries) for (const variable of Object.values(entry.variables)) fs.rmSync(path.join(BOT_KEYS, botVariable(variable, bot)), { force: true });
+  };
+  if (parts.length === 4) {
+    if (method === "GET") return { status: 200, value: { keys: keyed.map(entry => ({ integration: entry.id, own: hasOwnKeys(bot, entry), shared: shared(entry) })) } };
+    if (method !== "DELETE") return { status: 405, value: {} };
+    // All of them, as it leaves this machine: what it moved with goes with it.
+    const had = keyed.filter(entry => hasOwnKeys(bot, entry));
+    drop(keyed);
+    for (const name of listOf(BOT_KEYS)) if (name.startsWith("KUVO_KEY_") && name.endsWith(botVariable("", bot))) fs.rmSync(path.join(BOT_KEYS, name), { force: true });
+    const written = writeBotSettings(bot, catalog);
+    for (const entry of had) reconnectForBot(engine, entry.id, bot, later);
+    return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
+  }
+  if (parts.length !== 5) return { status: 404, value: {} };
+  const entry = keyed.find(each => each.id === parts[4]);
+  if (!entry) return { status: 404, value: message("A bot can't have a key of its own for that here.") };
+  const names = Object.keys(entry.variables);
+  switch (method) {
+    case "GET": {
+      if (!hasOwnKeys(bot, entry)) return { status: 404, value: {} };
+      return { status: 200, value: { keys: Object.fromEntries(names.map(name => [name, textOf(path.join(BOT_KEYS, botVariable(entry.variables[name], bot))) ?? ""])) } };
+    }
+    case "PUT": {
+      const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
+      if (!names.every(name => typeof given[name] === "string" && given[name].trim())) {
+        const labels = (entry.keys ?? []).map(key => key.label).join(" and ") || names.join(" and ");
+        return { status: 400, value: message(`${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.`) };
+      }
+      // Its folder's settings are checked first: none are written where they can't be named.
+      const { problem } = botSettings(bot);
+      if (problem) return { status: 409, value: message(problem) };
+      fs.mkdirSync(BOT_KEYS, { recursive: true, mode: 0o700 });
+      for (const name of names) writePrivate(path.join(BOT_KEYS, botVariable(entry.variables[name], bot)), given[name].trim());
+      writeBotSettings(bot, catalog);
+      reconnectForBot(engine, entry.id, bot, later);
+      return { status: 200, value: { integration: entry.id, own: true, shared: shared(entry) } };
+    }
+    case "DELETE": {
+      if (!hasOwnKeys(bot, entry)) return { status: 404, value: {} };
+      drop([entry]);
+      const written = writeBotSettings(bot, catalog);
+      reconnectForBot(engine, entry.id, bot, later);
+      return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
+    }
+    default:
+      return { status: 405, value: {} };
+  }
 }
 
 // MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
@@ -1287,6 +1419,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     if (request.method.toUpperCase() === "POST" && route === "kuvo/bots") {
       const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
+      return yield* json(status, value);
+    }
+    // A bot's keys of its own, as Edit Bot shows and changes them.
+    if (/^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route)) {
+      let engine = null;
+      try { engine = readEngine(); } catch {}
+      const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine);
       return yield* json(status, value);
     }
     // A bot here changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
@@ -2263,10 +2402,10 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
-  // Its keys of its own (`KUVO_KEY_…__<ID>`, as the Mac names them).
-  const own = `__${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
-  for (const name of listOf(path.join(K, "keys"))) {
-    if (name.startsWith("KUVO_KEY_") && name.endsWith(own)) fs.rmSync(path.join(K, "keys", name), { force: true });
+  // Its keys of its own (`KUVO_KEY_…__<ID>`).
+  const own = botVariable("", id);
+  for (const name of listOf(BOT_KEYS)) {
+    if (name.startsWith("KUVO_KEY_") && name.endsWith(own)) fs.rmSync(path.join(BOT_KEYS, name), { force: true });
   }
   let agents;
   try {
@@ -4589,6 +4728,8 @@ async function run() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
+  // Its bots' folders' settings, as its integrations are now (after an update, say).
+  try { refreshBotsKeys(); } catch {}
   const cleanUp = () => {
     try { if (fs.readFileSync(PID_FILE, "utf8") === String(process.pid)) fs.unlinkSync(PID_FILE); } catch {}
     process.exit(0);
@@ -4717,7 +4858,8 @@ function startBridge() {
 // to tell your phones. Nothing left to answer: the bridge stops, and the keys stay.
 // `kuvo-link.js box <command>`: a Mac's way to a machine's own settings, over SSH, the same way a
 // phone's goes (one answer, JSON, on stdout). `adopt` (a seed on stdin), `read`, `change`
-// ({changes} on stdin), `key <name>` (its value on stdin; none removes it).
+// ({changes} on stdin), `key <name>` (its value on stdin; none removes it), `route` (a request,
+// {method, path, body?}, answered as a phone's is: {status, body}), `bot-keys-refresh`.
 async function box(command) {
   const input = async () => {
     const chunks = [];
@@ -4759,6 +4901,25 @@ async function box(command) {
       spawn(process.execPath, [fileURLToPath(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
+    case "route": {
+      // A client's request, answered as the bridge answers a phone's: one that answers once,
+      // never a stream that follows.
+      let given = {};
+      try { given = JSON.parse(await input()); } catch {}
+      const handle = engineHandler(readEngineFile, { name: os.hostname() });
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)) };
+      let status = 502;
+      const chunks = [];
+      for await (const part of handle(request, {}, undefined)) {
+        if (part.head) status = part.head.status;
+        if (part.body) chunks.push(Buffer.from(part.body));
+      }
+      return say({ status, body: Buffer.concat(chunks).toString("utf8") });
+    }
+    case "bot-keys-refresh":
+      // Its bots' folders' settings as their keys and this machine's integrations are now.
+      refreshBotsKeys();
+      return say({ status: 200 });
     case "personalities": {
       // A Mac's copy met with this one's: both end up as one.
       let given = null;
@@ -4766,7 +4927,7 @@ async function box(command) {
       return say({ status: 200, ...changePersonalities(library => mergePersonalities(library, given)) });
     }
     default:
-      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | personalities | update-status | update-auto | update-now");
+      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-auto | update-now");
       process.exit(2);
   }
 }
