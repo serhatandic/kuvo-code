@@ -654,6 +654,133 @@ async function* forward(target, path, request, signal, allows) {
   }
 }
 
+// MARK: Integrations (PROTOCOL.md, "Integrations"), as the Mac's Settings › Integrations has them.
+
+const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
+// What this machine removed by itself, for the Mac to drop its bots' own keys for them too.
+const REMOVED_INTEGRATIONS = path.join(K, "box", "integrations-removed.json");
+const INTEGRATION_DATA = path.join(K, "integrations");
+// A bot's own keys, which the Mac puts here (BotKeys), apart from the machine's shared ones.
+const BOT_KEYS = path.join(K, "keys");
+
+function integrationCatalog(file = INTEGRATIONS_FILE) {
+  try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && !each.macOnly); } catch { return []; }
+}
+
+/** How it's doing here, as the Mac's Integrations.health says it. */
+function integrationHealth(entry, server, signedIn) {
+  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
+  if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
+  return health;
+}
+
+/** Each as `kuvo/integrations` lists it, from the catalog, with how it's doing on this machine. */
+async function integrationEntries(catalog, engine, signal) {
+  const { settings } = readSettings();
+  let servers = [];
+  let signedIn = new Set();
+  if (engine) {
+    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
+  }
+  return catalog.map(({ settings: _, variables, ...entry }) => {
+    const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
+    const shown = { ...entry, added };
+    if (variables) shown.keysSaved = Object.values(variables).every(name => fs.existsSync(path.join(BOX_KEYS, name)));
+    if (added) {
+      const server = (Array.isArray(servers) ? servers : []).find(each => each?.name === entry.id);
+      shown.health = integrationHealth(entry, server, signedIn);
+      if (server?.integrationID) shown.signIn = server.integrationID;
+    }
+    return shown;
+  });
+}
+
+/** Its bots' own keys for it (`KUVO_KEY_<ID>_<NAME>__<BOT>`) and their folders' settings naming its server, gone. */
+function dropBotsIntegration(entry) {
+  const own = Object.values(entry.variables ?? {});
+  for (const name of listOf(BOT_KEYS)) if (own.some(variable => name.startsWith(`${variable}__`))) fs.rmSync(path.join(BOT_KEYS, name), { force: true });
+  for (const bot of listOf(BOTS)) {
+    const file = path.join(BOTS, bot, "workspace", ".opencode", "opencode.json");
+    let settings;
+    try { settings = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
+    if (!settings?.mcp?.servers?.[entry.id]) continue;
+    delete settings.mcp.servers[entry.id];
+    if (!Object.keys(settings.mcp.servers).length) delete settings.mcp.servers;
+    if (!Object.keys(settings.mcp).length) delete settings.mcp;
+    if (Object.keys(settings).length) writePrivate(file, JSON.stringify(settings));
+    else fs.rmSync(file, { force: true });
+  }
+}
+
+/** `kuvo/integrations…`, for this machine's own. */
+export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE) {
+  const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return ""; } });
+  const catalog = integrationCatalog(file);
+  if (parts.length === 2) {
+    if (method !== "GET") return { status: 405, value: {} };
+    const { problem } = readSettings();
+    return { status: 200, value: { integrations: await integrationEntries(catalog, engine, signal), ...(problem ? { problem } : {}) } };
+  }
+  const entry = parts.length === 3 ? catalog.find(each => each.id === parts[2]) : null;
+  if (!entry) return { status: 404, value: {} };
+  const { settings, problem } = readSettings();
+  if (problem) return { status: 409, value: { message: `The engine's settings file can't be changed from here: ${problem}` } };
+  const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
+  if (method === "POST") {
+    if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on this machine.` } };
+    const variables = entry.variables ?? {};
+    const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
+    const names = Object.keys(variables);
+    if (names.length) {
+      if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
+        for (const name of names) {
+          const saved = setBoxKey(variables[name], given[name].trim());
+          if (saved.status !== 200) return { status: saved.status, value: { message: saved.message } };
+        }
+      } else if (!names.every(name => fs.existsSync(path.join(BOX_KEYS, variables[name])))) {
+        const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
+        return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
+      }
+    }
+    // One there already is written again as it is (the engine reads its keys again).
+    const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
+    const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
+    // Back again: its bots' keys aren't to go after all.
+    try {
+      const removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? [];
+      if (removed.includes(entry.id)) writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: removed.filter(id => id !== entry.id) }));
+    } catch {}
+    const [listed] = await integrationEntries([entry], engine, signal);
+    return { status: 200, value: { integration: listed } };
+  }
+  if (method === "DELETE") {
+    if (!added) return { status: 404, value: {} };
+    // Its sign-in as the engine has it, asked before it leaves the settings.
+    let signIn;
+    if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.(each => each?.name === entry.id)?.integrationID;
+    const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
+    if (engine && signIn) {
+      const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+      for (const each of Array.isArray(credentials) ? credentials : []) {
+        if (each?.integrationID === signIn) await call(engine, "DELETE", `/api/credential/${encodeURIComponent(each.id)}`, undefined, signal).catch(() => {});
+      }
+    }
+    for (const variable of Object.values(entry.variables ?? {})) setBoxKey(variable, null);
+    for (const name of [entry.id, `${entry.id}.json`]) fs.rmSync(path.join(INTEGRATION_DATA, name), { recursive: true, force: true });
+    dropBotsIntegration(entry);
+    let removed = [];
+    try { removed = JSON.parse(fs.readFileSync(REMOVED_INTEGRATIONS, "utf8")).removed ?? []; } catch {}
+    fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
+    writePrivate(REMOVED_INTEGRATIONS, JSON.stringify({ removed: [...new Set([...removed, entry.id])] }));
+    return { status: 200, value: {} };
+  }
+  return { status: 405, value: {} };
+}
+
 // MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
 
 const SKILLS = path.join(K, "config", "opencode", "skills");
@@ -921,6 +1048,15 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* json(405, {});
     }
     // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
+    // Settings › Integrations (PROTOCOL.md, "Integrations"): this machine's own, added and removed
+    // here from the catalog the Mac leaves (`bin/integrations.json`), with the Mac closed too.
+    if (/^kuvo\/integrations(\/|\?|$)/.test(request.path)) {
+      if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
+      let engine = null;
+      try { engine = readEngine(); } catch {}
+      const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
+      return yield* json(status, value);
+    }
     // Settings › Skills (PROTOCOL.md, "Skills"): this machine's own skills folder, and GitHub's
     // collections, which this machine reaches itself, with the Mac closed too.
     if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {

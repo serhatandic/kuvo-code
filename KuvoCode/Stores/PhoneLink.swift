@@ -655,6 +655,17 @@ final class PhoneLink {
                 }
             }
         }
+        // Settings › Integrations: this Mac's, added and removed as the page does it.
+        if request.path == "kuvo/integrations" || request.path.hasPrefix("kuvo/integrations/") || request.path.hasPrefix("kuvo/integrations?") {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.answerIntegrations(request) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
         if request.path.hasPrefix("kuvo/skills") || request.path.hasPrefix("kuvo/skill-library") {
             return AsyncThrowingStream { continuation in

@@ -532,6 +532,32 @@ itself. A host serves:
   `{file:~/.kuvo-code/box/keys/<name>}` there; on a Mac, `{file:<its keys' folder>/<name>}`.
   "Also Apply to…" on a phone is the same changes (`kuvo/config`) and keys made on each computer
   you pick: a list gets what was added and loses what was taken out, keeping the other's own.
+- Integrations, as Settings › Integrations has them, each computer its own (a Mac for its own,
+  keys in its Keychain; a machine's bridge from 0.9.20 for the machine's, keys in
+  `~/.kuvo-code/box/keys`, from the catalog its Mac leaves in `bin/integrations.json`, with the
+  Mac closed too; `409 {"message"}` until its settings are its own).
+  - `GET kuvo/integrations` → `{"integrations": [{id, title, summary, kind, symbol, site, how,
+    way, keys?, help?, redirect?, by?, added, keysSaved?, health?, signIn?, siteSignedIn?}],
+    "problem"?}`, by kind in the page's order (`kind` is its title: "Mail and Calendar", "Chat",
+    "Social", "Code and Work"). `way`: `official` (connect, then sign in), `token` (its maker's
+    server, with a token you bring), `app` (your app's client ID and secret, made with `redirect`,
+    then sign in), `package` (an open-source server, `by`, with the keys you bring) or `browser`
+    (the agent uses its site in the computer's browser: not added here; `siteSignedIn` says
+    whether it's signed in there, on a Mac). `keys`: `[{name, label, prompt}]`, `keysSaved`
+    whether the computer has them. `how` is the tag the page shows. Added: `health` is
+    `connected`, `starting`, `waitsForCode` (Outlook, until its first use's code), `needsSignIn`
+    or `failed`, and `signIn` is the engine's integration to sign in with, through
+    `api/integration/<signIn>/connect/oauth` as any (its page returns to `127.0.0.1:19876`:
+    `kuvo/sign-in/return`). `problem`: the settings file can't be changed.
+  - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
+    (or Add Key…) does: with the keys given, or those the computer has; one added already is
+    written again (the engine reads its keys again). `200 {"integration"}`, as listed; `400
+    {"message"}` without the keys it needs; `404` for none; `409 {"message"}` for one used on its
+    site, or a settings file that can't be changed.
+  - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: its keys, its sign-in, what its
+    server kept, and bots' own keys for it there. `200 {}`, `404` for one not added. A machine
+    notes what it removed with its Mac closed (`box/integrations-removed.json`), and its Mac
+    takes its bots' keys for it from your Keychain as it connects.
 - Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
   bridge from 0.9.20 for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
   engine lists them (`api/skill`) and finds a change within a moment.

@@ -44,6 +44,23 @@ enum MachineBox {
     static func install(on connection: SSHConnection) async throws {
         try await installTool(on: connection)
         try await writeCatalog(on: connection)
+        try await writeCatalog(await integrationsJSON(), named: "integrations.json", on: connection)
+    }
+
+    /// Settings › Integrations' catalog as the tool reads it (`integrations.json`), for a phone to
+    /// add and remove them there with this Mac closed: each as `kuvo/integrations` describes it,
+    /// with its settings there and its keys' variables. Those that use a Mac's own apps aren't in it.
+    @MainActor static func integrationsJSON() -> Data {
+        let entries: [[String: Any]] = Integrations.all.filter { !Integrations.macOnly.contains($0.id) }.map { service in
+            var entry = PhoneLink.described(service)
+            if let settings = Integrations.settings(for: service, on: "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
+                entry["settings"] = value
+            }
+            let keys = Integrations.keys(of: service.way)
+            if !keys.isEmpty { entry["variables"] = Dictionary(uniqueKeysWithValues: keys.map { ($0.name, IntegrationKeys.variable(service.id, $0.name)) }) }
+            return entry
+        }
+        return (try? JSONSerialization.data(withJSONObject: ["integrations": entries], options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
     }
 
     /// The popular servers as the tool reads them (`mcp-catalog.json`), written when they change.
@@ -71,13 +88,17 @@ enum MachineBox {
     }
 
     private static func writeCatalog(on connection: SSHConnection) async throws {
-        let data = await catalogJSON()
+        try await writeCatalog(await catalogJSON(), named: "mcp-catalog.json", on: connection)
+    }
+
+    /// `data` in the machine's `bin` as `name`, unless it has it already.
+    private static func writeCatalog(_ data: Data, named name: String, on connection: SSHConnection) async throws {
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-catalog-\(UUID().uuidString).json")
         try data.write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
         try await connection.run(BoxVersion.guardScript + "\n" + RemoteEngineInstaller.script("""
-            f="$K/bin/mcp-catalog.json"
+            f="$K/bin/\(name)"
             if [ "$(sha256sum "$f" 2>/dev/null | cut -c1-64)" = "\(hash)" ]; then cat >/dev/null; else cat >"$f.new" && mv -f "$f.new" "$f"; fi
             """), input: file)
     }
