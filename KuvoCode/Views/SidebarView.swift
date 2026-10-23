@@ -89,11 +89,6 @@ struct SidebarView: View {
 
                 SidebarSearchRow(text: $search)
 
-                if boxSwitcher == .track, boxes.count > 1, search.isEmpty {
-                    BoxNameTrack(boxes: boxes, selected: boxBinding, name: boxName, connection: boxConnection)
-                        .padding(.top, 8)
-                        .padding(.bottom, 2)
-                }
             }
             .padding(.top, 10)
 
@@ -120,11 +115,6 @@ struct SidebarView: View {
                     .scrollIndicators(.never)
                     .fadingScrollEdges()
                 }
-            }
-
-            if boxSwitcher == .dock, boxes.count > 1, search.isEmpty {
-                BoxDock(boxes: boxes, selected: boxBinding, name: boxName, connection: boxConnection)
-                    .padding(.bottom, 8)
             }
 
             if !Analytics.shared.noticeShown {
@@ -241,7 +231,6 @@ struct SidebarView: View {
     // MARK: Boxes
 
     /// How the boxes are switched besides the swipe (Settings › Appearance).
-    @AppStorage(BoxSwitcher.key) private var boxSwitcher = BoxSwitcher.dock
 
     /// This Mac, then your machines, each a page of its own.
     private var boxes: [SidebarBox] { app.boxes }
@@ -258,11 +247,6 @@ struct SidebarView: View {
 
     private func boxName(_ box: SidebarBox) -> String { app.name(of: box) }
 
-    /// A machine's connection, for its mark; none for this Mac.
-    private func boxConnection(_ box: SidebarBox) -> MachineEngine.Connection? {
-        app.machines.engine(box.machine)?.connection
-    }
-
     /// The box what's in view (a tab: a session, a bot, a group chat, a draft, a terminal) is on;
     /// nil for what's on none.
     private func box(of tag: String) -> SidebarBox? {
@@ -276,7 +260,7 @@ struct SidebarView: View {
 
     /// One box's page: what's on that computer.
     @ViewBuilder private func page(_ box: SidebarBox) -> some View {
-        if boxes.count > 1 { BoxHeading(box: box, switcher: boxSwitcher) }
+        if boxes.count > 1 { BoxHeading(box: box, boxes: boxes, selected: boxBinding) }
         let pinned = pinned(on: box)
         if !pinned.isEmpty {
             SectionHeader(title: "Pinned", isFolded: folded("pinned")) { EmptyView() }

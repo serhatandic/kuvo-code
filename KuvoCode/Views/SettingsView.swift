@@ -366,7 +366,6 @@ private struct SettingsSidebar: View {
     let preview: (SettingsPage, SidebarBox) -> Void
     @Environment(AppModel.self) private var app
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
-    @AppStorage(BoxSwitcher.key) private var switcher = BoxSwitcher.dock
     /// The computer whose pages are in view: the tab's, until you switch to another.
     @State private var shownBox = SidebarBox.mac
 
@@ -383,11 +382,6 @@ private struct SettingsSidebar: View {
                 .padding(.horizontal, 10)
                 .frame(height: SidebarMetrics.rowHeight)
             SidebarSearchRow(text: $search)
-            if switcher == .track, boxes.count > 1, search.isEmpty {
-                BoxNameTrack(boxes: boxes, selected: shownBinding, name: app.name(of:), connection: connection)
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
-            }
             if !search.isEmpty {
                 ScrollView {
                     results
@@ -401,11 +395,6 @@ private struct SettingsSidebar: View {
                 }
             } else {
                 pages(of: .mac)
-            }
-            if switcher == .dock, boxes.count > 1, search.isEmpty {
-                BoxDock(boxes: boxes, selected: shownBinding, name: app.name(of:), connection: connection)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 8)
             }
         }
         .padding(.top, 10)
@@ -423,16 +412,12 @@ private struct SettingsSidebar: View {
         }
     }
 
-    private func connection(_ box: SidebarBox) -> MachineEngine.Connection? {
-        app.machines.engine(box.machine)?.connection
-    }
-
     /// One computer's pages, by group.
     private func pages(of box: SidebarBox) -> some View {
         ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    if boxes.count > 1 { BoxHeading(box: box, switcher: switcher) }
+                    if boxes.count > 1 { BoxHeading(box: box, boxes: boxes, selected: shownBinding) }
                     let pages = SettingsPage.shown(on: box)
                     ForEach(SettingsPage.Group.allCases, id: \.self) { group in
                         let members = pages.filter { $0.group == group }

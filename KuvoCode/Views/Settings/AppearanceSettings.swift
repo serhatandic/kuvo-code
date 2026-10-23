@@ -10,7 +10,6 @@ struct AppearanceSettings: View {
     @AppStorage(Look.textSizeKey) private var textSize = 14.0
     @AppStorage(Look.fontKey) private var typeface = Look.Typeface.system
     @AppStorage(StepsDetail.key) private var steps = StepsDetail.summary
-    @AppStorage(BoxSwitcher.key) private var switcher = BoxSwitcher.dock
 
     private var modes: some View {
         ForEach(Appearance.allCases, id: \.self) { option in
@@ -87,25 +86,6 @@ struct AppearanceSettings: View {
             }
 
             Section {
-                LabeledContent {
-                    Picker("Switch computers with", selection: $switcher) {
-                        Text("Icons").tag(BoxSwitcher.dock)
-                        Text("Names").tag(BoxSwitcher.track)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                } label: {
-                    Text("Switch computers with")
-                    Text(switcher == .dock
-                        ? "With machines, the sidebar has a page for each computer: their icons below it switch, as two fingers swiping do."
-                        : "With machines, the sidebar has a page for each computer: their names above it switch, as two fingers swiping do.")
-                }
-            } header: {
-                Text("Sidebar")
-            }
-
-            Section {
                 HStack {
                     Spacer()
                     Button("Reset to Defaults") {
@@ -115,9 +95,8 @@ struct AppearanceSettings: View {
                         textSize = 14
                         typeface = .system
                         steps = .summary
-                        switcher = .dock
                     }
-                    .disabled(mode == .system && accent == Look.Accent.system.rawValue && window == .glass && textSize == 14 && typeface == .system && steps == .summary && switcher == .dock)
+                    .disabled(mode == .system && accent == Look.Accent.system.rawValue && window == .glass && textSize == 14 && typeface == .system && steps == .summary)
                 }
             }
         }

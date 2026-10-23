@@ -36,35 +36,53 @@ extension EnvironmentValues {
     @Entry var marksMachines = true
 }
 
-/// How the sidebars' computers are switched besides the swipe (Settings › Appearance): a dock of
-/// their icons below the pages, or their names above them.
-enum BoxSwitcher: String, CaseIterable {
-    case dock, track
-    static let key = "sidebar.boxSwitcher"
-}
-
-/// The top of a box's page: its name (the dock shows none), and a machine that isn't connected,
-/// with what it's doing and the way to connect it or start its engine.
+/// The top of a box's page, one slim line: its name, and every box's icon to switch with beside
+/// the two-finger swipe (this one's lit, a machine that needs you or is connecting marked). Under
+/// it, a machine that isn't connected: what it's doing, and the way to connect it or start its
+/// engine.
 struct BoxHeading: View {
     let box: SidebarBox
-    let switcher: BoxSwitcher
+    let boxes: [SidebarBox]
+    @Binding var selected: SidebarBox
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        if switcher == .dock {
-            HStack(spacing: 6) {
-                Image(systemName: box.symbol)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text(app.name(of: box))
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+        HStack(spacing: 6) {
+            Text(app.name(of: box))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            HStack(spacing: 0) {
+                ForEach(boxes) { other in
+                    let isOn = other == box
+                    Button {
+                        guard !isOn else { return }
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { selected = other }
+                    } label: {
+                        Image(systemName: other.symbol)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                            .overlay(alignment: .topTrailing) {
+                                if let connection = app.machines.engine(other.machine)?.connection {
+                                    MachineIndicator(connection: connection, size: 5, quiet: true)
+                                        .offset(x: 4, y: -2)
+                                }
+                            }
+                    }
+                    .buttonStyle(IconButtonStyle(width: 24, height: 20))
+                    .background(isOn ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+                    .help(app.name(of: other))
+                    .accessibilityLabel(app.name(of: other))
+                    .accessibilityAddTraits(isOn ? .isSelected : [])
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 2)
-            .padding(.bottom, 4)
         }
+        .frame(height: 22)
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.bottom, 2)
         if let engine = app.machines.engine(box.machine), !engine.isReady {
             HStack(spacing: 8) {
                 MachineStatus(engine: engine)
@@ -110,6 +128,9 @@ struct BoxPager<Page: View>: View {
                     ForEach(boxes) { box in
                         page(box)
                             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                            // Clipped out of sight, a page beside still takes clicks where it lies
+                            // (over the conversation): only the one in view does.
+                            .allowsHitTesting(box == selected)
                     }
                 }
             }
@@ -254,84 +275,5 @@ struct TrackpadSwipe: NSViewRepresentable {
                 return event
             }
         }
-    }
-}
-
-/// Switches the sidebar's box with a click, beside the swipe: one tile per box, the one in view
-/// raised, and a machine that needs you (or is connecting) marked.
-struct BoxDock: View {
-    let boxes: [SidebarBox]
-    @Binding var selected: SidebarBox
-    let name: (SidebarBox) -> String
-    let connection: (SidebarBox) -> MachineEngine.Connection?
-    @Namespace private var pill
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(boxes) { box in
-                let isOn = box == selected
-                Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { selected = box } } label: {
-                    Image(systemName: box.symbol)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isOn ? .primary : .secondary)
-                        .frame(width: 34, height: 26)
-                        .background { if isOn { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
-                        .overlay(alignment: .topTrailing) {
-                            if let connection = connection(box) {
-                                MachineIndicator(connection: connection, size: 6, quiet: true)
-                                    .offset(x: -5, y: 4)
-                            }
-                        }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .clickablePointer()
-                .help(name(box))
-                .accessibilityLabel(name(box))
-            }
-        }
-        .padding(3)
-        .glassEffect(.regular, in: .capsule)
-    }
-}
-
-/// Switches the sidebar's box with a click, beside the swipe: each box by name, in a track like the
-/// title bar's tabs, the one in view on a raised pill.
-struct BoxNameTrack: View {
-    let boxes: [SidebarBox]
-    @Binding var selected: SidebarBox
-    let name: (SidebarBox) -> String
-    let connection: (SidebarBox) -> MachineEngine.Connection?
-    @Namespace private var pill
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(boxes) { box in
-                let isOn = box == selected
-                Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { selected = box } } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: box.symbol)
-                            .font(.system(size: 11, weight: .medium))
-                        Text(name(box))
-                            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
-                            .lineLimit(1)
-                        if let connection = connection(box) {
-                            MachineIndicator(connection: connection, size: 6, quiet: true)
-                        }
-                    }
-                    .foregroundStyle(isOn ? .primary : .secondary)
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 26)
-                    .background { if isOn { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .clickablePointer()
-                .help(name(box))
-            }
-        }
-        .padding(3)
-        .glassEffect(.regular, in: .capsule)
     }
 }
