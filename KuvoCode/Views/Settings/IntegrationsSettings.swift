@@ -179,10 +179,8 @@ struct IntegrationsSettings: View {
     /// How it's doing on this computer.
     private func places(_ service: Integrations.Service) -> [Place] {
         let server = live.first { $0.name == service.id }
-        var here = Place.state(server)
-        if here == .connected, needsSignIn(service, server) { here = .needsSignIn }
-        if here == .connected, waitsForCode(service) { here = .waitsForCode }
-        return [Place(name: app.name(of: box), machine: box.machine, state: here)]
+        let health = Integrations.health(service, server: server, signedIn: signedIn, waitsForCode: box.machine == nil && Integrations.waitsForCode(service))
+        return [Place(name: app.name(of: box), machine: box.machine, state: Place.state(health))]
     }
 
     /// Whether a service the agent uses on its site is signed in on this computer, as far as its
@@ -206,28 +204,9 @@ struct IntegrationsSettings: View {
         return [ConnectView.Highlight(symbol: "text.bubble", title: "Just ask", detail: "The agent and your bots use \(service.title)'s own tools when you mention it, not its website.")]
     }
 
-    /// Whether it waits for you to sign in: as its server says, or, answering without a sign-in,
-    /// as there's none kept. Microsoft 365's server signs in by itself, with a code, when the
-    /// agent first uses it, and keeps the sign-in in its folder.
-    private func needsSignIn(_ service: Integrations.Service, _ server: MCPServer?) -> Bool {
-        guard let server else { return false }
-        if server.status.status == "needs_auth" { return true }
-        guard server.status.status == "connected", let integration = server.integrationID else { return false }
-        switch service.way {
-        case .official, .officialApp: return !signedIn.contains(integration)
-        default: return false
-        }
-    }
-
     private func readSignIns() async {
         guard let entries = try? await api?.credentialEntries() else { return }
         signedIn = Set(entries.filter { $0.active && $0.isOAuth }.map(\.integrationID))
-    }
-
-    /// Microsoft 365, without its sign-in yet (on this Mac: a machine's isn't looked at).
-    private func waitsForCode(_ service: Integrations.Service) -> Bool {
-        guard box.machine == nil, let files = Integrations.signInFiles[service.id], let first = files.first else { return false }
-        return !FileManager.default.fileExists(atPath: AppInfo.supportDirectory.appending(path: "integrations/\(service.id)/\(first)").path)
     }
 
     static func how(_ way: Integrations.Way) -> String {
@@ -246,62 +225,13 @@ struct IntegrationsSettings: View {
     }
 
     private func add(_ service: Integrations.Service) {
-        guard config.problem == nil else { return }
-        let path = MCPSettings.path + [service.id]
-        // Added already (a new key or app for it): as you set it up (turned off, Code Mode, headers
-        // you added), written again so the engine reads its keys again.
-        let existing = config.value(at: path)
-        guard let settings = existing ?? Integrations.settings(for: service, on: box.machine) else { return }
-        config.set(settings, at: path)
-        // Back again: what its removal left to do on this machine, out of reach then, isn't done.
-        if let machine = box.machine { app.machines.dropWaiting(marked: Machines.integrationMark(service.id), on: machine) }
-        if existing == nil { Analytics.shared.track("integration_added", ["integration": service.id, "machine": box.machine != nil]) }
+        app.addIntegration(service, on: box)
     }
 
     /// Out of the engine's settings, with its keys, its sign-in and what its server kept.
     private func remove(_ service: Integrations.Service) {
-        // Its keys and sign-in stay while it stays in a settings file that can't be changed.
-        guard config.problem == nil else { return }
         let listed = live.first { $0.name == service.id }?.integrationID
-        Task {
-            // Its sign-in as the engine has it now (the page's last look may have missed it), asked
-            // before it leaves the settings, and then the server with it.
-            var signIn = listed
-            if signIn == nil, let api { signIn = (try? await api.mcpServers())?.first { $0.name == service.id }?.integrationID }
-            removeEntry(service)
-            if let signIn { app.forgetSignIn(signIn, on: box) }
-        }
-    }
-
-    /// Out of this computer's settings, with its keys there and what its server kept there.
-    private func removeEntry(_ service: Integrations.Service) {
-        config.set(nil, at: MCPSettings.path + [service.id])
-        let variables = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name) }
-        // Bots here with keys of their own for it stop using it too: their keys go, and their
-        // folders' settings stop naming its server.
-        let bots = app.bots.list.filter { $0.machine == box.machine }
-        Task {
-            for bot in bots {
-                let theirs = Set(Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) })
-                let held = await Task.detached { IntegrationKeys.variables(ofBot: bot.id) }.value
-                if !theirs.isDisjoint(with: held) { await BotKeys.remove(service, bot: bot, app: app) }
-            }
-        }
-        guard let machine = box.machine else {
-            for variable in variables { IntegrationKeys.set(nil, for: variable) }
-            // What its server kept: its own folder (and the file it once kept).
-            for name in [service.id, "\(service.id).json"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "integrations/\(name)")) }
-            return
-        }
-        // On the machine: its keys and what its server kept there, now or the next time it answers.
-        let root = "\"$HOME/\(RemoteEngineInstaller.root)"
-        let script = (["rm -rf \(root)/integrations/\(service.id)\""] + variables.map { "rm -f \(root)/box/keys/\($0)\"" }).joined(separator: "; ")
-        let later = Machines.integrationMark(service.id) + script
-        guard app.machines.engine(machine)?.isReady == true else { app.machines.runLater(later, on: machine); return }
-        Task {
-            let done = await Task.detached { RemoteShell.run(script, on: machine) != nil }.value
-            if !done { app.machines.runLater(later, on: machine) }
-        }
+        Task { await app.removeIntegration(service, on: box, signIn: listed) }
     }
 
     private func refresh() async {
@@ -348,12 +278,13 @@ private struct Place: Identifiable {
     }
 
     /// As an engine reports its server (none yet: it starts with the engine).
-    static func state(_ server: MCPServer?) -> State {
-        switch server?.status.status {
-        case "connected": .connected
-        case "needs_auth": .needsSignIn
-        case "failed": .failed
-        default: .starting
+    static func state(_ health: Integrations.Health) -> State {
+        switch health {
+        case .connected: .connected
+        case .starting: .starting
+        case .waitsForCode: .waitsForCode
+        case .needsSignIn: .needsSignIn
+        case .failed: .failed
         }
     }
 }
@@ -478,28 +409,14 @@ private struct KeyEntry: View {
     }
 
     private func save() {
-        let given = keys.map { (IntegrationKeys.variable(service.id, $0.name), values[$0.name]?.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        guard let machine = box.machine else {
-            guard given.allSatisfy({ IntegrationKeys.set($0.1, for: $0.0) }) else {
-                failed = "Couldn’t save it in your Keychain. Try again, or check Keychain Access."
-                return
-            }
-            done(true)
-            return
-        }
-        // A machine no longer added: nowhere to keep it (and never this Mac's Keychain).
-        guard let engine = app.machines.engine(machine) else {
-            failed = "\(machine) isn’t one of your machines any more."
-            return
-        }
         isSaving = true
         failed = nil
         Task {
             do {
-                for (variable, value) in given { try await MachineBox.setKey(variable, value, on: engine.machine.connection) }
+                try await app.saveIntegrationKeys(service, values, on: box)
                 done(true)
             } catch {
-                failed = "Couldn’t save it on \(engine.machine.name): \(error.localizedDescription)"
+                failed = box.machine == nil ? error.localizedDescription : "Couldn’t save it on \(app.name(of: box)): \(error.localizedDescription)"
             }
             isSaving = false
         }

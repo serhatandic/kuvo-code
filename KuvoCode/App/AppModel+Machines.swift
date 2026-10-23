@@ -357,6 +357,8 @@ extension AppModel {
         // Bots it made, changed or deleted while this Mac was away, taken in (first, so a deleted
         // one's keys don't go back); and what it needs to make them itself.
         if live(engine) { await bots.adoptMade(on: engine.machine.id) }
+        // Integrations it removed while this Mac was away: its bots' own keys for them go here too.
+        if live(engine) { await takeInRemovedIntegrations(on: engine.machine.id) }
         // Its bots' keys of their own, which may have changed while it was away.
         if live(engine) { await BotKeys.applyAll(on: engine.machine.id, app: self) }
         // Your personalities, its copy and this Mac's met, before its kit says what they are.

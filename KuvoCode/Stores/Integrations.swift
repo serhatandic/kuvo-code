@@ -204,6 +204,42 @@ nonisolated enum Integrations {
 
     static func service(_ id: String) -> Service? { all.first { $0.id == id } }
 
+    /// How an added integration is doing on a computer, worst last, as Settings › Integrations
+    /// says it: its server's status, then whether it waits for you.
+    enum Health: String, Comparable, Sendable {
+        case connected, starting, waitsForCode, needsSignIn, failed
+
+        private static let order: [Health] = [.connected, .starting, .waitsForCode, .needsSignIn, .failed]
+        static func < (a: Health, b: Health) -> Bool { order.firstIndex(of: a)! < order.firstIndex(of: b)! }
+    }
+
+    /// `server`, its server as the engine lists it; `signedIn`, the integrations the engine keeps
+    /// a sign-in for; `waitsForCode`, Outlook's sign-in not made yet (`waitsForCode(_:)`).
+    static func health(_ service: Service, server: MCPServer?, signedIn: Set<String>, waitsForCode: Bool) -> Health {
+        var health: Health = switch server?.status.status {
+        case "connected": .connected
+        case "needs_auth": .needsSignIn
+        case "failed": .failed
+        default: .starting
+        }
+        // A server can answer without a sign-in (Google's do), then turn every call down.
+        if health == .connected, let integration = server?.integrationID, !signedIn.contains(integration) {
+            switch service.way {
+            case .official, .officialApp: health = .needsSignIn
+            default: break
+            }
+        }
+        if health == .connected, waitsForCode { health = .waitsForCode }
+        return health
+    }
+
+    /// Microsoft 365, without its sign-in yet, on this Mac (a machine's isn't looked at): its
+    /// server signs in by itself, with a code, when the agent first uses it.
+    static func waitsForCode(_ service: Service) -> Bool {
+        guard let files = signInFiles[service.id], let first = files.first else { return false }
+        return !FileManager.default.fileExists(atPath: AppInfo.supportDirectory.appending(path: "integrations/\(service.id)/\(first)").path)
+    }
+
     // MARK: Their sites
 
     /// An added integration's site, which the agent reaches through the integration's tools
