@@ -2,11 +2,11 @@ import CoreImage.CIFilterBuiltins
 import KuvoLink
 import SwiftUI
 
-/// Phone: pairing Kuvo Code for iPhone with this Mac (a QR code to scan), the phones you've
-/// paired, and the relay they meet through. Shown while the phone link is switched on.
+/// Phone: pairing Kuvo Code for iPhone with this Mac (a QR code to scan), and the phones you've
+/// paired. Shown while the phone link is switched on. (The relay they meet through isn't yours to
+/// change here; `PhoneLink.relay` says how a test points elsewhere.)
 struct PhoneSettings: View {
     @Environment(AppModel.self) private var app
-    @State private var relay = ""
     @State private var removing: PhoneLink.Phone?
 
     private var link: PhoneLink { app.phoneLink }
@@ -32,7 +32,11 @@ struct PhoneSettings: View {
             } header: {
                 Text("Pair")
             } footer: {
-                Text(statusText).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(statusText)
+                    Text("Your phones reach this Mac through Kuvo Code’s relay. Everything between them is encrypted end to end, so the relay only passes along what it can’t read.")
+                }
+                .foregroundStyle(.secondary)
             }
 
             Section {
@@ -61,20 +65,7 @@ struct PhoneSettings: View {
                 Text("A phone you remove can’t reach this Mac again until you pair it again.")
                     .foregroundStyle(.secondary)
             }
-
-            Section {
-                SettingsTextRow(title: "Relay") {
-                    TextField("Relay", text: $relay, prompt: Text(PhoneLink.defaultRelay.absoluteString))
-                        .onSubmit(saveRelay)
-                }
-            } header: {
-                Text("Relay")
-            } footer: {
-                Text("Where this Mac and your phones meet. Everything between them is encrypted end to end, so the relay only passes along what it can’t read.")
-                    .foregroundStyle(.secondary)
-            }
         }
-        .onAppear { relay = link.relay.absoluteString }
         .onDisappear { link.endPairing() }
         .confirmationDialog("Remove \(removing?.name ?? "this phone")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { phone in
             Button("Remove", role: .destructive) { link.remove(phone) }
@@ -90,14 +81,6 @@ struct PhoneSettings: View {
         case .connected: "Ready for your phones."
         case .failed(let message): message
         }
-    }
-
-    private func saveRelay() {
-        guard let url = URL(string: relay.trimmingCharacters(in: .whitespaces)), ["ws", "wss"].contains(url.scheme) else {
-            relay = link.relay.absoluteString
-            return
-        }
-        if url != link.relay { link.relay = url }
     }
 }
 

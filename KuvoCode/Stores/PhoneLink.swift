@@ -112,12 +112,7 @@ final class PhoneLink {
     @ObservationIgnored private var pairingEnds = ContinuousClock.now
 
     var relay: URL {
-        get { UserDefaults.standard.string(forKey: "phoneLink.relay").flatMap(URL.init(string:)) ?? Self.defaultRelay }
-        set {
-            UserDefaults.standard.set(newValue.absoluteString, forKey: "phoneLink.relay")
-            restart()
-            syncMachines()
-        }
+        UserDefaults.standard.string(forKey: "phoneLink.relay").flatMap(URL.init(string:)) ?? Self.defaultRelay
     }
 
     /// This Mac's key and relay secret, from the Keychain, made the first time the link is on
