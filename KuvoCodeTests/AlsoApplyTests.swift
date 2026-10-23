@@ -120,9 +120,15 @@ import Testing
         let adding = try config([:])
         adding.set(server, at: ["mcp", "servers", "tools"])
         #expect(AlsoApply.translated(AlsoApply.net(adding.changes), onto: [:], to: "lab").count == 1)
-        let agent = try config(["agent": .object(["review": .object(["model": .string("a/b")])])])
-        agent.set(.string("c/d"), at: ["agent", "review", "model"])
-        #expect(AlsoApply.translated(AlsoApply.net(agent.changes), onto: [:], to: "lab").isEmpty)
+        // The same for an agent's model and a command's description, as the settings file names them.
+        let agent = try config(["agents": .object(["review": .object(["mode": .string("subagent"), "model": .string("a/b")])])])
+        agent.set(.string("c/d"), at: ["agents", "review", "model"])
+        #expect(AlsoApply.translated(AlsoApply.net(agent.changes), onto: [:], to: "lab").isEmpty, "no agent there with only a model")
+        let hasIt: [String: JSONValue] = ["agents": .object(["review": .object(["mode": .string("subagent"), "model": .string("a/b")])])]
+        #expect(AlsoApply.translated(AlsoApply.net(agent.changes), onto: hasIt, to: "lab").map(\.path) == [["agents", "review", "model"]])
+        let command = try config(["commands": .object(["ship": .object(["template": .string("Ship it"), "description": .string("Old")])])])
+        command.set(.string("New"), at: ["commands", "ship", "description"])
+        #expect(AlsoApply.translated(AlsoApply.net(command.changes), onto: [:], to: "lab").isEmpty, "no command there with only a description")
     }
 
     @Test func whatsAppliedIsntOfferedBack() throws {

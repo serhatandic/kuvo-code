@@ -74,7 +74,7 @@ enum AlsoApply {
     static func entry(of path: [String]) -> [String]? {
         switch path.first {
         case "mcp" where path.count >= 4 && path[1] == "servers": Array(path.prefix(3))
-        case "agent", "command": path.count >= 3 ? Array(path.prefix(2)) : nil
+        case "agents", "commands": path.count >= 3 ? Array(path.prefix(2)) : nil
         default: nil
         }
     }
