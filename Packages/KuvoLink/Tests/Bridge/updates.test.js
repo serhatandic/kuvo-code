@@ -37,6 +37,8 @@ const server = http.createServer((request, response) => {
 });
 server.listen(0, "127.0.0.1", () => fs.writeFileSync(path.join(root, "run", "engine.json"),
   JSON.stringify({ pid: process.pid, port: server.address().port, password: "pw", version, notes: { mac: "mac-1" } })));
+// Gone with the test's folder, however late an update in the background started it.
+setInterval(() => { if (!fs.existsSync(root)) process.exit(0); }, 300);
 `);
 process.env.FAKE_ENGINE = fakeEngine;
 const engineBinary = version => `#!/bin/sh
