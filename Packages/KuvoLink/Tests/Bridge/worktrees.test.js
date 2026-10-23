@@ -1,7 +1,8 @@
 // A machine's worktrees, kept by the machine itself and answered for with the Mac closed: one
-// made for a session on a branch of its own, named after the session, listed with what to know
-// before removing it, and removed (not while an agent works there). Real git; the engine is a
-// stand-in that makes and removes worktrees with git, as it does.
+// made for a session on a branch of its own, named after the session (by a Mac, or by the machine
+// with no Mac there), listed with what to know before removing it, and removed (not while an
+// agent works there). Real git; the engine is a stand-in that makes and removes worktrees with
+// git, as it does.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -34,7 +35,9 @@ const engine = http.createServer((request, response) => {
   request.on("end", () => {
     const url = new URL(request.url, "http://x");
     const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-    if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: folderOf(request) === project ? "prj_shop" : "prj_workspace" } });
+    // Any folder in the repository (through a link too) is the project's.
+    const real = (() => { try { return fs.realpathSync(folderOf(request)); } catch { return ""; } })();
+    if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: real === project || real.startsWith(project + "/") ? "prj_shop" : "prj_workspace" } });
     if (url.pathname.startsWith("/api/worktree") && JSON.parse(body || "{}").projectID !== "prj_shop") return send({ message: "Not a git project" }, 400);
     if (url.pathname === "/api/worktree" && request.method === "POST") {
       const folder = path.join(home, "worktrees", `brave-otter-${sessions.length}`);
@@ -47,6 +50,7 @@ const engine = http.createServer((request, response) => {
       return send({});
     }
     if (url.pathname === "/api/session") return send({ data: sessions });
+    if (url.pathname.startsWith("/api/session/") && url.pathname !== "/api/session/active") return send({ data: sessions.find(each => each.id === decodeURIComponent(url.pathname.split("/").pop())) ?? null });
     if (url.pathname === "/api/session/active") return send({ data: Object.fromEntries([...active].map(id => [id, {}])) });
     send({}, 404);
   });
@@ -70,9 +74,12 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), branch);
   sessions.push({ id: "ses_tree", location: { directory: root } });
 
-  const renamed = await ask("POST", "kuvo/worktrees/rename", { path: root, branch: "kuvo/fix-the-total" });
+  const renamed = await ask("POST", "kuvo/worktrees/rename", { path: root, from: branch, branch: "kuvo/fix-the-total" });
   assert.deepEqual(renamed.value, { branch: "kuvo/fix-the-total" });
   assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-total");
+  // The same rename asked twice (the session's title came twice): the second finds it named.
+  assert.equal((await ask("POST", "kuvo/worktrees/rename", { path: root, from: branch, branch: "kuvo/fix-the-total" })).status, 409);
+  assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-total", "never kuvo/fix-the-total-2");
 
   fs.writeFileSync(path.join(root, "a.txt"), "a\n");
   git(root, "add", "-A");
@@ -80,6 +87,7 @@ test("made for a session on a branch of its own, named after it, listed with wha
   fs.writeFileSync(path.join(root, "b.txt"), "b\n");
   const [entry] = (await ask("GET", "kuvo/worktrees")).value.worktrees;
   assert.equal(entry.path, root);
+  assert.equal(entry.folder, root);
   assert.equal(entry.project, project);
   assert.equal(entry.branch, "kuvo/fix-the-total");
   assert.equal(entry.sessions, 1);
@@ -88,7 +96,7 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.equal(entry.ahead, 1);
   assert.ok(entry.size > 0);
   // What it keeps, as a Mac reads it as it connects.
-  assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value, { worktrees: [{ project, root, folder: root, branch: "kuvo/fix-the-total", base: "main" }], kept: true });
+  assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value, { worktrees: [{ project, root, folder: root, branch: "kuvo/fix-the-total", base: "main", made: branch, prefix: "kuvo/" }] });
 
   // Not while its agent works; with changes not committed only when they're to go.
   active.add("ses_tree");
@@ -102,10 +110,40 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.notEqual(git(project, "branch", "--list", "kuvo/fix-the-total"), "", "not merged: its branch stays");
   assert.deepEqual((await ask("GET", "kuvo/worktrees")).value.worktrees, []);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: root })).status, 404);
+  // Recorded again by a Mac that still had it: it's gone, so it stays gone.
+  assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root, branch: "kuvo/fix-the-total" })).status, 404);
+  assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value.worktrees, []);
+});
+
+test("with no Mac there, the machine names a branch after its session's title, once, and only one it made", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "me/" })).value;
+  sessions.push({ id: "ses_named", title: "Giriş düzeltmesi", location: { directory: made.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_named");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "me/giris-duzeltmesi");
+  sessions.at(-1).title = "Something else";
+  await link.nameWorktreeBranch(atEngine, "ses_named");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "me/giris-duzeltmesi", "named once");
+  assert.equal(link.branchSlug("Trim note titles"), "trim-note-titles");
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
+test("a project in a folder of its repository, reached through a link: its session runs in that folder of the worktree", async () => {
+  fs.mkdirSync(path.join(project, "web"));
+  fs.writeFileSync(path.join(project, "web", "index.html"), "<p>Shop</p>\n");
+  git(project, "add", "-A");
+  git(project, "commit", "-q", "-m", "Web");
+  const linked = path.join(home, "linked");
+  fs.symlinkSync(project, linked);
+  const made = (await ask("POST", "kuvo/worktrees", { project: path.join(linked, "web") })).value;
+  assert.equal(made.folder, path.join(made.root, "web"));
+  assert.ok(fs.existsSync(path.join(made.folder, "index.html")));
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
 test("one a Mac made before the machine kept them is kept from then on; a folder that isn't a repository is turned away", async () => {
-  const given = { project, root: path.join(home, "worktrees", "old"), folder: path.join(home, "worktrees", "old", "web"), branch: "kuvo/old", base: "main" };
+  const old = path.join(home, "worktrees", "old");
+  git(project, "worktree", "add", "-q", "-b", "kuvo/old", old);
+  const given = { project, root: old, folder: path.join(old, "web"), branch: "kuvo/old", base: "main" };
   assert.equal((await ask("POST", "kuvo/worktrees/record", given)).status, 200);
   assert.deepEqual(link.readWorktrees(), [given]);
   const plain = path.join(home, "plain");
