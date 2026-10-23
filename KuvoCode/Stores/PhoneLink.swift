@@ -677,6 +677,22 @@ final class PhoneLink {
                 }
             }
         }
+        // Settings › Machines and Settings › Worktrees: this Mac's machines, and the worktrees its
+        // sessions run in. Adding a machine checks it first: the phone going stops that (and
+        // nothing else, which would leave a removal half done).
+        if request.path == "kuvo/machines/events" { return Self.following { link?.machinesJSON() } }
+        let route = request.path.split(separator: "?").first.map(String.init) ?? request.path
+        if ["kuvo/machines", "kuvo/worktrees"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
+            return AsyncThrowingStream { continuation in
+                let task = Task { @MainActor in
+                    let (status, body) = await (route.hasPrefix("kuvo/machines") ? link?.answerMachines(request) : link?.answerWorktrees(request)) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+                if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
+            }
+        }
         if request.path == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
         if request.path == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
         if let id = Self.groupID(in: request.path, then: "events") { return Self.followingGroup(id, link: link) }
@@ -1091,6 +1107,11 @@ final class PhoneLink {
 
     nonisolated static func message(_ text: String) -> Data {
         (try? JSONEncoder().encode(["message": text])) ?? Data()
+    }
+
+    /// A route's answer, its keys sorted.
+    nonisolated static func json(_ value: Any) -> Data {
+        (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 
     // MARK: Files

@@ -148,8 +148,4 @@ extension PhoneLink {
         case nil: (502, message(error.localizedDescription))
         }
     }
-
-    private static func json(_ value: Any) -> Data {
-        (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
-    }
 }

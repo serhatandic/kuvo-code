@@ -578,6 +578,43 @@ itself. A host serves:
     under its folder's name. Errors are `{"message"}`: 404 for a repository or skill there isn't,
     409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be
     reached.
+- On a Mac, Settings › Machines: the machines it runs sessions on (a machine's bridge doesn't
+  answer these).
+  - `GET kuvo/machines` → `{"machines": [{id, name, otherAddresses, connection, status, failure?,
+    action?}], "hosts", "folded"?}`, in the page's order. `connection` is `notConnected`,
+    `connecting`, `reconnecting`, `installing`, `connected`, `failed` or `stopped`; `status` says
+    it in the page's words, `failure` why it couldn't connect. `action` is the one button the
+    page shows for it now: `disconnect`, `start` (its engine was stopped by a Mac with an older
+    Kuvo Code), `connect` or `connectNow` (it's trying again by itself). `hosts`: the hosts in the
+    Mac's `~/.ssh/config` not added yet, as Add a Machine suggests them. `folded` `{address,
+    machine}`: the address last found to be a machine already here, to say so.
+    `kuvo/machines/events` follows the same, a line each time it changes (NDJSON).
+  - `POST kuvo/machines {"destination"}` adds one as Add a Machine does (a Host from the Mac's
+    `~/.ssh/config`, or `user@host`): checked over SSH first, which can take a while, and stopped
+    if the request goes. `200 {"machine", "known"}`: `known` when it was one already here (at that
+    address, or another reaching the same computer, which keeps it as one of its addresses).
+    `400 {"message"}` for a destination that can't name one (a port or a path in it), `502
+    {"message"}` when it couldn't be reached or can't run the engine.
+  - `POST kuvo/machines/<id>/connect`, `/disconnect` or `/start`: the button's action, only when
+    it's the one `action` names (`connect` for both `connect` and `connectNow`); `200
+    {"machine"}`, `409 {"message"}` otherwise. Disconnect leaves it running there. `DELETE
+    kuvo/machines/<id>` removes it as Remove… does (its sessions and engine stay on it): `200 {}`.
+  - `DELETE kuvo/machines/<id>/addresses/<address>` stops using one of its other addresses (`404`
+    for its name, or one it doesn't have); `POST kuvo/machines/<id>/same-as {"other"}` makes it one
+    of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other, or `409
+    {"message"}` when the two told Kuvo Code different names and stay two machines.
+- On a Mac, Settings › Worktrees: the worktrees its sessions run in, on it and on your machines.
+  - `GET kuvo/worktrees` → `{"worktrees": [{path, project, projectName, branch, base?, machine?,
+    sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder (a
+    machine's as its sessions name their folders, with `machine`), `project` its project's,
+    `sessions` how many run there and `working` whether an agent is at work in one. What git says,
+    while it can be asked (a machine's while it's connected): `uncommitted`, changes not
+    committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
+    stays when it's removed. `size` in bytes, on the Mac only. Where new ones go is `kuvo/config`'s
+    `worktree.directory`.
+  - `POST kuvo/worktrees/remove {"path"}` removes it as Remove… does: its folder and anything in
+    it not committed; its branch stays unless it's merged. `200 {}`; `404` for none; `409
+    {"message"}` while an agent works there, or its machine isn't connected.
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
   does on a Mac; what's running in it stops. It answers `202 {}` first: the link goes down with
   the engine, and the computer is back once it answers again (`kuvo/info`). A machine's bridge

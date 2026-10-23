@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -172,6 +173,59 @@ import Testing
         guard case .failed(let message) = tree.mergeBack(from: folder, environment: [:]) else { Issue.record("merged into release"); return }
         #expect(message.contains("on release now"))
         #expect(!repository.exists("x.txt"))
+    }
+
+    /// Settings › Worktrees from a phone: each worktree with what to know before removing it
+    /// (changes not committed, commits its base doesn't have, an agent at work), and removed as
+    /// the page removes it, but not while its agent works.
+    @Test func aPhoneListsAndRemovesWorktrees() async throws {
+        defer { done() }
+        let link = PhoneLink()
+        link.workspace = workspace
+        func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {
+            let request = LinkRequest(method: method, path: path, headers: [:], body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
+            var status = 0
+            var answer = Data()
+            for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: Self.engine)!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): answer += chunk
+                }
+            }
+            return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
+        }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        let tree = try #require(workspace.worktrees[folder])
+        try Data("x\n".utf8).write(to: URL(filePath: folder).appending(path: "x.txt"))
+        _ = try git("add", "-A", in: folder)
+        _ = try git("commit", "-q", "-m", "x", in: folder)
+        try Data("y\n".utf8).write(to: URL(filePath: folder).appending(path: "y.txt"))
+
+        let listed = try #require(try await ask("kuvo/worktrees").json["worktrees"] as? [[String: Any]])
+        let entry = try #require(listed.first)
+        #expect(listed.count == 1)
+        #expect(entry["path"] as? String == tree.root)
+        #expect(entry["branch"] as? String == tree.branch)
+        #expect(entry["base"] as? String == "main")
+        #expect(entry["sessions"] as? Int == 1)
+        #expect(entry["working"] as? Bool == false)
+        #expect(entry["uncommitted"] as? Bool == true)
+        #expect(entry["ahead"] as? Int == 1)
+        #expect((entry["size"] as? Int ?? 0) > 0)
+        #expect(entry["machine"] == nil)
+
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.execution.started", "created": 1, "data": ["sessionID": session.id]])))
+        #expect((try await ask("kuvo/worktrees").json["worktrees"] as? [[String: Any]])?.first?["working"] as? Bool == true)
+        let refused = try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root])
+        #expect(refused.status == 409)
+        #expect((refused.json["message"] as? String)?.contains("An agent is still working") == true)
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.execution.interrupted", "created": 2, "data": ["sessionID": session.id]])))
+
+        #expect(try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root]).status == 200)
+        #expect(!FileManager.default.fileExists(atPath: folder), "its changes go with it, as the page says")
+        #expect((try await ask("kuvo/worktrees").json["worktrees"] as? [[String: Any]])?.isEmpty == true)
+        #expect(try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root]).status == 404)
     }
 
     /// While its agent works there, the worktree stays, whatever you were told.

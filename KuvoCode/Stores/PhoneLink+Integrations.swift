@@ -114,8 +114,4 @@ extension PhoneLink {
         if !keys.isEmpty { entry["keys"] = keys.map { ["name": $0.name, "label": $0.label, "prompt": $0.prompt] } }
         return entry
     }
-
-    private static func json(_ value: Any) -> Data {
-        (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
-    }
 }
