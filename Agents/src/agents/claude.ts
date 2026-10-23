@@ -12,15 +12,15 @@ import type { Agent, AgentContext, Account, OwnTurn, RunInput, RunResult, SignIn
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, model } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
-import { maintenance, update, type MaintenanceDefinition } from "../maintenance"
+import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
-import { afterInstall, commandSignIn } from "../signin"
+import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
-import { claudeProgram, managedNote, onMachine, ownFoldersScript } from "../machine"
+import { onMachine, ownFoldersScript } from "../machine"
 import { addShell, endShell } from "../shells"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
@@ -45,8 +45,8 @@ export class ClaudeAgent implements Agent {
   get name() {
     return accountName("Claude Code", this.instance)
   }
-  // (On a machine, Kuvo Code installs it, with the Claude Agent SDK.)
-  install = onMachine ? undefined : "curl -fsSL https://claude.ai/install.sh | bash"
+  /** Anthropic's installer, as its docs give it. */
+  install = "curl -fsSL https://claude.ai/install.sh | bash"
   private status?: { at: number; status: Status }
   /**
    * When Claude last turned its sign-in away in a run ("OAuth access token has been revoked"):
@@ -67,18 +67,7 @@ export class ClaudeAgent implements Agent {
   }
 
   executable(): string | undefined {
-    return onMachine ? claudeProgram(this.context.deps.folder(this.id)) : which("claude", places)
-  }
-
-  /** Its program, installed first on a machine (where Kuvo Code keeps its own copy). */
-  async installedProgram(): Promise<string | undefined> {
-    if (onMachine && !this.executable()) await this.sdk()
-    // An install that stopped halfway (its program missing): again, once.
-    if (onMachine && !this.executable()) {
-      this.context.deps.reset(this.id)
-      await this.sdk()
-    }
-    return this.executable()
+    return which("claude", places)
   }
 
   /** Its own installer puts it in `~/.local/share/claude` (or `~/.claude/local`): `claude update`. */
@@ -95,14 +84,18 @@ export class ClaudeAgent implements Agent {
 
   async maintenance(fresh = false) {
     const definition = this.definition
-    return definition && !onMachine ? maintenance(definition, fresh) : {}
+    return definition ? maintenance(definition, fresh) : {}
   }
 
   async update() {
-    if (onMachine) return { updated: false, message: managedNote }
     const definition = this.definition
     if (!definition) return { updated: false, message: "Claude Code isn't installed." }
     return update(definition, this.context.temporary)
+  }
+
+  /** Its program, with Anthropic's installer. */
+  async installProgram() {
+    return install("Claude Code", this.install, this.context.temporary, () => this.executable())
   }
 
   /** Its models asked of the new Claude Code (the old ones listed meanwhile); sessions start it at their next message. */
@@ -132,8 +125,6 @@ export class ClaudeAgent implements Agent {
   }
 
   async account(fresh = false): Promise<Account> {
-    // On a machine it comes as you sign in.
-    if (!this.executable() && onMachine) return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account. Kuvo Code installs it on this machine first." }
     if (!this.executable()) {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." }
     }
@@ -168,15 +159,8 @@ export class ClaudeAgent implements Agent {
   readonly signsInRemotely = true
 
   async signIn(methodID: string, options: SignInOptions = {}): Promise<SignInAttempt> {
-    // On a machine without it yet: installed first, said at once.
-    if (onMachine && !this.executable()) {
-      return afterInstall("Installing Claude Code on this machine…", "Finish signing in on Claude's page.", true, async () => {
-        if (!(await this.installedProgram())) throw new Error("Claude Code couldn't be installed on this machine. Try again.")
-        return this.signIn(methodID, options)
-      })
-    }
-    const executable = await this.installedProgram()
-    if (!executable) throw new Error(onMachine ? "Claude Code couldn't be installed on this machine. Try again." : "Install Claude Code first: curl -fsSL https://claude.ai/install.sh | bash")
+    const executable = this.executable()
+    if (!executable) throw new Error(`Install Claude Code first: ${this.install}`)
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
@@ -196,8 +180,8 @@ export class ClaudeAgent implements Agent {
   }
 
   async sdk(): Promise<typeof import("@anthropic-ai/claude-agent-sdk")> {
-    // Without its own copy of Claude Code: it runs yours; on a machine, with it (it's the one there).
-    await this.context.deps.ensure(this.id, SDK, { optional: onMachine })
+    // Without its own copy of Claude Code: it runs yours.
+    await this.context.deps.ensure(this.id, SDK, { optional: false })
     return this.context.deps.load(this.id, SDK[0].name)
   }
 

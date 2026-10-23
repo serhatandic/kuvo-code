@@ -3,7 +3,7 @@
 
 import type { AgentAccount } from "./accounts"
 import type { Limit } from "./auto"
-import type { Maintenance, UpdateResult } from "./maintenance"
+import type { InstallResult, Maintenance, UpdateResult } from "./maintenance"
 import type { Deps } from "./deps"
 import type { Turn, Outcome } from "./turn"
 import type { Decision, FormAnswer, FormField, IntegrationMethod, Model, ModelRef, OAuthStatus, Session, StructuredError } from "./wire"
@@ -236,6 +236,8 @@ export interface Agent {
   maintenance?(fresh?: boolean): Promise<Maintenance>
   /** Updates its program through the installer that owns it. */
   update?(): Promise<UpdateResult>
+  /** Installs its program with its own installer (`install`), where it's yours to install. */
+  installProgram?(): Promise<InstallResult>
   /**
    * Its program was updated (told to each account with it): the new one lists the models, and
    * runs sessions from their next message, without the app starting again.

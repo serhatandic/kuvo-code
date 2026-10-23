@@ -9,10 +9,10 @@ import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread
 import { accountName, ContextWindows, model } from "../agent"
 import { emit } from "../events"
 import { AcpThread, questionFields } from "../acp"
-import { grokProgram, installGrok, managedNote, onMachine, withOwnFolders } from "../machine"
-import { maintenance, update, type MaintenanceDefinition } from "../maintenance"
+import { withOwnFolders } from "../machine"
+import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { plain, run, which } from "../proc"
-import { afterInstall, commandSignIn } from "../signin"
+import { commandSignIn } from "../signin"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import type { Model, Session } from "../wire"
 
@@ -24,8 +24,8 @@ export class GrokAgent implements Agent {
   get name() {
     return accountName("Grok", this.instance)
   }
-  // (On a machine, Kuvo Code installs it.)
-  install = onMachine ? undefined : "npm install -g @xai-official/grok"
+  /** xAI's installer, as its docs give it (it needs no Node). */
+  install = "curl -fsSL https://x.ai/cli/install.sh | bash"
   private status?: { at: number; signedIn: boolean; models: { id: string; name: string; isDefault: boolean }[] }
   private promptCount = 0
 
@@ -66,12 +66,7 @@ export class GrokAgent implements Agent {
   }
 
   executable(): string | undefined {
-    return onMachine ? grokProgram(this.context.deps) : which("grok", places)
-  }
-
-  /** Its program, installed first on a machine (where Kuvo Code keeps its own copy). */
-  async installedProgram(): Promise<string | undefined> {
-    return onMachine ? installGrok(this.context.deps) : this.executable()
+    return which("grok", places)
   }
 
   /** Its own installer puts it in `~/.grok`: `grok update`. */
@@ -83,14 +78,18 @@ export class GrokAgent implements Agent {
 
   async maintenance(fresh = false) {
     const definition = this.definition
-    return definition && !onMachine ? maintenance(definition, fresh) : {}
+    return definition ? maintenance(definition, fresh) : {}
   }
 
   async update() {
-    if (onMachine) return { updated: false, message: managedNote }
     const definition = this.definition
     if (!definition) return { updated: false, message: "Grok's CLI isn't installed." }
     return update(definition, this.context.temporary)
+  }
+
+  /** Its program, with xAI's installer. */
+  async installProgram() {
+    return install("Grok's CLI", this.install, this.context.temporary, () => this.executable())
   }
 
   /** Counts updates of Grok's CLI: a session's agent started before the last one starts again. */
@@ -138,7 +137,6 @@ export class GrokAgent implements Agent {
   }
 
   async account(fresh = false): Promise<Account> {
-    if (!this.executable() && onMachine) return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan. Kuvo Code installs its CLI on this machine first." }
     if (!this.executable()) return { installed: false, signedIn: false, message: "Install Grok's CLI, then sign in here." }
     const status = await this.read(fresh)
     if (!status.signedIn) return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan." }
@@ -149,13 +147,8 @@ export class GrokAgent implements Agent {
   readonly signsInRemotely = true
 
   async signIn(_methodID = "grok", options: SignInOptions = {}): Promise<SignInAttempt> {
-    // On a machine without it yet: installed first, said at once.
-    if (onMachine && !this.executable()) return afterInstall("Installing Grok's CLI on this machine…", "Finish signing in to Grok in your browser.", false, async () => {
-      if (!(await this.installedProgram())) throw new Error("Grok's CLI couldn't be installed on this machine. Try again.")
-      return this.signIn(_methodID, options)
-    })
-    const executable = await this.installedProgram()
-    if (!executable) throw new Error("Install Grok's CLI first: npm install -g @xai-official/grok")
+    const executable = this.executable()
+    if (!executable) throw new Error(`Install Grok's CLI first: ${this.install}`)
     // On another device: a device code, as `grok login --device-auth` has it.
     return commandSignIn({
       command: executable,
@@ -195,8 +188,8 @@ export class GrokAgent implements Agent {
         restartAfterInterrupt: true,
         program: () => agent.program,
         async command({ approvesAll, plan, skills }) {
-          const executable = await agent.installedProgram()
-          if (!executable) throw new Error("Install Grok's CLI first: npm install -g @xai-official/grok")
+          const executable = agent.executable()
+          if (!executable) throw new Error(`Install Grok's CLI first: ${agent.install}`)
           // Settings › Skills' skills, as a plugin for this process alone.
           const plugin = skills ? ["--plugin-dir", skills] : []
           const argv = plan

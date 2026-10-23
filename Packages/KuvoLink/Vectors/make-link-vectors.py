@@ -166,7 +166,7 @@ for item in agent_routes:
 assert phone_may("api/credential") and phone_may("api/config") and phone_may("api/shell") and phone_may("api/integration/x/update")
 assert not phone_may("api/session/../credential") and not phone_may("kuvo/info") and not phone_may("api/session/%2e%2e\u200d/x")
 assert not agents_may("api/kuvo/engine") and not agents_may("api/kuvo/%65ngine") and not agents_may("api/kuvo/groups/x")
-assert agents_may("api/integration/claude-code/update") and agents_may("api/kuvo/auto")
+assert agents_may("api/integration/claude-code/update") and agents_may("api/integration/claude-code/install") and agents_may("api/kuvo/auto")
 
 # Where a sign-in's page sends the browser back to the computer (`kuvo/sign-in/return`), which
 # the phone hands it to load there: only this computer's own address (127.0.0.1, localhost, [::1])

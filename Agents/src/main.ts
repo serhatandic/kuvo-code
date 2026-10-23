@@ -17,11 +17,12 @@ import { Auto } from "./auto"
 import { Deps } from "./deps"
 import { EngineAgent, EngineLink } from "./engine"
 import { setToolProgram } from "./kuvotools"
-import { dropCarriedSignIns, machineHome, onMachine, takeOwnFolders } from "./machine"
+import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler } from "./server"
 import { Sessions } from "./sessions"
+import { refreshLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
@@ -82,6 +83,12 @@ process.on("uncaughtException", (error) => {
 })
 
 const deps = new Deps(join(home, "runtime"), join(home, "cache"))
+if (onMachine) {
+  // The agents' programs are the machine's own now, found on its login shell's PATH (which a
+  // command over SSH doesn't get), not copies of Kuvo Code's.
+  dropOwnPrograms(join(home, "runtime"))
+  void refreshLoginPath()
+}
 // What an earlier bridge left of its downloads (it kept them on this Mac): nothing installs yet.
 rmSync(join(home, "cache", "install"), { recursive: true, force: true })
 const context = { home, temporary, deps }

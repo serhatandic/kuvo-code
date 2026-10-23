@@ -7,7 +7,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SignInAttempt } from "./agent"
-import { failure } from "./agent"
 import { newID } from "./ids"
 import { firstURL, plain } from "./proc"
 import type { OAuthStatus } from "./wire"
@@ -149,46 +148,4 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
 
 function lastLines(text: string): string {
   return text.trim().split("\n").slice(-4).join("\n").trim()
-}
-
-/**
- * A sign-in that waits for its agent to be installed first (on a machine, a few hundred MB): it
- * answers at once, saying so, and goes on with the sign-in itself (`start`) once that's done, its
- * page coming with its status then, as Antigravity's does after its download.
- */
-export function afterInstall(installing: string, instructions: string, acceptsCode: boolean, start: () => Promise<SignInAttempt>): SignInAttempt {
-  let inner: SignInAttempt | undefined
-  let failed: string | undefined
-  let cancelled = false
-  void start().then(
-    (attempt) => {
-      if (cancelled) attempt.cancel()
-      else inner = attempt
-    },
-    (error) => (failed = failure(error).message),
-  )
-  return {
-    url: "",
-    instructions,
-    mode: "auto",
-    acceptsCode,
-    status: () => {
-      if (failed) return { status: "failed", message: failed }
-      if (!inner) return { status: "pending", message: installing }
-      const status = inner.status()
-      return status.status === "pending"
-        ? { ...status, url: status.url || inner.url, instructions: inner.instructions, ...(inner.userCode ? { userCode: inner.userCode } : {}) }
-        : status
-    },
-    complete: acceptsCode
-      ? async (code: string) => {
-          if (!inner?.complete) throw new Error("It's still getting ready. Paste the code once the page has opened.")
-          await inner.complete(code)
-        }
-      : undefined,
-    cancel: () => {
-      cancelled = true
-      inner?.cancel()
-    },
-  }
 }

@@ -1,17 +1,16 @@
 // @bun
 // Agents/src/main.ts
-import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync18, renameSync as renameSync8, rmSync as rmSync12, writeFileSync as writeFileSync13 } from "fs";
+import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync18, renameSync as renameSync7, rmSync as rmSync12, writeFileSync as writeFileSync13 } from "fs";
 import { join as join19 } from "path";
 
 // Agents/src/accounts.ts
 import { randomBytes } from "crypto";
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
 import { join as join2 } from "path";
 
 // Agents/src/machine.ts
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { brotliDecompressSync } from "zlib";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { join } from "path";
 var onMachine = process.env.KUVO_AGENTS_REMOTE === "1";
 var machineHome = process.env.KUVO_HOME;
 var ownFolders = {};
@@ -38,6 +37,9 @@ function withOwnFolders(env) {
       delete result[name];
   }
   return result;
+}
+function ownEnvironment() {
+  return onMachine ? { ...ownFolders } : {};
 }
 function ownFoldersScript(folder) {
   const names = Object.keys(ownFolders);
@@ -69,77 +71,15 @@ function ownFoldersConfig() {
     config["shell_environment_policy.exclude"] = unset;
   return config;
 }
-var arch = process.arch === "arm64" ? "arm64" : "x64";
-function musl() {
+function dropOwnPrograms(runtime) {
+  for (const agent of ["codex", "grok"])
+    rmSync(join(runtime, agent), { recursive: true, force: true });
+  const scope = join(runtime, "claude", "node_modules", "@anthropic-ai");
   try {
-    return readdirSync("/lib").some((name) => name.startsWith("ld-musl"));
-  } catch {
-    return false;
-  }
-}
-var machineVersions = { codex: "0.163.0", grok: "1.0.62" };
-var managedNote = "Kuvo Code keeps it up to date on this machine.";
-function claudeProgram(folder) {
-  const base = join(folder, "node_modules", "@anthropic-ai");
-  const names = musl() ? [`claude-agent-sdk-linux-${arch}-musl`, `claude-agent-sdk-linux-${arch}`] : [`claude-agent-sdk-linux-${arch}`, `claude-agent-sdk-linux-${arch}-musl`];
-  for (const name of names) {
-    const path = join(base, name, "claude");
-    if (!existsSync(path))
-      continue;
-    for (const other of names)
-      if (other !== name)
-        rmSync(join(base, other), { recursive: true, force: true });
-    return path;
-  }
-  return;
-}
-var codexPackages = [{ name: "@openai/codex", version: machineVersions.codex }];
-function codexProgram(deps) {
-  if (!deps.has("codex", codexPackages))
-    return;
-  const triple = arch === "arm64" ? "aarch64-unknown-linux-musl" : "x86_64-unknown-linux-musl";
-  const path = join(deps.folder("codex"), "node_modules", "@openai", `codex-linux-${arch}`, "vendor", triple, "bin", "codex");
-  return existsSync(path) ? path : undefined;
-}
-async function installCodex(deps) {
-  await deps.ensure("codex", codexPackages);
-  if (!codexProgram(deps)) {
-    deps.reset("codex");
-    await deps.ensure("codex", codexPackages);
-  }
-  const path = codexProgram(deps);
-  if (!path)
-    throw new Error("OpenAI doesn't make Codex for this machine.");
-  return path;
-}
-var grokPackage = `@xai-official/grok-linux-${arch}`;
-function grokProgram(deps) {
-  const path = join(deps.folder("grok"), "bin", "grok");
-  try {
-    return readFileSync(path + ".version", "utf8") === machineVersions.grok && existsSync(path) ? path : undefined;
-  } catch {
-    return;
-  }
-}
-async function installGrok(deps) {
-  const known = grokProgram(deps);
-  if (known)
-    return known;
-  await deps.ensure("grok", [{ name: grokPackage, version: machineVersions.grok }]);
-  const packed = join(deps.folder("grok"), "node_modules", grokPackage, "bin", "grok.br");
-  if (!existsSync(packed)) {
-    deps.reset("grok");
-    await deps.ensure("grok", [{ name: grokPackage, version: machineVersions.grok }]);
-  }
-  if (!existsSync(packed))
-    throw new Error("xAI doesn't make Grok's CLI for this machine.");
-  const path = join(deps.folder("grok"), "bin", "grok");
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path + ".new", brotliDecompressSync(readFileSync(packed)));
-  chmodSync(path + ".new", 493);
-  renameSync(path + ".new", path);
-  writeFileSync(path + ".version", machineVersions.grok);
-  return path;
+    for (const name of readdirSync(scope))
+      if (name.startsWith("claude-agent-sdk-linux-"))
+        rmSync(join(scope, name), { recursive: true, force: true });
+  } catch {}
 }
 function dropCarriedSignIns(home) {
   const visit = (folder, depth) => {
@@ -238,12 +178,12 @@ class Accounts {
   save() {
     mkdirSync2(this.root, { recursive: true });
     writeFileSync2(this.file + ".new", JSON.stringify(this.records, null, 2));
-    renameSync2(this.file + ".new", this.file);
+    renameSync(this.file + ".new", this.file);
   }
 }
 
 // Agents/src/auto.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "fs";
 import { join as join3 } from "path";
 
 // Agents/src/ids.ts
@@ -426,7 +366,7 @@ class Auto {
   save() {
     mkdirSync3(this.root, { recursive: true });
     writeFileSync3(this.file + ".new", JSON.stringify({ lists: this.lists, limits: this.held }, null, 2));
-    renameSync3(this.file + ".new", this.file);
+    renameSync2(this.file + ".new", this.file);
   }
 }
 function resetsIn(text, now = Date.now()) {
@@ -461,7 +401,7 @@ function resetTime(at) {
 }
 
 // Agents/src/deps.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "fs";
 import { join as join4 } from "path";
 var installing = new Map;
 
@@ -524,7 +464,7 @@ class Deps {
 }
 function installedVersion(folder, name) {
   const file = join4(folder, "node_modules", name, "package.json");
-  if (!existsSync2(file))
+  if (!existsSync(file))
     return;
   try {
     return JSON.parse(readFileSync4(file, "utf8")).version;
@@ -1306,8 +1246,8 @@ function kuvoToolName(name, args) {
 
 // Agents/src/snapshots.ts
 import { createHash } from "crypto";
-import { existsSync as existsSync3, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync2, readFileSync as readFileSync6, realpathSync, rmdirSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "fs";
-import { dirname as dirname2, join as join7, relative, resolve, sep } from "path";
+import { existsSync as existsSync2, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync2, readFileSync as readFileSync6, realpathSync, rmdirSync, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "fs";
+import { dirname, join as join7, relative, resolve, sep } from "path";
 
 // Agents/src/diff.ts
 var searchLimit = 2000;
@@ -1498,9 +1438,13 @@ function which(name, extra = []) {
   return;
 }
 async function run(command, args, options = {}) {
+  const env = { ...process.env, ...options.env };
+  for (const name of Object.keys(env))
+    if (env[name] === undefined)
+      delete env[name];
   const child = Bun.spawn([command, ...args], {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    env,
     stdin: options.input !== undefined ? "pipe" : "ignore",
     stdout: "pipe",
     stderr: "pipe"
@@ -1520,14 +1464,14 @@ async function run(command, args, options = {}) {
   return { code, stdout, stderr };
 }
 var pathRead = 0;
-async function refreshLoginPath() {
-  if (process.env.KUVO_AGENTS_REMOTE === "1" || Date.now() - pathRead < 5000)
+async function refreshLoginPath(now = false) {
+  if (!now && Date.now() - pathRead < 5000)
     return;
   pathRead = Date.now();
-  const shell = process.env.SHELL || "/bin/zsh";
+  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
   for (const flags of ["-ilc", "-lc"]) {
     try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { DISABLE_AUTO_UPDATE: "true" } });
+      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), DISABLE_AUTO_UPDATE: "true" } });
       const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
       if (found?.trim()) {
         process.env.PATH = [process.env.KUVO_BIN, found.trim()].filter(Boolean).join(":");
@@ -1607,7 +1551,7 @@ class Snapshots {
       return;
     return this.exclusive(repository, async () => {
       const store = this.storeOf(repository);
-      if (!existsSync3(join7(store, "HEAD"))) {
+      if (!existsSync2(join7(store, "HEAD"))) {
         mkdirSync5(store, { recursive: true });
         const made = await run("git", ["init", "--bare", "-q", store], { timeout: 30000, env: quiet });
         if (made.code !== 0)
@@ -1714,7 +1658,7 @@ class Snapshots {
       const back = paths.filter((path) => !isRules(path) && there.has(path));
       for (const path of back) {
         const full = join7(repository.top, path);
-        if (this.isInside(repository.top, full) && existsSync3(full) && lstatSync(full).isDirectory() && !existsSync3(join7(full, ".git")))
+        if (this.isInside(repository.top, full) && existsSync2(full) && lstatSync(full).isDirectory() && !existsSync2(join7(full, ".git")))
           rmSync4(full, { recursive: true, force: true });
       }
       await this.checkout(repository, tree, back);
@@ -1733,7 +1677,7 @@ class Snapshots {
       const folder = join7(store, "kuvo-ignored");
       mkdirSync5(folder, { recursive: true });
       const file = join7(folder, tree);
-      const known = existsSync3(file) ? readFileSync6(file, "utf8").split("\x00").filter(Boolean) : [];
+      const known = existsSync2(file) ? readFileSync6(file, "utf8").split("\x00").filter(Boolean) : [];
       writeFileSync5(file, [...new Set([...known, ...paths])].join("\x00"));
     } catch {}
   }
@@ -1756,7 +1700,7 @@ class Snapshots {
     const target = resolve(full);
     if (!target.startsWith(top + sep))
       return false;
-    let folder = dirname2(target);
+    let folder = dirname(target);
     while (folder.length > top.length) {
       try {
         if (lstatSync(folder).isSymbolicLink())
@@ -1764,7 +1708,7 @@ class Snapshots {
       } catch {
         return true;
       }
-      folder = dirname2(folder);
+      folder = dirname(folder);
     }
     return true;
   }
@@ -1774,13 +1718,13 @@ class Snapshots {
       return;
     try {
       const stat = lstatSync(full);
-      if (stat.isDirectory() && !stat.isSymbolicLink() && existsSync3(join7(full, ".git")))
+      if (stat.isDirectory() && !stat.isSymbolicLink() && existsSync2(join7(full, ".git")))
         return;
       rmSync4(full, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: true });
     } catch {
       return;
     }
-    let folder = dirname2(full);
+    let folder = dirname(full);
     while (folder.length > top.length) {
       try {
         if (readdirSync2(folder).length)
@@ -1789,7 +1733,7 @@ class Snapshots {
       } catch {
         break;
       }
-      folder = dirname2(folder);
+      folder = dirname(folder);
     }
   }
 }
@@ -1800,13 +1744,13 @@ function ancestors(path) {
 
 // Agents/src/agents/antigravity.ts
 import { createHash as createHash3 } from "crypto";
-import { chmodSync as chmodSync3, existsSync as existsSync7, mkdirSync as mkdirSync9, readdirSync as readdirSync4, readFileSync as readFileSync10, renameSync as renameSync5, rmSync as rmSync7, statSync as statSync3, writeFileSync as writeFileSync9 } from "fs";
+import { chmodSync as chmodSync2, existsSync as existsSync6, mkdirSync as mkdirSync9, readdirSync as readdirSync4, readFileSync as readFileSync10, renameSync as renameSync4, rmSync as rmSync7, statSync as statSync3, writeFileSync as writeFileSync9 } from "fs";
 import { join as join10 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // Agents/src/acp.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync6 } from "fs";
-import { dirname as dirname3, resolve as resolve2 } from "path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync6 } from "fs";
+import { dirname as dirname2, resolve as resolve2 } from "path";
 
 // Agents/src/rpc.ts
 class RPCError extends Error {
@@ -2082,7 +2026,7 @@ class AcpThread {
       const watch = setInterval(() => {
         if (rpc.isClosed)
           return clearInterval(watch);
-        if (!existsSync4(file))
+        if (!existsSync3(file))
           return;
         clearInterval(watch);
         asksSignIn = true;
@@ -2560,7 +2504,7 @@ ${others.map((path) => `- ${path}`).join(`
       if (!path && !all)
         continue;
       const served = path && clientRead(call) ? active.served.get(path)?.shift() : undefined;
-      this.settleRead(active, id, served ?? (path && !existsSync4(path) ? { error: "There's no such file." } : { text: "" }));
+      this.settleRead(active, id, served ?? (path && !existsSync3(path) ? { error: "There's no such file." } : { text: "" }));
     }
   }
   readPath(call) {
@@ -2723,7 +2667,7 @@ ${others.map((path) => `- ${path}`).join(`
         const file = resolve2(this.session.location.directory, params.path);
         if (active?.hooks.check({ action: "edit", resources: [file] }) === "deny")
           throw new RPCError(-32000, "Kuvo Code's settings don't allow this (Settings \u203A Permissions, or this session's rules).");
-        mkdirSync6(dirname3(file), { recursive: true });
+        mkdirSync6(dirname2(file), { recursive: true });
         writeFileSync6(file, params.content ?? "");
         return {};
       }
@@ -2950,16 +2894,16 @@ function questionFields(questions) {
 }
 
 // Agents/src/signin.ts
-import { chmodSync as chmodSync2, existsSync as existsSync5, mkdirSync as mkdirSync7, readFileSync as readFileSync8, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "fs";
+import { chmodSync, existsSync as existsSync4, mkdirSync as mkdirSync7, readFileSync as readFileSync8, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "fs";
 import { join as join8 } from "path";
 function catcher(temporary) {
   const path = join8(temporary, "bin", "kuvo-catch-url");
-  if (!existsSync5(path)) {
+  if (!existsSync4(path)) {
     mkdirSync7(join8(temporary, "bin"), { recursive: true });
     writeFileSync7(path, `#!/bin/sh
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 `);
-    chmodSync2(path, 493);
+    chmodSync(path, 493);
   }
   return path;
 }
@@ -3023,7 +2967,7 @@ async function commandSignIn(options) {
       if (printed)
         url = printed;
     } else {
-      if (existsSync5(urlFile))
+      if (existsSync4(urlFile))
         url = readFileSync8(urlFile, "utf8").split(`
 `)[0].trim();
       if (printed)
@@ -3078,45 +3022,11 @@ function lastLines(text) {
 `).slice(-4).join(`
 `).trim();
 }
-function afterInstall(installing2, instructions, acceptsCode, start) {
-  let inner;
-  let failed;
-  let cancelled = false;
-  start().then((attempt) => {
-    if (cancelled)
-      attempt.cancel();
-    else
-      inner = attempt;
-  }, (error) => failed = failure(error).message);
-  return {
-    url: "",
-    instructions,
-    mode: "auto",
-    acceptsCode,
-    status: () => {
-      if (failed)
-        return { status: "failed", message: failed };
-      if (!inner)
-        return { status: "pending", message: installing2 };
-      const status = inner.status();
-      return status.status === "pending" ? { ...status, url: status.url || inner.url, instructions: inner.instructions, ...inner.userCode ? { userCode: inner.userCode } : {} } : status;
-    },
-    complete: acceptsCode ? async (code) => {
-      if (!inner?.complete)
-        throw new Error("It's still getting ready. Paste the code once the page has opened.");
-      await inner.complete(code);
-    } : undefined,
-    cancel: () => {
-      cancelled = true;
-      inner?.cancel();
-    }
-  };
-}
 
 // Agents/src/skills.ts
 import { createHash as createHash2 } from "crypto";
-import { cpSync, existsSync as existsSync6, mkdirSync as mkdirSync8, readdirSync as readdirSync3, readFileSync as readFileSync9, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync2, symlinkSync, utimesSync, writeFileSync as writeFileSync8 } from "fs";
-import { dirname as dirname4, join as join9, resolve as resolve3, sep as sep2 } from "path";
+import { cpSync, existsSync as existsSync5, mkdirSync as mkdirSync8, readdirSync as readdirSync3, readFileSync as readFileSync9, renameSync as renameSync3, rmSync as rmSync6, statSync as statSync2, symlinkSync, utimesSync, writeFileSync as writeFileSync8 } from "fs";
+import { dirname as dirname3, join as join9, resolve as resolve3, sep as sep2 } from "path";
 var link;
 var home;
 function setSkillSource(engine, folder) {
@@ -3142,9 +3052,9 @@ function engineSkills(directory) {
       for (const skill of list) {
         const name = typeof skill?.name === "string" ? skill.name : typeof skill?.id === "string" ? skill.id : undefined;
         const path = typeof skill?.path === "string" ? skill.path : undefined;
-        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync6(path))
+        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync5(path))
           continue;
-        found.push({ name, folder: dirname4(path) });
+        found.push({ name, folder: dirname3(path) });
       }
       if (!list.length)
         listed.delete(directory);
@@ -3163,7 +3073,7 @@ function upward(directory) {
   let at = resolve3(directory);
   while (true) {
     folders.push(at);
-    const up = dirname4(at);
+    const up = dirname3(at);
     if (up === at)
       return folders;
     at = up;
@@ -3252,7 +3162,7 @@ function skillsFolder(skills) {
   const root = join9(home, "skills");
   const folder = join9(root, set);
   const now = new Date;
-  if (existsSync6(join9(folder, ".claude-plugin", "plugin.json"))) {
+  if (existsSync5(join9(folder, ".claude-plugin", "plugin.json"))) {
     try {
       utimesSync(folder, now, now);
     } catch {}
@@ -3270,7 +3180,7 @@ function skillsFolder(skills) {
 `);
   symlinkSync(join9("..", "skills"), join9(making, ".cursor", "skills"));
   try {
-    renameSync4(making, folder);
+    renameSync3(making, folder);
   } catch {
     rmSync6(making, { recursive: true, force: true });
   }
@@ -3307,9 +3217,9 @@ function copySkillsInto(folder, skills) {
       if (before[name] !== after[name])
         rmSync6(join9(folder, folderName(name)), { recursive: true, force: true });
     for (const entry of list) {
-      if (before[entry.name] === after[entry.name] && existsSync6(join9(folder, entry.name)))
+      if (before[entry.name] === after[entry.name] && existsSync5(join9(folder, entry.name)))
         continue;
-      if (!existsSync6(join9(folder, entry.name)) && !copy(entry.skill.folder, join9(folder, entry.name)))
+      if (!existsSync5(join9(folder, entry.name)) && !copy(entry.skill.folder, join9(folder, entry.name)))
         delete after[entry.name];
     }
     writeFileSync8(record, JSON.stringify(after));
@@ -3632,7 +3542,7 @@ class AntigravityAgent {
     return join10(this.profile, "kuvo-models.json");
   }
   get isInstalled() {
-    return existsSync7(join10(this.folder, ".complete"));
+    return existsSync6(join10(this.folder, ".complete"));
   }
   methods() {
     return [{ type: "oauth", id: "oauth-personal", label: "Sign in with Google" }];
@@ -3657,7 +3567,7 @@ class AntigravityAgent {
         return { installed: this.isInstalled, signedIn: false, ended: true, message: "Google ended this sign-in. Sign in again." };
       this.endedSignIn = undefined;
     }
-    if (!existsSync7(this.tokenFile)) {
+    if (!existsSync6(this.tokenFile)) {
       return {
         installed: this.isInstalled,
         signedIn: false,
@@ -3707,10 +3617,10 @@ class AntigravityAgent {
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
       rmSync7(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync3(join10(staging, name), 493);
+        chmodSync2(join10(staging, name), 493);
       writeFileSync9(join10(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
       rmSync7(this.folder, { recursive: true, force: true });
-      renameSync5(staging, this.folder);
+      renameSync4(staging, this.folder);
       for (const name of readdirSync4(this.root)) {
         if (name !== version && name !== "profile" && /^\d/.test(name))
           rmSync7(join10(this.root, name), { recursive: true, force: true });
@@ -3726,7 +3636,7 @@ class AntigravityAgent {
   launch() {
     mkdirSync9(join10(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
     const settings = join10(this.profile, "antigravity-acp", "settings.json");
-    if (!existsSync7(settings))
+    if (!existsSync6(settings))
       writeFileSync9(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
     const temporary = join10(this.context.temporary, "antigravity", newID("att"));
     mkdirSync9(temporary, { recursive: true });
@@ -3954,17 +3864,18 @@ function unzipper() {
 
 // Agents/src/agents/claude.ts
 import { randomUUID } from "crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync11, statSync as statSync4 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync11, statSync as statSync4 } from "fs";
 import { homedir } from "os";
 import { join as join12 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Agents/src/maintenance.ts
-import { existsSync as existsSync8, realpathSync as realpathSync2 } from "fs";
+import { existsSync as existsSync7, realpathSync as realpathSync2 } from "fs";
 import { basename, join as join11 } from "path";
 var checked = new Map;
 var newest = new Map;
 var updating = new Map;
+var installing2 = new Map;
 async function maintenance(definition, fresh = false) {
   const kept = checked.get(definition.executable);
   if (!fresh && kept && Date.now() - kept.at < 10 * 60000)
@@ -3986,7 +3897,7 @@ function update(definition, temporary) {
     const before = await maintenance(definition, true);
     if (!before.command)
       return { updated: false, version: before.installed, message: `Update ${definition.name} the way you installed it.` };
-    const ran = await run(before.command[0], before.command.slice(1), { cwd: temporary, env: before.env, timeout: 10 * 60000 });
+    const ran = await run(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60000 });
     const after = await maintenance(definition, true);
     const changed = Boolean(after.installed && after.installed !== before.installed);
     if (changed || after.installed && !isOutdated(after))
@@ -4004,6 +3915,28 @@ ${output}` : ""}`
     };
   })().finally(() => updating.delete(definition.executable));
   updating.set(definition.executable, task);
+  return task;
+}
+function install(name, command, temporary, found) {
+  const running = installing2.get(command);
+  if (running)
+    return running;
+  const task = (async () => {
+    await refreshLoginPath();
+    const ran = await run("/bin/sh", ["-c", command], { cwd: temporary, env: ownEnvironment(), timeout: 10 * 60000 });
+    await refreshLoginPath(true);
+    const executable = found();
+    if (executable)
+      return { installed: true, version: await installedVersion2(executable) };
+    const output = plain(ran.stderr + `
+` + ran.stdout).trim().split(`
+`).slice(-6).join(`
+`).trim();
+    return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `
+
+${output}` : ""}` };
+  })().finally(() => installing2.delete(command));
+  installing2.set(command, task);
   return task;
 }
 async function installedVersion2(executable) {
@@ -4059,7 +3992,7 @@ async function resolveUpdater(definition) {
     return nativeUpdater;
   const prefix = npmGlobalPrefix(realPath, definition.npmPackage);
   if (prefix) {
-    const npm = existsSync8(join11(prefix, "bin", "npm")) ? join11(prefix, "bin", "npm") : "npm";
+    const npm = existsSync7(join11(prefix, "bin", "npm")) ? join11(prefix, "bin", "npm") : "npm";
     return {
       command: [npm, "install", "-g", "--prefix", prefix, `--allow-scripts=${definition.npmPackage}`, `${definition.npmPackage}@latest`],
       shown: `npm install -g ${definition.npmPackage}@latest`,
@@ -4068,7 +4001,7 @@ async function resolveUpdater(definition) {
   }
   const keg = homebrewKeg(realPath);
   if (keg && keg.name.toLowerCase() !== "mise") {
-    const brew = existsSync8(join11(keg.prefix, "bin", "brew")) ? join11(keg.prefix, "bin", "brew") : which("brew");
+    const brew = existsSync7(join11(keg.prefix, "bin", "brew")) ? join11(keg.prefix, "bin", "brew") : which("brew");
     if (brew) {
       const said2 = (await run(brew, ["--prefix"], { timeout: 15000 }).catch(() => {
         return;
@@ -4222,7 +4155,7 @@ class ClaudeAgent {
   get name() {
     return accountName("Claude Code", this.instance);
   }
-  install = onMachine ? undefined : "curl -fsSL https://claude.ai/install.sh | bash";
+  install = "curl -fsSL https://claude.ai/install.sh | bash";
   status;
   authFailedAt;
   modelList;
@@ -4234,16 +4167,7 @@ class ClaudeAgent {
     this.providerID = providerID("claude", instance.id);
   }
   executable() {
-    return onMachine ? claudeProgram(this.context.deps.folder(this.id)) : which("claude", places);
-  }
-  async installedProgram() {
-    if (onMachine && !this.executable())
-      await this.sdk();
-    if (onMachine && !this.executable()) {
-      this.context.deps.reset(this.id);
-      await this.sdk();
-    }
-    return this.executable();
+    return which("claude", places);
   }
   get definition() {
     const executable = this.executable();
@@ -4258,15 +4182,16 @@ class ClaudeAgent {
   }
   async maintenance(fresh = false) {
     const definition = this.definition;
-    return definition && !onMachine ? maintenance(definition, fresh) : {};
+    return definition ? maintenance(definition, fresh) : {};
   }
   async update() {
-    if (onMachine)
-      return { updated: false, message: managedNote };
     const definition = this.definition;
     if (!definition)
       return { updated: false, message: "Claude Code isn't installed." };
     return update(definition, this.context.temporary);
+  }
+  async installProgram() {
+    return install("Claude Code", this.install, this.context.temporary, () => this.executable());
   }
   programUpdated() {
     this.program++;
@@ -4294,8 +4219,6 @@ class ClaudeAgent {
     return status;
   }
   async account(fresh = false) {
-    if (!this.executable() && onMachine)
-      return { installed: true, signedIn: false, message: "Sign in to Claude Code with your Claude plan or an Anthropic Console account. Kuvo Code installs it on this machine first." };
     if (!this.executable()) {
       return { installed: false, signedIn: false, message: "Install Claude Code, then sign in here." };
     }
@@ -4323,16 +4246,9 @@ class ClaudeAgent {
   }
   signsInRemotely = true;
   async signIn(methodID, options = {}) {
-    if (onMachine && !this.executable()) {
-      return afterInstall("Installing Claude Code on this machine\u2026", "Finish signing in on Claude's page.", true, async () => {
-        if (!await this.installedProgram())
-          throw new Error("Claude Code couldn't be installed on this machine. Try again.");
-        return this.signIn(methodID, options);
-      });
-    }
-    const executable = await this.installedProgram();
+    const executable = this.executable();
     if (!executable)
-      throw new Error(onMachine ? "Claude Code couldn't be installed on this machine. Try again." : "Install Claude Code first: curl -fsSL https://claude.ai/install.sh | bash");
+      throw new Error(`Install Claude Code first: ${this.install}`);
     return commandSignIn({
       command: executable,
       args: ["auth", "login", methodID === "console" ? "--console" : "--claudeai"],
@@ -4347,7 +4263,7 @@ class ClaudeAgent {
     });
   }
   async sdk() {
-    await this.context.deps.ensure(this.id, SDK, { optional: onMachine });
+    await this.context.deps.ensure(this.id, SDK, { optional: false });
     return this.context.deps.load(this.id, SDK[0].name);
   }
   ownSkillFolders(directory) {
@@ -5493,7 +5409,7 @@ function previewDiff(name, input) {
   const path = String(input.file_path ?? "");
   if (!path)
     return;
-  const before = existsSync9(path) ? safeRead(path) : undefined;
+  const before = existsSync8(path) ? safeRead(path) : undefined;
   if (name === "Write")
     return fileDiff(path, before, String(input.content ?? ""));
   if (before === undefined)
@@ -5523,7 +5439,7 @@ function diffs(name, input, structured) {
 `).join("");
     return [fromPatch(path, patch)];
   }
-  if (typeof structured?.originalFile === "string" && existsSync9(path))
+  if (typeof structured?.originalFile === "string" && existsSync8(path))
     return [fileDiff(path, structured.originalFile, safeRead(path) ?? "")];
   if (name === "NotebookEdit" && (typeof structured?.old_source === "string" || typeof structured?.new_source === "string"))
     return [fileDiff(path, structured.old_source ?? "", structured.new_source ?? "")];
@@ -5643,7 +5559,7 @@ function safeBase642(path) {
 }
 
 // Agents/src/agents/codex.ts
-import { existsSync as existsSync10, lstatSync as lstatSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync5, readFileSync as readFileSync12, readlinkSync, rmSync as rmSync8, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync5, readFileSync as readFileSync12, readlinkSync, rmSync as rmSync8, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join13 } from "path";
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join13(homedir2(), ".local/bin"), join13(homedir2(), ".codex/bin")];
@@ -5657,7 +5573,7 @@ class CodexAgent {
   get name() {
     return accountName("Codex", this.instance);
   }
-  install = onMachine ? undefined : "npm install -g @openai/codex";
+  install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
   server;
   get running() {
     return this.server && !this.server.isClosed ? this.server : undefined;
@@ -5677,7 +5593,7 @@ class CodexAgent {
     this.providerID = providerID("codex", instance.id);
   }
   executable() {
-    return onMachine ? codexProgram(this.context.deps) : which("codex", places2);
+    return which("codex", places2);
   }
   get definition() {
     const executable = this.executable();
@@ -5687,15 +5603,16 @@ class CodexAgent {
   }
   async maintenance(fresh = false) {
     const definition = this.definition;
-    return definition && !onMachine ? maintenance(definition, fresh) : {};
+    return definition ? maintenance(definition, fresh) : {};
   }
   async update() {
-    if (onMachine)
-      return { updated: false, message: managedNote };
     const definition = this.definition;
     if (!definition)
       return { updated: false, message: "Codex isn't installed." };
     return update(definition, this.context.temporary);
+  }
+  async installProgram() {
+    return install("Codex", this.install, this.context.temporary, () => this.executable());
   }
   outdated;
   programUpdated() {
@@ -5746,9 +5663,9 @@ class CodexAgent {
     return this.starting;
   }
   async start() {
-    const executable = onMachine ? await installCodex(this.context.deps) : this.executable();
+    const executable = this.executable();
     if (!executable)
-      throw new Error("Install Codex first: npm install -g @openai/codex");
+      throw new Error(`Install Codex first: ${this.install}`);
     if (this.instance.home && !onMachine)
       shadowHome(this.instance.home);
     const rpc = new RPC([executable, "app-server"], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined });
@@ -5868,8 +5785,6 @@ class CodexAgent {
   }
   early = new Map;
   async account(fresh = false) {
-    if (!this.executable() && onMachine)
-      return { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key. Kuvo Code installs it on this machine first." };
     if (!this.executable())
       return { installed: false, signedIn: false, message: "Install Codex, then sign in here." };
     if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 30000)
@@ -5891,11 +5806,6 @@ class CodexAgent {
   }
   signsInRemotely = true;
   async signIn(_methodID = "chatgpt", options = {}) {
-    if (onMachine && !codexProgram(this.context.deps))
-      return afterInstall("Installing Codex on this machine\u2026", "Finish signing in with ChatGPT in your browser.", false, async () => {
-        await installCodex(this.context.deps);
-        return this.signIn(_methodID, options);
-      });
     const rpc = await this.rpc();
     if (options.remote) {
       const device = await rpc.request("account/login/start", { type: "chatgptDeviceCode" }, 30000);
@@ -7117,7 +7027,7 @@ function shadowHome(home2) {
   const own = join13(homedir2(), ".codex");
   const kept2 = new Set(["auth.json", "models_cache.json"]);
   mkdirSync10(home2, { recursive: true, mode: 448 });
-  const wanted = existsSync10(own) ? readdirSync5(own).filter((name) => !kept2.has(name)) : [];
+  const wanted = existsSync9(own) ? readdirSync5(own).filter((name) => !kept2.has(name)) : [];
   for (const name of wanted) {
     const link2 = join13(home2, name);
     const target = join13(own, name);
@@ -7154,7 +7064,7 @@ function firstLine2(text) {
 }
 
 // Agents/src/agents/cursor.ts
-import { existsSync as existsSync11, mkdirSync as mkdirSync11, readFileSync as readFileSync13, rmSync as rmSync9 } from "fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync11, readFileSync as readFileSync13, rmSync as rmSync9 } from "fs";
 import { homedir as homedir3 } from "os";
 import { join as join14 } from "path";
 var effortParameters = ["effort", "reasoning", "reasoning_effort"];
@@ -7208,7 +7118,7 @@ class CursorAgent {
     const fromEnvironment = this.instance.home ? undefined : process.env.CURSOR_API_KEY?.trim();
     if (fromEnvironment)
       return fromEnvironment;
-    if (!existsSync11(this.authFile))
+    if (!existsSync10(this.authFile))
       return;
     const loaded = await (await this.store(sdk ?? await this.sdk())).load();
     if (!loaded?.apiKey)
@@ -7218,7 +7128,7 @@ class CursorAgent {
     return loaded.apiKey;
   }
   async account(fresh = false) {
-    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync11(this.authFile)) {
+    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync10(this.authFile)) {
       return { installed: true, signedIn: false, message: "Sign in with your Cursor account. Kuvo Code downloads Cursor's agent the first time." };
     }
     if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 60000)
@@ -7822,7 +7732,7 @@ function withTimeout2(promise, milliseconds) {
 // Agents/src/agents/grok.ts
 import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync12, readFileSync as readFileSync14, writeFileSync as writeFileSync10 } from "fs";
-import { dirname as dirname5, join as join15 } from "path";
+import { dirname as dirname4, join as join15 } from "path";
 var places3 = [join15(homedir4(), ".grok/bin"), join15(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 
 class GrokAgent {
@@ -7833,7 +7743,7 @@ class GrokAgent {
   get name() {
     return accountName("Grok", this.instance);
   }
-  install = onMachine ? undefined : "npm install -g @xai-official/grok";
+  install = "curl -fsSL https://x.ai/cli/install.sh | bash";
   status;
   promptCount = 0;
   get effortsFile() {
@@ -7857,7 +7767,7 @@ class GrokAgent {
     if (!Object.keys(known).length || JSON.stringify(known) === JSON.stringify(this.efforts()))
       return;
     try {
-      mkdirSync12(dirname5(this.effortsFile), { recursive: true });
+      mkdirSync12(dirname4(this.effortsFile), { recursive: true });
       writeFileSync10(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
@@ -7867,10 +7777,7 @@ class GrokAgent {
     this.providerID = providerID("grok", instance.id);
   }
   executable() {
-    return onMachine ? grokProgram(this.context.deps) : which("grok", places3);
-  }
-  async installedProgram() {
-    return onMachine ? installGrok(this.context.deps) : this.executable();
+    return which("grok", places3);
   }
   get definition() {
     const executable = this.executable();
@@ -7880,15 +7787,16 @@ class GrokAgent {
   }
   async maintenance(fresh = false) {
     const definition = this.definition;
-    return definition && !onMachine ? maintenance(definition, fresh) : {};
+    return definition ? maintenance(definition, fresh) : {};
   }
   async update() {
-    if (onMachine)
-      return { updated: false, message: managedNote };
     const definition = this.definition;
     if (!definition)
       return { updated: false, message: "Grok's CLI isn't installed." };
     return update(definition, this.context.temporary);
+  }
+  async installProgram() {
+    return install("Grok's CLI", this.install, this.context.temporary, () => this.executable());
   }
   program = 0;
   programUpdated() {
@@ -7925,8 +7833,6 @@ class GrokAgent {
     return this.status;
   }
   async account(fresh = false) {
-    if (!this.executable() && onMachine)
-      return { installed: true, signedIn: false, message: "Sign in to Grok with your SuperGrok plan. Kuvo Code installs its CLI on this machine first." };
     if (!this.executable())
       return { installed: false, signedIn: false, message: "Install Grok's CLI, then sign in here." };
     const status = await this.read(fresh);
@@ -7936,15 +7842,9 @@ class GrokAgent {
   }
   signsInRemotely = true;
   async signIn(_methodID = "grok", options = {}) {
-    if (onMachine && !this.executable())
-      return afterInstall("Installing Grok's CLI on this machine\u2026", "Finish signing in to Grok in your browser.", false, async () => {
-        if (!await this.installedProgram())
-          throw new Error("Grok's CLI couldn't be installed on this machine. Try again.");
-        return this.signIn(_methodID, options);
-      });
-    const executable = await this.installedProgram();
+    const executable = this.executable();
     if (!executable)
-      throw new Error("Install Grok's CLI first: npm install -g @xai-official/grok");
+      throw new Error(`Install Grok's CLI first: ${this.install}`);
     return commandSignIn({
       command: executable,
       args: options.remote ? ["login", "--device-auth"] : ["login"],
@@ -7976,9 +7876,9 @@ class GrokAgent {
       restartAfterInterrupt: true,
       program: () => agent.program,
       async command({ approvesAll, plan, skills }) {
-        const executable = await agent.installedProgram();
+        const executable = agent.executable();
         if (!executable)
-          throw new Error("Install Grok's CLI first: npm install -g @xai-official/grok");
+          throw new Error(`Install Grok's CLI first: ${agent.install}`);
         const plugin = skills ? ["--plugin-dir", skills] : [];
         const argv = plan ? [executable, "--permission-mode", "plan", "agent", ...plugin, "stdio"] : approvesAll ? [executable, "agent", ...plugin, "--always-approve", "stdio"] : [executable, "--permission-mode", "default", "agent", ...plugin, "stdio"];
         return { argv, env: agent.env() };
@@ -8104,7 +8004,7 @@ import { createHash as createHash4 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync15, statSync as statSync5 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname6, join as join16, resolve as resolve4 } from "path";
+import { dirname as dirname5, join as join16, resolve as resolve4 } from "path";
 import { fileURLToPath } from "url";
 
 // Agents/src/handover.ts
@@ -9059,7 +8959,7 @@ var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "gl
 function ownPlaces() {
   const places4 = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join16(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places4.push(join16(dirname6(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places4.push(join16(dirname5(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places4, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces()) {
@@ -9069,7 +8969,7 @@ function outsidePaths(ask, directory, attached, own = ownPlaces()) {
   return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
 }
 function outsideAsk(ask, paths) {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join16(dirname6(path), "*")))], unclassified: false };
+  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join16(dirname5(path), "*")))], unclassified: false };
 }
 function partsOf(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
@@ -10696,7 +10596,7 @@ function ownWords(message) {
 }
 
 // Agents/src/groups/store.ts
-import { existsSync as existsSync12, mkdirSync as mkdirSync13, readdirSync as readdirSync6, readFileSync as readFileSync16, renameSync as renameSync6, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync13, readdirSync as readdirSync6, readFileSync as readFileSync16, renameSync as renameSync5, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "fs";
 import { join as join17 } from "path";
 
 // Agents/src/groups/rules.ts
@@ -11312,7 +11212,7 @@ var text = (file) => {
 };
 function write(file, value) {
   writeFileSync11(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
-  renameSync6(file + ".new", file);
+  renameSync5(file + ".new", file);
 }
 
 class GroupStore {
@@ -11360,17 +11260,17 @@ class GroupStore {
   }
   setAwake(id, awake) {
     const file = join17(this.folder(id), "awake");
-    if (awake && !existsSync12(file) && existsSync12(this.folder(id)))
+    if (awake && !existsSync11(file) && existsSync11(this.folder(id)))
       writeFileSync11(file, "");
     if (!awake)
       rmSync10(file, { force: true });
   }
   trash(id, trash) {
-    if (!existsSync12(this.folder(id)))
+    if (!existsSync11(this.folder(id)))
       return;
     const into = join17(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync13(into, { recursive: true, mode: 448 });
-    renameSync6(this.folder(id), join17(into, id));
+    renameSync5(this.folder(id), join17(into, id));
   }
   settings() {
     const value = read(join17(this.root, "settings.json"));
@@ -11423,7 +11323,7 @@ class GroupStore {
   writeFile(path, contents) {
     mkdirSync13(join17(path, ".."), { recursive: true });
     writeFileSync11(path + ".new", contents, { mode: 384 });
-    renameSync6(path + ".new", path);
+    renameSync5(path + ".new", path);
   }
   removeFile(path) {
     rmSync10(path, { force: true });
@@ -11870,6 +11770,19 @@ function handler(context) {
           }
           return json2({ data: result });
         }
+        if (b === "install" && method === "POST") {
+          if (!agent.installProgram)
+            return error2(400, `Install ${agent.name} the way its maker says.`);
+          const result = await agent.installProgram();
+          if (result.installed) {
+            for (const each of roster.all())
+              if (each.id === agent.id)
+                each.programUpdated?.();
+            emit("integration.updated", { integrationID: agent.providerID });
+            emit("model.updated", {});
+          }
+          return json2({ data: result });
+        }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut)
             return error2(400, `Sign out of ${agent.name} where you signed in.`);
@@ -12139,7 +12052,7 @@ ${all}`;
 }
 
 // Agents/src/store.ts
-import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync17, renameSync as renameSync7, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync12 } from "fs";
+import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync17, renameSync as renameSync6, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync12 } from "fs";
 import { join as join18 } from "path";
 
 class Store {
@@ -12217,7 +12130,7 @@ class Store {
     ]) {
       const file = join18(folder, name);
       writeFileSync12(file + ".new", JSON.stringify(value));
-      renameSync7(file + ".new", file);
+      renameSync6(file + ".new", file);
     }
   }
 }
@@ -13731,6 +13644,10 @@ process.on("uncaughtException", (error3) => {
   process.exit(1);
 });
 var deps = new Deps(join19(home2, "runtime"), join19(home2, "cache"));
+if (onMachine) {
+  dropOwnPrograms(join19(home2, "runtime"));
+  refreshLoginPath();
+}
 rmSync12(join19(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
 var roster = new Roster(new Accounts(home2), context);
@@ -13785,7 +13702,7 @@ try {
 var record = onMachine ? join19(machineHome, "run", "bridge.json") : undefined;
 if (record) {
   writeFileSync13(record + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
-  renameSync8(record + ".new", record);
+  renameSync7(record + ".new", record);
 }
 var stopping = false;
 function stop() {
@@ -13817,4 +13734,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 98083cb483ad69939ff4a498657a68756a3b6b4fd7a46a8a385d18f9cb66ea70
+// Built from Agents/src 2ad8fd8e493d8219b7900267d08ed201b31aff6b7761324b5d3572ffe7f5c177

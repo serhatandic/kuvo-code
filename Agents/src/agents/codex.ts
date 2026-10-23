@@ -15,12 +15,11 @@ import { kuvoTools, toolServerName } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
 import { newID } from "../ids"
-import { installCodex, codexProgram, managedNote, onMachine, ownFoldersConfig } from "../machine"
-import { maintenance, update, type MaintenanceDefinition } from "../maintenance"
+import { onMachine, ownFoldersConfig } from "../machine"
+import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
 import { RPC, RPCError } from "../rpc"
 import { engineSkills, skillsFolder, skillsFor, turnedOff, upward, within } from "../skills"
-import { afterInstall } from "../signin"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
 
@@ -33,8 +32,8 @@ export class CodexAgent implements Agent {
   get name() {
     return accountName("Codex", this.instance)
   }
-  // (On a machine, Kuvo Code installs it.)
-  install = onMachine ? undefined : "npm install -g @openai/codex"
+  /** OpenAI's installer, as its docs give it (it needs no Node). */
+  install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
   private server?: RPC
 
   /** Its app-server while one runs (none is started for this). */
@@ -65,7 +64,7 @@ export class CodexAgent implements Agent {
   }
 
   executable(): string | undefined {
-    return onMachine ? codexProgram(this.context.deps) : which("codex", places)
+    return which("codex", places)
   }
 
   /** Its own installer puts it in `~/.codex`: `codex update`. */
@@ -77,14 +76,18 @@ export class CodexAgent implements Agent {
 
   async maintenance(fresh = false) {
     const definition = this.definition
-    return definition && !onMachine ? maintenance(definition, fresh) : {}
+    return definition ? maintenance(definition, fresh) : {}
   }
 
   async update() {
-    if (onMachine) return { updated: false, message: managedNote }
     const definition = this.definition
     if (!definition) return { updated: false, message: "Codex isn't installed." }
     return update(definition, this.context.temporary)
+  }
+
+  /** Its program, with OpenAI's installer. */
+  async installProgram() {
+    return install("Codex", this.install, this.context.temporary, () => this.executable())
   }
 
   /** The app-server still running the old Codex. */
@@ -148,9 +151,8 @@ export class CodexAgent implements Agent {
   }
 
   private async start(): Promise<RPC> {
-    // On a machine, Kuvo Code's own copy, installed the first time it's needed.
-    const executable = onMachine ? await installCodex(this.context.deps) : this.executable()
-    if (!executable) throw new Error("Install Codex first: npm install -g @openai/codex")
+    const executable = this.executable()
+    if (!executable) throw new Error(`Install Codex first: ${this.install}`)
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
     // own. (On a machine, nothing of the machine's own Codex.)
     if (this.instance.home && !onMachine) shadowHome(this.instance.home)
@@ -275,7 +277,6 @@ export class CodexAgent implements Agent {
   private early = new Map<string, { at: number; events: [string, any][] }>()
 
   async account(fresh = false): Promise<Account> {
-    if (!this.executable() && onMachine) return { installed: true, signedIn: false, message: "Sign in to Codex with ChatGPT or an OpenAI API key. Kuvo Code installs it on this machine first." }
     if (!this.executable()) return { installed: false, signedIn: false, message: "Install Codex, then sign in here." }
     if (!fresh && this.accountCache && Date.now() - this.accountCache.at < 30_000) return this.accountCache.account
     const rpc = await this.rpc()
@@ -298,11 +299,6 @@ export class CodexAgent implements Agent {
   readonly signsInRemotely = true
 
   async signIn(_methodID = "chatgpt", options: SignInOptions = {}): Promise<SignInAttempt> {
-    // On a machine without it yet: installed first, said at once.
-    if (onMachine && !codexProgram(this.context.deps)) return afterInstall("Installing Codex on this machine…", "Finish signing in with ChatGPT in your browser.", false, async () => {
-      await installCodex(this.context.deps)
-      return this.signIn(_methodID, options)
-    })
     const rpc = await this.rpc()
     // On another device: a code to enter on ChatGPT's page, as `codex login --device-auth` has it.
     if (options.remote) {

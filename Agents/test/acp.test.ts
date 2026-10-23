@@ -146,9 +146,6 @@ class TestGrok extends GrokAgent {
   override executable() {
     return this.launcher
   }
-  override async installedProgram() {
-    return this.launcher
-  }
   override async account() {
     return { installed: true, signedIn: true }
   }

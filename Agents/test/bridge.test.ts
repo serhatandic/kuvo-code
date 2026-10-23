@@ -9,7 +9,7 @@ import { noTokens, type ServerEvent } from "../src/wire"
 import { unwrapShell } from "../src/agents/codex"
 import { fileDiff, fromPatch, unified } from "../src/diff"
 import { messageID, newID } from "../src/ids"
-import { compareVersions, homebrewKeg, npmGlobalPrefix, versionIn } from "../src/maintenance"
+import { compareVersions, homebrewKeg, install, npmGlobalPrefix, versionIn } from "../src/maintenance"
 import { evaluate, matches } from "../src/rules"
 import { handover } from "../src/handover"
 import { EngineAgent, EngineLink } from "../src/engine"
@@ -18,7 +18,8 @@ import { kuvoToolName, loadKuvoTools, setToolServer } from "../src/kuvotools"
 import { pictureData, pictureFile, withPictures } from "../src/pictures"
 import { expandCommand } from "../src/server"
 import { commandParts, parseCommands, withTextFiles } from "../src/sessions"
-import { afterInstall, commandSignIn } from "../src/signin"
+import { which } from "../src/proc"
+import { commandSignIn } from "../src/signin"
 
 describe("diffs", () => {
   test("a changed line, with the lines around it", () => {
@@ -114,6 +115,28 @@ describe("keeping an agent's program current", () => {
     expect(homebrewKeg("/opt/homebrew/Caskroom/codex/0.159.3/bin/codex")).toEqual({ kind: "cask", name: "codex", prefix: "/opt/homebrew" })
     expect(homebrewKeg("/usr/local/Cellar/gh/2.80.0/bin/gh")).toEqual({ kind: "formula", name: "gh", prefix: "/usr/local" })
     expect(homebrewKeg("/Users/me/.local/share/claude/versions/2.1.156")).toBeUndefined()
+  })
+
+  test("installing with its maker's command: there after it, with its version, or why not", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-install-"))
+    // Your login shell's PATH isn't read here.
+    const remote = process.env.KUVO_AGENTS_REMOTE
+    process.env.KUVO_AGENTS_REMOTE = "1"
+    try {
+      const bin = join(folder, "bin")
+      const command = `mkdir -p bin && printf '#!/bin/sh\\necho "fake 1.4.2"\\n' > bin/fake && chmod +x bin/fake`
+      const installed = await install("Fake", command, folder, () => which("fake", [bin]))
+      expect(installed).toEqual({ installed: true, version: "1.4.2" })
+
+      const failed = await install("Other", "echo 'curl: (6) Could not resolve host' >&2; exit 6", folder, () => which("other", [bin]))
+      expect(failed.installed).toBe(false)
+      expect(failed.message).toContain("Other isn't installed after")
+      expect(failed.message).toContain("Could not resolve host")
+    } finally {
+      if (remote === undefined) delete process.env.KUVO_AGENTS_REMOTE
+      else process.env.KUVO_AGENTS_REMOTE = remote
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })
 
@@ -221,19 +244,6 @@ exit 1
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
-  })
-
-  test("a device code still reaches the other device when its agent is installed first", async () => {
-    let installed!: () => void
-    const done = new Promise<void>((resolve) => (installed = resolve))
-    const sign = afterInstall("Installing Codex…", "Finish signing in with ChatGPT in your browser.", false, async () => {
-      await done
-      return { url: "https://auth.openai.com/codex/device", instructions: "Enter the code on that page.", mode: "auto", userCode: "ABCD-1234", status: () => ({ status: "pending" }), cancel: () => {} }
-    })
-    expect(sign.status()).toEqual({ status: "pending", message: "Installing Codex…" })
-    installed()
-    await Bun.sleep(10)
-    expect(sign.status()).toMatchObject({ status: "pending", url: "https://auth.openai.com/codex/device", instructions: "Enter the code on that page.", userCode: "ABCD-1234" })
   })
 
   async function settled(sign: Awaited<ReturnType<typeof attempt>>) {

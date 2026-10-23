@@ -408,10 +408,19 @@ itself. A host serves:
     any; `PATCH …/accounts/<provider> {label}`; `DELETE …/accounts/<provider>`.
     `metadata.signInEnded` true: its maker ended the sign-in; mark the account (the Mac says
     "Sign-in ended") and offer to sign in again.
+  - Installing and updating an agent's program (Claude Code, Codex, Grok), on the computer the
+    bridge is on: `metadata.installed` false, with `metadata.install` the maker's installer
+    command; `POST kuvo/agents/api/integration/<provider>/install` runs it (a few minutes at most)
+    → `{data: {installed, version?, message?}}` (`message`: why not, in the installer's words).
+    `metadata.outdated` with `version` and `latestVersion`, and `metadata.updates` true when the
+    installer that owns it can update it (`updateCommand`, as typed): `POST …/<provider>/update` →
+    `{data: {updated, version?, message?}}`. Either one done, `integration.updated` and
+    `model.updated` follow. One program serves every account with it, so update one per
+    computer; Update All updates each outdated one on every computer.
   - Signing in to an agent: `POST kuvo/agents/api/integration/<provider>/connect/oauth {methodID,
     remote}` → `{data: {attemptID, url, instructions, mode, acceptsCode?, userCode?, time}}`; `GET
     …/connect/oauth/<attempt>` → its status (`pending`, with `url`, `instructions`, `userCode` and
-    `message` as they come, for an agent installed first;
+    `message` as they come, for an agent downloaded first, Antigravity;
     `complete`; `failed` with `message`; `expired`); `POST …/connect/oauth/<attempt>/complete
     {code}` for one with `acceptsCode`; `DELETE …/connect/oauth/<attempt>` to give up. A key:
     `POST …/connect/key {key}`. With `remote: true` the page is for another device (the phone),

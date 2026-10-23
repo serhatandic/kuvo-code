@@ -236,6 +236,18 @@ export function handler(context: Context) {
           }
           return json({ data: result })
         }
+        // Its program installed with its maker's installer (the command `metadata.install` shows),
+        // as you'd run it in Terminal; then what it lists.
+        if (b === "install" && method === "POST") {
+          if (!agent.installProgram) return error(400, `Install ${agent.name} the way its maker says.`)
+          const result = await agent.installProgram()
+          if (result.installed) {
+            for (const each of roster.all()) if (each.id === agent.id) each.programUpdated?.()
+            emit("integration.updated", { integrationID: agent.providerID })
+            emit("model.updated", {})
+          }
+          return json({ data: result })
+        }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut) return error(400, `Sign out of ${agent.name} where you signed in.`)
           await agent.signOut()
