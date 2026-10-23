@@ -131,6 +131,15 @@ import Testing
         #expect(AlsoApply.translated(AlsoApply.net(command.changes), onto: [:], to: "lab").isEmpty, "no command there with only a description")
     }
 
+    /// The engine's own agents are on every computer, named in its settings or not: Plan's model,
+    /// or the Titles model, set here goes to a computer whose settings don't name them yet.
+    @Test func aBuiltInAgentsFieldGoesAnywhere() throws {
+        let here = try config([:])
+        here.set(.string("anthropic/sonnet"), at: ["agents", "plan", "model"])
+        here.set(.string("openai/mini"), at: ["agents", "title", "model"])
+        #expect(Set(AlsoApply.translated(AlsoApply.net(here.changes), onto: [:], to: "lab").map(\.path)) == [["agents", "plan", "model"], ["agents", "title", "model"]])
+    }
+
     @Test func whatsAppliedIsntOfferedBack() throws {
         let there = try config([:])
         there.set([(["model"], .string("anthropic/sonnet"))], noted: false)

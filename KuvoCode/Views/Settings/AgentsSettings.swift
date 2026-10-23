@@ -17,8 +17,8 @@ struct AgentsSettings: View {
 
     /// The engine's own agents that people see; the hidden ones (titles, summaries) aren't
     /// listed, but their models can be set above.
-    static let builtIn = ["build", "plan", "general", "explore"]
-    static let hiddenBuiltIn: Set = ["compaction", "title", "summary"]
+    static let builtIn = BuiltInAgents.shown
+    static let hiddenBuiltIn = BuiltInAgents.hidden
 
     /// Built-in ones first, then yours: from the engine's list and from the settings (one
     /// that's turned off is only there).

@@ -62,6 +62,15 @@ nonisolated enum ClaudeCode {
     }
 }
 
+/// The engine's own agents, on every computer whether its settings name them or not: the ones
+/// people pick and hand work to, and the hidden ones that write titles, summaries and compactions.
+nonisolated enum BuiltInAgents {
+    static let shown = ["build", "plan", "general", "explore"]
+    static let hidden: Set = ["compaction", "title", "summary"]
+
+    static func contains(_ id: String) -> Bool { shown.contains(id) || hidden.contains(id) }
+}
+
 /// Claude Code's subagents (~/.claude/agents), to bring over as the engine's subagents.
 nonisolated enum ClaudeAgents {
     struct Agent: Identifiable, Sendable {
@@ -72,8 +81,6 @@ nonisolated enum ClaudeAgents {
         var instructions: String
     }
 
-    /// The engine's own agents, which an imported one mustn't replace.
-    private static let reserved: Set = ["build", "plan", "general", "explore", "compaction", "title", "summary"]
 
     static func load(from folder: URL = ClaudeCode.folder.appending(path: "agents")) -> [Agent] {
         ClaudeCode.files(in: folder).compactMap { parse($0.text, fallbackName: $0.name) }
@@ -85,7 +92,8 @@ nonisolated enum ClaudeAgents {
         let name = fields["name"].flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName
         var id = ClaudeCode.id(name)
         guard !id.isEmpty else { return nil }
-        if reserved.contains(id) { id += "-claude" }
+        // Not in place of one of the engine's own.
+        if BuiltInAgents.contains(id) { id += "-claude" }
         // Claude Code writes "\n" for line breaks in a one-line description.
         let description = (fields["description"] ?? "").replacingOccurrences(of: "\\n", with: "\n")
         return Agent(id: id, name: name, description: description, instructions: body)

@@ -70,10 +70,12 @@ enum AlsoApply {
         return result
     }
 
-    /// The named entry (an MCP server, an agent, a command) `path` is a field of, when it's one.
+    /// The named entry (an MCP server, an agent, a command) `path` is a field of, when it's one
+    /// a computer may not have. (The engine's own agents are on every one, named or not.)
     static func entry(of path: [String]) -> [String]? {
         switch path.first {
         case "mcp" where path.count >= 4 && path[1] == "servers": Array(path.prefix(3))
+        case "agents" where path.count >= 3 && BuiltInAgents.contains(path[1]): nil
         case "agents", "commands": path.count >= 3 ? Array(path.prefix(2)) : nil
         default: nil
         }
