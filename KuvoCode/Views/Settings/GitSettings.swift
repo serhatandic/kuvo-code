@@ -121,9 +121,15 @@ struct WorktreesSettings: View {
                 }
             }
         }
+        // A machine's as it keeps them now (one made there from a phone, say).
+        .task(id: box.machine) { if let machine = box.machine { await workspace.takeWorktrees(from: machine) } }
         .task(id: trees.map(\.tree.root)) {
-            // A machine's take room there, not here.
-            let roots = box.machine == nil ? trees.map(\.tree.root) : []
+            // A machine's take room there: it says how much.
+            if let machine = box.machine {
+                sizes = await workspace.worktreeSizes(on: machine)
+                return
+            }
+            let roots = trees.map(\.tree.root)
             sizes = await Task.detached {
                 Dictionary(uniqueKeysWithValues: roots.map { ($0, StorageReport.size(of: URL(filePath: $0))) })
             }.value

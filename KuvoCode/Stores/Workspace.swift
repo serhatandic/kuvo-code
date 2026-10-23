@@ -750,8 +750,16 @@ final class Workspace {
     }
 
     /// A new worktree of the project's repository on a branch of its own, set up by the
-    /// project's setup command. Returns the folder for the session to run in.
+    /// project's setup command. Returns the folder for the session to run in. A machine's
+    /// project's is the machine's own (`onBox`).
     private func makeWorktree(of directory: String) async throws -> String {
+        if let remote = RemoteFolder.parse(directory) {
+            let made: BoxWorktree = try await onBox(remote.machine, "POST", "kuvo/worktrees", ["project": remote.path, "branchPrefix": GitPreferences.branchPrefix])
+            let folder = RemoteFolder.folder(made.folder ?? made.root, on: remote.machine)
+            worktrees[folder] = Worktree(project: directory, root: RemoteFolder.folder(made.root, on: remote.machine), branch: made.branch, base: made.base)
+            saveWorktrees()
+            return folder
+        }
         guard let api = api(forFolder: directory) else { throw CancellationError() }
         let project = try await api.location(directory: directory).project
         let (base, subpath) = await Task.detached { (Git.currentBranch(in: directory), Git.pathInRepository(of: directory)) }.value
@@ -776,10 +784,14 @@ final class Workspace {
     /// A worktree made for a session that wasn't: removed, with its branch, and not recorded as
     /// one you removed.
     func discardWorktree(_ folder: String) async {
-        guard let tree = worktrees[folder], let api = api(forFolder: tree.project),
-              let project = try? await api.location(directory: tree.project).project else { return }
-        try? await api.removeWorktree(project: project.id, directory: tree.root, force: true)
-        _ = await Task.detached { Git.run(["branch", "-D", tree.branch], in: tree.project) }.value
+        guard let tree = worktrees[folder] else { return }
+        if let remote = RemoteFolder.parse(tree.root) {
+            let _: Empty? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "forget": true])
+        } else {
+            guard let api = api(forFolder: tree.project), let project = try? await api.location(directory: tree.project).project else { return }
+            try? await api.removeWorktree(project: project.id, directory: tree.root, force: true)
+            _ = await Task.detached { Git.run(["branch", "-D", tree.branch], in: tree.project) }.value
+        }
         worktrees = worktrees.filter { $0.value.root != tree.root }
         saveWorktrees()
     }
@@ -794,7 +806,14 @@ final class Workspace {
         guard !slug.isEmpty else { return }
         Task {
             let prefix = GitPreferences.branchPrefix
-            guard let renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value else { return }
+            let renamed: String?
+            if let remote = RemoteFolder.parse(tree.root) {
+                let answer: BoxWorktree.Renamed? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/rename", ["path": remote.path, "branch": prefix + slug])
+                renamed = answer?.branch
+            } else {
+                renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value
+            }
+            guard let renamed else { return }
             for (key, value) in worktrees where value.root == tree.root { worktrees[key]?.branch = renamed }
             saveWorktrees()
             if let tree = worktrees[folder] {
@@ -814,25 +833,99 @@ final class Workspace {
     /// `discardingChanges` (you were told they go); without, one that has some stays. Its branch
     /// stays with its commits, unless it's merged already. Never while an agent works in it.
     func removeWorktree(_ directory: String, discardingChanges: Bool = true) async throws {
-        guard let api = api(forFolder: directory), let tree = worktrees[directory] else { return }
+        guard let tree = worktrees[directory] else { return }
+        guard let api = api(forFolder: directory) else {
+            // The machine removes it, with its engine.
+            if let machine = RemoteFolder.machine(of: tree.root) {
+                throw GitFailure(message: "\(machine) isn’t connected, so the worktree of \(tree.branch) can’t be removed now.")
+            }
+            return
+        }
         // Looked at again now: an agent may have written more since you were asked.
         // Any session there, opened or not, with its subagents and background commands.
         if sessions.contains(where: { worktrees[$0.location.directory]?.root == tree.root && isWorking($0.id) }) {
             throw GitFailure(message: "An agent is still working in the worktree of \(tree.branch), so it stays. Stop it first, then remove the worktree.")
         }
-        if !discardingChanges, await Task.detached(operation: { Git.hasUncommittedChanges(in: tree.root, includingHidden: true) }).value {
-            throw GitFailure(message: "The worktree of \(tree.branch) has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.")
+        if let remote = RemoteFolder.parse(tree.root) {
+            // The machine's own: it checks the same, and removes it as for a phone.
+            let _: Empty = try await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "discard": discardingChanges])
+        } else {
+            if !discardingChanges, await Task.detached(operation: { Git.hasUncommittedChanges(in: tree.root, includingHidden: true) }).value {
+                throw GitFailure(message: "The worktree of \(tree.branch) has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.")
+            }
+            let project = try await api.location(directory: tree.project).project
+            // Forced only when you were told its changes go: otherwise git itself keeps one that has some.
+            try await api.removeWorktree(project: project.id, directory: tree.root, force: discardingChanges)
+            // Git deletes only a branch that's merged.
+            _ = await Task.detached { Git.run(["branch", "-d", tree.branch], in: tree.project) }.value
         }
-        let project = try await api.location(directory: tree.project).project
-        // Forced only when you were told its changes go: otherwise git itself keeps one that has some.
-        try await api.removeWorktree(project: project.id, directory: tree.root, force: discardingChanges)
-        // Git deletes only a branch that's merged.
-        _ = await Task.detached { Git.run(["branch", "-d", tree.branch], in: tree.project) }.value
         for (folder, removed) in worktrees where removed.root == tree.root { removedWorktrees[folder] = removed.project }
         UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees")
         worktrees = worktrees.filter { $0.value.root != tree.root }
         saveWorktrees()
         Analytics.shared.track("worktree_removed")
+    }
+
+    /// A machine's worktrees as it keeps them, read as it connects: this Mac shows them from
+    /// then on. Ones this Mac made there before the machine kept them are handed over first, once.
+    func takeWorktrees(from machine: String) async {
+        guard let kept: BoxWorktree.Kept = try? await onBox(machine, "GET", "kuvo/worktrees?records=1", nil) else { return }
+        var records = kept.worktrees
+        if !kept.kept {
+            for (folder, tree) in worktrees where RemoteFolder.machine(of: tree.root) == machine {
+                guard let project = RemoteFolder.parse(tree.project)?.path, let root = RemoteFolder.parse(tree.root)?.path,
+                      let path = RemoteFolder.parse(folder)?.path else { continue }
+                var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
+                if let base = tree.base { record["base"] = base }
+                let _: Empty? = try? await onBox(machine, "POST", "kuvo/worktrees/record", record)
+                records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
+            }
+        }
+        var mine = worktrees.filter { RemoteFolder.machine(of: $0.value.root) != machine }
+        for record in records {
+            mine[RemoteFolder.folder(record.folder ?? record.root, on: machine)] = Worktree(
+                project: RemoteFolder.folder(record.project, on: machine), root: RemoteFolder.folder(record.root, on: machine), branch: record.branch, base: record.base)
+        }
+        if mine != worktrees {
+            worktrees = mine
+            saveWorktrees()
+        }
+    }
+
+    /// The room a machine's worktrees take there, by root (as this Mac names them); none when it
+    /// can't say.
+    func worktreeSizes(on machine: String) async -> [String: Int64] {
+        struct Listed: Decodable {
+            struct Entry: Decodable { var path: String; var size: Int64? }
+            var worktrees: [Entry]
+        }
+        guard let listed: Listed = try? await onBox(machine, "GET", "kuvo/worktrees", nil) else { return [:] }
+        return Dictionary(listed.worktrees.compactMap { entry in entry.size.map { (RemoteFolder.folder(entry.path, on: machine), $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths.
+    struct BoxWorktree: Codable {
+        var project: String
+        var root: String
+        var folder: String?
+        var branch: String
+        var base: String?
+
+        struct Renamed: Decodable { var branch: String }
+        struct Kept: Decodable { var worktrees: [BoxWorktree]; var kept: Bool }
+    }
+
+    private struct Empty: Decodable {}
+
+    /// A request to `machine`'s box (`MachineBox.route`): its answer, or what it said when it
+    /// said no.
+    private func onBox<Answer: Decodable>(_ machine: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
+        let (status, data) = try await MachineBox.route(method, path, body: body, on: SSHConnection(destination: machine))
+        guard (200..<300).contains(status) else {
+            let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            throw GitFailure(message: said ?? "\(machine) said no (\(status)).")
+        }
+        return try JSONDecoder().decode(Answer.self, from: data)
     }
 
     private static func loadWorktrees() -> [String: Worktree] {

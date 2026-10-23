@@ -22,7 +22,7 @@ for Linux's tools).
 | B5 Review the changes, comment on a line, send the comments | SessionEditsTests, SentMessageTests, DraftsTests | |
 | B6 Undo a turn, then change your mind | ComposerReturnsTests, AttachmentsTests, UndoRedoTests | |
 | B7 Commit with a message, push, make a branch | ChangesCommitTests, ChangesDiscardTests, ChangesStagingTests, ChangesFileNamesTests | |
-| B8 A session in a worktree, merged back | WorktreeSessionTests, GitBranchesTests | |
+| B8 A session in a worktree, merged back; a machine's worktrees kept by the machine | WorktreeSessionTests, GitBranchesTests, the bridge's worktrees.test.js | making one on a machine from the Mac (by hand, on a test machine) |
 | B9 Plan first, then Build It | AgentAsksTests | |
 | B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |
 | B11, L38 The agent asks questions, answered in the card or skipped | AgentAsksTests | |

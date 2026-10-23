@@ -255,6 +255,18 @@ import Testing
         #expect(gone?["uncommitted"] == nil && gone?["ahead"] == nil && gone?["size"] == nil)
     }
 
+    /// A machine's worktree, while the machine isn't connected: removing it says so, and it stays.
+    @Test func aMachinesWorktreeWaitsForItsMachine() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: "worktrees") }
+        let folder = RemoteFolder.folder("/home/me/worktrees/brave-otter", on: "lab")
+        let tree = Workspace.Worktree(project: RemoteFolder.folder("/home/me/shop", on: "lab"), root: folder, branch: "kuvo/brave-otter", base: "main")
+        UserDefaults.standard.set(try JSONEncoder().encode([folder: tree]), forKey: "worktrees")
+        let remembered = Workspace()
+        let said = await #expect(throws: GitFailure.self) { try await remembered.removeWorktree(folder) }
+        #expect(said?.message == "lab isn’t connected, so the worktree of kuvo/brave-otter can’t be removed now.")
+        #expect(remembered.worktrees[folder] == tree)
+    }
+
     /// While its agent works there, the worktree stays, whatever you were told.
     @Test func notRemovedWhileItsAgentWorks() async throws {
         defer { done() }

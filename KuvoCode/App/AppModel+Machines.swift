@@ -400,6 +400,8 @@ extension AppModel {
         // Bots it made, changed or deleted while this Mac was away, taken in (first, so a deleted
         // one's keys don't go back); and what it needs to make them itself.
         if live(engine) { await bots.adoptMade(on: engine.machine.id) }
+        // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
+        if live(engine) { await workspace.takeWorktrees(from: engine.machine.id) }
         // Its bots' keys of their own are its own: any this Mac kept from before go to it, and its
         // bots' folders' settings follow its integrations as they are now.
         if live(engine) { await BotKeys.applyAll(on: engine.machine.id, app: self) }
