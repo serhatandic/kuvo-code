@@ -35,4 +35,17 @@ import Testing
         // Its URL from before comes back with it.
         #expect(MCPSettings.switched(back.settings, to: "remote", putAside: back.putAside)?.settings["url"] == .string("https://example.com/mcp"))
     }
+
+    /// The address you type for a server on the web, as it's saved: one with its scheme as it is;
+    /// without, https (http for this computer's own); one that isn't an address, nothing (what was
+    /// there stays).
+    @Test func aServersAddressAsItsSaved() {
+        #expect(MCPSettings.webAddress("https://mcp.example.com/sse") == "https://mcp.example.com/sse")
+        #expect(MCPSettings.webAddress("  mcp.example.com/sse ") == "https://mcp.example.com/sse")
+        #expect(MCPSettings.webAddress("localhost:3000/mcp") == "http://localhost:3000/mcp")
+        #expect(MCPSettings.webAddress("127.0.0.1:8080") == "http://127.0.0.1:8080")
+        #expect(MCPSettings.webAddress("") == nil)
+        #expect(MCPSettings.webAddress("not an address") == nil)
+        #expect(MCPSettings.webAddress("ftp://example.com") == nil)
+    }
 }

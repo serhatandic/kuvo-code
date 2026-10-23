@@ -264,7 +264,14 @@ private struct ServerEditor: View {
     @State private var confirmsRemoval = false
     /// "On the web" chosen for a server with no URL yet: nothing's written until you give one.
     @State private var pendingRemote = false
-    @State private var pendingURL = ""
+    /// The address as you type it, saved as `MCPSettings.webAddress` makes it once you're done.
+    @State private var address = ""
+    /// What you typed isn't an address: said under it, and what was saved stays.
+    @State private var addressProblem = false
+    @FocusState private var addressFocused: Bool
+
+    /// Where it runs: here (a command), on the web, or on the web once you give it a URL.
+    private enum Kind { case local, waitingForURL, web }
 
     private var config: EngineConfig { app.config(for: box) }
     /// Under headers and environment variables alike.
@@ -337,33 +344,39 @@ private struct ServerEditor: View {
     }
 
     @ViewBuilder private func editor(_ path: [String]) -> some View {
-        let isRemote = pendingRemote || config.value(at: path + ["type"])?.string == "remote"
+        let kind: Kind = pendingRemote ? .waitingForURL : config.value(at: path + ["type"])?.string == "remote" ? .web : .local
         Group {
             Section {
                 Picker("Runs", selection: Binding(
-                    get: { isRemote ? "remote" : "local" },
-                    set: { kind in
+                    get: { kind == .local ? "local" : "remote" },
+                    set: { picked in
                         // Back before a URL was given: nothing was written.
-                        if kind == "local", pendingRemote {
+                        if picked == "local", pendingRemote {
                             pendingRemote = false
-                            pendingURL = ""
+                            address = ""
+                            addressProblem = false
                         } else {
-                            switchKind(of: path, to: kind)
+                            switchKind(of: path, to: picked)
+                            // The address it had before comes back with it, shown as saved.
+                            address = config.value(at: path + ["url"])?.string ?? ""
+                            if pendingRemote { addressFocused = true }
                         }
                     }
                 )) {
-                    Text(box.machine == nil ? "On this Mac" : "On \(app.name(of: box))").tag("local")
+                    Text(box.machine == nil ? "On this Mac" : "On the machine").tag("local")
                     Text("On the web").tag("remote")
                 }
                 .pickerStyle(.segmented)
-                if pendingRemote {
+                if kind != .local {
                     SettingsTextRow(title: "URL") {
-                        TextField("URL", text: $pendingURL, prompt: Text(verbatim: "https://example.com/mcp"))
-                            .onSubmit { saveURL(path) }
-                            .onDisappear { saveURL(path) }
+                        TextField("URL", text: $address, prompt: Text(verbatim: "https://example.com/mcp"))
+                            .focused($addressFocused)
+                            .onSubmit { saveAddress(path) }
+                            .onDisappear { saveAddress(path) }
+                            .onChange(of: address) { addressProblem = false }
                     }
-                } else if isRemote {
-                    ConfigTextField(title: "URL", path: path + ["url"], prompt: "https://example.com/mcp")
+                }
+                if kind == .web {
                     // Sign-in set up by hand (an object) isn't this switch's to replace.
                     let customSignIn = config.value(at: path + ["oauth"])?.object != nil
                     Toggle(isOn: customSignIn ? .constant(true) : Binding(
@@ -392,12 +405,15 @@ private struct ServerEditor: View {
                     Text("Code Mode: the agent looks up this server's tools and combines several in one step, which keeps each message small for a server with many tools. Smaller models may not find its tools this way.")
                 }
             } footer: {
-                if pendingRemote {
+                if addressProblem {
+                    Text("That isn’t a web address. Give one like https://example.com/mcp.")
+                        .foregroundStyle(.red)
+                } else if kind == .waitingForURL {
                     Text("Add its URL to save it.")
                         .foregroundStyle(.secondary)
                 }
             }
-            if isRemote, !pendingRemote {
+            if kind == .web {
                 Section {
                     ConfigKeyValueList(path: path + ["headers"], keyPrompt: "Header, like Authorization", valuePrompt: "Value")
                 } header: {
@@ -405,7 +421,7 @@ private struct ServerEditor: View {
                 } footer: {
                     Self.keyNote
                 }
-            } else if !isRemote {
+            } else if kind == .local {
                 Section {
                     ConfigKeyValueList(path: path + ["environment"], keyPrompt: "Variable, like GITHUB_TOKEN", valuePrompt: "Value")
                 } header: {
@@ -418,8 +434,9 @@ private struct ServerEditor: View {
         .onAppear {
             command = Self.commandLine(config.value(at: path + ["command"]))
             shownCommand = command
+            address = config.value(at: path + ["url"])?.string ?? ""
             #if DEBUG
-            if ProcessInfo.processInfo.environment["KUVO_DEMO_MCP_SERVER"]?.hasSuffix("|web") == true { switchKind(of: path, to: "remote") }
+            if ProcessInfo.processInfo.environment["KUVO_DEMO_MCP_SERVER"] == "\(path.last ?? "")|web" { switchKind(of: path, to: "remote") }
             #endif
         }
         // A URL typed into a server that had none turns it on, as a command does. (Switching
@@ -440,17 +457,28 @@ private struct ServerEditor: View {
 
     private func close(_ path: [String]) {
         saveCommand(path)
-        saveURL(path)
+        saveAddress(path)
         done()
     }
 
-    /// The URL given for a server switched to "On the web": it's one now, and on.
-    private func saveURL(_ path: [String]) {
-        let url = pendingURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard pendingRemote, let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased()), parsed.host() != nil else { return }
-        pendingRemote = false
-        pendingURL = ""
-        switchKind(of: path, to: "remote", url: url)
+    /// The address you typed, saved as an address (`MCPSettings.webAddress`): for a server waiting
+    /// for one, it's on the web now, and on. One that isn't an address is said, and what was
+    /// saved stays (never a server on the web without one).
+    private func saveAddress(_ path: [String]) {
+        let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = config.value(at: path + ["url"])?.string
+        guard pendingRemote || config.value(at: path + ["type"])?.string == "remote", typed != (saved ?? "") || pendingRemote, !(typed.isEmpty && pendingRemote) else { return }
+        guard let url = MCPSettings.webAddress(typed) else {
+            addressProblem = true
+            return
+        }
+        address = url
+        if pendingRemote {
+            pendingRemote = false
+            switchKind(of: path, to: "remote", url: url)
+        } else if url != saved {
+            config.set(.string(url), at: path + ["url"])
+        }
     }
 
     /// Switches between running a command and connecting to a URL (`MCPSettings.switched`);
@@ -495,6 +523,19 @@ private struct ServerEditor: View {
 }
 
 extension MCPSettings {
+    /// What you typed for a server on the web, as an address to save: as it is with its scheme;
+    /// without one, https (http for this computer's own, `localhost`); nil for one that isn't an
+    /// address.
+    static func webAddress(_ typed: String) -> String? {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.contains(where: \.isWhitespace) else { return nil }
+        let local = ["localhost", "127.0.0.1", "[::1]"].contains { text.hasPrefix($0) }
+        let full = text.contains("://") ? text : (local ? "http://" : "https://") + text
+        guard let url = URL(string: full), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host(), !host.isEmpty, host.contains(".") || host == "localhost" || host.contains(":") else { return nil }
+        return full
+    }
+
     /// The fields only one kind of server has: a command and what it runs with, or a URL and how
     /// it signs in.
     static let kindFields = ["command", "cwd", "environment", "url", "headers", "oauth"]
