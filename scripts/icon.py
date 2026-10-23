@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Generates KuvoCode/AppIcon.icon, the app icon in Icon Composer's format.
 
-The icon is the team: Kuvo Code's five bot shapes (round, squircle, pebble, gem and bloom, as
-BotAvatar.swift draws them) standing together at the bottom of the tile, each in a bot colour
-and with two small eyes, all looking up the same way. The tile is cream in light mode and ink in
-dark mode; the bots keep their colours, with thin gaps between them. Each bot is its own flat
-layer, so macOS derives the clear and tinted styles from them. No glass, shine or shadow. Xcode
+The icon is the team: Kuvo Code's five bots (bloom, gem, pebble, squircle and round, as
+BotAvatar.swift draws them), each in its colour and with two eyes, packed together with the coral
+one in front, on a cream tile in light mode and a near-black one in dark mode. They have no outlines: each is softly lit from above, rounds off at
+its edges, has a fine matte grain, and is shaded where a bot in front of it overlaps it. Each bot
+is its own image layer, so macOS still derives the clear and tinted styles from them. Xcode
 compiles the file with the app.
 
-It also renders the README's docs/images/icon.png, the dark one, with Icon Composer's ictool,
-and, given their paths, writes the iPhone app's copy and the website's icon.svg and
-apple-touch-icon.png:
+It also renders the README's docs/images/icon.png with Icon Composer's ictool, and, given their
+paths, writes the iPhone app's copy and the website's icon.png, icon-dark.png and
+apple-touch-icon.png (the artwork itself, without the glass edge macOS adds):
 
     python3 scripts/icon.py [--phone ../kuvo-code-ios/KuvoCodeMobile/AppIcon.icon] [--web ../kuvo-web]
 
 Needs numpy and OpenCV (pip install numpy opencv-python), and Xcode for ictool.
 """
 import argparse
+import colorsys
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 
 import cv2
 import numpy as np
@@ -31,39 +31,37 @@ OUT = os.path.join(ROOT, "KuvoCode", "AppIcon.icon")
 README_ICON = os.path.join(ROOT, "docs", "images", "icon.png")
 ICTOOL = "/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"
 
-CREAM, INK = "#F1EDE5", "#17161B"
+# The tile, top and bottom: cream in light mode, near-black in dark mode.
+TILES = {"light": ("#F5F2EB", "#E8E3D9"), "dark": ("#1B1A20", "#0E0D11")}
 
-# The bots' colours, as BotLook.Tint has them, and the eyes BotFace draws on them: light on the
-# deep ones, dark on the rest.
+# The bots' colours, as BotLook.Tint has them, a little richer, and the eyes BotFace draws on
+# them: light on the deep ones, dark on the rest.
 TINTS = {
     "mint": (0.37, 0.78, 0.72), "sky": (0.31, 0.61, 0.96), "indigo": (0.36, 0.36, 0.94),
     "violet": (0.54, 0.36, 0.96), "pink": (0.93, 0.44, 0.71), "coral": (0.95, 0.45, 0.36),
     "orange": (0.96, 0.60, 0.24), "amber": (0.95, 0.76, 0.31), "lime": (0.55, 0.80, 0.31),
     "graphite": (0.43, 0.45, 0.50),
 }
+RICHER = 1.1
 DEEP = {"indigo", "violet", "graphite"}
-DARK_EYES, LIGHT_EYES = "#18191F", "#F7F5F0"
+DARK_EYES, LIGHT_EYES = "#141318", "#F6F2EA"
 
-# The team, back to front: shape, colour, centre, size, turn in degrees, on Icon Composer's
-# 1024-point canvas. They fill the tile to about an eighth from its top, and the three in front
-# run off the bottom edge, every face still whole. Their colours are those of the bots on the
-# website's banners: Sage, Lookout, Keeper and Tally, and a sky pebble.
+# The team, back to front: shape, colour, centre, size, turn in degrees, and its eyes (centre,
+# gap, width, height), on Icon Composer's 1024-point canvas. They fill the tile below a strip
+# along its top, the three in front run off its bottom edge, and every face is whole.
 TEAM = [
-    ("bloom", "violet", 320, 369, 468, -6),
-    ("gem", "amber", 712, 356, 468, 8),
-    ("pebble", "sky", 86, 776, 546, -4),
-    ("squircle", "mint", 864, 772, 559, 4),
-    ("round", "coral", 518, 733, 572, 0),
+    ("bloom", "violet", 280, 440, 700, -8, (330, 400, 100, 42, 100)),
+    ("gem", "amber", 770, 430, 620, 14, (762, 418, 86, 37, 84)),
+    ("pebble", "sky", 92, 790, 590, -6, (100, 780, 76, 33, 72)),
+    ("squircle", "mint", 932, 782, 580, 6, (930, 750, 76, 33, 72)),
+    ("round", "coral", 512, 852, 660, 0, (530, 762, 108, 42, 86)),
 ]
-GAP = 14                      # tile showing between one bot and the one in front of it
-EYES = 0.66                   # their faces, as a share of the app's
-LOOK = (0.09, -0.11)          # where they all look: right and up, as a share of their size
 
-# The shapes are drawn as signed distances (negative inside) on a grid twice the canvas, then
-# traced into paths.
+# Everything is drawn at twice the canvas, as signed distances (negative inside), then scaled
+# down for smooth edges.
 SS = 2
 N = 1024 * SS
-_gy, _gx = np.mgrid[0:N, 0:N].astype(np.float64)
+_gy, _gx = np.mgrid[0:N, 0:N].astype(np.float32)
 X, Y = (_gx + 0.5) / SS, (_gy + 0.5) / SS
 
 
@@ -88,8 +86,8 @@ def superellipse(x, y, a, b, n):
 
 
 def polygon(x, y, points):
-    d = np.full(x.shape, 1e9)
-    sign = np.ones(x.shape)
+    d = np.full(x.shape, 1e9, np.float32)
+    sign = np.ones(x.shape, np.float32)
     for (ax, ay), (bx, by) in zip(points[-1:] + points[:-1], points):
         px, py, ex, ey = x - ax, y - ay, bx - ax, by - ay
         h = np.clip((px * ex + py * ey) / (ex * ex + ey * ey), 0, 1)
@@ -130,69 +128,90 @@ def body(shape, x, y, s):
     raise ValueError(shape)
 
 
-def eyes(shape, x, y, s):
-    """Two eyes, as BotFace's calm face places them in its box."""
-    w, h = 0.5 * s, 0.3 * s
-    cx, cy = 0.04 * s, (0.12 if shape == "pebble" else -0.03) * s
-    a, b = w * 0.17 / 2, h * 0.62 / 2
-    return np.minimum(ellipse(x - (cx - 0.23 * w), y - cy, a, b), ellipse(x - (cx + 0.23 * w), y - cy, a, b))
+def coverage(d, soft=1.0):
+    """Antialiased coverage from a signed distance."""
+    return np.clip(0.5 - d * SS / soft, 0, 1).astype(np.float32)
 
 
-def team():
-    """Signed distances of what shows of each bot, back to front: (shape, colour, its body with
-    its eyes cut out and a gap cleared for every bot in front, its eyes)."""
-    placed = []
-    for shape, tint, cx, cy, s, deg in TEAM:
-        x, y = frame(cx, cy, deg)
-        placed.append((shape, tint, body(shape, x, y, s), eyes(shape, x - LOOK[0] * s, y - LOOK[1] * s, s * EYES)))
-    parts = []
-    for i, (shape, tint, own, face) in enumerate(placed):
-        shown = own
-        for _, _, front, _ in placed[i + 1:]:
-            shown = np.maximum(shown, GAP - front)
-        parts.append((shape, tint, np.maximum(shown, -face), np.maximum(face, shown)))
-    return parts
+def blur(a, sigma):
+    s = sigma * SS
+    return cv2.GaussianBlur(a, (int(s * 3) * 2 + 1,) * 2, s, borderType=cv2.BORDER_REFLECT)
 
 
-def sample(field, px, py):
-    gx, gy = px * SS - 0.5, py * SS - 0.5
-    x0, y0 = np.clip(np.floor(gx).astype(int), 0, N - 2), np.clip(np.floor(gy).astype(int), 0, N - 2)
-    fx, fy = gx - x0, gy - y0
-    return (field[y0, x0] * (1 - fx) * (1 - fy) + field[y0, x0 + 1] * fx * (1 - fy)
-            + field[y0 + 1, x0] * (1 - fx) * fy + field[y0 + 1, x0 + 1] * fx * fy)
+def smoothstep(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0, 1)
+    return t * t * (3 - 2 * t)
 
 
-def trace(d):
-    """The outlines of d < 0, moved onto the exact edge and thinned to what a curve needs.
-    Where the mark runs off the canvas, its outline is pushed past the edge."""
-    contours, _ = cv2.findContours((d < 0).astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-    gy, gx = np.gradient(d)
-    paths = []
-    for c in contours:
-        if len(c) < 12:
-            continue
-        grid = (c[:, 0, :].astype(np.float64) + 0.5) / SS
-        p = grid.copy()
-        for _ in range(3):
-            u, v = sample(gx, *p.T) * SS, sample(gy, *p.T) * SS
-            step = np.clip(sample(d, *p.T) / np.maximum(u * u + v * v, 1e-9), -1, 1)
-            p -= np.stack([step * u, step * v], 1)
-        k = 3
-        q = np.vstack([p[-k:], p, p[:k]])
-        p = np.stack([np.convolve(q[:, i], np.ones(2 * k + 1) / (2 * k + 1), mode="valid") for i in (0, 1)], 1)
-        edge = (grid < 1) | (grid > 1023)
-        p = np.where(edge, np.where(grid < 512, -4.0, 1028.0), p)
-        p = cv2.approxPolyDP(p.astype(np.float32).reshape(-1, 1, 2), 0.12, True).reshape(-1, 2)
-        paths.append(p)
-    return paths
+def noise(scale, seed, octaves):
+    """Smooth value noise in [0, 1], with features about `scale` points across."""
+    rng = np.random.default_rng(seed)
+    out = np.zeros((N, N), np.float32)
+    amp = total = 1.0
+    total = 0.0
+    for o in range(octaves):
+        cells = max(2, int(1024 / scale * 2 ** o))
+        out += cv2.resize(rng.random((cells + 1, cells + 1)).astype(np.float32), (N, N), interpolation=cv2.INTER_CUBIC) * amp
+        total += amp
+        amp *= 0.5
+    out /= total
+    return (out - out.min()) / (out.max() - out.min() + 1e-6)
 
 
-def path_data(paths, scale=1.0):
-    return " ".join("M" + " L".join(f"{x * scale:.2f},{y * scale:.2f}".replace(".00", "") for x, y in p) + "Z" for p in paths)
+def linear(hex_or_rgb):
+    c = np.array([int(hex_or_rgb[i:i + 2], 16) / 255 for i in (1, 3, 5)] if isinstance(hex_or_rgb, str) else hex_or_rgb, np.float32)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def hex_color(rgb):
-    return "#" + "".join(f"{round(v * 255):02X}" for v in rgb)
+def encoded(c):
+    c = np.clip(c, 0, None)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+
+
+def richer(rgb):
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+    return colorsys.hls_to_rgb(h, l, min(1, s * RICHER))
+
+
+def eye_pair(ex, ey, gap, w, h, deg):
+    a = np.deg2rad(deg)
+    dx, dy = np.cos(a) * gap / 2, np.sin(a) * gap / 2
+    return np.minimum(ellipse(*frame(ex - dx, ey - dy, deg), w / 2, h / 2),
+                      ellipse(*frame(ex + dx, ey + dy, deg), w / 2, h / 2))
+
+
+def layers():
+    """Each bot as its own image, back to front: (name, RGBA at 1024 px). A bot is lit from above,
+    rounds off at its edges, has a fine grain, and is shaded where the bots in front of it sit."""
+    grain = noise(1.4, seed=21, octaves=2) - 0.5
+    dither = (noise(0.6, seed=5, octaves=1) - 0.5) * (1.5 / 255)
+    shapes = []
+    for shape, tint, cx, cy, s, deg, eyes in TEAM:
+        d = body(shape, *frame(cx, cy, deg), s)
+        shapes.append((d, coverage(d), s))
+    out = []
+    for i, (shape, tint, cx, cy, s, deg, (ex, ey, gap, w, h)) in enumerate(TEAM):
+        d, a, _ = shapes[i]
+        t = np.clip((Y - (cy - s * 0.5)) / s, 0, 1)
+        colour = linear(richer(TINTS[tint]))[None, None, :] * (1.22 - 0.5 * smoothstep(0, 1, t))[..., None]
+        edge = 1 - smoothstep(0, 0.12 * s, np.clip(-d, 0, None))
+        colour *= (1 - 0.22 * edge * (0.4 + 0.6 * t))[..., None]
+        colour *= (1 + 0.05 * grain)[..., None]
+        face = coverage(eye_pair(ex, ey, gap, w, h, deg * 0.6), soft=1.6)
+        ink = linear(LIGHT_EYES if tint in DEEP else DARK_EYES)
+        colour = colour * (1 - face[..., None]) + ink * face[..., None]
+        for _, front, fs in shapes[i + 1:]:                      # the soft shadow of each bot in front
+            shift = np.float32([[1, 0, 0], [0, 1, 0.015 * fs * SS]])
+            moved = cv2.warpAffine(front, shift, (N, N), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            colour *= (1 - blur(moved, 0.045 * fs) * 0.55)[..., None]
+        rgb = encoded(colour + dither[..., None])
+        premultiplied = np.dstack([rgb * a[..., None], a])
+        small = cv2.resize(premultiplied, (1024, 1024), interpolation=cv2.INTER_AREA)
+        alpha = small[..., 3:]
+        rgb = np.where(alpha > 1e-4, small[..., :3] / np.maximum(alpha, 1e-4), 0)
+        rgba = (np.clip(np.dstack([rgb, alpha]), 0, 1) * 255 + 0.5).astype(np.uint8)
+        out.append((shape, rgba))
+    return out
 
 
 def color(hex_value):
@@ -200,36 +219,25 @@ def color(hex_value):
     return f"srgb:{r:.5f},{g:.5f},{b:.5f},1.00000"
 
 
-def layers():
-    """The icon's flat layers, back to front: (name, colour, outline paths). One per bot, then the
-    eyes, dark and light."""
-    out, dark, light = [], [], []
-    for shape, tint, shown, face in team():
-        out.append((shape, hex_color(TINTS[tint]), trace(shown)))
-        (light if tint in DEEP else dark).extend(trace(face))
-    out.append(("eyes", DARK_EYES, dark))
-    if light:
-        out.append(("light eyes", LIGHT_EYES, light))
-    return out
-
-
 def write_icon(path, parts, platform):
-    """An Icon Composer document: the cream or ink tile and the team on it, a layer for each part."""
+    """An Icon Composer document: the tile, light or dark with the Mac, and the team on it, a layer
+    for each bot."""
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(os.path.join(path, "Assets"))
     entries = []
-    for name, fill, paths in reversed(parts):       # Icon Composer lists the front first
-        image = name.replace(" ", "-") + ".svg"
-        with open(os.path.join(path, "Assets", image), "w") as f:
-            f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">'
-                    f'<path d="{path_data(paths)}" fill="{fill}" fill-rule="evenodd"/></svg>\n')
+    for name, rgba in reversed(parts):       # Icon Composer lists the front first
+        image = name + ".png"
+        cv2.imwrite(os.path.join(path, "Assets", image), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
         entries.append({"image-name": image, "name": name, "glass": False,
                         "position": {"scale": 1, "translation-in-points": [0, 0]}})
+    def gradient(top, bottom):
+        return {"linear-gradient": [color(top), color(bottom)],
+                "orientation": {"start": {"x": 0.5, "y": 0}, "stop": {"x": 0.5, "y": 1}}}
     icon = {
         "fill-specializations": [
-            {"value": {"solid": color(CREAM)}},
-            {"appearance": "dark", "value": {"solid": color(INK)}},
+            {"value": gradient(*TILES["light"])},
+            {"appearance": "dark", "value": gradient(*TILES["dark"])},
         ],
         "groups": [{
             "name": "Team",
@@ -247,7 +255,7 @@ def write_icon(path, parts, platform):
 
 
 def render(icon, out, size, platform="macOS", margin=0, rendition="Default"):
-    """Icon Composer's own rendering of the icon (light mode, or Dark), with an empty margin round it."""
+    """Icon Composer's own rendering of the icon (light, or Dark), with an empty margin round it."""
     subprocess.run([ICTOOL, icon, "--export-image", "--output-file", out, "--platform", platform,
                     "--rendition", rendition, "--width", str(size - 2 * margin), "--height", str(size - 2 * margin),
                     "--scale", "1"], check=True, capture_output=True)
@@ -257,26 +265,42 @@ def render(icon, out, size, platform="macOS", margin=0, rendition="Default"):
     print("Wrote", os.path.normpath(out))
 
 
-def write_web(web, parts, phone_icon):
-    """The website's favicon (its tile light or dark with the system, like the app's icon) and touch icon."""
-    svg = os.path.join(web, "public", "code", "icon.svg")
-    with open(svg, "w") as f:
-        f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">\n'
-                f'  <style>.tile{{fill:{CREAM}}}@media (prefers-color-scheme: dark){{.tile{{fill:{INK}}}}}</style>\n'
-                '  <clipPath id="tile"><rect width="64" height="64" rx="14.5"/></clipPath>\n'
-                '  <rect class="tile" width="64" height="64" rx="14.5"/>\n'
-                '  <g clip-path="url(#tile)" fill-rule="evenodd">\n')
-        for _, fill, paths in parts:
-            f.write(f'    <path fill="{fill}" d="{path_data(paths, 1 / 16)}"/>\n')
-        f.write('  </g>\n</svg>\n')
-    print("Wrote", os.path.normpath(svg))
-    render(phone_icon, os.path.join(web, "public", "code", "apple-touch-icon.png"), 180, platform="iOS")
+def flat(parts, size, look="light", corner=0.0):
+    """The artwork itself at `size` pixels, without the glass edge macOS draws round an icon: the
+    light or dark tile and the bots, with corners rounded by `corner` (a share of the side, as
+    CSS's border-radius takes it), or square."""
+    big = 1024 * SS
+    top, bottom = TILES[look]
+    t = smoothstep(0, 1, (np.arange(big, dtype=np.float32) + 0.5) / big)[:, None, None]
+    tile = linear(top) * (1 - t) + linear(bottom) * t
+    out = np.broadcast_to(encoded(tile), (big, big, 3)).copy()
+    for _, rgba in parts:
+        layer = cv2.resize(rgba, (big, big), interpolation=cv2.INTER_CUBIC).astype(np.float32) / 255
+        a = layer[..., 3:]
+        out = layer[..., :3] * a + out * (1 - a)
+    alpha = np.ones((big, big, 1), np.float32)
+    if corner:
+        r = corner * big
+        q = np.abs((np.arange(big, dtype=np.float32) + 0.5) - big / 2) - big / 2 + r
+        qx, qy = np.meshgrid(q, q)
+        d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
+        alpha = np.clip(0.5 - d, 0, 1)[..., None]
+    premultiplied = np.dstack([out * alpha, alpha])
+    small = cv2.resize(premultiplied, (size, size), interpolation=cv2.INTER_AREA)
+    a = small[..., 3:]
+    rgb = np.where(a > 1e-4, small[..., :3] / np.maximum(a, 1e-4), 0)
+    return (np.clip(np.dstack([rgb, a]), 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+def save(rgba, path):
+    cv2.imwrite(path, cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+    print("Wrote", os.path.normpath(path))
 
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     args.add_argument("--phone", help="the iPhone app's AppIcon.icon, to write its copy")
-    args.add_argument("--web", help="the kuvo-web checkout, to write its icon.svg and apple-touch-icon.png")
+    args.add_argument("--web", help="the kuvo-web checkout, to write its icon.png, icon-dark.png and apple-touch-icon.png")
     args = args.parse_args()
     parts = layers()
     write_icon(OUT, parts, "macOS")
@@ -285,9 +309,9 @@ if __name__ == "__main__":
     if args.phone:
         write_icon(args.phone, parts, "iOS")
     if args.web:
-        with tempfile.TemporaryDirectory() as scratch:
-            # the touch icon is drawn as the iPhone draws the icon
-            phone = args.phone or os.path.join(scratch, "AppIcon.icon")
-            if not args.phone:
-                write_icon(phone, parts, "iOS")
-            write_web(args.web, parts, phone)
+        # the site's icon beside its name, and its favicon, light and dark: the artwork with the
+        # corners the page rounds it by; the touch icon square, as iPhones round it themselves
+        code = os.path.join(args.web, "public", "code")
+        save(flat(parts, 256, "light", corner=0.2266), os.path.join(code, "icon.png"))
+        save(flat(parts, 256, "dark", corner=0.2266), os.path.join(code, "icon-dark.png"))
+        save(flat(parts, 180, "light"), os.path.join(code, "apple-touch-icon.png"))

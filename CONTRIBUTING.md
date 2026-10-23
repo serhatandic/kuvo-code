@@ -274,9 +274,10 @@ without clicking, for trying a change or taking screenshots:
 `scripts/icon.py` generates the app icon as an Icon Composer file in
 `KuvoCode/AppIcon.icon`, which Xcode compiles with the app, and the README's
 `docs/images/icon.png`. It draws the five bot shapes as `BotShape` in
-`BotAvatar.swift` does, so run it again after changing the icon there. With
-`--phone` and `--web` it also writes the iPhone app's copy and the website's
-`icon.svg` and `apple-touch-icon.png`. It needs numpy, OpenCV and Xcode.
+`BotAvatar.swift` does, each softly shaded as its own image layer, so run it
+again after changing the icon there. With `--phone` and `--web` it also writes
+the iPhone app's copy and the website's `icon.png`, `icon-dark.png` and
+`apple-touch-icon.png`. It needs numpy, OpenCV and Xcode.
 
 ### The coding agents
 

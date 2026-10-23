@@ -2,13 +2,39 @@
   "fill-specializations": [
     {
       "value": {
-        "solid": "srgb:0.94510,0.92941,0.89804,1.00000"
+        "linear-gradient": [
+          "srgb:0.96078,0.94902,0.92157,1.00000",
+          "srgb:0.90980,0.89020,0.85098,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
       }
     },
     {
       "appearance": "dark",
       "value": {
-        "solid": "srgb:0.09020,0.08627,0.10588,1.00000"
+        "linear-gradient": [
+          "srgb:0.10588,0.10196,0.12549,1.00000",
+          "srgb:0.05490,0.05098,0.06667,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
       }
     }
   ],
@@ -17,31 +43,7 @@
       "name": "Team",
       "layers": [
         {
-          "image-name": "light-eyes.svg",
-          "name": "light eyes",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "eyes.svg",
-          "name": "eyes",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "round.svg",
+          "image-name": "round.png",
           "name": "round",
           "glass": false,
           "position": {
@@ -53,7 +55,7 @@
           }
         },
         {
-          "image-name": "squircle.svg",
+          "image-name": "squircle.png",
           "name": "squircle",
           "glass": false,
           "position": {
@@ -65,7 +67,7 @@
           }
         },
         {
-          "image-name": "pebble.svg",
+          "image-name": "pebble.png",
           "name": "pebble",
           "glass": false,
           "position": {
@@ -77,7 +79,7 @@
           }
         },
         {
-          "image-name": "gem.svg",
+          "image-name": "gem.png",
           "name": "gem",
           "glass": false,
           "position": {
@@ -89,7 +91,7 @@
           }
         },
         {
-          "image-name": "bloom.svg",
+          "image-name": "bloom.png",
           "name": "bloom",
           "glass": false,
           "position": {
