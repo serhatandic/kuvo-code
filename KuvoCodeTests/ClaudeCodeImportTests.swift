@@ -7,8 +7,12 @@ import Testing
 /// description and instructions, never in place of one of the engine's own; each command by its
 /// file's name, in Claude Code's folders too, with its prompt as written. A made-up ~/.claude in
 /// the test's own folder.
-@Suite struct ClaudeCodeImportTests {
+@Suite(.serialized) struct ClaudeCodeImportTests {
     let claude = AppInfo.testRoot.appending(path: "dot-claude-\(UUID().uuidString.prefix(6))")
+
+    init() {
+        TestEnvironment.prepare()
+    }
 
     private func write(_ path: String, _ text: String) throws {
         let url = claude.appending(path: path)
@@ -66,7 +70,6 @@ import Testing
     /// and whether this Mac has it; a command named as one of the engine's comes over beside it.
     @MainActor @Test func aPhoneSeesWhatImportWrites() async throws {
         defer { try? FileManager.default.removeItem(at: claude) }
-        TestEnvironment.prepare()
         try write("agents/code-reviewer.md", "---\nname: code-reviewer\ndescription: Reviews code\n---\nList what's wrong, worst first.\n")
         try write("commands/review.md", "---\ndescription: Review a pull request\n---\nReview #$ARGUMENTS.\n")
         let app = AppModel()
@@ -85,5 +88,14 @@ import Testing
         #expect(command["name"] as? String == "review-claude", "beside the engine's /review")
         #expect(command["path"] as? [String] == ["commands", "review-claude"])
         #expect(command["settings"] as? [String: String] == ["template": "Review #$ARGUMENTS.", "description": "Review a pull request"])
+
+        // Imported as the phone does it (its settings at its path): said to be there.
+        let config = app.config(for: .mac)
+        defer { config.set(nil, at: ["agents", "code-reviewer"]) }
+        config.set(try #require(ClaudeAgents.load(from: claude.appending(path: "agents")).first).settings, at: ["agents", "code-reviewer"])
+        let again = try #require(try JSONSerialization.jsonObject(with: await link.claudeCodeJSON(folder: claude).1) as? [String: Any])
+        #expect((again["agents"] as? [[String: Any]])?.first?["imported"] as? Bool == true)
+        // For a computer that isn't one of yours: nothing.
+        #expect(await link.claudeCodeJSON(for: "nowhere", folder: claude).0 == 404)
     }
 }

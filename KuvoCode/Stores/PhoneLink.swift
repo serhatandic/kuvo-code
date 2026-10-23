@@ -110,6 +110,9 @@ final class PhoneLink {
     /// The link a phone pairs with, while Settings › Phone shows it: good for ten minutes, once.
     private(set) var pairing: PairingLink?
     @ObservationIgnored private var pairingEnds = ContinuousClock.now
+    /// A link a paired phone asked for, for another phone (`kuvo/phones/pair`): apart from the one
+    /// Settings › Phone shows, so neither ends the other. Good for as long, once.
+    @ObservationIgnored private var askedPairing: (link: PairingLink, ends: ContinuousClock.Instant)?
 
     var relay: URL {
         UserDefaults.standard.string(forKey: "phoneLink.relay").flatMap(URL.init(string:)) ?? Self.defaultRelay
@@ -293,18 +296,23 @@ final class PhoneLink {
 
     /// `kuvo/phones`: the phones paired with this Mac (`you`, the one asking); `kuvo/phones/remove`
     /// (POST, `{"phones": [{key, pairing}]}`): a phone removes others (a lost one, say) or itself;
-    /// `kuvo/phones/pair` (POST): a link for another phone to pair with, as Settings › Phone shows.
+    /// `kuvo/phones/pair`: POST, a link for another phone to pair with, as Settings › Phone shows
+    /// one; DELETE ends it, as Done does there.
     func answerPhones(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
         let encoder = JSONEncoder()
         let me = asking?.base64URL
         if request.path == "kuvo/phones/pair" {
+            if request.method.uppercased() == "DELETE" {
+                askedPairing = nil
+                return (200, Data("{}".utf8))
+            }
             guard request.method.uppercased() == "POST" else { return (405, Data("{}".utf8)) }
             // (Its keys are made only once the link is on.)
             guard Self.isEnabled, hasIdentity else { return (409, Self.message("The phone link is off on this Mac.")) }
-            beginPairing()
-            guard let pairing else { return (503, Self.message("Kuvo Code isn't ready yet. Try again in a moment.")) }
+            let asked = PairingLink(relay: relay, host: secret.address, key: key.publicBytes, name: Self.computerName)
+            askedPairing = (asked, .now + Self.pairingTime)
             let ends = Date.now.addingTimeInterval(Double(Self.pairingTime.components.seconds))
-            return (200, Self.json(["link": pairing.url.absoluteString, "ends": ends.timeIntervalSince1970]))
+            return (200, Self.json(["link": asked.url.absoluteString, "ends": ends.timeIntervalSince1970]))
         }
         if request.path == "kuvo/phones" {
             struct Listed: Encodable { var key: String; var name: String; var added: Double; var pairing: String; var you: Bool }
@@ -704,10 +712,12 @@ final class PhoneLink {
             }
         }
         // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
-        if request.path == "kuvo/claude-code" {
+        if request.path.split(separator: "?").first == "kuvo/claude-code" {
+            // `?machine=<id>`: named and said to be there as that machine's pages have them.
+            let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON() ?? (503, Data()) : (405, Data())
+                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON(for: machine) ?? (503, Data()) : (405, Data("{}".utf8))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -804,8 +814,9 @@ final class PhoneLink {
         syncMachines()
     }
 
-    /// Lets in a phone you've paired, or one showing the pairing link's token (once, in time).
-    private func authorize(_ key: Data, _ address: LinkAddress, _ hello: PhoneHello) -> Bool {
+    /// Lets in a phone you've paired, or one showing a pairing link's token (once, in time): the
+    /// one Settings › Phone shows, or one a paired phone asked for.
+    func authorize(_ key: Data, _ address: LinkAddress, _ hello: PhoneHello) -> Bool {
         // Met at the relay only for your machines: no phone comes in.
         guard Self.isEnabled else { return false }
         let encoded = key.base64URL
@@ -814,14 +825,17 @@ final class PhoneLink {
         let isPaired = phones.contains(where: { $0.key == encoded })
         // Showing the token: a pairing of its own, paired before or not (one removed on your
         // machines comes back there too).
-        guard let pairing, ContinuousClock.now < pairingEnds, let token = hello.pair.flatMap({ Data(base64URL: $0) }),
-              token.count == pairing.token.count, zip(token, pairing.token).reduce(0, { $0 | ($1.0 ^ $1.1) }) == 0
-        else { return isPaired }
+        let shows = { (link: PairingLink?, ends: ContinuousClock.Instant) -> Bool in
+            guard let link, ContinuousClock.now < ends, let token = hello.pair.flatMap({ Data(base64URL: $0) }) else { return false }
+            return token.count == link.token.count && zip(token, link.token).reduce(0, { $0 | ($1.0 ^ $1.1) }) == 0
+        }
+        let onPage = shows(pairing, pairingEnds)
+        guard onPage || shows(askedPairing?.link, askedPairing?.ends ?? .now) else { return isPaired }
         // A pairing of its own: in, whatever removed it before.
         paired.pair(Phone(key: encoded, name: String(hello.name.prefix(100)), added: .now, address: address.text, pairing: PairedPhones.newPairing()))
         save()
         Task { await tellMachines() }
-        self.pairing = nil
+        if onPage { self.pairing = nil } else { askedPairing = nil }
         syncMachines()
         log.info("Paired a phone")
         return true

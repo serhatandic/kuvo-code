@@ -13,6 +13,8 @@ import Testing
     init() {
         TestEnvironment.prepare()
         UserDefaults.standard.removeObject(forKey: Awake.key)
+        // Off, so nothing here reads the link's keys from the Keychain.
+        UserDefaults.standard.removeObject(forKey: "phoneLink")
     }
 
     private func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {

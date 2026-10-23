@@ -38,8 +38,50 @@ import Testing
         return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    private func deleting(_ link: PhoneLink, _ path: String, as phone: LinkKey) async throws -> Int {
+        let request = LinkRequest(method: "DELETE", path: path, headers: [:], body: Data())
+        var status = 0
+        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: "http://127.0.0.1:9/")!, password: nil, agents: nil, asking: phone.publicBytes) {
+            if case .head(let code, _) = part { status = code }
+        }
+        return status
+    }
+
     private func removal(_ key: LinkKey, pairing: String? = nil) -> String {
         #"{"phones":[{"key":"\#(key.publicBytes.base64URL)"\#(pairing.map { #","pairing":"\#($0)""# } ?? "")}]}"#
+    }
+
+    /// A phone asks for a link for another phone, only while the link is on: one of its own, apart
+    /// from the one Settings › Phone shows, so opening and closing that page doesn't end it; good
+    /// once, and ended when the phone's sheet closes.
+    @Test func aPhoneGetsALinkForAnotherPhone() async throws {
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            UserDefaults.standard.removeObject(forKey: "phoneLink")
+        }
+        let link = link()
+        UserDefaults.standard.removeObject(forKey: "phoneLink")
+        #expect(try await ask(link, "kuvo/phones/pair", as: mine, body: "{}").status == 409, "not while the link is off")
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        let address = try #require(LinkAddress(bytes: Data(repeating: 7, count: LinkAddress.length)))
+        // Asked for, then its sheet closed: it lets nobody in.
+        let closed = try await ask(link, "kuvo/phones/pair", as: mine, body: "{}")
+        let ended = try #require((closed.json?["link"] as? String).flatMap(URL.init(string:)).flatMap(PairingLink.init))
+        #expect(try await deleting(link, "kuvo/phones/pair", as: mine) == 200)
+        #expect(!link.authorize(LinkKey().publicBytes, address, PhoneHello(name: "Too Late", app: "1", pair: ended.token.base64URL)))
+        #expect(try await deleting(link, "kuvo/phones/pair", as: mine) == 200, "with none showing too")
+
+        let answer = try await ask(link, "kuvo/phones/pair", as: mine, body: "{}")
+        #expect(answer.status == 200)
+        let given = try #require((answer.json?["link"] as? String).flatMap(URL.init(string:)).flatMap(PairingLink.init))
+        #expect(given.key == mac.publicBytes, "this Mac's")
+        #expect(answer.json?["ends"] is Double)
+        link.beginPairing()
+        link.endPairing()
+        let hello = PhoneHello(name: "New iPhone", app: "1", pair: given.token.base64URL)
+        #expect(link.authorize(LinkKey().publicBytes, address, hello), "in, with Settings › Phone opened and closed meanwhile")
+        #expect(link.phones.contains { $0.name == "New iPhone" })
+        #expect(!link.authorize(LinkKey().publicBytes, address, hello), "once")
     }
 
     @Test func aPhoneRemovesALostOneForGood() async throws {
