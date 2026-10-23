@@ -644,6 +644,17 @@ final class PhoneLink {
                 }
             }
         }
+        // A conversation carried on with the coding agents, as picking one of their models in it does.
+        if let id = Self.sessionID(in: request.path, then: "agents"), request.method.uppercased() == "POST" {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.moveToAgents(id, with: request.body) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         if request.path == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
         if request.path == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
         if let id = Self.groupID(in: request.path, then: "events") { return Self.followingGroup(id, link: link) }
@@ -1553,6 +1564,37 @@ final class PhoneLink {
         return (200, (try? JSONEncoder().encode(["bot": entry(changed)])) ?? Data())
     }
 
+    /// `POST kuvo/sessions/<id>/agents` with `{model}`: a conversation on the engine (here or on a
+    /// machine) carried on with the coding agents on `model` (one of theirs, or Custom Auto), as
+    /// picking it in the conversation does: a session of theirs with all of it, what was waiting
+    /// and its draft; the engine's goes to Archived (a bot's takes the new one). Answers 200
+    /// `{session}`, the new one; 400 for a model that isn't theirs; 404 for no such conversation;
+    /// 409 for one with them already, or while it moves; 422 for a model it can't use where it
+    /// is; 503 while the coding agents aren't running there.
+    func moveToAgents(_ id: String, with body: Data) async -> (Int, Data) {
+        guard let workspace, let app = bots?.app else { return (503, Self.message("Kuvo Code isn’t ready yet. Try again in a moment.")) }
+        guard let session = workspace.session(id) else { return (404, Self.message("That conversation isn’t there any more.")) }
+        if OutsideAgents.isAgentSession(session) { return (409, Self.message("It’s with the coding agents already.")) }
+        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
+        struct Given: Decodable { var model: ModelRef }
+        let machine = RemoteFolder.machine(of: session.location.directory)
+        guard let model = (try? JSONDecoder().decode(Given.self, from: body))?.model, OutsideAgents.runsWithAgents(model, machine: machine) else {
+            return (400, Self.message("That isn’t a coding agent’s model."))
+        }
+        let place = machine.map { machine in app.machines.list.first { $0.id == machine }?.name ?? machine }
+        if let refusal = Self.refusal(of: model, on: machine, called: place, app: app) { return (422, Self.message(refusal)) }
+        do {
+            guard let moved = try await workspace.moveToAgents(id, model: model, opens: false) else { return (404, Self.message("That conversation isn’t there any more.")) }
+            return (200, (try? JSONEncoder().encode(["session": moved.id])) ?? Data())
+        } catch let failure as OutsideAgents.Failure {
+            return (503, Self.message(failure.localizedDescription))
+        } catch let failure as Moves.Failure {
+            return (409, Self.message(failure.localizedDescription))
+        } catch {
+            return (502, Self.message(error.localizedDescription))
+        }
+    }
+
     /// `DELETE kuvo/bots/<id>`, as Delete Bot… deletes it: its conversation and wake-ups, and its
     /// folder to the Trash (on a machine, to Kuvo Code's trash there). Answers 200 `{}`; 404 for
     /// no such bot; 409 while it moves, or while the machine it lives on isn't connected.
@@ -1573,6 +1615,13 @@ final class PhoneLink {
     }
 
     /// The bot in `kuvo/bots/<id>` (not `kuvo/bots/templates`).
+    /// `kuvo/sessions/<id>/<then>`'s session.
+    nonisolated private static func sessionID(in path: String, then: String) -> String? {
+        let parts = path.split(separator: "/")
+        guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
+        return String(parts[2]).removingPercentEncoding
+    }
+
     nonisolated private static func botID(in path: String) -> String? {
         let parts = path.split(separator: "/")
         guard parts.count == 3, parts[0] == "kuvo", parts[1] == "bots", parts[2] != "templates" else { return nil }

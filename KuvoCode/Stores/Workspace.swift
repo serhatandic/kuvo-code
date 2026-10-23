@@ -871,11 +871,13 @@ final class Workspace {
 
     /// An engine session you picked a coding agent's model (or Auto) in: it carries on with the
     /// agents, in a session of theirs with its conversation (their first agent is handed all of
-    /// it), opened in its place; the engine's goes to Archived, its draft comes along.
-    func moveToAgents(_ id: String, model: ModelRef) async throws {
+    /// it), opened in its place; the engine's goes to Archived, its draft comes along. `opens`:
+    /// with no tab of it, the new one opens (not when a phone moved it). Nil: it isn't there.
+    @discardableResult
+    func moveToAgents(_ id: String, model: ModelRef, opens: Bool = true) async throws -> Session? {
         // Moving to another computer: it goes to the coding agents once it's there.
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
-        guard let moved = try await carryToAgents(id, model: model) else { return }
+        guard let moved = try await carryToAgents(id, model: model) else { return nil }
         Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
         // The window with its tab (or pane) takes its place, before the old one goes.
         let swap = TabSwap(from: id, to: moved.id)
@@ -888,9 +890,10 @@ final class Workspace {
             try? await Task.sleep(for: .milliseconds(400))
             if swappedTab == swap {
                 swappedTab = nil
-                if !kept { requestedTab = swap.to }
+                if !kept, opens { requestedTab = swap.to }
             }
         }
+        return moved
     }
 
     /// Told when a conversation moved to the coding agents (from, to): true when something else

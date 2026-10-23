@@ -474,6 +474,16 @@ itself. A host serves:
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
   settings, so this Mac's (`kuvo/config`) don't reach it (as it was when it last connected).
+- On a Mac, `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
+  conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
+  agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the
+  conversation does: a session of theirs with the whole conversation, what was waiting and its
+  draft; the engine's goes to Archived, and a bot's conversation becomes the new one. `200
+  {"session"}`, the new one, to open (read through `kuvo/agents/api/…`). Errors are
+  `{"message"}`: 400 for a model that isn't theirs; 404 for no such conversation; 409 for one
+  with them already, or while it moves; 422 for a model it can't use where it is (signed out);
+  503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
+  the Mac. A machine's bridge doesn't do this: with the Mac away, say to open it on the Mac.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
   `127.0.0.1:19876`, a coding agent's), which a phone can't load. The computer loads it, as the
@@ -562,7 +572,9 @@ itself. A host serves:
   model that can't run there (its account isn't signed in there); 503 when it couldn't be made.
 - `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model}` changes a bot as Edit Bot
   does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`):
-  `200 {"bot": <as kuvo/bots lists one>}`. Errors are `{"message"}`: 400 for an empty name, or a
+  `200 {"bot": <as kuvo/bots lists one>}`, after a coding agent's model for a bot on the engine
+  has moved its conversation to them (its `session` is the new one, `agents` true; if the move
+  can't happen yet, its machine away, the model is kept and it moves once it can). Errors are `{"message"}`: 400 for an empty name, or a
   look or personality there isn't; 422 for a model it can't use where it lives (the one it has is
   always kept); 404 for no such bot; 409 while it moves; 503 when it couldn't be changed (a
   machine's engine is stopped). `DELETE kuvo/bots/<id>` deletes it as Delete Bot… does, its
