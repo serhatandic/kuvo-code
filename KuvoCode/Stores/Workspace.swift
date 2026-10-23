@@ -244,6 +244,16 @@ final class Workspace {
         didSet { sessions.removeAll { seats.contains($0.id) } }
     }
 
+    /// A group chat's conversation for one question (a guest's turn, a work list) that's still
+    /// there half an hour on: what was asking it stopped before deleting it (the app quit or
+    /// crashed). It goes. (A machine's are its own to clear.)
+    static func dropLeftScratch(_ sessions: [Session], api: OpenCodeAPI) {
+        let old = Date.now.timeIntervalSince1970 * 1000 - 30 * 60_000
+        let left = sessions.filter { $0.metadata?["kuvo"]?["seat"]?["scratch"]?.bool == true && $0.time.updated < old }
+        guard !left.isEmpty else { return }
+        Task { for session in left { try? await api.deleteSession(session.id) } }
+    }
+
     /// A bot's seat in a group chat, by its metadata, before it's in `seats`.
     static func isSeat(_ session: Session) -> Bool {
         session.metadata?["kuvo"]?["seat"] != nil
@@ -984,7 +994,9 @@ final class Workspace {
     func refresh() async {
         guard let api else { return }
         do {
-            let local = try await api.allSessions().filter { !isHidden($0) && movedAway[$0.id] != .some(nil) }
+            let all = try await api.allSessions()
+            Self.dropLeftScratch(all, api: api)
+            let local = all.filter { !isHidden($0) && movedAway[$0.id] != .some(nil) }
             // (This Mac's: a machine's agents' are its own, with its engine's.)
             let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) }
             sessions = local + theAgents + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
@@ -1030,7 +1042,9 @@ final class Workspace {
         // (A machine's come with its engine's: `refresh(_ engine:)`.)
         let isMacs = { (session: Session) in OutsideAgents.isAgentSession(session) && !RemoteFolder.isRemote(session.location.directory) }
         do {
-            let listed = try await api.allSessions().filter { !isHidden($0) }
+            let all = try await api.allSessions()
+            Self.dropLeftScratch(all, api: api)
+            let listed = all.filter { !isHidden($0) }
             sessions = sessions.filter { !isMacs($0) } + listed
             // Read while the bridge was away: so here, and told it now.
             let listedIDs = Set(listed.map(\.id))

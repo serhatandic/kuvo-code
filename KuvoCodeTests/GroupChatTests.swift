@@ -24,8 +24,10 @@ import Testing
         private var answered: [String: (prompt: String, text: String)] = [:]
         private(set) var turns: [(bot: String, heard: String)] = []
         private var next = 1
-        /// How much a bot's seats send the model (their context, in tokens), as their answers say.
-        var sizes: [String: Int] = [:]
+        /// How much a bot's seats send the model (their context, in tokens), as their answers say:
+        /// one for each turn in turn, the last kept.
+        var sizes: [String: [Int]] = [:]
+        private var answeredSize: [String: Int] = [:]
         /// Conversations deleted, and each one's bot.
         private(set) var deleted: [(seat: String, bot: String)] = []
 
@@ -52,6 +54,13 @@ import Testing
                 turns.append((bot, text))
                 let line = lines[bot]?.isEmpty == false ? lines[bot]!.removeFirst() : "PASS"
                 answered[seat] = (prompt, line)
+                if var queue = sizes[bot], let size = queue.first {
+                    if queue.count > 1 { queue.removeFirst() }
+                    sizes[bot] = queue
+                    answeredSize[seat] = size
+                } else {
+                    answeredSize[seat] = nil
+                }
             }
         }
 
@@ -63,7 +72,7 @@ import Testing
                 var reply: [String: Any] = ["id": prompt + "_reply", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3],
                                             "model": ["id": "m", "providerID": "p"], "content": refused == nil ? [["type": "text", "text": text]] : []]
                 if let refused { reply["error"] = ["type": "provider", "message": refused] }
-                if let bot = bots[seat], let size = sizes[bot] {
+                if let size = answeredSize[seat] {
                     reply["tokens"] = ["input": size, "output": 10, "reasoning": 0, "cache": ["read": 0, "write": 0]]
                 }
                 return [["id": prompt, "type": "user", "time": ["created": 1], "text": "(turn)"], reply]
@@ -204,23 +213,43 @@ import Testing
         #expect(seats.deleted.contains { $0.bot == "Cy" }, "its conversation for the turn goes once it has answered")
     }
 
-    /// A seat grown well past the chat (pages it read, long answers) goes after the turn, and the
-    /// bot's next turn is in a new seat, given the whole chat, its own words as "You".
+    /// A seat grown well past the chat (pages it read, long answers) since its first turn goes
+    /// after the turn, and the bot's next turn is in a new seat, given the whole chat, its own
+    /// words as "You". What it carries at every turn (instructions and tools) doesn't count.
     @Test func aSeatGrownPastTheChatStartsOverWithTheWholeChat() async throws {
         defer { done() }
-        let (app, group, seats) = try await start(lines: ["Ada": ["Hi there.", "PASS", "Still here."], "Ben": ["PASS", "PASS"]])
-        seats.sizes = ["Ada": 40_000]
+        // Each discussion's work list, in a conversation of its own, takes a line and a size too.
+        let (app, group, seats) = try await start(lines: ["Ada": ["Hi there.", "NONE", "Grown.", "NONE", "Still here."], "Ben": ["PASS", "PASS", "PASS"]])
+        seats.sizes = ["Ada": [5_000, 5_000, 40_000, 1_000]]
         app.groups.send("Anyone there?", to: group.id)
         try await talkedThrough(app, group)
-        #expect(seats.deleted.contains { $0.bot == "Ada" }, "her grown seat went")
-        #expect(app.groups.group(group.id)?.seats["bot_ada"] == nil)
-        seats.sizes = [:]
+        #expect(!seats.deleted.contains { $0.bot == "Ada" && $0.seat == app.groups.group(group.id)?.seats["bot_ada"] })
+        let first = try #require(app.groups.group(group.id)?.seats["bot_ada"])
         app.groups.send("Again?", to: group.id)
         try await talkedThrough(app, group)
-        let fresh = try #require(seats.turns.last { $0.bot == "Ada" && $0.heard.contains("Again?") })
+        #expect(seats.deleted.contains { $0.seat == first }, "her grown seat went")
+        #expect(app.groups.group(group.id)?.seats["bot_ada"] == nil)
+        app.groups.send("Once more?", to: group.id)
+        try await talkedThrough(app, group)
+        let fresh = try #require(seats.turns.last { $0.bot == "Ada" && $0.heard.contains("Once more?") })
         #expect(fresh.heard.hasPrefix("Everything said in \"Team\" so far, from the start:"))
-        #expect(fresh.heard.contains("You:\n    Hi there."))
+        #expect(fresh.heard.contains("You:\n    Grown."))
         #expect(fresh.heard.contains("User:\n    Anyone there?"))
+    }
+
+    /// A seat that carries a lot at every turn (a bot with many tools) keeps its seat as long as
+    /// it hasn't grown.
+    @Test func aSeatThatStartsBigKeepsItsSeat() async throws {
+        defer { done() }
+        let (app, group, seats) = try await start(lines: ["Ada": ["Hi there.", "NONE", "Still here."], "Ben": ["PASS", "PASS"]])
+        seats.sizes = ["Ada": [45_000, 45_000, 48_000]]
+        app.groups.send("Anyone there?", to: group.id)
+        try await talkedThrough(app, group)
+        let first = try #require(app.groups.group(group.id)?.seats["bot_ada"])
+        app.groups.send("Again?", to: group.id)
+        try await talkedThrough(app, group)
+        #expect(app.groups.group(group.id)?.seats["bot_ada"] == first)
+        #expect(!seats.deleted.contains { $0.seat == first })
     }
 
     /// Named with &, a bot speaks first, the lead after it; being in the chat, it's asked there,

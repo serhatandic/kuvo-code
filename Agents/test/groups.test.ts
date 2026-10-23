@@ -90,6 +90,11 @@ describe("a group chat on a machine goes by the Mac's rules", () => {
     for (const vector of vectors.ampersands) expect([vector.text, ampersands(vector.text, vector.names)]).toEqual([vector.text, vector.shown])
   })
 
+  test("a chat too long to give whole: the latest of it that fits, saying how much is left out", () => {
+    const name = (author?: string) => (author === undefined ? "User" : "Ada")
+    for (const vector of vectors.chatBudget) expect([vector.budget, chatText("bot_ada", vector.group, vector.all, name, vector.budget)]).toEqual([vector.budget, vector.chat])
+  })
+
   test("when a seat has outgrown its chat", () => {
     for (const vector of vectors.outgrew) expect([vector.size, outgrew(vector.size, vector.chat)]).toEqual([vector.size, vector.outgrew])
   })

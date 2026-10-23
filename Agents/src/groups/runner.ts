@@ -27,6 +27,7 @@ import {
   guestText,
   guests,
   outgrew,
+  seatBudget,
   ampersands,
   stamp,
   tasks as splitTasks,
@@ -112,6 +113,8 @@ const runsWithAgents = (model?: ModelRef) => Boolean(model && (model.providerID 
 export class GroupRunner {
   private chats: Map<string, Kept>
   private live = new Map<string, Live>()
+  /** Each seat's context at its first turn since the bridge started: its growth past that makes it start over (`outgrew`). */
+  private seatBase = new Map<string, number>()
   private runs = 0
   /** Parts being handed to their bots or followed, so none is followed twice. */
   private following = new Set<string>()
@@ -149,6 +152,24 @@ export class GroupRunner {
   start() {
     this.resumeWork()
     this.scheduleMeetings(10_000)
+    void this.dropLeftScratch()
+  }
+
+  /**
+   * A chat's conversations for one question (a guest's turn, a work list) still there half an
+   * hour on, on the engine or this bridge: what was asking stopped before deleting them (the
+   * bridge stopped or updated itself). They go.
+   */
+  private async dropLeftScratch() {
+    const old = Date.now() - 30 * 60_000
+    const bridge = this.context.bridge()
+    for (const api of [new SeatAPI(this.context.engine), ...(bridge ? [new SeatAPI(bridge)] : [])]) {
+      const sessions = await api.sessions().catch(() => [])
+      for (const session of sessions) {
+        if (session?.metadata?.kuvo?.seat?.scratch !== true || (session?.time?.updated ?? Date.now()) >= old) continue
+        await api.delete(session.id).catch(() => {})
+      }
+    }
   }
 
   // MARK: What's here
@@ -475,6 +496,9 @@ export class GroupRunner {
     let saidCount = 0
     // Guests that answered (or tried), each by the message that named it and its id.
     const guested = new Set<string>()
+    // Where the discussion began: from that message on, each one's guests are asked, even one that
+    // came while a bot was talking and isn't the latest any more.
+    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"))
     while (!signal.aborted) {
       const kept = this.chat(id)
       if (!kept) return epoch
@@ -491,18 +515,23 @@ export class GroupRunner {
         if (bot) names.set(member, bot.name)
       }
       const members = kept.group.members.filter((member) => names.has(member) && !absent.has(member))
-      // A bot outside the chat that the latest message names with & answers it first, as a guest, once.
-      const latest = [...kept.messages].reverse().find((message) => message.kind !== "note")
-      const guest = latest
-        ? guests(kept.messages, kept.group.members, this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }))).find((bot) => !guested.has(latest.id + "/" + bot))
-        : undefined
-      if (latest && guest) {
-        guested.add(latest.id + "/" + guest)
+      // A bot outside the chat that a message since the discussion began names with & answers it first, as a guest, once.
+      const bots = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }))
+      let named: { message: GroupMessage; guest: string } | undefined
+      for (let index = begun; index < kept.messages.length && !named; index++) {
+        const message = kept.messages[index]
+        if (message.kind === "note") continue
+        const guest = guests(kept.messages.slice(0, index + 1), kept.group.members, bots).find((bot) => !guested.has(message.id + "/" + bot))
+        if (guest) named = { message, guest }
+      }
+      if (named) {
+        const { message, guest } = named
+        guested.add(message.id + "/" + guest)
         if (turns >= limit(kept.group.members.length)) {
           live.paused = true
           break
         }
-        const outcome = await this.turn(guest, id, signal, false, true)
+        const outcome = await this.turn(guest, id, signal, false, message)
         if (signal.aborted) return epoch
         turns++
         if (outcome === "said") {
@@ -552,7 +581,8 @@ export class GroupRunner {
    * it), and its answer to the chat. A `guest` (a bot outside the chat that a message there named)
    * answers in a conversation of its own for the turn, given the whole chat, which goes once it has.
    */
-  private async turn(botID: string, id: string, signal: AbortSignal, wrapUp = false, guest = false): Promise<Outcome> {
+  private async turn(botID: string, id: string, signal: AbortSignal, wrapUp = false, namedIn?: GroupMessage): Promise<Outcome> {
+    const guest = namedIn !== undefined
     const bot = this.bot(botID)
     if (!bot) return "absent"
     const live = this.state(id)
@@ -620,7 +650,7 @@ export class GroupRunner {
       const retracted = guest ? undefined : current.group.retracted?.[botID]
       const name = (author?: string) => this.name(author)
       const prompt = guest
-        ? guestText(botID, current.group, all, [...all].reverse().find((message) => message.kind !== "note")?.author, name)
+        ? guestText(botID, current.group, all, namedIn?.author, name)
         : isNew
           ? seatStartText(botID, current.group, all, wrapUp, name, named(all))
           : turnText(botID, current.group, unheard, wrapUp, name, named(unheard))
@@ -676,9 +706,16 @@ export class GroupRunner {
       const reply = await this.reply(seat, promptID, sent, api)
       going()
       // Grown well past the chat it's in (pages it read, drafts, long answers): it starts over at
-      // its next turn, in a new seat given the whole chat, and this one goes.
-      if (!guest && reply.size !== undefined && outgrew(reply.size, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
-        await this.startOver(botID, id)
+      // its next turn, in a new seat given the whole chat, and this one goes. Grown from its first
+      // turn here, so what every turn carries (its instructions and tools) doesn't count.
+      if (!guest && reply.size !== undefined) {
+        const base = this.seatBase.get(seat) ?? reply.size
+        this.seatBase.set(seat, base)
+        const grown = reply.size - base
+        if (grown > seatBudget && outgrew(grown, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
+          this.seatBase.delete(seat)
+          await this.startOver(botID, id)
+        }
       }
       if (!reply.text) {
         if (reply.error) {
@@ -1246,7 +1283,12 @@ export class GroupRunner {
     const agent = runsWithAgents(model) && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined
     const session = await api.create(bot.directory, title, agent, model, rules)
     await api.setMetadata(session.id, { kuvo: { seat: { group: group.id, bot: bot.id, scratch: true } } }).catch(() => {})
-    await api.setInstruction(session.id, seatKey, this.seatText(bot, group))
+    try {
+      await api.setInstruction(session.id, seatKey, this.seatText(bot, group))
+    } catch (error) {
+      await api.delete(session.id).catch(() => {})
+      throw error
+    }
     return session.id
   }
 

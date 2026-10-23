@@ -305,6 +305,9 @@ final class BotGroups {
     private(set) var activity: [String: [GroupActivity]] = [:]
     /// The chat each conversation at work now talks in (a member's seat, a guest's), for its stream.
     @ObservationIgnored private var talkingIn: [String: String] = [:]
+    /// Each seat's context at its first turn since the app started: its growth past that is
+    /// what makes it start over (`outgrew`).
+    @ObservationIgnored private var seatBase: [String: Int] = [:]
     /// What a seat at work has thought so far in its step, from the engine's stream: its messages
     /// have its thinking only once the step ends.
     @ObservationIgnored private var thinking: [String: String] = [:]
@@ -573,7 +576,7 @@ final class BotGroups {
     /// A seat at work, thinking or writing (from the engine's stream): its latest thought, in a
     /// line under its name, a few times a second at most.
     func streamed(_ event: ServerEvent) {
-        guard let seat = event.sessionID, let id = talkingIn[seat] else { return }
+        guard let seat = event.sessionID, let id = talkingIn[seat], speaking[id] != nil else { return }
         var now: [GroupActivity]?
         switch event.type {
         case "session.reasoning.started":
@@ -726,6 +729,8 @@ final class BotGroups {
         runs[id] = nil
         paused.remove(id)
         activity[id] = nil
+        // What its seats still stream as they stop shows under nobody.
+        talkingIn = talkingIn.filter { $0.value != id }
         // The bot talking, or the lead handing out the work.
         for speaker in [speaking.removeValue(forKey: id), splitting.removeValue(forKey: id)].compactMap({ $0 }) {
             guard let bot = app?.bots.bot(speaker), let seat = group(id)?.seats[speaker] else { continue }
@@ -782,6 +787,9 @@ final class BotGroups {
         var said = 0
         /// Guests that answered (or tried), each by the message that named it and its id.
         var guested: Set<String> = []
+        /// Where the discussion began: from that message on, each one's guests are asked, even
+        /// one that came while a bot was talking and isn't the latest any more.
+        let begun = max(0, messages(in: id).lastIndex { $0.kind != .note } ?? 0)
         while !Task.isCancelled {
             guard let group = group(id), let app else { return epoch }
             if asked[id, default: 0] != epoch {
@@ -792,18 +800,25 @@ final class BotGroups {
                 said = 0
             }
             let members = group.members.filter { app.bots.bot($0) != nil && !absent.contains($0) }
-            // A bot outside the chat that the latest message names with "&" answers it first, as
-            // a guest, once.
+            // A bot outside the chat that a message since the discussion began names with "&"
+            // answers it first, as a guest, once.
             let all = messages(in: id)
-            if let last = all.last(where: { $0.kind != .note }),
-               let guest = Self.guests(in: all, members: group.members, among: app.bots.list.map { (id: $0.id, name: $0.name) })
-                   .first(where: { !guested.contains(last.id + "/" + $0) }) {
-                guested.insert(last.id + "/" + guest)
+            let bots = app.bots.list.map { (id: $0.id, name: $0.name) }
+            let named = all.indices.dropFirst(min(begun, all.count)).lazy
+                .filter { all[$0].kind != .note }
+                .compactMap { index in
+                    Self.guests(in: Array(all[...index]), members: group.members, among: bots)
+                        .first { !guested.contains(all[index].id + "/" + $0) }
+                        .map { (message: all[index], guest: $0) }
+                }
+                .first
+            if let (message, guest) = named {
+                guested.insert(message.id + "/" + guest)
                 if turns >= Self.limit(members: group.members.count) {
                     paused.insert(id)
                     break
                 }
-                let outcome = await turn(of: guest, in: id, guest: true)
+                let outcome = await turn(of: guest, in: id, namedIn: message)
                 guard !Task.isCancelled else { return epoch }
                 turns += 1
                 if outcome == .said {
@@ -898,7 +913,9 @@ final class BotGroups {
     /// it), and its answer to the chat. A `guest` (a bot outside the chat that a message there
     /// named) answers in a conversation of its own for the turn, given the whole chat, which goes
     /// once it has.
-    private func turn(of botID: String, in id: String, wrapUp: Bool = false, guest: Bool = false) async -> Outcome {
+    /// `namedIn`: a guest's turn, asked in by that message.
+    private func turn(of botID: String, in id: String, wrapUp: Bool = false, namedIn: GroupMessage? = nil) async -> Outcome {
+        let guest = namedIn != nil
         guard let app, let bot = app.bots.bot(botID) else { return .absent }
         speaking[id] = botID
         defer {
@@ -952,7 +969,7 @@ final class BotGroups {
             let promptID = Identifier.message()
             let ended = app.workspace.endedRuns[seat, default: 0]
             let prompt = guest
-                ? Self.guestText(bot: botID, name: bot.name, in: group, all: all, asker: all.last { $0.kind != .note }?.author) { self.name(of: $0) }
+                ? Self.guestText(bot: botID, name: bot.name, in: group, all: all, asker: namedIn?.author) { self.name(of: $0) }
                 : isNew ? seatStartText(for: bot, in: group, all: all, wrapUp: wrapUp) : turnText(for: bot, in: group, unheard: Array(unheard), wrapUp: wrapUp)
             try await api.prompt(session: seat, id: promptID, text: prompt, delivery: .queue)
             if !guest, let last = all.last { setHeard(last.id, by: botID, in: id) }
@@ -976,9 +993,16 @@ final class BotGroups {
             })
             let (said, error, steps, size) = try await reply(in: seat, after: promptID, since: sent, api: api)
             // Grown well past the chat it's in (pages it read, drafts, long answers): it starts
-            // over at its next turn, in a new seat given the whole chat, and this one goes.
-            if !guest, let size, Self.outgrew(size, chat: Self.chatText(bot: botID, in: group, all: messages(in: id)) { self.name(of: $0) }) {
-                await startOver(botID, in: id)
+            // over at its next turn, in a new seat given the whole chat, and this one goes. Grown
+            // from its first turn here, so what every turn carries (its instructions and tools)
+            // doesn't count.
+            if !guest, let size {
+                let base = seatBase[seat] ?? size
+                seatBase[seat] = base
+                if size - base > Self.seatBudget, Self.outgrew(size - base, chat: Self.chatText(bot: botID, in: group, all: messages(in: id)) { self.name(of: $0) }) {
+                    seatBase[seat] = nil
+                    await startOver(botID, in: id)
+                }
             }
             let text = said
             if text.isEmpty {
@@ -1206,19 +1230,31 @@ final class BotGroups {
 
     /// The whole chat as a bot reads it in a conversation new to it (a new member's seat, one
     /// started over as it outgrew the chat, a guest's turn, the work list): every message from the
-    /// first, its own as "You".
-    static func chatText(bot: String, in group: BotGroup, all: [GroupMessage], name: (String?) -> String) -> String {
+    /// first, its own as "You"; in a chat too long for that, the latest that fit in `budget`.
+    static func chatText(bot: String, in group: BotGroup, all: [GroupMessage], name: (String?) -> String, budget: Int = chatBudget) -> String {
         let said = all.filter { $0.kind != .note }
         guard !said.isEmpty else { return "Nothing has been said in \"\(group.name)\" yet.\n" }
-        var text = "Everything said in \"\(group.name)\" so far, from the start:\n"
-        for message in said {
+        let parts = said.map { message in
             let who = message.author == bot
                 ? "You" + (message.report != nil ? " (reporting back on your part of the work)" : message.kind == .wrapUp ? " (wrap-up)" : "")
                 : label(of: message, name: name)
-            text += "\n\(who):\n\(indented(message.text))\n"
+            return "\n\(who):\n\(indented(message.text))\n"
         }
-        return text
+        // The latest that fit in the budget (the last always does).
+        var first = parts.count - 1
+        var size = parts[first].utf8.count
+        while first > 0, size + parts[first - 1].utf8.count <= budget {
+            size += parts[first - 1].utf8.count
+            first -= 1
+        }
+        let header = first == 0
+            ? "Everything said in \"\(group.name)\" so far, from the start:\n"
+            : "What was said in \"\(group.name)\" lately (\(first == 1 ? "the 1 earlier message is" : "the \(first) earlier messages are") left out, too long to give in full):\n"
+        return header + parts[first...].joined()
     }
+
+    /// How much of a chat a bot is given at most, in bytes of text (about 40,000 tokens): the latest of it.
+    static let chatBudget = 160_000
 
     /// What a bot is told at its first turn in a seat new to it: the whole chat, then its turn.
     static func seatStartText(bot: String, name botName: String, in group: BotGroup, all: [GroupMessage], wrapUp: Bool, named: String?, name: (String?) -> String) -> String {
@@ -1234,28 +1270,70 @@ final class BotGroups {
     }
 
     /// A bot's reply as the chat shows it: a bot of `names` written with "@", as models often write
-    /// it, named with "&" as the chat names bots, so it shows as that bot. The whole name, at the
-    /// start of a word: not "x@mira.com".
+    /// it, named with "&" as the chat names bots, so it shows as that bot. The whole name, as a
+    /// word of its own: after a space, the start or an opening bracket, quote or emphasis, never in
+    /// code, nor part of an address or a package (`x@mira.com`, `medium.com/@mira/post`,
+    /// `@mira/core`, `@mira.dev`).
     static func ampersands(in text: String, names: [String]) -> String {
         let mutable = NSMutableString(string: text)
+        let code = codeUnits(in: text)
         func isWordCharacter(at offset: Int) -> Bool {
             guard offset >= 0, offset < mutable.length else { return false }
             let character = mutable.substring(with: mutable.rangeOfComposedCharacterSequence(at: offset)).first
             return character.map { $0.isLetter || $0.isNumber } ?? false
         }
+        func unit(at offset: Int) -> unichar? { offset >= 0 && offset < mutable.length ? mutable.character(at: offset) : nil }
         for name in names.filter({ !$0.isEmpty }).sorted(by: { $0.count > $1.count }) {
             var from = 0
             while from < mutable.length {
                 let found = mutable.range(of: "@" + name, options: [.caseInsensitive, .diacriticInsensitive], range: NSRange(location: from, length: mutable.length - from))
                 guard found.location != NSNotFound else { break }
                 let end = found.location + found.length
-                if !isWordCharacter(at: found.location - 1), !isWordCharacter(at: end) {
+                let startsWord = found.location == 0 || unit(at: found.location - 1).map(mentionOpeners.contains) == true
+                let after = unit(at: end)
+                let endsWord = !isWordCharacter(at: end) && !(after.map(Self.joiners.contains) ?? false)
+                    && !(after.map(Self.continuers.contains) == true && isWordCharacter(at: end + 1))
+                if startsWord, endsWord, !code.contains(found.location) {
                     mutable.replaceCharacters(in: NSRange(location: found.location, length: 1), with: "&")
                 }
                 from = end
             }
         }
         return mutable as String
+    }
+
+    /// What may come right before a name written with "@": a space or line break, an opening
+    /// bracket or quote, emphasis.
+    private static let mentionOpeners = Set(" \t\n\r\u{00A0}([{\"'\u{201C}\u{2018}\u{00AB}*_~>".utf16)
+    /// What, right after one, makes it part of something else: a handle, a path, a package.
+    private static let joiners = Set("_/@".utf16)
+    /// What does too when a letter or number follows (`@mira.dev`, `@mira-core`): a sentence's end otherwise.
+    private static let continuers = Set(".-:".utf16)
+
+    /// Where `text` is code, by UTF-16 offset: fenced blocks (their fences too) and `inline` spans.
+    static func codeUnits(in text: String) -> Set<Int> {
+        var code = Set<Int>()
+        var fenced = false
+        var offset = 0
+        let backtick = UInt16(UInt8(ascii: "`"))
+        for line in text.components(separatedBy: "\n") {
+            let units = Array(line.utf16)
+            let trimmed = units.drop { $0 == 0x20 || $0 == 0x09 }
+            let fence = trimmed.starts(with: Array("```".utf16))
+            if fence || fenced {
+                for index in units.indices { code.insert(offset + index) }
+            } else {
+                var from = 0
+                while let open = units[from...].firstIndex(of: backtick), let close = units[(open + 1)...].firstIndex(of: backtick) {
+                    for index in open...close { code.insert(offset + index) }
+                    from = close + 1
+                    if from >= units.count { break }
+                }
+            }
+            if fence { fenced.toggle() }
+            offset += units.count + 1
+        }
+        return code
     }
 
     /// Bots outside the chat that its latest message names with "&" in its own words (not a quote
@@ -1671,7 +1749,12 @@ final class BotGroups {
         if onAgents { app?.workspace.runsOnAgents([session.id]) }
         app?.workspace.seats.insert(session.id)
         try? await api.setMetadata(session: session.id, .object(["kuvo": .object(["seat": .object(["group": .string(group.id), "bot": .string(bot.id), "scratch": .bool(true)])])]))
-        try await api.setInstruction(session: session.id, key: Self.seatKey, text: seatInstructions(for: bot, in: group))
+        do {
+            try await api.setInstruction(session: session.id, key: Self.seatKey, text: seatInstructions(for: bot, in: group))
+        } catch {
+            await dropScratch(session.id, api: api)
+            throw error
+        }
         return session.id
     }
 

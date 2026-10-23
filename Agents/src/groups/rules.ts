@@ -269,19 +269,35 @@ export function turnEnd(botName: string, wrapUp: boolean): string {
  * over as it outgrew the chat, a guest's turn, the work list): every message from the first, its
  * own as "You".
  */
-export function chatText(bot: string, group: Group, all: GroupMessage[], name: (author?: string) => string): string {
+export function chatText(bot: string, group: Group, all: GroupMessage[], name: (author?: string) => string, budget = chatBudget): string {
   const said = all.filter((message) => message.kind !== "note")
   if (said.length === 0) return `Nothing has been said in "${group.name}" yet.\n`
-  let text = `Everything said in "${group.name}" so far, from the start:\n`
-  for (const message of said) {
+  const parts = said.map((message) => {
     const who =
       message.author === bot
         ? "You" + (message.report !== undefined ? " (reporting back on your part of the work)" : message.kind === "wrapUp" ? " (wrap-up)" : "")
         : label(message, name)
-    text += `\n${who}:\n${indented(message.text)}\n`
+    return `\n${who}:\n${indented(message.text)}\n`
+  })
+  // The latest that fit in the budget (the last always does).
+  const encoder = new TextEncoder()
+  let first = parts.length - 1
+  let size = encoder.encode(parts[first]).length
+  while (first > 0) {
+    const more = encoder.encode(parts[first - 1]).length
+    if (size + more > budget) break
+    size += more
+    first--
   }
-  return text
+  const header =
+    first === 0
+      ? `Everything said in "${group.name}" so far, from the start:\n`
+      : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):\n`
+  return header + parts.slice(first).join("")
 }
+
+/** How much of a chat a bot is given at most, in bytes of text (about 40,000 tokens): the latest of it. */
+export const chatBudget = 160_000
 
 /** What a bot is told at its first turn in a seat new to it: the whole chat, then its turn. */
 export function seatStartText(bot: string, group: Group, all: GroupMessage[], wrapUp: boolean, name: (author?: string) => string, named?: string): string {
@@ -299,12 +315,15 @@ export function guestText(bot: string, group: Group, all: GroupMessage[], asker:
 
 /**
  * A bot's reply as the chat shows it: a bot of `names` written with "@", as models often write it,
- * named with "&" as the chat names bots, so it shows as that bot. The whole name, at the start of
- * a word: not "x@mira.com".
+ * named with "&" as the chat names bots, so it shows as that bot. The whole name, as a word of its
+ * own: after a space, the start or an opening bracket, quote or emphasis, never in code, nor part
+ * of an address or a package (`x@mira.com`, `medium.com/@mira/post`, `@mira/core`, `@mira.dev`).
  */
 export function ampersands(text: string, names: string[]): string {
   const folded = fold(text)
+  const code = codeUnits(text)
   const marks = new Set<number>()
+  const word = (at: number) => at >= 0 && at < text.length && /^[\p{L}\p{N}]/u.test(text.slice(at))
   for (const name of names.filter((each) => each.length > 0).sort((a, b) => length(b) - length(a))) {
     const needle = fold("@" + name)
     let from = 0
@@ -312,7 +331,10 @@ export function ampersands(text: string, names: string[]): string {
       const at = folded.indexOf(needle, from)
       if (at < 0) break
       const end = at + needle.length
-      if (!/[\p{L}\p{N}]$/u.test(text.slice(0, at)) && !/^[\p{L}\p{N}]/u.test(text.slice(end))) marks.add(at)
+      const after = text[end]
+      const startsWord = at === 0 || mentionOpeners.includes(text[at - 1])
+      const endsWord = !word(end) && !"_/@".includes(after ?? " ") && !(after !== undefined && ".-:".includes(after) && word(end + 1))
+      if (startsWord && endsWord && !code.has(at)) marks.add(at)
       from = end
     }
   }
@@ -321,6 +343,35 @@ export function ampersands(text: string, names: string[]): string {
     .split("")
     .map((unit, index) => (marks.has(index) ? "&" : unit))
     .join("")
+}
+
+/** What may come right before a name written with "@": a space or line break, an opening bracket or quote, emphasis. */
+const mentionOpeners = " \t\n\r\u00a0([{\"'\u201c\u2018\u00ab*_~>"
+
+/** Where `text` is code, by UTF-16 offset: fenced blocks (their fences too) and `inline` spans. */
+export function codeUnits(text: string): Set<number> {
+  const code = new Set<number>()
+  let fenced = false
+  let offset = 0
+  for (const line of text.split("\n")) {
+    const fence = /^[ \t]*```/.test(line)
+    if (fence || fenced) {
+      for (let index = 0; index < line.length; index++) code.add(offset + index)
+    } else {
+      let from = 0
+      for (;;) {
+        const open = line.indexOf("`", from)
+        if (open < 0) break
+        const close = line.indexOf("`", open + 1)
+        if (close < 0) break
+        for (let index = open; index <= close; index++) code.add(offset + index)
+        from = close + 1
+      }
+    }
+    if (fence) fenced = !fenced
+    offset += line.length + 1
+  }
+  return code
 }
 
 /** Bots outside the chat that its latest message names with & in its own words (not a quote it replies to): each answers it, once, as a guest. `bots`: every bot there is, by name. */

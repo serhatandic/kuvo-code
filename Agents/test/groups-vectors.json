@@ -80,6 +80,289 @@
       ],
       "shown" : "",
       "text" : ""
+    },
+    {
+      "names" : [
+        "Max"
+      ],
+      "shown" : "```py\n@max_retries(3)\n```\nThanks &Max.",
+      "text" : "```py\n@max_retries(3)\n```\nThanks @Max."
+    },
+    {
+      "names" : [
+        "Nova"
+      ],
+      "shown" : "Use `@nova/core`, &Nova",
+      "text" : "Use `@nova/core`, @Nova"
+    },
+    {
+      "names" : [
+        "Nova"
+      ],
+      "shown" : "See medium.com/@nova/post and npm i @nova/core",
+      "text" : "See medium.com/@nova/post and npm i @nova/core"
+    },
+    {
+      "names" : [
+        "Nova"
+      ],
+      "shown" : "@nova.dev or &Nova.",
+      "text" : "@nova.dev or @Nova."
+    },
+    {
+      "names" : [
+        "Mira",
+        "Nova",
+        "Ada"
+      ],
+      "shown" : "**&Mira** and _@Nova_ > &Ada",
+      "text" : "**@Mira** and _@Nova_ > @Ada"
+    },
+    {
+      "names" : [
+        "Mira"
+      ],
+      "shown" : "@mira-core vs &Mira - yes",
+      "text" : "@mira-core vs @Mira - yes"
+    },
+    {
+      "names" : [
+        "Mira"
+      ],
+      "shown" : "&Mira's turn, &Mira: go",
+      "text" : "@Mira's turn, @Mira: go"
+    }
+  ],
+  "chatBudget" : [
+    {
+      "all" : [
+        {
+          "id" : "gm_a",
+          "kind" : "message",
+          "text" : "First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_b",
+          "kind" : "message",
+          "text" : "Second.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "id" : "gm_c",
+          "kind" : "message",
+          "text" : "Third.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_d",
+          "kind" : "message",
+          "text" : "Fourth and last.",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "budget" : 0,
+      "chat" : "What was said in \"X\" lately (the 3 earlier messages are left out, too long to give in full):\n\nYou:\n    Fourth and last.\n",
+      "group" : {
+        "created" : "1970-01-01T00:00:00Z",
+        "heard" : {
+
+        },
+        "id" : "grp_x",
+        "members" : [
+          "bot_ada"
+        ],
+        "name" : "X",
+        "seats" : {
+
+        }
+      }
+    },
+    {
+      "all" : [
+        {
+          "id" : "gm_a",
+          "kind" : "message",
+          "text" : "First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_b",
+          "kind" : "message",
+          "text" : "Second.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "id" : "gm_c",
+          "kind" : "message",
+          "text" : "Third.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_d",
+          "kind" : "message",
+          "text" : "Fourth and last.",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "budget" : 40,
+      "chat" : "What was said in \"X\" lately (the 3 earlier messages are left out, too long to give in full):\n\nYou:\n    Fourth and last.\n",
+      "group" : {
+        "created" : "1970-01-01T00:00:00Z",
+        "heard" : {
+
+        },
+        "id" : "grp_x",
+        "members" : [
+          "bot_ada"
+        ],
+        "name" : "X",
+        "seats" : {
+
+        }
+      }
+    },
+    {
+      "all" : [
+        {
+          "id" : "gm_a",
+          "kind" : "message",
+          "text" : "First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_b",
+          "kind" : "message",
+          "text" : "Second.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "id" : "gm_c",
+          "kind" : "message",
+          "text" : "Third.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_d",
+          "kind" : "message",
+          "text" : "Fourth and last.",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "budget" : 70,
+      "chat" : "What was said in \"X\" lately (the 1 earlier message is left out, too long to give in full):\n\nYou:\n    Second.\n\nUser:\n    Third.\n\nYou:\n    Fourth and last.\n",
+      "group" : {
+        "created" : "1970-01-01T00:00:00Z",
+        "heard" : {
+
+        },
+        "id" : "grp_x",
+        "members" : [
+          "bot_ada"
+        ],
+        "name" : "X",
+        "seats" : {
+
+        }
+      }
+    },
+    {
+      "all" : [
+        {
+          "id" : "gm_a",
+          "kind" : "message",
+          "text" : "First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_b",
+          "kind" : "message",
+          "text" : "Second.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "id" : "gm_c",
+          "kind" : "message",
+          "text" : "Third.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_d",
+          "kind" : "message",
+          "text" : "Fourth and last.",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "budget" : 150,
+      "chat" : "What was said in \"X\" lately (the 1 earlier message is left out, too long to give in full):\n\nYou:\n    Second.\n\nUser:\n    Third.\n\nYou:\n    Fourth and last.\n",
+      "group" : {
+        "created" : "1970-01-01T00:00:00Z",
+        "heard" : {
+
+        },
+        "id" : "grp_x",
+        "members" : [
+          "bot_ada"
+        ],
+        "name" : "X",
+        "seats" : {
+
+        }
+      }
+    },
+    {
+      "all" : [
+        {
+          "id" : "gm_a",
+          "kind" : "message",
+          "text" : "First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_b",
+          "kind" : "message",
+          "text" : "Second.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "id" : "gm_c",
+          "kind" : "message",
+          "text" : "Third.",
+          "time" : "2026-09-21T14:13:20Z"
+        },
+        {
+          "author" : "bot_ada",
+          "id" : "gm_d",
+          "kind" : "message",
+          "text" : "Fourth and last.",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "budget" : 1000,
+      "chat" : "Everything said in \"X\" so far, from the start:\n\nUser:\n    First, a long one: şşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşşş\n\nYou:\n    Second.\n\nUser:\n    Third.\n\nYou:\n    Fourth and last.\n",
+      "group" : {
+        "created" : "1970-01-01T00:00:00Z",
+        "heard" : {
+
+        },
+        "id" : "grp_x",
+        "members" : [
+          "bot_ada"
+        ],
+        "name" : "X",
+        "seats" : {
+
+        }
+      }
     }
   ],
   "compose" : [

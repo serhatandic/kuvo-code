@@ -29,8 +29,8 @@ class Engine {
   /** Bots whose seats take a while (at work meanwhile), and ones whose prompts stay queued. */
   slow = new Map<string, number>()
   stuck = new Set<string>()
-  /** How much a bot's seat sends the model at each step (its context, in tokens). */
-  sizes: Record<string, number> = {}
+  /** How much a bot's seat sends the model at each step (its context, in tokens): one for every reply, or one for each in turn (the last kept). */
+  sizes: Record<string, number | number[]> = {}
   /** Prompts that take this long, by what they say. */
   slowPrompts = new Map<string, number>()
   /** A slow bot's thinking, shown with a file it reads, while it's at work. */
@@ -108,7 +108,8 @@ class Engine {
       if (refused) {
         conversation.push({ type: "assistant", id: body.id + "_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [], error: { message: refused } })
       } else if (line) {
-        const size = bot ? this.sizes[bot] : undefined
+        const sizes = bot ? this.sizes[bot] : undefined
+        const size = Array.isArray(sizes) ? (sizes.length > 1 ? sizes.shift() : sizes[0]) : sizes
         conversation.push({ type: "assistant", id: body.id + "_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text: line }],
           ...(size ? { tokens: { input: size, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } } : {}) })
       }
@@ -324,25 +325,57 @@ describe("a group chat on a machine", () => {
     await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${session}`))
   })
 
+  test("a guest you name while a bot is talking still answers, after that bot", async () => {
+    const { groups } = runner()
+    bot("bot_carl", "Carl")
+    engine.slow.set("Ada", 800)
+    engine.lines = { Ada: ["Thinking it over.", "NONE"], Carl: ["Carl here."], Ben: ["PASS", "PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Should we ship?")
+    await until(() => groups.talk("grp_team000001").speaking === "bot_ada")
+    groups.send("grp_team000001", "&Carl, you too?")
+    await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.author === "bot_carl") ?? false), 8000)
+    const said = groups.get("grp_team000001")!.messages.map((message) => message.text)
+    expect(said.indexOf("Carl here.")).toBeGreaterThan(said.indexOf("Thinking it over."))
+    const asked = engine.prompts().find((request) => String(request.body.text).startsWith("You're not in"))!
+    expect(asked.body.text).toStartWith(`You're not in "Team", but the user named you there with &Carl`)
+  }, 15_000)
+
   test("a seat grown well past the chat starts over at the bot's next turn, given the whole chat", async () => {
     const { groups } = runner()
-    engine.sizes = { Ada: 40_000 }
-    engine.lines = { Ada: ["Hi there.", "PASS", "Still here."], Ben: ["PASS", "PASS"] }
+    // Her seat grown by 35,000 from its first turn, at its second (each discussion's work list,
+    // in a conversation of its own, answers NONE).
+    engine.sizes = { Ada: [5_000, 5_000, 40_000, 1_000] }
+    engine.lines = { Ada: ["Hi there.", "NONE", "Grown.", "NONE", "Still here."], Ben: ["PASS", "PASS", "PASS"] }
+    groups.put(group(), [], "active", false)
+    const said = (text: string) => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.text === text) ?? false)
+    groups.send("grp_team000001", "Anyone there?")
+    await until(() => said("Hi there."))
+    const first = engine.prompts().find((request) => String(request.body.text).includes("Anyone there?"))!.path.split("/")[3]
+    groups.send("grp_team000001", "Again?")
+    await until(() => said("Grown."))
+    // Her seat went, with what it carried.
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${first}`))
+    expect(groups.get("grp_team000001")!.group.seats.bot_ada).toBeUndefined()
+    groups.send("grp_team000001", "Once more?")
+    await until(() => said("Still here."))
+    expect(engine.seatsMade().filter((title) => title === "Ada in Team").length).toBe(2)
+    const fresh = engine.prompts().find((request) => String(request.body.text).includes("Once more?"))!.body.text as string
+    expect(fresh).toStartWith(`Everything said in "Team" so far, from the start:`)
+    expect(fresh).toContain("You:\n    Grown.")
+    expect(fresh).toContain("User:\n    Anyone there?")
+  })
+
+  test("what a seat carries at every turn (its instructions and tools, a big one's) doesn't make it start over", async () => {
+    const { groups } = runner()
+    engine.sizes = { Ada: [45_000, 45_000, 48_000] }
+    engine.lines = { Ada: ["Hi there.", "NONE", "Still here."], Ben: ["PASS", "PASS"] }
     groups.put(group(), [], "active", false)
     groups.send("grp_team000001", "Anyone there?")
     await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.text === "Hi there.") ?? false))
-    // Her seat went, with what it carried.
-    const first = engine.prompts().find((request) => String(request.body.text).includes("Anyone there?"))!.path.split("/")[3]
-    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${first}`))
-    expect(groups.get("grp_team000001")!.group.seats.bot_ada).toBeUndefined()
-    engine.sizes = {}
     groups.send("grp_team000001", "Again?")
     await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.text === "Still here.") ?? false))
-    expect(engine.seatsMade().filter((title) => title === "Ada in Team").length).toBe(2)
-    const fresh = engine.prompts().find((request) => String(request.body.text).includes("Again?"))!.body.text as string
-    expect(fresh).toStartWith(`Everything said in "Team" so far, from the start:`)
-    expect(fresh).toContain("You:\n    Hi there.")
-    expect(fresh).toContain("User:\n    Anyone there?")
+    expect(engine.seatsMade().filter((title) => title === "Ada in Team").length).toBe(1)
   })
 
   test("writing while the work is handed out stops it, and your message has the next turn", async () => {

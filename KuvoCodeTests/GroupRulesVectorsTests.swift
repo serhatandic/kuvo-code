@@ -11,7 +11,7 @@ import Testing
 /// bridge's tests then say whether the machine's rules still match.
 @MainActor
 struct GroupRulesVectorsTests {
-    static let recorded = "071f16131caeede0e87b9e91d4077efa04a2ca18eb4db668168530ee846f8864"
+    static let recorded = "f4415876466b597d27ce28a403f4e9195186d470493ad59674259142b844926a"
 
     @Test func theMachinesChatsGoByTheseRules() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
@@ -41,6 +41,7 @@ struct GroupRulesVectorsTests {
             "freshText": try freshCases(),
             "guests": try guestCases(),
             "ampersands": ampersandCases.map { text, names in ["text": text, "names": names, "shown": BotGroups.ampersands(in: text, names: names)] },
+            "chatBudget": try chatBudgetCases(),
             "outgrew": outgrowCases.map { size, chat in ["size": size, "chat": chat, "outgrew": BotGroups.outgrew(size, chat: chat)] },
             "nextSpeaker": try speakerCases(),
             "mentions": mentionCases.map { text, names in
@@ -236,7 +237,22 @@ struct GroupRulesVectorsTests {
         ("@Mira — you first?", ["Mira", "Nova"]), ("Over to @mira and @NOVA.", ["Mira", "Nova"]), ("@Miranda isn't @Mira", ["Mira"]),
         ("Write to x@mira.com", ["Mira"]), ("&Mira already", ["Mira"]), ("@Zoë and @Zoe", ["Zoë"]), ("@Sam, @Samantha!", ["Sam", "Samantha"]),
         ("No names here", ["Mira"]), ("@Işık 😀 @Ada", ["Işık", "Ada"]), ("(@Mira)", ["Mira"]), ("", ["Mira"]),
+        ("```py\n@max_retries(3)\n```\nThanks @Max.", ["Max"]), ("Use `@nova/core`, @Nova", ["Nova"]),
+        ("See medium.com/@nova/post and npm i @nova/core", ["Nova"]), ("@nova.dev or @Nova.", ["Nova"]),
+        ("**@Mira** and _@Nova_ > @Ada", ["Mira", "Nova", "Ada"]), ("@mira-core vs @Mira - yes", ["Mira"]), ("@Mira's turn, @Mira: go", ["Mira"]),
     ]
+
+    /// A chat given within a budget (tiny here): the latest that fit, saying how many are left out.
+    static func chatBudgetCases() throws -> [[String: Any]] {
+        let group = BotGroup(id: "grp_x", name: "X", members: ["bot_ada"], created: Date(timeIntervalSince1970: 0))
+        let all = [message("gm_a", nil, "First, a long one: " + String(repeating: "ş", count: 60)), message("gm_b", "bot_ada", "Second."),
+                   message("gm_c", nil, "Third."), message("gm_d", "bot_ada", "Fourth and last.")]
+        let name: (String?) -> String = { $0 == nil ? "User" : "Ada" }
+        return try [0, 40, 70, 150, 1000].map { budget in
+            ["budget": budget, "group": try JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(group)), "all": try encoded(all),
+             "chat": BotGroups.chatText(bot: "bot_ada", in: group, all: all, name: name, budget: budget)]
+        }
+    }
 
     static let outgrowCases: [(Int, String)] = [
         (29_000, "short"), (31_000, "short"), (31_000, String(repeating: "x", count: 70_000)), (60_000, String(repeating: "x", count: 70_000)),

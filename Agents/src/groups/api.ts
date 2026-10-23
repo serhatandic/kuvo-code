@@ -47,6 +47,21 @@ export class SeatAPI {
     return new Set(Object.keys(answer?.data ?? {}))
   }
 
+  /** Every session, a page at a time (newest first). */
+  async sessions(): Promise<any[]> {
+    const all: any[] = []
+    let query = "limit=100&order=desc"
+    for (let pages = 0; pages < 50; pages++) {
+      const answer = await this.requester.request("GET", `/api/session?${query}`)
+      const data: any[] = Array.isArray(answer?.data) ? answer.data : []
+      all.push(...data)
+      const next = answer?.cursor?.next
+      if (data.length < 100 || !next) break
+      query = `limit=100&cursor=${encodeURIComponent(next)}`
+    }
+    return all
+  }
+
   async session(id: string): Promise<any> {
     return (await this.requester.request("GET", at(id)))?.data
   }
