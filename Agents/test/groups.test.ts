@@ -19,6 +19,7 @@ import {
   guestText,
   guests,
   outgrew,
+  ampersands,
   type Group,
   type GroupMessage,
   type GroupTask,
@@ -83,6 +84,10 @@ describe("a group chat on a machine goes by the Mac's rules", () => {
 
   test("who's asked in as a guest", () => {
     for (const vector of vectors.guests) expect(guests(vector.messages, vector.members, vector.bots)).toEqual(vector.guests)
+  })
+
+  test("a bot named with @ in a bot's reply, named with &", () => {
+    for (const vector of vectors.ampersands) expect([vector.text, ampersands(vector.text, vector.names)]).toEqual([vector.text, vector.shown])
   })
 
   test("when a seat has outgrown its chat", () => {

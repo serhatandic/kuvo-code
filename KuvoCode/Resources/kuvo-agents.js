@@ -10896,6 +10896,26 @@ function guestText(bot, group, all, asker, name) {
 ` + chatText(bot, group, all, name) + `
 Your turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing to add.`;
 }
+function ampersands(text, names) {
+  const folded = fold(text);
+  const marks = new Set;
+  for (const name of names.filter((each) => each.length > 0).sort((a, b) => length(b) - length(a))) {
+    const needle = fold("@" + name);
+    let from = 0;
+    for (;; ) {
+      const at = folded.indexOf(needle, from);
+      if (at < 0)
+        break;
+      const end = at + needle.length;
+      if (!/[\p{L}\p{N}]$/u.test(text.slice(0, at)) && !/^[\p{L}\p{N}]/u.test(text.slice(end)))
+        marks.add(at);
+      from = end;
+    }
+  }
+  if (marks.size === 0)
+    return text;
+  return text.split("").map((unit, index) => marks.has(index) ? "&" : unit).join("");
+}
 function guests(all, members, bots) {
   const last2 = [...all].reverse().find((message) => message.kind !== "note");
   if (!last2)
@@ -11128,7 +11148,7 @@ ${job}
 ` + `
 ` + `This conversation is your seat in "${group.name}", a group chat between the user and these bots: ${who.length === 0 ? "just you" : who}, and you. ${leads}${purpose}
 ` + `
-` + `Each message you get here holds what was said in the chat since you last spoke, and means it's your turn. Your reply is posted ` + `to the chat as your message, so write it to the group: a few sentences, plain and to the point, like a colleague in a team ` + `chat. Add something new: build on what others said instead of repeating it, disagree when you do, and ask someone directly ` + `with &Name. Write to the user as "you". If you have nothing new to add, reply with just PASS.
+` + `Each message you get here holds what was said in the chat since you last spoke, and means it's your turn. Your reply is posted ` + `to the chat as your message, so write it to the group: a few sentences, plain and to the point, like a colleague in a team ` + `chat. Add something new: build on what others said instead of repeating it, disagree when you do, and ask someone directly ` + `with &Name (an ampersand, never @Name). Write to the user as "you". If you have nothing new to add, reply with just PASS.
 ` + `
 ` + `Answer from what's in the chat and what you know; look things up (read and search files, search the web, read another conversation) only when what's asked needs it, and give small talk and quick questions a straight answer. There are no commands, subagents or messages to other agents here. ` + `Don't change files or start the work here: the chat is for talking it through. When something needs doing, say who should ` + `do it. Once the user says go, each of you gets your part in your own conversation, does it there with all your tools, and ` + `reports back here: don't send anyone the work yourself, and don't wait on it in the chat.
 ` + `
@@ -12835,13 +12855,46 @@ class GroupRunner {
         this.changed(id);
       }
       const sent = Date.now();
-      await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
-        const now2 = activity(messages, promptID, sent);
+      let thinking = "";
+      let streamedAt = 0;
+      const show = (now2) => {
         if (live.run !== run2 || live.speaking !== botID || JSON.stringify(now2) === JSON.stringify(live.activity ?? []))
           return;
-        live.activity = now2.length ? now2 : undefined;
+        const sameKind = live.activity?.[0]?.kind === now2[0]?.kind;
+        if (sameKind && Date.now() - streamedAt < 300)
+          return;
+        live.activity = now2;
+        streamedAt = Date.now();
         this.told(id);
+      };
+      const unlisten = this.context.listen?.(seat, {
+        event: (event) => {
+          const data = event?.data ?? {};
+          if (event?.type === "session.reasoning.started")
+            thinking = "";
+          else if (event?.type === "session.reasoning.delta") {
+            thinking = (thinking + String(data.delta ?? "")).slice(-2000);
+            const line = thought(thinking);
+            if (line)
+              show([{ kind: "thinking", text: line }]);
+          } else if (event?.type === "session.text.started" || event?.type === "session.text.delta")
+            show([{ kind: "writing" }]);
+        },
+        reconnected() {}
       });
+      try {
+        await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
+          const now2 = activity(messages, promptID, sent);
+          if (live.run !== run2 || live.speaking !== botID || now2.length === 0 || JSON.stringify(now2) === JSON.stringify(live.activity ?? []))
+            return;
+          if (Date.now() - streamedAt < 3000)
+            return;
+          live.activity = now2;
+          this.told(id);
+        });
+      } finally {
+        unlisten?.();
+      }
       if (left())
         return "absent";
       const reply = await this.reply(seat, promptID, sent, api);
@@ -12858,7 +12911,14 @@ class GroupRunner {
       }
       if (!wrapUp && isPass(reply.text))
         return "passed";
-      this.append({ id: groupMessageID(), author: botID, text: reply.text, time: stamp2(), kind: wrapUp ? "wrapUp" : "message", ...reply.steps.length ? { steps: reply.steps.map(trimmed) } : {} }, id);
+      this.append({
+        id: groupMessageID(),
+        author: botID,
+        text: ampersands(reply.text, this.context.store.allBots().map((each) => each.name)),
+        time: stamp2(),
+        kind: wrapUp ? "wrapUp" : "message",
+        ...reply.steps.length ? { steps: reply.steps.map(trimmed) } : {}
+      }, id);
       return "said";
     } catch (error3) {
       if (signal.aborted || error3 instanceof Cancelled || left())
@@ -13695,7 +13755,10 @@ var groups;
 if (onMachine) {
   try {
     const store2 = new GroupStore(join19(machineHome, "groups"), process.env.KUVO_BOTS ?? join19(machineHome, "bots"));
-    groups = { store: store2, runner: new GroupRunner({ store: store2, engine: link2, bridge: () => self, trash: join19(machineHome, "trash") }) };
+    groups = {
+      store: store2,
+      runner: new GroupRunner({ store: store2, engine: link2, bridge: () => self, trash: join19(machineHome, "trash"), listen: (session, listener) => link2.listen(session, listener) })
+    };
   } catch (error3) {
     console.error("group chats:", error3);
   }
@@ -13754,4 +13817,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 7298c1d5bd094c316d1b35d89db93409eab924e1b796212a9ce8fc89b7dc2cc0
+// Built from Agents/src 98083cb483ad69939ff4a498657a68756a3b6b4fd7a46a8a385d18f9cb66ea70

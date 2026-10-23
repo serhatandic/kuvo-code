@@ -1551,6 +1551,10 @@ final class Workspace {
     /// A run was refused its model's sign-in (it ran out and couldn't be renewed), or a step on it
     /// ended well (`ended` false): the provider, and the machine whose engine it is (nil: this Mac's).
     @ObservationIgnored var onSignInEnded: ((_ provider: String, _ machine: String?, _ ended: Bool) -> Void)?
+    /// A session nothing here shows (a group chat's seat at work), thinking or writing: its
+    /// thinking reaches its messages only as each step ends, so the chat follows it here.
+    @ObservationIgnored var onUnshownStream: ((ServerEvent) -> Void)?
+    private static let streamTypes: Set<String> = ["session.reasoning.started", "session.reasoning.delta", "session.text.started", "session.text.delta"]
 
     /// An event from this Mac's engine, or from `machine`'s.
     func handle(_ event: ServerEvent, machine: String? = nil) {
@@ -1610,6 +1614,7 @@ final class Workspace {
         }
         noteQuestions(event)
         guard let id = event.sessionID else { return }
+        if models[id] == nil, Self.streamTypes.contains(event.type) { onUnshownStream?(event) }
         // A sign-in that couldn't be renewed (the engine says only "Request failed: 400" then), and
         // one that works again (a step that ended well).
         if event.type == "session.execution.failed" {

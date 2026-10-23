@@ -118,7 +118,10 @@ let groups: { runner: GroupRunner; store: GroupStore } | undefined
 if (onMachine) {
   try {
     const store = new GroupStore(join(machineHome!, "groups"), process.env.KUVO_BOTS ?? join(machineHome!, "bots"))
-    groups = { store, runner: new GroupRunner({ store, engine: link, bridge: () => self, trash: join(machineHome!, "trash") }) }
+    groups = {
+      store,
+      runner: new GroupRunner({ store, engine: link, bridge: () => self, trash: join(machineHome!, "trash"), listen: (session, listener) => link.listen(session, listener) }),
+    }
   } catch (error) {
     console.error("group chats:", error)
   }

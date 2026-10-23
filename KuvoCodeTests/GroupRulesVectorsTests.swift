@@ -11,7 +11,7 @@ import Testing
 /// bridge's tests then say whether the machine's rules still match.
 @MainActor
 struct GroupRulesVectorsTests {
-    static let recorded = "9102dd4b81f06d6d595059098cbb7938992aaa3a4ca0064a4f9bdccea685f612"
+    static let recorded = "071f16131caeede0e87b9e91d4077efa04a2ca18eb4db668168530ee846f8864"
 
     @Test func theMachinesChatsGoByTheseRules() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
@@ -40,6 +40,7 @@ struct GroupRulesVectorsTests {
             "turnText": try turnCases(),
             "freshText": try freshCases(),
             "guests": try guestCases(),
+            "ampersands": ampersandCases.map { text, names in ["text": text, "names": names, "shown": BotGroups.ampersands(in: text, names: names)] },
             "outgrew": outgrowCases.map { size, chat in ["size": size, "chat": chat, "outgrew": BotGroups.outgrew(size, chat: chat)] },
             "nextSpeaker": try speakerCases(),
             "mentions": mentionCases.map { text, names in
@@ -230,6 +231,12 @@ struct GroupRulesVectorsTests {
         }
         return cases
     }
+
+    static let ampersandCases: [(String, [String])] = [
+        ("@Mira — you first?", ["Mira", "Nova"]), ("Over to @mira and @NOVA.", ["Mira", "Nova"]), ("@Miranda isn't @Mira", ["Mira"]),
+        ("Write to x@mira.com", ["Mira"]), ("&Mira already", ["Mira"]), ("@Zoë and @Zoe", ["Zoë"]), ("@Sam, @Samantha!", ["Sam", "Samantha"]),
+        ("No names here", ["Mira"]), ("@Işık 😀 @Ada", ["Işık", "Ada"]), ("(@Mira)", ["Mira"]), ("", ["Mira"]),
+    ]
 
     static let outgrowCases: [(Int, String)] = [
         (29_000, "short"), (31_000, "short"), (31_000, String(repeating: "x", count: 70_000)), (60_000, String(repeating: "x", count: 70_000)),

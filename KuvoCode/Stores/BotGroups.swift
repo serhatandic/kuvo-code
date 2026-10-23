@@ -303,6 +303,14 @@ final class BotGroups {
     private(set) var speaking: [String: String] = [:]
     /// What the bot talking is doing, by chat (see `GroupActivity`).
     private(set) var activity: [String: [GroupActivity]] = [:]
+    /// The chat each conversation at work now talks in (a member's seat, a guest's), for its stream.
+    @ObservationIgnored private var talkingIn: [String: String] = [:]
+    /// What a seat at work has thought so far in its step, from the engine's stream: its messages
+    /// have its thinking only once the step ends.
+    @ObservationIgnored private var thinking: [String: String] = [:]
+    /// When a chat's line last came from the stream: a look at the seat's messages, which can be
+    /// a step behind, doesn't take it back for a moment.
+    @ObservationIgnored private var streamedAt: [String: Date] = [:]
     /// Chats talking something through right now.
     private(set) var discussing: Set<String> = []
     /// Chats that stopped at their limit of turns with more to say.
@@ -561,6 +569,30 @@ final class BotGroups {
     }
 
     // MARK: Talking
+
+    /// A seat at work, thinking or writing (from the engine's stream): its latest thought, in a
+    /// line under its name, a few times a second at most.
+    func streamed(_ event: ServerEvent) {
+        guard let seat = event.sessionID, let id = talkingIn[seat] else { return }
+        var now: [GroupActivity]?
+        switch event.type {
+        case "session.reasoning.started":
+            thinking[seat] = ""
+        case "session.reasoning.delta":
+            guard let delta = try? event.payload(as: EventPayload.Delta.self) else { return }
+            thinking[seat, default: ""] += delta.delta
+            if let text = thinking[seat], text.count > 2000 { thinking[seat] = String(text.suffix(1000)) }
+            now = GroupActivity.thought(thinking[seat] ?? "").map { [.thinking($0)] }
+        default:
+            now = [.writing]
+        }
+        guard let now, activity[id] != now else { return }
+        // Its kind changing (thinking, then writing) shows at once; the same thought growing, now and then.
+        let sameKind = activity[id]?.first.map { if case .thinking = $0 { true } else { false } } == now.first.map { if case .thinking = $0 { true } else { false } }
+        if sameKind, Date.now.timeIntervalSince(streamedAt[id] ?? .distantPast) < 0.3 { return }
+        activity[id] = now
+        streamedAt[id] = .now
+    }
 
     /// Your message to the chat. It starts a discussion, or joins the one under way: the bot
     /// talking gets it straight away, the rest at their turns.
@@ -930,9 +962,17 @@ final class BotGroups {
                 save()
             }
             let sent = Date.now
+            talkingIn[seat] = id
+            defer {
+                talkingIn[seat] = nil
+                thinking[seat] = nil
+            }
             try await waitForRun(of: seat, after: ended, since: sent, api: api, seen: { [weak self] messages in
+                guard let self else { return }
                 let now = GroupActivity.latest(in: messages, after: promptID, since: sent)
-                if self?.speaking[id] == botID, self?.activity[id] ?? [] != now { self?.activity[id] = now.isEmpty ? nil : now }
+                guard self.speaking[id] == botID, !now.isEmpty, self.activity[id] ?? [] != now,
+                      Date.now.timeIntervalSince(self.streamedAt[id] ?? .distantPast) > 3 else { return }
+                self.activity[id] = now
             })
             let (said, error, steps, size) = try await reply(in: seat, after: promptID, since: sent, api: api)
             // Grown well past the chat it's in (pages it read, drafts, long answers): it starts
@@ -949,7 +989,7 @@ final class BotGroups {
                 return .passed
             }
             if !wrapUp, Self.isPass(text) { return .passed }
-            append(GroupMessage(id: Self.newID(), author: botID, text: text, time: .now, kind: wrapUp ? .wrapUp : .message,
+            append(GroupMessage(id: Self.newID(), author: botID, text: Self.ampersands(in: text, names: app.bots.list.map(\.name)), time: .now, kind: wrapUp ? .wrapUp : .message,
                                 steps: steps.isEmpty ? nil : steps.map(Self.trimmed)), to: id)
             return .said
         } catch is CancellationError {
@@ -1191,6 +1231,31 @@ final class BotGroups {
         "You're not in \"\(group.name)\", but \(asker.map(name) ?? "the user") named you there with &\(botName), so you answer this once, as a guest.\n\n"
             + chatText(bot: bot, in: group, all: all, name: name)
             + "\nYour turn, \(botName). Reply to the group, or just PASS if you have nothing to add."
+    }
+
+    /// A bot's reply as the chat shows it: a bot of `names` written with "@", as models often write
+    /// it, named with "&" as the chat names bots, so it shows as that bot. The whole name, at the
+    /// start of a word: not "x@mira.com".
+    static func ampersands(in text: String, names: [String]) -> String {
+        let mutable = NSMutableString(string: text)
+        func isWordCharacter(at offset: Int) -> Bool {
+            guard offset >= 0, offset < mutable.length else { return false }
+            let character = mutable.substring(with: mutable.rangeOfComposedCharacterSequence(at: offset)).first
+            return character.map { $0.isLetter || $0.isNumber } ?? false
+        }
+        for name in names.filter({ !$0.isEmpty }).sorted(by: { $0.count > $1.count }) {
+            var from = 0
+            while from < mutable.length {
+                let found = mutable.range(of: "@" + name, options: [.caseInsensitive, .diacriticInsensitive], range: NSRange(location: from, length: mutable.length - from))
+                guard found.location != NSNotFound else { break }
+                let end = found.location + found.length
+                if !isWordCharacter(at: found.location - 1), !isWordCharacter(at: end) {
+                    mutable.replaceCharacters(in: NSRange(location: found.location, length: 1), with: "&")
+                }
+                from = end
+            }
+        }
+        return mutable as String
     }
 
     /// Bots outside the chat that its latest message names with "&" in its own words (not a quote
@@ -1659,7 +1724,7 @@ final class BotGroups {
         Each message you get here holds what was said in the chat since you last spoke, and means it's your turn. Your reply is posted \
         to the chat as your message, so write it to the group: a few sentences, plain and to the point, like a colleague in a team \
         chat. Add something new: build on what others said instead of repeating it, disagree when you do, and ask someone directly \
-        with &Name. Write to the user as "you". If you have nothing new to add, reply with just PASS.
+        with &Name (an ampersand, never @Name). Write to the user as "you". If you have nothing new to add, reply with just PASS.
 
         Answer from what's in the chat and what you know; look things up (read and search files, search the web, read another conversation) only when what's asked needs it, and give small talk and quick questions a straight answer. There are no commands, subagents or messages to other agents here. \
         Don't change files or start the work here: the chat is for talking it through. When something needs doing, say who should \

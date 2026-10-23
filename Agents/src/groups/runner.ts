@@ -27,9 +27,11 @@ import {
   guestText,
   guests,
   outgrew,
+  ampersands,
   stamp,
   tasks as splitTasks,
   activity as activityOf,
+  thought,
   trim,
   trimmed,
   turnText,
@@ -57,6 +59,8 @@ export interface RunnerContext {
   trash: string
   /** How often it looks in on a run, as a share of the usual (tests look in more often). */
   pace?: number
+  /** The engine's live events for a session, while it's listened to: a seat's thinking reaches its messages only as each step ends. */
+  listen?: (session: string, listener: { event(event: any): void; reconnected(): void }) => () => void
 }
 
 /** What the Mac and phone see of a chat's talk. */
@@ -632,12 +636,42 @@ export class GroupRunner {
         this.changed(id)
       }
       const sent = Date.now()
-      await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
-        const now = activityOf(messages, promptID, sent)
+      // Its latest thought, from the engine's stream, in a line under its name, a few times a
+      // second at most; a look at its messages, which can be a step behind, doesn't take it back
+      // for a moment.
+      let thinking = ""
+      let streamedAt = 0
+      const show = (now: Activity[]) => {
         if (live.run !== run || live.speaking !== botID || JSON.stringify(now) === JSON.stringify(live.activity ?? [])) return
-        live.activity = now.length ? now : undefined
+        const sameKind = live.activity?.[0]?.kind === now[0]?.kind
+        if (sameKind && Date.now() - streamedAt < 300) return
+        live.activity = now
+        streamedAt = Date.now()
         this.told(id)
+      }
+      const unlisten = this.context.listen?.(seat, {
+        event: (event) => {
+          const data = event?.data ?? {}
+          if (event?.type === "session.reasoning.started") thinking = ""
+          else if (event?.type === "session.reasoning.delta") {
+            thinking = (thinking + String(data.delta ?? "")).slice(-2000)
+            const line = thought(thinking)
+            if (line) show([{ kind: "thinking", text: line }])
+          } else if (event?.type === "session.text.started" || event?.type === "session.text.delta") show([{ kind: "writing" }])
+        },
+        reconnected() {},
       })
+      try {
+        await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
+          const now = activityOf(messages, promptID, sent)
+          if (live.run !== run || live.speaking !== botID || now.length === 0 || JSON.stringify(now) === JSON.stringify(live.activity ?? [])) return
+          if (Date.now() - streamedAt < 3000) return
+          live.activity = now
+          this.told(id)
+        })
+      } finally {
+        unlisten?.()
+      }
       if (left()) return "absent"
       const reply = await this.reply(seat, promptID, sent, api)
       going()
@@ -655,7 +689,14 @@ export class GroupRunner {
       }
       if (!wrapUp && isPass(reply.text)) return "passed"
       this.append(
-        { id: groupMessageID(), author: botID, text: reply.text, time: stamp(), kind: wrapUp ? "wrapUp" : "message", ...(reply.steps.length ? { steps: reply.steps.map(trimmed) } : {}) },
+        {
+          id: groupMessageID(),
+          author: botID,
+          text: ampersands(reply.text, this.context.store.allBots().map((each) => each.name)),
+          time: stamp(),
+          kind: wrapUp ? "wrapUp" : "message",
+          ...(reply.steps.length ? { steps: reply.steps.map(trimmed) } : {}),
+        },
         id,
       )
       return "said"

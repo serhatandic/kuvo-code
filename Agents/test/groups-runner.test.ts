@@ -439,6 +439,36 @@ describe("a group chat on a machine", () => {
     expect(groups.talk("grp_team000001").activity).toBeUndefined()
   })
 
+  test("what a bot thinks shows as it thinks, from the engine's stream, before its messages have it", async () => {
+    const store = new GroupStore(join(root, "groups"), join(root, "bots"))
+    const listeners = new Map<string, { event(event: any): void }>()
+    const groups = new GroupRunner({
+      store, engine: server(engine.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05,
+      listen: (session, listener) => {
+        listeners.set(session, listener)
+        return () => listeners.delete(session)
+      },
+    })
+    engine.lines = { Ada: ["Sushi it is."], Ben: [] }
+    engine.slow.set("Ada", 2000)
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Where for lunch?")
+    await until(() => listeners.size > 0)
+    const [listener] = [...listeners.values()]
+    listener.event({ type: "session.reasoning.started", data: {} })
+    listener.event({ type: "session.reasoning.delta", data: { delta: "**Thinking about lunch**\nLooking at the " } })
+    listener.event({ type: "session.reasoning.delta", data: { delta: "menus" } })
+    await until(() => (groups.talk("grp_team000001").activity as any[] | undefined)?.[0]?.kind === "thinking")
+    expect(groups.talk("grp_team000001").activity).toEqual([{ kind: "thinking", text: "Looking at the" }])
+    await Bun.sleep(350)
+    listener.event({ type: "session.reasoning.delta", data: { delta: "!" } })
+    await until(() => (groups.talk("grp_team000001").activity as any[] | undefined)?.[0]?.text === "Looking at the menus!")
+    listener.event({ type: "session.text.started", data: {} })
+    await until(() => (groups.talk("grp_team000001").activity as any[] | undefined)?.[0]?.kind === "writing")
+    await until(() => !groups.talk("grp_team000001").discussing, 8000)
+    expect(listeners.size).toBe(0)
+  })
+
   test("a bot whose message stays queued (held after a stop) is woken, then passes", async () => {
     const { groups } = runner()
     engine.lines = { Ada: [], Ben: ["Here."] }

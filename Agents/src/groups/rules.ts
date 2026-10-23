@@ -297,6 +297,32 @@ export function guestText(bot: string, group: Group, all: GroupMessage[], asker:
   )
 }
 
+/**
+ * A bot's reply as the chat shows it: a bot of `names` written with "@", as models often write it,
+ * named with "&" as the chat names bots, so it shows as that bot. The whole name, at the start of
+ * a word: not "x@mira.com".
+ */
+export function ampersands(text: string, names: string[]): string {
+  const folded = fold(text)
+  const marks = new Set<number>()
+  for (const name of names.filter((each) => each.length > 0).sort((a, b) => length(b) - length(a))) {
+    const needle = fold("@" + name)
+    let from = 0
+    for (;;) {
+      const at = folded.indexOf(needle, from)
+      if (at < 0) break
+      const end = at + needle.length
+      if (!/[\p{L}\p{N}]$/u.test(text.slice(0, at)) && !/^[\p{L}\p{N}]/u.test(text.slice(end))) marks.add(at)
+      from = end
+    }
+  }
+  if (marks.size === 0) return text
+  return text
+    .split("")
+    .map((unit, index) => (marks.has(index) ? "&" : unit))
+    .join("")
+}
+
 /** Bots outside the chat that its latest message names with & in its own words (not a quote it replies to): each answers it, once, as a guest. `bots`: every bot there is, by name. */
 export function guests(all: GroupMessage[], members: string[], bots: { id: string; name: string }[]): string[] {
   const last = [...all].reverse().find((message) => message.kind !== "note")
@@ -593,7 +619,7 @@ export function seatInstructions(bot: SeatBot, group: Group, others: SeatBot[], 
     `Each message you get here holds what was said in the chat since you last spoke, and means it's your turn. Your reply is posted ` +
     `to the chat as your message, so write it to the group: a few sentences, plain and to the point, like a colleague in a team ` +
     `chat. Add something new: build on what others said instead of repeating it, disagree when you do, and ask someone directly ` +
-    `with &Name. Write to the user as "you". If you have nothing new to add, reply with just PASS.\n` +
+    `with &Name (an ampersand, never @Name). Write to the user as "you". If you have nothing new to add, reply with just PASS.\n` +
     `\n` +
     `Answer from what's in the chat and what you know; look things up (read and search files, search the web, read another conversation) only when what's asked needs it, and give small talk and quick questions a straight answer. There are no commands, subagents or messages to other agents here. ` +
     `Don't change files or start the work here: the chat is for talking it through. When something needs doing, say who should ` +
