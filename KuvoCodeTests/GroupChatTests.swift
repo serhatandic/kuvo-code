@@ -24,6 +24,14 @@ import Testing
         private var answered: [String: (prompt: String, text: String)] = [:]
         private(set) var turns: [(bot: String, heard: String)] = []
         private var next = 1
+        /// How much a bot's seats send the model (their context, in tokens), as their answers say.
+        var sizes: [String: Int] = [:]
+        /// Conversations deleted, and each one's bot.
+        private(set) var deleted: [(seat: String, bot: String)] = []
+
+        func delete(_ seat: String) {
+            lock.withLock { deleted.append((seat, bots[seat] ?? "")) }
+        }
 
         init(lines: [String: [String]]) { self.lines = lines }
 
@@ -55,12 +63,15 @@ import Testing
                 var reply: [String: Any] = ["id": prompt + "_reply", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3],
                                             "model": ["id": "m", "providerID": "p"], "content": refused == nil ? [["type": "text", "text": text]] : []]
                 if let refused { reply["error"] = ["type": "provider", "message": refused] }
+                if let bot = bots[seat], let size = sizes[bot] {
+                    reply["tokens"] = ["input": size, "output": 10, "reasoning": 0, "cache": ["read": 0, "write": 0]]
+                }
                 return [["id": prompt, "type": "user", "time": ["created": 1], "text": "(turn)"], reply]
             }
         }
 
         /// The discussion's turns: not the lead's request, after it, to list who does what.
-        var speakers: [String] { lock.withLock { turns.filter { !$0.heard.hasPrefix("For the app, not the chat") }.map(\.bot) } }
+        var speakers: [String] { lock.withLock { turns.filter { !$0.heard.contains("For the app, not the chat") }.map(\.bot) } }
     }
 
     /// The workspace, for the engine's events from its own thread.
@@ -95,9 +106,11 @@ import Testing
     }
 
     /// Ada (the lead) and Ben in a chat, with the lines they'll say; the app around them.
-    private func start(lines: [String: [String]], meeting: BotGroup.Meeting? = nil, benOn model: ModelRef? = nil, benTalksOn conversation: ModelRef? = nil) async throws -> (AppModel, BotGroup, Seats) {
+    private func start(lines: [String: [String]], meeting: BotGroup.Meeting? = nil, benOn model: ModelRef? = nil, benTalksOn conversation: ModelRef? = nil,
+                       withCy: Bool = false) async throws -> (AppModel, BotGroup, Seats) {
         try FileManager.default.createDirectory(at: botsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: [bot("bot_ada", "Ada"), bot("bot_ben", "Ben", model: model)]).write(to: botsFile)
+        // Cy: a bot of yours that isn't in the chat.
+        try JSONSerialization.data(withJSONObject: [bot("bot_ada", "Ada"), bot("bot_ben", "Ben", model: model)] + (withCy ? [bot("bot_cy", "Cy")] : [])).write(to: botsFile)
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
@@ -105,7 +118,8 @@ import Testing
         app.workspace.api = engine.api
         engine.list([StubEngine.session("ses_bot_ada", title: "Ada", directory: root.appending(path: "bot_ada").path(percentEncoded: false)),
                      StubEngine.session("ses_bot_ben", title: "Ben", directory: root.appending(path: "bot_ben").path(percentEncoded: false),
-                                        extra: conversation.map { ["model": ["id": $0.id, "providerID": $0.providerID]] } ?? [:])])
+                                        extra: conversation.map { ["model": ["id": $0.id, "providerID": $0.providerID]] } ?? [:])]
+                    + (withCy ? [StubEngine.session("ses_bot_cy", title: "Cy", directory: root.appending(path: "bot_cy").path(percentEncoded: false))] : []))
         let seats = Seats(lines: lines)
         let events = Events(app.workspace, engine)
         let directory = root.path(percentEncoded: false)
@@ -121,6 +135,10 @@ import Testing
                 seats.turn(String(seat), prompt: request.body["id"] as? String ?? "", text: request.body["text"] as? String ?? "")
                 events.ran(String(seat))
             }
+            return StubWeb.json([:])
+        }
+        engine.on("DELETE", "/api/session/ses_seat_*") { request in
+            seats.delete(String(request.path.split(separator: "/")[2]))
             return StubWeb.json([:])
         }
         engine.on("GET", "/api/session/ses_seat_*") { request in
@@ -166,6 +184,43 @@ import Testing
         // Each heard your message, and Ben what Ada said before him.
         #expect(seats.turns.first?.heard.contains("Which database for the notes app?") == true)
         #expect(seats.turns.first { $0.bot == "Ben" }?.heard.contains("SQLite: one file") == true)
+    }
+
+    /// Named with &, a bot of yours outside the chat answers it, once, as a guest: given the whole
+    /// chat, in a conversation of its own for the turn, which goes once it has; it doesn't join.
+    @Test func aBotOutsideTheChatNamedWithAndAnswersAsAGuest() async throws {
+        defer { done() }
+        let (app, group, seats) = try await start(lines: ["Cy": ["Cy here: ship it."], "Ada": ["PASS"], "Ben": ["PASS"]], withCy: true)
+        app.groups.send("&Cy, what do you think?", to: group.id)
+        try await talkedThrough(app, group)
+        #expect(said(app, group) == [nil, "bot_cy"])
+        #expect(app.groups.messages(in: group.id).last { $0.author == "bot_cy" }?.text == "Cy here: ship it.")
+        let asked = try #require(seats.turns.first { $0.bot == "Cy" })
+        #expect(asked.heard.hasPrefix("You're not in \"Team\", but the user named you there with &Cy, so you answer this once, as a guest."))
+        #expect(asked.heard.contains("&Cy, what do you think?"))
+        #expect(app.groups.group(group.id)?.members == ["bot_ada", "bot_ben"])
+        #expect(app.groups.group(group.id)?.seats["bot_cy"] == nil)
+        for _ in 0..<100 where !seats.deleted.contains(where: { $0.bot == "Cy" }) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(seats.deleted.contains { $0.bot == "Cy" }, "its conversation for the turn goes once it has answered")
+    }
+
+    /// A seat grown well past the chat (pages it read, long answers) goes after the turn, and the
+    /// bot's next turn is in a new seat, given the whole chat, its own words as "You".
+    @Test func aSeatGrownPastTheChatStartsOverWithTheWholeChat() async throws {
+        defer { done() }
+        let (app, group, seats) = try await start(lines: ["Ada": ["Hi there.", "PASS", "Still here."], "Ben": ["PASS", "PASS"]])
+        seats.sizes = ["Ada": 40_000]
+        app.groups.send("Anyone there?", to: group.id)
+        try await talkedThrough(app, group)
+        #expect(seats.deleted.contains { $0.bot == "Ada" }, "her grown seat went")
+        #expect(app.groups.group(group.id)?.seats["bot_ada"] == nil)
+        seats.sizes = [:]
+        app.groups.send("Again?", to: group.id)
+        try await talkedThrough(app, group)
+        let fresh = try #require(seats.turns.last { $0.bot == "Ada" && $0.heard.contains("Again?") })
+        #expect(fresh.heard.hasPrefix("Everything said in \"Team\" so far, from the start:"))
+        #expect(fresh.heard.contains("You:\n    Hi there."))
+        #expect(fresh.heard.contains("User:\n    Anyone there?"))
     }
 
     /// Named with &, a bot speaks first, the lead after it; being in the chat, it's asked there,
@@ -336,7 +391,7 @@ import Testing
 
         app.groups.send("It's a small notes app.", to: group.id)
         try await talkedThrough(app, group)
-        let after = seats.turns.filter { !$0.heard.hasPrefix("For the app, not the chat") }.suffix(2)
+        let after = seats.turns.filter { !$0.heard.contains("For the app, not the chat") }.suffix(2)
         // Told it was taken back, with what it said, and told so once.
         let ada = try #require(after.first { $0.bot == "Ada" })
         #expect(ada.heard.contains("We need a big database server."))

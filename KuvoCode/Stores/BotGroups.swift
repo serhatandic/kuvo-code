@@ -748,6 +748,8 @@ final class BotGroups {
         var absent: Set<String> = []
         /// Bots' messages since yours.
         var said = 0
+        /// Guests that answered (or tried), each by the message that named it and its id.
+        var guested: Set<String> = []
         while !Task.isCancelled {
             guard let group = group(id), let app else { return epoch }
             if asked[id, default: 0] != epoch {
@@ -758,6 +760,26 @@ final class BotGroups {
                 said = 0
             }
             let members = group.members.filter { app.bots.bot($0) != nil && !absent.contains($0) }
+            // A bot outside the chat that the latest message names with "&" answers it first, as
+            // a guest, once.
+            let all = messages(in: id)
+            if let last = all.last(where: { $0.kind != .note }),
+               let guest = Self.guests(in: all, members: group.members, among: app.bots.list.map { (id: $0.id, name: $0.name) })
+                   .first(where: { !guested.contains(last.id + "/" + $0) }) {
+                guested.insert(last.id + "/" + guest)
+                if turns >= Self.limit(members: group.members.count) {
+                    paused.insert(id)
+                    break
+                }
+                let outcome = await turn(of: guest, in: id, guest: true)
+                guard !Task.isCancelled else { return epoch }
+                turns += 1
+                if outcome == .said {
+                    quiet = []
+                    said += 1
+                }
+                continue
+            }
             // Nobody with more to say: it's over, at the limit or not.
             guard let speaker = nextSpeaker(in: group, members: members, quiet: quiet) else { break }
             if turns >= Self.limit(members: group.members.count) {
@@ -840,8 +862,11 @@ final class BotGroups {
         .map(\.0)
     }
 
-    /// One bot's turn: what it hasn't heard yet goes to its seat, and its answer to the chat.
-    private func turn(of botID: String, in id: String, wrapUp: Bool = false) async -> Outcome {
+    /// One bot's turn: what it hasn't heard yet goes to its seat (the whole chat, to a seat new to
+    /// it), and its answer to the chat. A `guest` (a bot outside the chat that a message there
+    /// named) answers in a conversation of its own for the turn, given the whole chat, which goes
+    /// once it has.
+    private func turn(of botID: String, in id: String, wrapUp: Bool = false, guest: Bool = false) async -> Outcome {
         guard let app, let bot = app.bots.bot(botID) else { return .absent }
         speaking[id] = botID
         defer {
@@ -868,7 +893,7 @@ final class BotGroups {
             return .absent
         }
         // A seat made on another model (picked since, in its conversation or Edit Bot): on this one.
-        if let model, let group = group(id), let seat = group.seats[bot.id], let api = seatAPI(of: bot, in: group),
+        if !guest, let model, let group = group(id), let seat = group.seats[bot.id], let api = seatAPI(of: bot, in: group),
            let current = try? await api.session(seat).model, !current.sameModel(as: model) {
             await follow(model, bot: bot, in: group)
         }
@@ -876,27 +901,46 @@ final class BotGroups {
             note("\(bot.name) couldn’t answer: \(app.workspace.agents(forFolder: bot.directory)?.api == nil && OutsideAgents.runsWithAgents(model, machine: bot.machine) ? "the coding agents aren’t running" : "the engine isn’t running").", in: id)
             return .absent
         }
+        var scratch: String?
+        defer { if let scratch { Task { await self.dropScratch(scratch, api: api) } } }
         do {
-            let seat = try await seat(of: bot, in: id, api: api)
             guard let group = group(id) else { return .absent }
+            let seat: String, isNew: Bool
+            if guest {
+                seat = try await scratchSession(for: bot, in: group, api: api, title: "\(bot.name) asked into \(group.name)")
+                scratch = seat
+                isNew = true
+            } else {
+                (seat, isNew) = try await self.seat(of: bot, in: id, api: api)
+            }
+            guard let group = self.group(id) else { return .absent }
             let all = messages(in: id)
             let start = group.heard[botID].flatMap { heard in all.firstIndex { $0.id == heard } }.map { $0 + 1 } ?? 0
             let unheard = all[start...].filter { $0.author != botID && $0.kind != .note }
             let promptID = Identifier.message()
             let ended = app.workspace.endedRuns[seat, default: 0]
-            try await api.prompt(session: seat, id: promptID, text: turnText(for: bot, in: group, unheard: Array(unheard), wrapUp: wrapUp), delivery: .queue)
-            if let last = all.last { setHeard(last.id, by: botID, in: id) }
-            if let index = list.firstIndex(where: { $0.id == id }), list[index].retracted?[botID] != nil {
+            let prompt = guest
+                ? Self.guestText(bot: botID, name: bot.name, in: group, all: all, asker: all.last { $0.kind != .note }?.author) { self.name(of: $0) }
+                : isNew ? seatStartText(for: bot, in: group, all: all, wrapUp: wrapUp) : turnText(for: bot, in: group, unheard: Array(unheard), wrapUp: wrapUp)
+            try await api.prompt(session: seat, id: promptID, text: prompt, delivery: .queue)
+            if !guest, let last = all.last { setHeard(last.id, by: botID, in: id) }
+            if !guest, let index = list.firstIndex(where: { $0.id == id }), list[index].retracted?[botID] != nil {
                 list[index].retracted?[botID] = nil
                 if list[index].retracted?.isEmpty == true { list[index].retracted = nil }
                 save()
             }
             let sent = Date.now
-            try await waitForRun(of: seat, after: ended, since: sent, api: api) { [weak self] messages in
+            try await waitForRun(of: seat, after: ended, since: sent, api: api, seen: { [weak self] messages in
                 let now = GroupActivity.latest(in: messages, after: promptID, since: sent)
                 if self?.speaking[id] == botID, self?.activity[id] ?? [] != now { self?.activity[id] = now.isEmpty ? nil : now }
+            })
+            let (said, error, steps, size) = try await reply(in: seat, after: promptID, since: sent, api: api)
+            // Grown well past the chat it's in (pages it read, drafts, long answers): it starts
+            // over at its next turn, in a new seat given the whole chat, and this one goes.
+            if !guest, let size, Self.outgrew(size, chat: Self.chatText(bot: botID, in: group, all: messages(in: id)) { self.name(of: $0) }) {
+                await startOver(botID, in: id)
             }
-            let (text, error, steps) = try await reply(in: seat, after: promptID, since: sent, api: api)
+            let text = said
             if text.isEmpty {
                 if let error {
                     note("\(bot.name) couldn’t answer: \(catalog.plain(error, for: model, on: place))", in: id)
@@ -939,11 +983,16 @@ final class BotGroups {
     /// way, since nobody's there to answer them. `seen` hears its latest messages now and then,
     /// for what it's doing.
     private func waitForRun(of seat: String, after ended: Int, since sent: Date, api: OpenCodeAPI,
-                            seen: (([Message]) -> Void)? = nil) async throws {
+                            stops: (() -> Bool)? = nil, seen: (([Message]) -> Void)? = nil) async throws {
         var checked = Date.now
         var looked = Date.now
         while app?.workspace.endedRuns[seat, default: 0] == ended {
             try await Task.sleep(for: .milliseconds(300))
+            // Not worth waiting for any more (you wrote, while the work list was asked): stopped.
+            if stops?() == true {
+                try? await api.interrupt(session: seat)
+                throw CancellationError()
+            }
             if let seen, Date.now.timeIntervalSince(looked) > 1.5 {
                 looked = .now
                 if let messages = try? await api.messages(session: seat, limit: 12).data { seen(messages) }
@@ -979,11 +1028,28 @@ final class BotGroups {
     /// was given (yours, steered in while it talked, start a new part), so nothing it said to
     /// the group is lost, and none of the asides between its steps go in. An error, if that's
     /// all it has.
-    private func reply(in seat: String, after promptID: String, since sent: Date, api: OpenCodeAPI) async throws -> (text: String, error: String?, steps: [Message.ToolCall]) {
+    /// What the seat said since `promptID`, for the chat, and how much it sent the model at its
+    /// last step (its whole context, in tokens).
+    private func reply(in seat: String, after promptID: String, since sent: Date, api: OpenCodeAPI) async throws -> (text: String, error: String?, steps: [Message.ToolCall], size: Int?) {
         let messages = try await api.messages(session: seat, limit: 60).data
         let start = messages.firstIndex { $0.id == promptID }.map { $0 + 1 }
         let since = sent.timeIntervalSince1970 * 1000 - 2000
-        return Self.said(in: messages.enumerated().filter { index, message in start.map { index >= $0 } ?? (message.created >= since) }.map(\.element))
+        let (text, error, steps) = Self.said(in: messages.enumerated().filter { index, message in start.map { index >= $0 } ?? (message.created >= since) }.map(\.element))
+        let size = messages.reversed().lazy.compactMap { message -> TokenUsage? in
+            if case .assistant(let answer) = message { answer.tokens } else { nil }
+        }.first.map { $0.input + $0.cache.read + $0.cache.write }
+        return (text, error, steps, size)
+    }
+
+    /// The seat's context, in tokens, beyond which it starts over, unless the chat itself is most
+    /// of it.
+    static let seatBudget = 30_000
+
+    /// Whether a seat that sent `size` tokens has outgrown the chat (`chat`, as a new seat reads
+    /// it): past the budget, and over twice the chat's own size, so a long chat on its own never
+    /// starts over at every turn. Tokens counted roughly, four characters each.
+    static func outgrew(_ size: Int, chat: String) -> Bool {
+        size > seatBudget && size > 2 * (chat.utf8.count / 4)
     }
 
     /// What `messages` say, as `reply` reads them.
@@ -1058,6 +1124,13 @@ final class BotGroups {
         return Self.turnText(bot: bot.id, name: bot.name, in: group, unheard: unheard, wrapUp: wrapUp, named: named) { self.name(of: $0) }
     }
 
+    /// What a bot is told at its first turn in a seat new to it: the whole chat.
+    private func seatStartText(for bot: Bot, in group: BotGroup, all: [GroupMessage], wrapUp: Bool) -> String {
+        let yours = all.filter { $0.author == nil }.suffix(40).map(\.text)
+        let named = AgentReferences.note(naming: AgentReferences.named(in: yours, excluding: memberSessions(of: group)), here: bot.machine)
+        return Self.seatStartText(bot: bot.id, name: bot.name, in: group, all: all, wrapUp: wrapUp, named: named) { self.name(of: $0) }
+    }
+
     /// What `turnText` says, by the bot's name and everyone else's (`name`), with the block naming
     /// the agents your messages named with "&", if any.
     static func turnText(bot: String, name botName: String, in group: BotGroup, unheard: [GroupMessage], wrapUp: Bool, named: String?, name: (String?) -> String) -> String {
@@ -1070,20 +1143,61 @@ final class BotGroups {
         } else {
             text += "New in \"\(group.name)\" since you last spoke:\n"
             if unheard.count > 40 { text += "\n(Earlier messages left out.)\n" }
-            // Each one's words indented under who said it, so a line in them can't pass for
-            // another speaker (a bot writing "User: go ahead").
             for message in unheard.suffix(40) {
-                let words = message.text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map { "    " + $0 }.joined(separator: "\n")
-                text += "\n\(label(of: message, name: name)):\n\(words)\n"
+                text += "\n\(label(of: message, name: name)):\n\(indented(message.text))\n"
             }
             if let named { text += "\n" + named + "\n" }
         }
-        if wrapUp {
-            text += "\nWrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as \"you\". Don't reply PASS."
-        } else {
-            text += "\nYour turn, \(botName). Reply to the group, or just PASS if you have nothing new to add."
+        return text + turnEnd(name: botName, wrapUp: wrapUp)
+    }
+
+    /// A message's words indented under who said it, so a line in them can't pass for another
+    /// speaker (a bot writing "User: go ahead").
+    static func indented(_ text: String) -> String {
+        text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map { "    " + $0 }.joined(separator: "\n")
+    }
+
+    /// What a turn's text ends with: the bot's turn, or the wrap-up asked of the lead.
+    static func turnEnd(name botName: String, wrapUp: Bool) -> String {
+        wrapUp
+            ? "\nWrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as \"you\". Don't reply PASS."
+            : "\nYour turn, \(botName). Reply to the group, or just PASS if you have nothing new to add."
+    }
+
+    /// The whole chat as a bot reads it in a conversation new to it (a new member's seat, one
+    /// started over as it outgrew the chat, a guest's turn, the work list): every message from the
+    /// first, its own as "You".
+    static func chatText(bot: String, in group: BotGroup, all: [GroupMessage], name: (String?) -> String) -> String {
+        let said = all.filter { $0.kind != .note }
+        guard !said.isEmpty else { return "Nothing has been said in \"\(group.name)\" yet.\n" }
+        var text = "Everything said in \"\(group.name)\" so far, from the start:\n"
+        for message in said {
+            let who = message.author == bot
+                ? "You" + (message.report != nil ? " (reporting back on your part of the work)" : message.kind == .wrapUp ? " (wrap-up)" : "")
+                : label(of: message, name: name)
+            text += "\n\(who):\n\(indented(message.text))\n"
         }
         return text
+    }
+
+    /// What a bot is told at its first turn in a seat new to it: the whole chat, then its turn.
+    static func seatStartText(bot: String, name botName: String, in group: BotGroup, all: [GroupMessage], wrapUp: Bool, named: String?, name: (String?) -> String) -> String {
+        chatText(bot: bot, in: group, all: all, name: name) + (named.map { "\n" + $0 + "\n" } ?? "") + turnEnd(name: botName, wrapUp: wrapUp)
+    }
+
+    /// What a bot outside the chat is told when a message there names it with "&": the whole chat,
+    /// then its one turn in it, as a guest. `asker`: who named it (nil: you).
+    static func guestText(bot: String, name botName: String, in group: BotGroup, all: [GroupMessage], asker: String?, name: (String?) -> String) -> String {
+        "You're not in \"\(group.name)\", but \(asker.map(name) ?? "the user") named you there with &\(botName), so you answer this once, as a guest.\n\n"
+            + chatText(bot: bot, in: group, all: all, name: name)
+            + "\nYour turn, \(botName). Reply to the group, or just PASS if you have nothing to add."
+    }
+
+    /// Bots outside the chat that its latest message names with "&" in its own words (not a quote
+    /// it replies to): each answers it, once, as a guest. `bots`: every bot there is, by name.
+    static func guests(in all: [GroupMessage], members: [String], among bots: [(id: String, name: String)]) -> [String] {
+        guard let last = all.last(where: { $0.kind != .note }) else { return [] }
+        return mentions(in: Quoting.words(of: last.text), among: bots.filter { !members.contains($0.id) && $0.id != last.author })
     }
 
     func name(of author: String?) -> String {
@@ -1110,8 +1224,7 @@ final class BotGroups {
     /// under the wrap-up; if you'd already said to go ahead, each bot starts on its part at once,
     /// in its own conversation, otherwise once you click Start the Work.
     private func splitWork(of wrapUpID: String, in id: String, lead: String) async {
-        guard let app, let bot = app.bots.bot(lead), let group = group(id), let seat = group.seats[lead],
-              let api = seatAPI(of: bot, in: group) else { return }
+        guard let app, let bot = app.bots.bot(lead), let group = group(id), let api = seatAPI(of: bot, in: group) else { return }
         let members = group.members.compactMap { app.bots.bot($0) }
         // Yours since the wrap-up before this one: the discussion it sums up.
         let all = messages(in: id)
@@ -1119,16 +1232,27 @@ final class BotGroups {
         let begin = all[..<end].lastIndex { $0.kind == .wrapUp }.map { $0 + 1 } ?? all.startIndex
         let said = all[begin..<end].filter { $0.author == nil && $0.kind == .message }.suffix(6).map { String(Quoting.words(of: $0.text).prefix(800)) }
         let promptID = Identifier.message()
-        let ended = app.workspace.endedRuns[seat, default: 0]
         let sent = Date.now
         // A message of yours from here on is newer than the go-ahead the lead reads.
         let epoch = asked[id, default: 0]
         splitting[id] = lead
         defer { if splitting[id] == lead { splitting[id] = nil } }
+        // Asked apart from the lead's seat, so its list doesn't stay in what the lead carries to
+        // every turn after: in a conversation of its own, given the chat up to the wrap-up, which
+        // goes once it's answered.
+        var scratch: String?
+        defer { if let scratch { Task { await self.dropScratch(scratch, api: api) } } }
         do {
-            try await api.prompt(session: seat, id: promptID, text: Self.splitText(members: members, said: said), delivery: .queue)
-            try await waitForRun(of: seat, after: ended, since: sent, api: api)
-            let (text, _, _) = try await reply(in: seat, after: promptID, since: sent, api: api)
+            let session = try await scratchSession(for: bot, in: group, api: api, title: "\(bot.name) handing out the work in \(group.name)")
+            scratch = session
+            let chat = Self.chatText(bot: lead, in: group, all: Array(all[..<min(end + 1, all.count)])) { self.name(of: $0) }
+            let ended = app.workspace.endedRuns[session, default: 0]
+            try await api.prompt(session: session, id: promptID, text: chat + "\n" + Self.splitText(members: members, said: said), delivery: .queue)
+            // You writing meanwhile comes first: the list stops, and your message has the next turn.
+            try await waitForRun(of: session, after: ended, since: sent, api: api, stops: { [weak self] in
+                self?.asked[id, default: 0] != epoch
+            })
+            let (text, _, _, _) = try await reply(in: session, after: promptID, since: sent, api: api)
             let (tasks, go) = Self.tasks(in: text, members: members)
             guard !Task.isCancelled else { return }
             guard !tasks.isEmpty else {
@@ -1140,6 +1264,8 @@ final class BotGroups {
             Analytics.shared.track("group_work_split", ["parts": tasks.count, "go": go])
             // You wrote since (another thought, a stop): the parts wait for Start the Work.
             if go, asked[id, default: 0] == epoch { startWork(wrapUpID, in: id) }
+        } catch is CancellationError {
+            return
         } catch {
             guard !Task.isCancelled else { return }
             log.error("Splitting the work in \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
@@ -1428,7 +1554,8 @@ final class BotGroups {
     // MARK: Seats
 
     /// The bot's seat in the chat, made the first time it's needed.
-    private func seat(of bot: Bot, in id: String, api: OpenCodeAPI) async throws -> String {
+    /// The bot's seat in the chat, made if it has none yet; `isNew` when it was, for the whole chat.
+    private func seat(of bot: Bot, in id: String, api: OpenCodeAPI) async throws -> (id: String, isNew: Bool) {
         if let seat = group(id)?.seats[bot.id] {
             // One an earlier version made: its rules and instructions as seats get them now, once a
             // launch (so a seat from before & names whoever it asks with &, as the chat reads it).
@@ -1436,7 +1563,7 @@ final class BotGroups {
                 try? await api.setPermissions(session: seat, rules: Self.seatRules(for: bot))
                 if let group = group(id) { try? await api.setInstruction(session: seat, key: Self.seatKey, text: seatInstructions(for: bot, in: group)) }
             }
-            return seat
+            return (seat, false)
         }
         guard let group = group(id), let app else { throw CancellationError() }
         let model = talkingModel(of: bot)
@@ -1455,7 +1582,37 @@ final class BotGroups {
         list[index].seats[bot.id] = session.id
         if onAgents { list[index].agentSeats = (list[index].agentSeats ?? []).union([session.id]) }
         save()
+        return (session.id, true)
+    }
+
+    /// A seat that outgrew the chat: it goes, with what it gathered, and the bot's next turn makes
+    /// a new one, given the whole chat.
+    private func startOver(_ botID: String, in id: String) async {
+        guard let group = group(id), let seat = group.seats[botID] else { return }
+        await deleteSeat(seat, of: botID, in: group)
+        guard let index = list.firstIndex(where: { $0.id == id }), list[index].seats[botID] == seat else { return }
+        list[index].seats[botID] = nil
+        list[index].heard[botID] = nil
+        save()
+    }
+
+    /// A conversation of a bot's own for one question in a chat, beside its seat (a guest's turn,
+    /// the work list): made as a seat is and kept out of the lists as seats are, and deleted
+    /// (`dropScratch`) once answered, so nothing of it piles up.
+    private func scratchSession(for bot: Bot, in group: BotGroup, api: OpenCodeAPI, title: String) async throws -> String {
+        let model = talkingModel(of: bot)
+        let onAgents = OutsideAgents.runsWithAgents(model, machine: bot.machine)
+        let session = try await api.createSession(directory: bot.directory, title: title, agent: Self.seatAgent(for: model, onAgents: onAgents), model: model, permissions: Self.seatRules(for: bot))
+        if onAgents { app?.workspace.runsOnAgents([session.id]) }
+        app?.workspace.seats.insert(session.id)
+        try? await api.setMetadata(session: session.id, .object(["kuvo": .object(["seat": .object(["group": .string(group.id), "bot": .string(bot.id), "scratch": .bool(true)])])]))
+        try await api.setInstruction(session: session.id, key: Self.seatKey, text: seatInstructions(for: bot, in: group))
         return session.id
+    }
+
+    private func dropScratch(_ session: String, api: OpenCodeAPI) async {
+        try? await api.deleteSession(session)
+        app?.workspace.seats.remove(session)
     }
 
     /// A seat talks and looks things up; it doesn't change anything, and never waits for answers.

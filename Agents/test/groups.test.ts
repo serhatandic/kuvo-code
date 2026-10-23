@@ -14,6 +14,11 @@ import {
   seatRules,
   splitText,
   turnText,
+  chatText,
+  seatStartText,
+  guestText,
+  guests,
+  outgrew,
   type Group,
   type GroupMessage,
   type GroupTask,
@@ -64,6 +69,24 @@ describe("a group chat on a machine goes by the Mac's rules", () => {
       const group: Group = vector.group
       expect(turnText(vector.bot, group, vector.unheard, vector.wrapUp, name, vector.named ?? undefined)).toBe(vector.text)
     }
+  })
+
+  test("what a bot reads in a conversation new to it: the whole chat", () => {
+    for (const vector of vectors.freshText) {
+      const name = (author?: string) => (author === undefined ? "User" : (vector.names[author] ?? "A bot that left"))
+      const group: Group = vector.group
+      expect(chatText(vector.bot, group, vector.all, name)).toBe(vector.chat)
+      expect(seatStartText(vector.bot, group, vector.all, vector.wrapUp, name, vector.named ?? undefined)).toBe(vector.start)
+      expect(guestText(vector.bot, group, vector.all, vector.asker ?? undefined, name)).toBe(vector.guest)
+    }
+  })
+
+  test("who's asked in as a guest", () => {
+    for (const vector of vectors.guests) expect(guests(vector.messages, vector.members, vector.bots)).toEqual(vector.guests)
+  })
+
+  test("when a seat has outgrown its chat", () => {
+    for (const vector of vectors.outgrew) expect([vector.size, outgrew(vector.size, vector.chat)]).toEqual([vector.size, vector.outgrew])
   })
 
   test("who talks next", () => {

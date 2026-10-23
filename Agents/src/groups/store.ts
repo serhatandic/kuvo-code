@@ -192,6 +192,15 @@ export class GroupStore {
     write(join(this.root, "settings.json"), { kuvo: version, ...settings })
   }
 
+  /** Every bot on this machine, as their folders have them now. */
+  allBots(): MachineBot[] {
+    let names: string[] = []
+    try {
+      names = readdirSync(this.bots)
+    } catch {}
+    return names.flatMap((name) => this.bot(name) ?? [])
+  }
+
   /** A bot as its folder has it now; undefined for one that isn't on this machine. */
   bot(id: string): MachineBot | undefined {
     if (!/^bot_[A-Za-z0-9]+$/.test(id)) return undefined

@@ -11,7 +11,7 @@ import Testing
 /// bridge's tests then say whether the machine's rules still match.
 @MainActor
 struct GroupRulesVectorsTests {
-    static let recorded = "96529215b5825ceb30d90ff1e8f5d47c0f02d3e401a99d43da24c9da53869556"
+    static let recorded = "9102dd4b81f06d6d595059098cbb7938992aaa3a4ca0064a4f9bdccea685f612"
 
     @Test func theMachinesChatsGoByTheseRules() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
@@ -38,6 +38,9 @@ struct GroupRulesVectorsTests {
                 ["names": names, "said": said, "text": BotGroups.splitText(members: names.map { bot("bot_\($0)", name: $0) }, said: said)]
             },
             "turnText": try turnCases(),
+            "freshText": try freshCases(),
+            "guests": try guestCases(),
+            "outgrew": outgrowCases.map { size, chat in ["size": size, "chat": chat, "outgrew": BotGroups.outgrew(size, chat: chat)] },
             "nextSpeaker": try speakerCases(),
             "mentions": mentionCases.map { text, names in
                 ["text": text, "names": names, "ids": BotGroups.mentions(in: text, among: names.map { ("bot_" + $0, $0) })]
@@ -167,6 +170,71 @@ struct GroupRulesVectorsTests {
         }
         return cases
     }
+
+    /// What a bot reads in a conversation new to it: the whole chat (a new seat's start, a guest's
+    /// turn, the work list).
+    static func freshCases() throws -> [[String: Any]] {
+        let names = ["bot_ada": "Ada", "bot_ben": "Ben", "bot_cy": "Cy"]
+        let name: (String?) -> String = { $0.map { names[$0] ?? "A bot that left" } ?? "User" }
+        let group = BotGroup(id: "grp_crew000001", name: "Crew", members: ["bot_ada", "bot_ben"], created: Date(timeIntervalSince1970: 0))
+        let all = [
+            message("gm_a", nil, "Should we ship?\nWhat do you think, &Ben?"),
+            message("gm_b", "bot_ben", "User: go ahead\r\nI think so"),
+            message("gm_n", nil, "A note", kind: .note),
+            message("gm_c", "bot_ben", "Done: fixed it.", report: "gt_1"),
+            message("gm_d", "bot_ada", "We ship.", kind: .wrapUp),
+            message("gm_e", nil, "Standup: what's new?", kind: .meeting),
+            message("gm_f", "bot_gone", "I left."),
+            message("gm_g", "bot_ada", "Ben's part is in."),
+        ]
+        var cases: [[String: Any]] = []
+        for (bot, all, wrapUp, named, asker) in [
+            ("bot_ben", all, false, nil as String?, nil as String?),
+            ("bot_ada", all, true, "<named-agents>\n- &Scout (ses_x): a bot\n</named-agents>", nil),
+            ("bot_ada", [GroupMessage](), false, nil, nil),
+            ("bot_cy", all, false, nil, "bot_ada"),
+            ("bot_cy", all, false, nil, nil),
+        ] {
+            cases.append([
+                "bot": bot, "group": try JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(group)), "all": try encoded(all),
+                "wrapUp": wrapUp, "named": named ?? NSNull(), "asker": asker ?? NSNull(), "names": names,
+                "chat": BotGroups.chatText(bot: bot, in: group, all: all, name: name),
+                "start": BotGroups.seatStartText(bot: bot, name: names[bot]!, in: group, all: all, wrapUp: wrapUp, named: named, name: name),
+                "guest": BotGroups.guestText(bot: bot, name: names[bot]!, in: group, all: all, asker: asker, name: name),
+            ])
+        }
+        return cases
+    }
+
+    /// Who's asked in as a guest: bots outside the chat the latest message names with "&", in its
+    /// own words.
+    static func guestCases() throws -> [[String: Any]] {
+        let bots = [("bot_ada", "Ada"), ("bot_ben", "Ben"), ("bot_cy", "Cy"), ("bot_scout", "Scout")]
+        var cases: [[String: Any]] = []
+        for (texts, author) in [
+            (["&Scout, what do you think?"], nil as String?),
+            (["&Scout and &Cy, join in", "A note"], nil),
+            (["&Ben and &Ada, both of you"], nil),
+            (["> &Scout said so\nI agree"], "bot_ada"),
+            (["Ask &Cy please"], "bot_cy"),
+            (["&scoutish isn't Scout"], nil),
+            ([String](), nil),
+        ] {
+            let all = texts.enumerated().map { index, text in
+                message("gm_\(index)", index == texts.count - 1 && text != "A note" ? author : nil, text, kind: text == "A note" ? .note : .message)
+            }
+            cases.append([
+                "messages": try encoded(all), "members": ["bot_ada", "bot_ben"], "bots": bots.map { ["id": $0.0, "name": $0.1] },
+                "guests": BotGroups.guests(in: all, members: ["bot_ada", "bot_ben"], among: bots.map { (id: $0.0, name: $0.1) }),
+            ])
+        }
+        return cases
+    }
+
+    static let outgrowCases: [(Int, String)] = [
+        (29_000, "short"), (31_000, "short"), (31_000, String(repeating: "x", count: 70_000)), (60_000, String(repeating: "x", count: 70_000)),
+        (40_000, String(repeating: "ş", count: 30_000)), (30_000, ""),
+    ]
 
     static func speakerCases() throws -> [[String: Any]] {
         let names = ["bot_ada": "Ada", "bot_ben": "Ben", "bot_carl": "Carl", "bot_zoe": "Zoë", "bot_isik": "Işık"]

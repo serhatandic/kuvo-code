@@ -243,21 +243,73 @@ export function turnText(bot: string, group: Group, unheard: GroupMessage[], wra
   } else {
     text += `New in "${group.name}" since you last spoke:\n`
     if (unheard.length > 40) text += "\n(Earlier messages left out.)\n"
-    for (const message of unheard.slice(-40)) {
-      const words = message.text
-        .split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/)
-        .map((line) => "    " + line)
-        .join("\n")
-      text += `\n${label(message, name)}:\n${words}\n`
-    }
+    for (const message of unheard.slice(-40)) text += `\n${label(message, name)}:\n${indented(message.text)}\n`
     if (named) text += "\n" + named + "\n"
   }
-  if (wrapUp) {
-    text += `\nWrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as "you". Don't reply PASS.`
-  } else {
-    text += `\nYour turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing new to add.`
+  return text + turnEnd(name(bot), wrapUp)
+}
+
+/** A message's words indented under who said it, so a line in them can't pass for another speaker (a bot writing "User: go ahead"). */
+export function indented(text: string): string {
+  return text
+    .split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/)
+    .map((line) => "    " + line)
+    .join("\n")
+}
+
+/** What a turn's text ends with: the bot's turn, or the wrap-up asked of the lead. */
+export function turnEnd(botName: string, wrapUp: boolean): string {
+  return wrapUp
+    ? `\nWrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as "you". Don't reply PASS.`
+    : `\nYour turn, ${botName}. Reply to the group, or just PASS if you have nothing new to add.`
+}
+
+/**
+ * The whole chat as a bot reads it in a conversation new to it (a new member's seat, one started
+ * over as it outgrew the chat, a guest's turn, the work list): every message from the first, its
+ * own as "You".
+ */
+export function chatText(bot: string, group: Group, all: GroupMessage[], name: (author?: string) => string): string {
+  const said = all.filter((message) => message.kind !== "note")
+  if (said.length === 0) return `Nothing has been said in "${group.name}" yet.\n`
+  let text = `Everything said in "${group.name}" so far, from the start:\n`
+  for (const message of said) {
+    const who =
+      message.author === bot
+        ? "You" + (message.report !== undefined ? " (reporting back on your part of the work)" : message.kind === "wrapUp" ? " (wrap-up)" : "")
+        : label(message, name)
+    text += `\n${who}:\n${indented(message.text)}\n`
   }
   return text
+}
+
+/** What a bot is told at its first turn in a seat new to it: the whole chat, then its turn. */
+export function seatStartText(bot: string, group: Group, all: GroupMessage[], wrapUp: boolean, name: (author?: string) => string, named?: string): string {
+  return chatText(bot, group, all, name) + (named ? "\n" + named + "\n" : "") + turnEnd(name(bot), wrapUp)
+}
+
+/** What a bot outside the chat is told when a message there names it with &: the whole chat, then its one turn in it, as a guest. `asker`: who named it (undefined: you). */
+export function guestText(bot: string, group: Group, all: GroupMessage[], asker: string | undefined, name: (author?: string) => string): string {
+  return (
+    `You're not in "${group.name}", but ${asker !== undefined ? name(asker) : "the user"} named you there with &${name(bot)}, so you answer this once, as a guest.\n\n` +
+    chatText(bot, group, all, name) +
+    `\nYour turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing to add.`
+  )
+}
+
+/** Bots outside the chat that its latest message names with & in its own words (not a quote it replies to): each answers it, once, as a guest. `bots`: every bot there is, by name. */
+export function guests(all: GroupMessage[], members: string[], bots: { id: string; name: string }[]): string[] {
+  const last = [...all].reverse().find((message) => message.kind !== "note")
+  if (!last) return []
+  return mentions(ownWords(last.text), bots.filter((bot) => !members.includes(bot.id) && bot.id !== last.author))
+}
+
+/** The seat's context, in tokens, beyond which it starts over, unless the chat itself is most of it. */
+export const seatBudget = 30_000
+
+/** Whether a seat that sent `size` tokens has outgrown the chat (`chat`, as a new seat reads it): past the budget, and over twice the chat's own size. Tokens counted roughly, four characters each (UTF-8). */
+export function outgrew(size: number, chat: string): boolean {
+  return size > seatBudget && size > 2 * Math.floor(new TextEncoder().encode(chat).length / 4)
 }
 
 // MARK: Splitting the work

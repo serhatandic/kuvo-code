@@ -29,6 +29,10 @@ class Engine {
   /** Bots whose seats take a while (at work meanwhile), and ones whose prompts stay queued. */
   slow = new Map<string, number>()
   stuck = new Set<string>()
+  /** How much a bot's seat sends the model at each step (its context, in tokens). */
+  sizes: Record<string, number> = {}
+  /** Prompts that take this long, by what they say. */
+  slowPrompts = new Map<string, number>()
   /** A slow bot's thinking, shown with a file it reads, while it's at work. */
   working = new Map<string, string>()
   /** The accounts the engine lists, those it has ready, and seats whose provider turns them down with `failing`'s words. */
@@ -104,14 +108,16 @@ class Engine {
       if (refused) {
         conversation.push({ type: "assistant", id: body.id + "_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [], error: { message: refused } })
       } else if (line) {
-        conversation.push({ type: "assistant", id: body.id + "_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text: line }] })
+        const size = bot ? this.sizes[bot] : undefined
+        conversation.push({ type: "assistant", id: body.id + "_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text: line }],
+          ...(size ? { tokens: { input: size, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } } : {}) })
       }
       const finish = () => {
         conversation.push({ type: "idle", id: body.id + "_i", time: { created: at + 3 }, outcome: "succeeded" })
         this.conversations.set(session, conversation)
         this.busy.delete(session)
       }
-      const delay = bot ? this.slow.get(bot) : undefined
+      const delay = (bot ? this.slow.get(bot) : undefined) ?? [...this.slowPrompts].find(([text]) => String(body.text).includes(text))?.[1]
       if (delay) {
         // At work a while, its answer not there yet.
         const said = conversation.pop()
@@ -277,7 +283,14 @@ describe("a group chat on a machine", () => {
     expect(benPart).toContain("**Ada**: Notes written.")
     expect(messages.filter((message) => message.report !== undefined).map((message) => message.text)).toEqual(["Notes written.", "Build fixed."])
     // Each seat made once, with its rules, told who it is; the chat kept on disk as the Mac writes it.
-    expect(engine.seatsMade()).toEqual(["Ada in Team", "Ben in Team"])
+    // The work list asked apart from Ada's seat, given the whole chat, in a conversation that goes
+    // once it's answered.
+    expect(engine.seatsMade()).toEqual(["Ada in Team", "Ben in Team", "Ada handing out the work in Team"])
+    const asked = engine.prompts().find((request) => String(request.body.text).includes("For the app, not the chat"))!
+    expect(asked.body.text).toContain('Everything said in "Team" so far, from the start:')
+    expect(asked.body.text).toContain("You (wrap-up):")
+    const listed = asked.path.split("/")[3]
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${listed}`))
     const seat = engine.requests.find((request) => request.method === "POST" && request.path === "/api/session")!
     expect(seat.body.permissions.some((rule: any) => rule.action === "edit" && rule.effect === "deny")).toBe(true)
     const told = engine.requests.find((request) => request.method === "PUT" && request.path.endsWith("/instructions/entries/kuvo.seat"))!
@@ -291,6 +304,60 @@ describe("a group chat on a machine", () => {
     await until(() => engine.requests.some((request) => request.path.endsWith("/instructions/entries/kuvo.groups.machine")), 6000)
     expect(existsSync(join(root, "bots", "bot_ada", "groups", "grp_team000001.md"))).toBe(true)
     expect(events.some((event) => event.type === "kuvo.group.done")).toBe(true)
+  }, 20_000)
+
+  test("a bot outside the chat that you name with & answers as a guest, in a conversation of its own that goes", async () => {
+    const { groups } = runner()
+    bot("bot_carl", "Carl")
+    engine.lines = { Carl: ["Carl here: ship it."], Ada: ["PASS"], Ben: ["PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "&Carl, what do you think?")
+    await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.author === "bot_carl") ?? false))
+    const kept = groups.get("grp_team000001")!
+    expect(kept.messages.find((message) => message.author === "bot_carl")?.text).toBe("Carl here: ship it.")
+    expect(kept.group.members).toEqual(["bot_ada", "bot_ben"])
+    expect(kept.group.seats.bot_carl).toBeUndefined()
+    const asked = engine.prompts().find((request) => String(request.body.text).startsWith("You're not in"))!
+    expect(asked.body.text).toStartWith(`You're not in "Team", but the user named you there with &Carl, so you answer this once, as a guest.`)
+    expect(asked.body.text).toContain("&Carl, what do you think?")
+    const session = asked.path.split("/")[3]
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${session}`))
+  })
+
+  test("a seat grown well past the chat starts over at the bot's next turn, given the whole chat", async () => {
+    const { groups } = runner()
+    engine.sizes = { Ada: 40_000 }
+    engine.lines = { Ada: ["Hi there.", "PASS", "Still here."], Ben: ["PASS", "PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Anyone there?")
+    await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.text === "Hi there.") ?? false))
+    // Her seat went, with what it carried.
+    const first = engine.prompts().find((request) => String(request.body.text).includes("Anyone there?"))!.path.split("/")[3]
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${first}`))
+    expect(groups.get("grp_team000001")!.group.seats.bot_ada).toBeUndefined()
+    engine.sizes = {}
+    groups.send("grp_team000001", "Again?")
+    await until(() => !groups.talk("grp_team000001").discussing && (groups.get("grp_team000001")?.messages.some((message) => message.text === "Still here.") ?? false))
+    expect(engine.seatsMade().filter((title) => title === "Ada in Team").length).toBe(2)
+    const fresh = engine.prompts().find((request) => String(request.body.text).includes("Again?"))!.body.text as string
+    expect(fresh).toStartWith(`Everything said in "Team" so far, from the start:`)
+    expect(fresh).toContain("You:\n    Hi there.")
+    expect(fresh).toContain("User:\n    Anyone there?")
+  })
+
+  test("writing while the work is handed out stops it, and your message has the next turn", async () => {
+    const { groups } = runner()
+    engine.slowPrompts.set("For the app, not the chat", 3000)
+    engine.lines = { Ada: ["Let's ship. &Ben?", "Agreed.", "We ship.", "NONE", "Hello again."], Ben: ["Yes.", "PASS", "PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send("grp_team000001", "Should we ship?")
+    await until(() => engine.prompts().some((request) => String(request.body.text).includes("For the app, not the chat")), 8000)
+    const list = engine.prompts().find((request) => String(request.body.text).includes("For the app, not the chat"))!.path.split("/")[3]
+    groups.send("grp_team000001", "One more thing")
+    await until(() => engine.requests.some((request) => request.path === `/api/session/${list}/interrupt`), 3000)
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${list}`))
+    await until(() => groups.get("grp_team000001")?.messages.some((message) => message.text === "Hello again.") ?? false, 8000)
+    expect(groups.get("grp_team000001")!.messages.find((message) => message.kind === "wrapUp")?.tasks).toBeUndefined()
   }, 20_000)
 
   test("a bot you name with @ speaks first", async () => {

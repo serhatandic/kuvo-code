@@ -10848,27 +10848,63 @@ function turnText(bot, group, unheard, wrapUp, name, named2) {
       text += `
 (Earlier messages left out.)
 `;
-    for (const message of unheard.slice(-40)) {
-      const words = message.text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).map((line) => "    " + line).join(`
-`);
+    for (const message of unheard.slice(-40))
       text += `
 ${label(message, name)}:
-${words}
+${indented(message.text)}
 `;
-    }
     if (named2)
       text += `
 ` + named2 + `
 `;
   }
-  if (wrapUp) {
+  return text + turnEnd(name(bot), wrapUp);
+}
+function indented(text) {
+  return text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).map((line) => "    " + line).join(`
+`);
+}
+function turnEnd(botName, wrapUp) {
+  return wrapUp ? `
+Wrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as "you". Don't reply PASS.` : `
+Your turn, ${botName}. Reply to the group, or just PASS if you have nothing new to add.`;
+}
+function chatText(bot, group, all, name) {
+  const said2 = all.filter((message) => message.kind !== "note");
+  if (said2.length === 0)
+    return `Nothing has been said in "${group.name}" yet.
+`;
+  let text = `Everything said in "${group.name}" so far, from the start:
+`;
+  for (const message of said2) {
+    const who = message.author === bot ? "You" + (message.report !== undefined ? " (reporting back on your part of the work)" : message.kind === "wrapUp" ? " (wrap-up)" : "") : label(message, name);
     text += `
-Wrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as "you". Don't reply PASS.`;
-  } else {
-    text += `
-Your turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing new to add.`;
+${who}:
+${indented(message.text)}
+`;
   }
   return text;
+}
+function seatStartText(bot, group, all, wrapUp, name, named2) {
+  return chatText(bot, group, all, name) + (named2 ? `
+` + named2 + `
+` : "") + turnEnd(name(bot), wrapUp);
+}
+function guestText(bot, group, all, asker, name) {
+  return `You're not in "${group.name}", but ${asker !== undefined ? name(asker) : "the user"} named you there with &${name(bot)}, so you answer this once, as a guest.
+
+` + chatText(bot, group, all, name) + `
+Your turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing to add.`;
+}
+function guests(all, members, bots) {
+  const last2 = [...all].reverse().find((message) => message.kind !== "note");
+  if (!last2)
+    return [];
+  return mentions(ownWords2(last2.text), bots.filter((bot) => !members.includes(bot.id) && bot.id !== last2.author));
+}
+var seatBudget = 30000;
+function outgrew(size, chat) {
+  return size > seatBudget && size > 2 * Math.floor(new TextEncoder().encode(chat).length / 4);
 }
 function splitText(names, said2) {
   let text = `For the app, not the chat: list who does what next, from what was decided, one line for each bot with work, as
@@ -11331,6 +11367,13 @@ class GroupStore {
   }
   writeSettings(settings) {
     write(join17(this.root, "settings.json"), { kuvo: version2, ...settings });
+  }
+  allBots() {
+    let names = [];
+    try {
+      names = readdirSync6(this.bots);
+    } catch {}
+    return names.flatMap((name) => this.bot(name) ?? []);
   }
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
@@ -12641,6 +12684,7 @@ class GroupRunner {
     let quiet2 = new Set;
     let absent = new Set;
     let saidCount = 0;
+    const guested = new Set;
     while (!signal.aborted) {
       const kept3 = this.chat(id);
       if (!kept3)
@@ -12659,6 +12703,24 @@ class GroupRunner {
           names.set(member, bot.name);
       }
       const members = kept3.group.members.filter((member) => names.has(member) && !absent.has(member));
+      const latest = [...kept3.messages].reverse().find((message) => message.kind !== "note");
+      const guest = latest ? guests(kept3.messages, kept3.group.members, this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }))).find((bot) => !guested.has(latest.id + "/" + bot)) : undefined;
+      if (latest && guest) {
+        guested.add(latest.id + "/" + guest);
+        if (turns >= limit(kept3.group.members.length)) {
+          live.paused = true;
+          break;
+        }
+        const outcome2 = await this.turn(guest, id, signal, false, true);
+        if (signal.aborted)
+          return epoch;
+        turns++;
+        if (outcome2 === "said") {
+          quiet2 = new Set;
+          saidCount++;
+        }
+        continue;
+      }
       const speaker = nextSpeaker(kept3.group, kept3.messages, members, quiet2, names);
       if (!speaker)
         break;
@@ -12696,7 +12758,7 @@ class GroupRunner {
     }
     return epoch;
   }
-  async turn(botID, id, signal, wrapUp = false) {
+  async turn(botID, id, signal, wrapUp = false, guest = false) {
     const bot = this.bot(botID);
     if (!bot)
       return "absent";
@@ -12708,7 +12770,8 @@ class GroupRunner {
       if (signal.aborted)
         throw new Cancelled;
     };
-    const left = () => !this.chat(id)?.group.members.includes(botID);
+    const left = () => !guest && !this.chat(id)?.group.members.includes(botID);
+    let scratch;
     let provider;
     try {
       const kept2 = this.chat(id);
@@ -12732,12 +12795,20 @@ class GroupRunner {
           return "absent";
         }
       }
-      const seat = await this.seat(bot, id, first);
+      let seat;
+      let isNew;
+      if (guest) {
+        seat = await this.scratch(bot, kept2.group, first, `${bot.name} asked into ${kept2.group.name}`);
+        scratch = { seat, api: first };
+        isNew = true;
+      } else {
+        ({ seat, isNew } = await this.seat(bot, id, first));
+      }
       going();
       const current = this.chat(id);
       if (!current)
         return "absent";
-      const api = await this.seatAPI(bot, current.group, seat);
+      const api = guest ? first : await this.seatAPI(bot, current.group, seat);
       going();
       if (!api) {
         this.note(`${bot.name} couldn\u2019t answer: the coding agents aren\u2019t running.`, id);
@@ -12748,11 +12819,13 @@ class GroupRunner {
       const start = heard ? all.findIndex((message) => message.id === heard) + 1 : 0;
       const unheard = all.slice(start).filter((message) => message.author !== botID && message.kind !== "note");
       const promptID = newID("msg");
-      const retracted = current.group.retracted?.[botID];
-      await api.prompt(seat, promptID, turnText(botID, current.group, unheard, wrapUp, (author) => this.name(author), named2(unheard)), "queue");
+      const retracted = guest ? undefined : current.group.retracted?.[botID];
+      const name = (author) => this.name(author);
+      const prompt = guest ? guestText(botID, current.group, all, [...all].reverse().find((message) => message.kind !== "note")?.author, name) : isNew ? seatStartText(botID, current.group, all, wrapUp, name, named2(all)) : turnText(botID, current.group, unheard, wrapUp, name, named2(unheard));
+      await api.prompt(seat, promptID, prompt, "queue");
       going();
       const last2 = all.at(-1);
-      if (last2)
+      if (last2 && !guest)
         this.setHeard(last2.id, botID, id);
       const now = this.chat(id)?.group;
       if (now && retracted !== undefined && now.retracted?.[botID] === retracted) {
@@ -12773,6 +12846,9 @@ class GroupRunner {
         return "absent";
       const reply = await this.reply(seat, promptID, sent, api);
       going();
+      if (!guest && reply.size !== undefined && outgrew(reply.size, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
+        await this.startOver(botID, id);
+      }
       if (!reply.text) {
         if (reply.error) {
           this.note(`${bot.name} couldn\u2019t answer: ${plainError(reply.error, provider)}`, id);
@@ -12791,6 +12867,8 @@ class GroupRunner {
       this.note(`${bot.name} couldn\u2019t answer: ${plainError(reason2(error3), provider)}`, id);
       return "absent";
     } finally {
+      if (scratch)
+        scratch.api.delete(scratch.seat).catch(() => {});
       if (live.speaking === botID && live.run === run2) {
         live.speaking = undefined;
         live.activity = undefined;
@@ -12815,7 +12893,7 @@ class GroupRunner {
       this.setHeard(message.id, botID, id);
     } catch {}
   }
-  async waitForRun(seat, promptID, sent, api, signal, seen) {
+  async waitForRun(seat, promptID, sent, api, signal, seen, stops) {
     const pace = this.context.pace ?? 1;
     let looked = Date.now();
     let gone = 0;
@@ -12824,6 +12902,10 @@ class GroupRunner {
     let woken = false;
     for (;; ) {
       await sleep(600 * pace, signal);
+      if (stops?.()) {
+        await api.interrupt(seat).catch(() => {});
+        throw new Cancelled;
+      }
       await this.decline(seat, api);
       if (seen && Date.now() - looked > 1500 * pace) {
         looked = Date.now();
@@ -12894,15 +12976,16 @@ class GroupRunner {
     const { data } = await api.messages(seat, 60);
     const start = data.findIndex((message) => message?.id === promptID);
     const since = sent - 2000;
-    return said2(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since));
+    const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens;
+    const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
+    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size };
   }
   async splitWork(wrapUpID, id, lead, signal) {
     const kept2 = this.chat(id);
     const bot = this.bot(lead);
-    const seat = kept2?.group.seats[lead];
-    if (!kept2 || !bot || !seat)
+    if (!kept2 || !bot)
       return;
-    const api = await this.seatAPI(bot, kept2.group, seat);
+    const api = await this.seatAPI(bot, kept2.group, kept2.group.seats[lead]);
     if (!api)
       return;
     const members = kept2.group.members.flatMap((member) => {
@@ -12927,9 +13010,13 @@ class GroupRunner {
     live.splitting = lead;
     this.told(id);
     const sent = Date.now();
+    let seat;
     try {
-      await api.prompt(seat, promptID, splitText(members.map((member) => member.name), yours), "queue");
-      await this.waitForRun(seat, promptID, sent, api, signal);
+      seat = await this.scratch(bot, kept2.group, api, `${bot.name} handing out the work in ${kept2.group.name}`);
+      const chat = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
+      await api.prompt(seat, promptID, chat + `
+` + splitText(members.map((member) => member.name), yours), "queue");
+      await this.waitForRun(seat, promptID, sent, api, signal, undefined, () => this.state(id).asked !== epoch);
       const reply = await this.reply(seat, promptID, sent, api);
       const { tasks: tasks2, go } = tasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase());
       if (signal.aborted)
@@ -12947,6 +13034,8 @@ class GroupRunner {
         return;
       this.note(`${bot.name} couldn\u2019t hand out the work: ${reason2(error3)}`, id);
     } finally {
+      if (seat)
+        api.delete(seat).catch(() => {});
       if (live.splitting === lead)
         live.splitting = undefined;
       this.told(id);
@@ -13272,7 +13361,7 @@ class GroupRunner {
         this.seatTexts.set(existing, text2);
       }
       if (await this.keepModel(existing, bot, id, api))
-        return existing;
+        return { seat: existing, isNew: false };
     }
     if (!same())
       throw new Cancelled;
@@ -13297,6 +13386,28 @@ class GroupRunner {
     if (onAgents)
       after.group.agentSeats = [...new Set([...after.group.agentSeats ?? [], session.id])];
     this.changed(id);
+    return { seat: session.id, isNew: true };
+  }
+  async startOver(botID, id) {
+    const kept2 = this.chat(id);
+    const seat = kept2?.group.seats[botID];
+    if (!kept2 || !seat)
+      return;
+    await this.deleteSeat(seat, kept2.group, botID);
+    if (kept2.group.seats[botID] !== seat)
+      return;
+    delete kept2.group.seats[botID];
+    delete kept2.group.heard[botID];
+    this.changed(id);
+  }
+  async scratch(bot, group, api, title) {
+    const settings = this.context.store.settings();
+    const rules = seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? []);
+    const model2 = await this.model(bot);
+    const agent = runsWithAgents(model2) && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
+    const session = await api.create(bot.directory, title, agent, model2, rules);
+    await api.setMetadata(session.id, { kuvo: { seat: { group: group.id, bot: bot.id, scratch: true } } }).catch(() => {});
+    await api.setInstruction(session.id, seatKey, this.seatText(bot, group));
     return session.id;
   }
   seatText(bot, group) {
@@ -13643,4 +13754,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 01536317fb0982a1ef59d9b2ed467f5b89053dd1570ec83a5235fe7e966d20f7
+// Built from Agents/src 7298c1d5bd094c316d1b35d89db93409eab924e1b796212a9ce8fc89b7dc2cc0

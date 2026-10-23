@@ -6,6 +6,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Group chats answer sooner: a message you write while the lead works out who does what comes first, and bots stay quick in a long chat, as what they looked up along the way no longer weighs on every turn. A bot new to a chat reads all of it, not only the latest messages.
+- In a group chat, name a bot that isn't in it with &, and it answers that once, as a guest.
+- A message you steer into a session says At its next step until the agent takes it.
 - A new app icon: Kuvo Code's five bots together, each in its own color with a small pair of eyes, on cream in light mode and on black in dark mode.
 - A remote machine's engine runs on its own, with its sessions, bots and group chats: quitting Kuvo Code or clicking Disconnect leaves it running, it no longer stops after a day without Kuvo Code, and it starts again by itself if it crashes.
 - Stop Engine in Settings › Machines stops a machine's engine until you click Start Engine, through restarts of the machine too.
