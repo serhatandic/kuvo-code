@@ -22,6 +22,14 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## The same care for every task, start to finish
+
+Quality slips as a session goes on. The context fills up, hours pass, a task looks small or familiar, and corners get cut. Watch for this in yourself, and don't let it happen.
+
+- Give the last task of a long session the same care as the first. Read the code before you change it, test what you changed, look at the UI, run the reviews, and check the docs and the changelog.
+- No task is too small for the rules in this file. A one-line fix still gets its test, its docs check and a look in the app.
+- When you notice yourself skimming, guessing, or about to report something done that you haven't checked, stop and do it properly. If the context is too full to work well, say so and suggest a fresh session. Never lower the bar.
+
 ## Keep what Kuvo Code leaves on people's computers contained (strict)
 
 Kuvo Code must never spread files across the user's Mac or their machines. Everything it needs is packaged, kept in its own folders, organized inside them, and gone when those folders are deleted.
