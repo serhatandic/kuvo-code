@@ -2,6 +2,17 @@
 
 A native macOS harness for coding agents that works with any model. It runs the opencode engine (`@opencode/cli`), unmodified, as a private server, and is the interface around it: sessions, reviewing changes, a side panel with files, terminals and a browser the agent can use, and a usage tracker in the menu bar.
 
+## The architecture: equal boxes, and clients (strict)
+
+Kuvo Code is a small distributed system. Build every feature for that system, never for the Mac alone.
+
+- **Every computer is an equal box, the Mac included.** This Mac and each machine run the same things: the engine with its sessions, bots, coding agents, group chats, wake-ups and the agent's browser. Each box keeps its own settings and keys, and keeps working with no client connected. A machine has its keeper for that, and this Mac's box runs in the background with Open at Login. The Mac is no different from a machine.
+- **Boxes talk peer to peer**, end to end encrypted through the relay (`Packages/KuvoLink/PROTOCOL.md`, "Peers"). Agents on one box write to agents on another, and no box needs another one to do its own work.
+- **Clients connect to boxes.** The Mac app and the iPhone app are both clients of every box, the Mac app's own box included. They show what a box has and change it, and hold none of its state.
+- **So every feature lives on the box**: in the engine, the bridges and `kuvo-link.js`. It works on every box, including a machine with the Mac closed, and every client can reach it.
+  - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
+  - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
+
 ## UI and UX come first (strict)
 
 What people see and touch is the most important part of Kuvo Code. Never trade its quality away, and never let the machinery behind a feature crowd it out.
