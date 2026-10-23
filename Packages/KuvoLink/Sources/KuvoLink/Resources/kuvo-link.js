@@ -632,6 +632,14 @@ async function* forward(target, path, request, signal, allows) {
     const value = response.headers.get(name);
     if (value) out[name] = value;
   }
+  // Archived or brought back (`kuvo.archived` in its metadata), here with the Mac closed too: its
+  // wake-ups wait, or come back, as a Mac's Archive has it.
+  const changed = method === "PATCH" && response.ok && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
+  if (changed) {
+    let archived;
+    try { archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"]; } catch {}
+    if (typeof archived === "boolean") try { holdArchived(decodeURIComponent(changed[1]), archived); } catch {}
+  }
   yield { head: { status: response.status, headers: out } };
   if (!response.body) return;
   const reader = response.body.getReader();
@@ -1163,6 +1171,24 @@ export function wakeOf(name, note = "") {
 }
 
 // The folder keeping a session's wake-ups: its bot's, or its own in `wakes`; null for none.
+/**
+ * A conversation archived (or brought back) from a phone: its wake-ups wait while it's archived,
+ * as WakeUps.setPaused has a Mac hold them, and come back with it. A hold of your own (`paused`)
+ * stays; a move's (`moving`) becomes archiving's.
+ */
+export function holdArchived(session, archived) {
+  if (!/^ses_[A-Za-z0-9]+$/.test(session)) return;
+  const folder = path.join(SESSION_WAKES, session);
+  const file = path.join(folder, "paused");
+  const held = textOf(file);
+  if (archived) {
+    if (!fs.existsSync(folder) || (held !== null && held !== "moving")) return;
+    fs.writeFileSync(file, "archived");
+  } else if (held === "archived" || held === "") {
+    fs.rmSync(file, { force: true });
+  }
+}
+
 export function wakeFolder(session) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(session)) return null;
   for (const id of listOf(BOTS)) {

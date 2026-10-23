@@ -642,7 +642,10 @@ itself. A host serves:
 - `kuvo/wakes/<session>`: a session's (or chat's) wake-ups and watches, which its
   agent sets with `kuvo-wake`, as the bar over the Mac's composer shows them: `{"wakes": [{id,
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds
-  since 1970, `every` like `1d` or null; paused while it's archived). `POST
+  since 1970, `every` like `1d` or null; paused while it's archived: archive it as the Mac does,
+  `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
+  and its wake-ups wait, or come back; a Mac sees to it, and a machine's bridge (from 0.9.20) does
+  with the Mac closed too; a pause of your own stays through both). `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still
   comes back at its time). Both answer `200 {}`, `404 {}` when there's no such one, `409

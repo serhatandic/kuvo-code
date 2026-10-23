@@ -208,6 +208,28 @@ async function fakeEngine() {
   return { asked, port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
+test("a conversation archived from a phone holds its wake-ups, with the Mac closed too, and brought back lets them go; a pause of your own stays", async t => {
+  const engine = await fakeEngine();
+  t.after(engine.close);
+  const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "pw", version: "2.0.30" }));
+  const wakes = path.join(home, "wakes", "ses_archived1");
+  fs.mkdirSync(wakes, { recursive: true });
+  t.after(() => fs.rmSync(path.join(home, "wakes"), { recursive: true, force: true }));
+  const archive = async (session, archived) => answer(handle, "PATCH", `api/session/${session}`, JSON.stringify({ metadata: { "kuvo.archived": archived } }));
+  assert.equal((await archive("ses_archived1", true)).status, 200);
+  assert.equal(fs.readFileSync(path.join(wakes, "paused"), "utf8"), "archived");
+  assert.equal((await archive("ses_archived1", false)).status, 200);
+  assert.equal(fs.existsSync(path.join(wakes, "paused")), false);
+  // Yours stays through archiving and back.
+  fs.writeFileSync(path.join(wakes, "paused"), "paused");
+  await archive("ses_archived1", true);
+  await archive("ses_archived1", false);
+  assert.equal(fs.readFileSync(path.join(wakes, "paused"), "utf8"), "paused");
+  // A session with no wake-ups has nothing to hold; nor does a name that isn't a session's.
+  await archive("ses_nowakes1", true);
+  assert.equal(fs.existsSync(path.join(home, "wakes", "ses_nowakes1")), false);
+});
+
 test("requests go to the engine with its password, all of its API; paths that aren't what they seem don't", async t => {
   const engine = await fakeEngine();
   t.after(engine.close);

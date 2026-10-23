@@ -205,6 +205,34 @@ import Testing
         #expect(left.count == (repeating ? 1 : 0))
     }
 
+    /// A session archived from a phone (its metadata changed on the engine, which tells the Mac):
+    /// its wake-ups wait, as with Archive here, and come back when the phone brings it back.
+    @Test func archivingFromAPhoneHoldsItsWakeUps() async throws {
+        await start()
+        defer { done() }
+        // As the app has it (`startMachines`).
+        app.workspace.onArchived = { [app] session, isArchived in
+            guard let found = app.workspace.session(session) else { return }
+            Task { await app.wakeUps.archived(found, isArchived) }
+        }
+        let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
+        try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
+        func changed(archived: Bool) async throws {
+            let one = StubWeb.json(["data": Self.session(id, archived: archived)])
+            StubWeb.route(Self.engine + "/api/session/\(id)") { _ in one }
+            app.workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: [
+                "id": UUID().uuidString, "type": "session.metadata.updated", "created": 1, "data": ["sessionID": id],
+            ])))
+        }
+        try await changed(archived: true)
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(app.wakeUps.paused.contains(id), "archived from the phone: its wake-ups wait")
+        #expect((try? String(contentsOfFile: folder(id, "paused"), encoding: .utf8)) == "archived")
+        try await changed(archived: false)
+        for _ in 0..<100 where FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!app.wakeUps.paused.contains(id), "brought back: they come back")
+    }
+
     /// Wake-ups you paused stay paused when the session is archived and brought back; ones paused
     /// only by archiving come back with it.
     @Test func aPauseYouSetOutlastsArchiving() async throws {

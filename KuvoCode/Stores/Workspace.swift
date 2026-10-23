@@ -2211,7 +2211,11 @@ final class Workspace {
         nameBranch(of: session)
         noteBeside(session)
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            let wasArchived = Self.isArchived(sessions[index])
             sessions[index] = session
+            // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
+            // as with Archive here. (Archive here notes it first, so it isn't told twice.)
+            if Self.isArchived(session) != wasArchived { onArchived?(session.id, !wasArchived) }
         } else {
             sessions.insert(session, at: 0)
         }
