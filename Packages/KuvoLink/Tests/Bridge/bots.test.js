@@ -604,3 +604,30 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
     fs.rmSync(keys, { recursive: true, force: true });
   }
 });
+
+test("with no Mac there, a bot whose run ended has its job read from its memory: its description and what it's told follow, once", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  const folder = bot("bot_scout00001");
+  write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
+  const engine = await fakeEngine();
+  try {
+    const target = { port: engine.port, password: "p" };
+    await link.refreshBotJob(target, "ses_bot_scout00001");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "Watches the nightly build");
+    const puts = () => engine.asked.filter(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries/kuvo.bot");
+    assert.equal(puts().length, 1);
+    assert.match(JSON.parse(puts()[0].body).value, /Watches the nightly build\.\nPosts when it breaks\./);
+    // Nothing changed: not told again.
+    await link.refreshBotJob(target, "ses_bot_scout00001");
+    assert.equal(puts().length, 1);
+    // Its memory's job changed: told again.
+    write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks, and who broke it.\n");
+    await link.refreshBotJob(target, "ses_bot_scout00001");
+    assert.equal(puts().length, 2);
+    // Not a bot's conversation: nothing.
+    await link.refreshBotJob(target, "ses_someone");
+    assert.equal(puts().length, 2);
+  } finally {
+    engine.close();
+  }
+});

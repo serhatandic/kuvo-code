@@ -2564,6 +2564,30 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
 // name, look, personality or model), in its description and in its conversation, which is told as
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
 // change in as it next connects (Bots.takeIn).
+// What each bot here was last told, by its conversation: told again only when it changes.
+const toldBots = new Map();
+
+// With no Mac here, a bot's run ended: its job as its memory has it now, in its description and
+// what it's told, as a Mac does when one of its runs ends (Bots.syncJob). `target` runs its
+// conversation (the engine, or the coding agents' bridge).
+export async function refreshBotJob(target, sessionID) {
+  const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
+  const kit = readKit();
+  if (!here || !kit || isMoving(here.folder)) return;
+  const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
+  if ((job?.line ?? "") !== (here.described.job ?? "")) {
+    // (Not an edit of its description's: a Mac takes its job from its memory too.)
+    const file = path.join(here.folder, "bot.json");
+    fs.writeFileSync(`${file}.new`, JSON.stringify({ ...here.described, job: job?.line ?? "" }, null, 2));
+    fs.renameSync(`${file}.new`, file);
+  }
+  const personality = botPersonalities(kit).find(each => each.id === here.described.personality)?.instruction;
+  const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, job);
+  if (told === null || toldBots.get(sessionID) === told) return;
+  await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries/kuvo.bot`, { value: told });
+  toldBots.set(sessionID, told);
+}
+
 // Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
 const carrying = new Set();
 
@@ -3239,8 +3263,10 @@ async function watchEvents(read, tell) {
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
       for await (const event of serverEvents(response.body)) {
-        // A worktree's branch named after its session, as a Mac does while it's here.
+        // A worktree's branch named after its session, and a bot's job read from its memory as
+        // its run ends, as a Mac does while it's here.
         if (event.type === "session.renamed" && !macPresent()) nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+        if (event.type === "session.execution.succeeded" && !macPresent()) refreshBotJob(source, event.data?.sessionID).catch(() => {});
         if ((!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) || macPresent()) continue;
         if (GROUP_NEWS.has(event.type)) {
           const notice = groupNotice(event);

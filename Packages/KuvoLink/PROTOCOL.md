@@ -692,7 +692,9 @@ itself. A host serves:
   live on that machine, as their folders are now, with the Mac closed too: their name, look and
   job as the Mac last wrote them there (`bot.json`, which the Mac writes when they change and
   each time it connects, and the bridge when a phone changes them; one it hasn't written yet
-  isn't listed). For a machine's bot, its machine's list is the newer while it answers.
+  isn't listed). With no Mac connected, the bridge (from 0.9.23) also reads a bot's job from its
+  memory as each of its runs ends, as a Mac does, and tells its conversation when it changed. For
+  a machine's bot, its machine's list is the newer while it answers.
 - On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
   `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],
   "personalities": [{id, name, description, custom}], "looks": {colors, shapes, faces},
