@@ -9,12 +9,13 @@ import OpenCodeKit
 /// along, from where this computer keeps them to where the other does, unless it has its own.
 enum AlsoApply {
     enum Failure: LocalizedError {
-        case unread(String)
+        /// Its settings couldn't be read: `connected`, though it's connected.
+        case unread(String, connected: Bool)
         case refused(String)
 
         var errorDescription: String? {
             switch self {
-            case .unread(let name): "\(name)’s settings couldn’t be read."
+            case .unread(let name, let connected): "Not applied on \(name): \(connected ? "its settings couldn’t be read." : "it isn’t connected.")"
             case .refused(let why): why
             }
         }
@@ -44,10 +45,28 @@ enum AlsoApply {
         translation(changes, onto: target, to: machine).made
     }
 
-    /// What `target` doesn't have that `changes` are to (an agent, a command, a server), so
-    /// they aren't made there: by entry (`describe` says each), once each.
+    /// What `target` doesn't have that `changes` are to (an agent, a command, a server, a
+    /// provider; on a machine, a server that uses a Mac's own apps), so they aren't made there: by
+    /// entry (`describe` says each), once each.
     static func leftOut(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [[String]] {
         translation(changes, onto: target, to: machine).leftOut
+    }
+
+    /// What each computer keeps its own, as the bar says it, among `changes`: its shell (each
+    /// picks from its own), and a worktrees folder on its disk (one relative to each project goes).
+    static func keptOwn(_ changes: [EngineConfig.Change]) -> [String] {
+        var kept: [String] = []
+        for change in changes {
+            if let own = ownSetting(change), !kept.contains(own) { kept.append(own) }
+        }
+        return kept
+    }
+
+    private static func ownSetting(_ change: EngineConfig.Change) -> String? {
+        if change.path == ["shell"] { return "its shell" }
+        if change.path == ["worktree", "directory"], let folder = change.after?.string ?? change.before?.string,
+           folder.hasPrefix("/") || folder.hasPrefix("~") { return "its worktrees folder" }
+        return nil
     }
 
     /// An entry `leftOut` names, as the bar says it: "the agent review".
@@ -56,6 +75,7 @@ enum AlsoApply {
         return switch entry.first {
         case "agents": "the agent \(name)"
         case "commands": "the command /\(name)"
+        case "providers": "the provider \(name)"
         default: Integrations.service(name)?.title ?? "the MCP server \(name)"
         }
     }
@@ -67,7 +87,13 @@ enum AlsoApply {
         for change in changes {
             // Integrations that use a Mac's own apps stay on Macs.
             if machine != nil, change.path.count >= 3, change.path[0] == "mcp", change.path[1] == "servers",
-               Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) { continue }
+               Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) {
+                let entry = Array(change.path.prefix(3))
+                if !leftOut.contains(entry) { leftOut.append(entry) }
+                continue
+            }
+            // What each computer keeps its own (`keptOwn`).
+            if ownSetting(change) != nil { continue }
             // A field of a server, agent or command the target doesn't have, or the mode new
             // sessions start in when it's an agent it doesn't have: none made there with only
             // that (adding or removing a whole one still goes).
@@ -102,13 +128,14 @@ enum AlsoApply {
         return entry(of: change.path)
     }
 
-    /// The named entry (an MCP server, an agent, a command) `path` is a field of, when it's one
-    /// a computer may not have. (The engine's own agents are on every one, named or not.)
+    /// The named entry (an MCP server, an agent, a command, a provider) `path` is a field of,
+    /// when it's one a computer may not have. (The engine's own agents are on every one, named or
+    /// not.)
     static func entry(of path: [String]) -> [String]? {
         switch path.first {
         case "mcp" where path.count >= 4 && path[1] == "servers": Array(path.prefix(3))
         case "agents" where path.count >= 3 && BuiltInAgents.contains(path[1]): nil
-        case "agents", "commands": path.count >= 3 ? Array(path.prefix(2)) : nil
+        case "agents", "commands", "providers": path.count >= 3 ? Array(path.prefix(2)) : nil
         default: nil
         }
     }
@@ -129,6 +156,8 @@ enum AlsoApply {
     /// what it doesn't have that some of the changes were to (`describe`d).
     struct Outcome {
         var leftOut: [String] = []
+        /// What it keeps its own (`keptOwn`), so stayed here.
+        var keptOwn: [String] = []
         /// Something was made there, or every change was already so.
         var applied = true
     }
@@ -140,10 +169,13 @@ enum AlsoApply {
         if !config.isLoaded {
             config.reload()
             for _ in 0..<150 where !config.isLoaded && config.problem == nil { try await Task.sleep(for: .milliseconds(100)) }
-            guard config.isLoaded else { throw Failure.unread(app.name(of: target)) }
+            guard config.isLoaded else {
+                throw Failure.unread(app.name(of: target), connected: target.machine.map { app.machines.engine($0)?.isReady == true } ?? true)
+            }
         }
         let (made, missing) = translation(net(changes), onto: config.settings, to: target.machine)
-        let outcome = Outcome(leftOut: missing.map(describe), applied: !made.isEmpty || missing.isEmpty)
+        let own = keptOwn(net(changes))
+        let outcome = Outcome(leftOut: missing.map(describe), keptOwn: own, applied: !made.isEmpty || (missing.isEmpty && own.isEmpty))
         guard !made.isEmpty else { return outcome }
         // The keys first, so the settings that name them find them there; one the other computer
         // has of its own (another account's token, say) stays.

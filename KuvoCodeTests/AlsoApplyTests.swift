@@ -158,6 +158,32 @@ import Testing
         #expect(AlsoApply.leftOut(AlsoApply.net(plan.changes), onto: [:], to: "lab").isEmpty)
     }
 
+    /// What a computer keeps its own (its shell, a worktrees folder on its disk), a provider it
+    /// doesn't have, and a server that uses a Mac's own apps (on a machine): not made there, and
+    /// said. A worktrees folder relative to each project goes anywhere.
+    @Test func whatStaysWithEachComputerIsSaid() throws {
+        let here = try config(["providers": .object(["acme": .object(["npm": .string("@ai-sdk/openai-compatible"), "options": .object(["baseURL": .string("https://acme.test/v1")])])])])
+        here.set(.number(64_000), at: ["providers", "acme", "models", "fast", "limit", "context"])
+        here.set(.string("/bin/zsh"), at: ["shell"])
+        here.set(.string("/Users/me/worktrees"), at: ["worktree", "directory"])
+        let changes = AlsoApply.net(here.changes)
+        #expect(AlsoApply.translated(changes, onto: [:], to: "lab").isEmpty, "no half provider, nor this Mac's shell or folder")
+        #expect(AlsoApply.leftOut(changes, onto: [:], to: "lab").map(AlsoApply.describe) == ["the provider acme"])
+        #expect(AlsoApply.keptOwn(changes) == ["its shell", "its worktrees folder"])
+
+        let relative = try config([:])
+        relative.set(.string("../worktrees"), at: ["worktree", "directory"])
+        #expect(AlsoApply.translated(AlsoApply.net(relative.changes), onto: [:], to: "lab").map(\.path) == [["worktree", "directory"]])
+        #expect(AlsoApply.keptOwn(AlsoApply.net(relative.changes)).isEmpty)
+
+        let macOnly = try #require(Integrations.macOnly.first)
+        let apps = try config([:])
+        apps.set(.object(["type": .string("local"), "command": .array([.string("x")])]), at: ["mcp", "servers", macOnly])
+        #expect(AlsoApply.translated(AlsoApply.net(apps.changes), onto: [:], to: "lab").isEmpty)
+        #expect(AlsoApply.leftOut(AlsoApply.net(apps.changes), onto: [:], to: "lab").map(AlsoApply.describe) == [Integrations.service(macOnly)?.title ?? macOnly])
+        #expect(AlsoApply.translated(AlsoApply.net(apps.changes), onto: [:], to: nil).count == 1, "another Mac runs it")
+    }
+
     @Test func whatsAppliedIsntOfferedBack() throws {
         let there = try config([:])
         there.set([(["model"], .string("anthropic/sonnet"))], noted: false)

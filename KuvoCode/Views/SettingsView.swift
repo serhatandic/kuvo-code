@@ -655,11 +655,14 @@ private struct AlsoApplyBar: View {
     @State private var failure: String?
 
     /// How it went: where it's made now, and what stayed here because a computer doesn't have it
-    /// (an agent, a command, a server), which stays said until Done.
+    /// (an agent, a command, a server) or keeps its own (its shell), which stays said until Done.
+    /// `failure`: where it couldn't be made, said in red; the change is offered again after
+    /// Done, to try once more.
     private struct Applied: Equatable {
         var title: String
         var note: String?
         var anywhere: Bool
+        var failure: String?
     }
 
     private var config: EngineConfig { app.config(for: box) }
@@ -681,8 +684,14 @@ private struct AlsoApplyBar: View {
                             .foregroundStyle(applied.anywhere ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
                         VStack(alignment: .leading, spacing: 1) {
                             Text(applied.title)
-                                .font(.system(size: 13, weight: applied.note == nil ? .regular : .medium))
+                                .font(.system(size: 13, weight: applied.note == nil && applied.failure == nil ? .regular : .medium))
                                 .lineLimit(1)
+                            if let failure = applied.failure {
+                                Text(failure)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.red)
+                                    .lineLimit(2)
+                            }
                             if let note = applied.note {
                                 Text(note)
                                     .font(.system(size: 12))
@@ -690,7 +699,7 @@ private struct AlsoApplyBar: View {
                                     .lineLimit(2)
                             }
                         }
-                        if applied.note != nil {
+                        if applied.note != nil || applied.failure != nil {
                             Spacer(minLength: 8)
                             Button("Done") { withAnimation(.ui) { self.applied = nil } }
                         }
@@ -740,12 +749,18 @@ private struct AlsoApplyBar: View {
             #if DEBUG
             // KUVO_DEMO_ALSO_APPLY: a change on this page, as if made (nothing's saved). `missing`:
             // one to an agent the other computers don't have, applied to them once they're
-            // connected, for what the bar says stayed here (nothing's made there either).
+            // connected (or couldn't be), for what the bar says stayed here (nothing's made there
+            // either). `own`: the shell (which each keeps its own) and Snapshots, likewise.
             if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_ALSO_APPLY"], fresh.isEmpty {
-                if demo == "missing" {
-                    config.noteForDemo(["agents", "kuvo-demo-reviewer", "model"], to: .string("anthropic/claude-sonnet-4-5"))
+                if demo == "missing" || demo == "own" {
+                    if demo == "missing" {
+                        config.noteForDemo(["agents", "kuvo-demo-reviewer", "model"], to: .string("anthropic/claude-sonnet-4-5"))
+                    } else {
+                        config.noteForDemo(["shell"], to: .string("/bin/zsh"))
+                        config.noteForDemo(["snapshots"], to: .bool(config.value(at: ["snapshots"])?.bool == false))
+                    }
                     Task {
-                        while !others.allSatisfy({ $0.machine.map { app.machines.engine($0)?.isReady == true } ?? true }) {
+                        while !others.allSatisfy({ $0.machine.map { app.machines.engine($0).map { $0.isReady || $0.connection == .failed } ?? true } ?? true }) {
                             try? await Task.sleep(for: .seconds(1))
                         }
                         apply(to: others)
@@ -771,6 +786,7 @@ private struct AlsoApplyBar: View {
             var done: [String] = []
             var notDone: [String] = []
             var notes: [String] = []
+            var failures: [String] = []
             for target in targets {
                 let name = app.name(of: target)
                 applying = name
@@ -781,13 +797,27 @@ private struct AlsoApplyBar: View {
                         let what = outcome.leftOut.formatted(.list(type: .or))
                         notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
                     }
+                    if !outcome.keptOwn.isEmpty {
+                        notes.append("\(name) keeps \(outcome.keptOwn.formatted(.list(type: .and))), so \(outcome.keptOwn.count == 1 ? "that" : "those") stayed here.")
+                    }
+                } catch AlsoApply.Failure.unread(let away, let connected) {
+                    failures.append(AlsoApply.Failure.unread(away, connected: connected).localizedDescription)
                 } catch {
-                    failure = "Not applied on \(name): \(error.localizedDescription)"
+                    failures.append("Not applied on \(name): \(error.localizedDescription)")
                 }
             }
             applying = nil
             Analytics.shared.track("settings_also_applied", ["computers": done.count])
-            guard failure == nil else { return }
+            guard failures.isEmpty else {
+                if done.isEmpty {
+                    failure = (failures + notes).joined(separator: " ")
+                } else {
+                    // Made on some: said, with where it wasn't; offered again after Done.
+                    applied = Applied(title: "Also applied on \(done.formatted(.list(type: .and)))", note: notes.isEmpty ? nil : notes.joined(separator: " "), anywhere: true,
+                                      failure: failures.joined(separator: " "))
+                }
+                return
+            }
             seen = max(seen ?? 0, last)
             let result = Applied(
                 title: done.isEmpty ? "Not applied on \(notDone.formatted(.list(type: .and)))" : "Also applied on \(done.formatted(.list(type: .and)))",
