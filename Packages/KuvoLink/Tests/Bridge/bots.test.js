@@ -514,7 +514,7 @@ test("a change that can't be is said, and nothing changes", async () => {
       [{ personality: "custom.gone" }, 400, "There’s no personality “custom.gone”."],
       [{ model: { id: "x" } }, 400, "That isn’t a model."],
       [{ model: { id: "luna", providerID: "openai" } }, 422, "luna needs a sign-in on this machine: sign in to it in Settings › Accounts, or choose another model."],
-      [{ model: { id: "sonnet", providerID: "claude-code" } }, 422, "Its conversation runs on this machine’s engine, and only your Mac can carry it on with the coding agents: choose another model, or change it on your Mac."],
+      [{ model: { id: "sonnet", providerID: "claude-code" } }, 503, "The coding agents aren’t running on this machine."],
     ]) {
       const answer = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Renamed", ...body });
       assert.equal(answer.status, status, JSON.stringify(body));

@@ -1686,6 +1686,16 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine);
       return yield* json(status, value);
     }
+    // A conversation here carried on with the coding agents here, as picking one of their models
+    // in it does.
+    const toAgents = route.match(/^kuvo\/sessions\/([^/]+)\/agents$/);
+    if (toAgents) {
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      let id;
+      try { id = decodeURIComponent(toAgents[1]); } catch { return yield* json(404, { message: "That conversation isn’t there any more." }); }
+      const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge(), signal);
+      return yield* json(status, value);
+    }
     // A bot here changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
     const oneBot = route.match(/^kuvo\/bots\/([^/]+)$/);
     if (oneBot && ["PATCH", "DELETE"].includes(request.method.toUpperCase())) {
@@ -2554,6 +2564,106 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
 // name, look, personality or model), in its description and in its conversation, which is told as
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
 // change in as it next connects (Bots.takeIn).
+// Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
+const carrying = new Set();
+
+// A file a waiting message brings (the engine's form of it), as the agents' bridge takes one.
+const promptFiles = payload => (Array.isArray(payload?.files) ? payload.files : []).map(file => {
+  const name = typeof file?.name === "string" ? { name: file.name } : {};
+  const uri = file?.source?.uri ?? file?.uri;
+  if (typeof uri === "string") return { uri, ...name };
+  return typeof file?.data === "string" ? { uri: `data:${file.mime ?? "application/octet-stream"};base64,${file.data}`, ...name } : null;
+}).filter(Boolean);
+
+// `POST kuvo/sessions/<id>/agents`, as a Mac's (Workspace.moveToAgents): a conversation this
+// machine's engine runs, carried on with its coding agents on `model` (one of theirs, or Custom
+// Auto), as picking it in the conversation does: a session of theirs with the whole conversation
+// and what was waiting; the engine's goes to Archived, and a bot's conversation becomes the new
+// one. `{status, value}`: 200 `{session}`, the new one.
+export async function carryToAgents(id, model, readEngine, agents, signal) {
+  const no = (status, message) => ({ status, value: { message } });
+  if (!isModel(model) || !runsWithAgents(model)) return no(400, "That isn’t a coding agent’s model.");
+  let engine;
+  try { engine = readEngine(); } catch {}
+  if (!engine) return no(503, "The engine isn’t running.");
+  if (!agents) return no(503, "The coding agents aren’t running on this machine.");
+  const route = `api/session/${encodeURIComponent(id)}`;
+  let session;
+  try { session = (await engineGet(engine, route))?.data; } catch {}
+  if (!session) {
+    // One of theirs already, or none.
+    const theirs = await engineGet(agents, route).catch(() => null);
+    return theirs?.data ? no(409, "It’s with the coding agents already.") : no(404, "That conversation isn’t there any more.");
+  }
+  if (session.metadata?.kuvoAgent) return no(409, "It’s with the coding agents already.");
+  const bot = listOf(BOTS).map(botHere).find(here => here?.session === id) ?? null;
+  if (bot && isMoving(bot.folder)) return no(409, MOVING);
+  // Signed in there, unless it's Auto, which picks among those that are.
+  if (model.providerID !== "auto") {
+    const integration = (await engineGet(agents, `api/integration/${encodeURIComponent(model.providerID)}`).catch(() => null))?.data;
+    const name = integration?.name ?? model.providerID;
+    if (integration?.metadata?.installed === false) return no(422, `${name} isn’t installed on this machine: install it in Settings › Accounts, or choose another model.`);
+    if (!integration?.connections?.length) return no(422, `${name} needs a sign-in on this machine: sign in in Settings › Accounts, or choose another model.`);
+  }
+  if (carrying.has(id)) return no(409, "It’s being carried on with the coding agents already.");
+  carrying.add(id);
+  try {
+    // Not partway through a turn.
+    const active = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
+    if (id in active) {
+      await call(engine, "POST", `/${route}/interrupt`, undefined, signal).catch(() => {});
+      await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`, undefined, signal).catch(() => {});
+    }
+    // Its whole conversation, page by page (a great many messages at most).
+    let page = await engineGet(engine, `${route}/message?limit=200&order=desc`);
+    let messages = [...(page?.data ?? [])].reverse();
+    while ((page?.data?.length ?? 0) >= 200 && messages.length < 20_000) {
+      const cursor = page.cursor?.next ?? page.cursor?.previous;
+      if (!cursor) break;
+      page = await engineGet(engine, `${route}/message?limit=200&cursor=${encodeURIComponent(cursor)}`);
+      if (!page?.data?.length) break;
+      messages = [...page.data].reverse().concat(messages);
+    }
+    // An undo waiting to be kept: the conversation as it is now, without what it took back.
+    const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert.messageID) : -1;
+    if (cut >= 0) messages = messages.slice(0, cut);
+    // What was sent and waiting comes along, still waiting.
+    const waiting = ((await engineGet(engine, `${route}/inbox`).catch(() => null))?.data ?? []).filter(item => item?.type === "user" && typeof item.text === "string");
+    const directory = session.location?.directory ?? session.directory;
+    const moved = await call(agents, "POST", "/api/session/import", {
+      title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, messages,
+      waiting: waiting.map(item => ({ id: messageID(), text: item.text, files: promptFiles(item.payload) })),
+    }, signal);
+    if (typeof moved?.id !== "string") return no(502, "The coding agents didn’t take it.");
+    for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`, undefined, signal).catch(() => {});
+    const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
+    const tree = readWorktrees().find(each => (each.folder ?? each.root) === directory);
+    if (tree) {
+      const told = `You work in a git worktree of this project, on the branch ${tree.branch}, so your changes stay apart from the user's own checkout at ${tree.project} until they merge them. Make your changes here, not there.`;
+      await call(agents, "PUT", `${entries}/kuvo.worktree`, { value: told }, signal).catch(() => {});
+    }
+    if (bot) {
+      // The bot's conversation is the new one, marked as its, told what it is.
+      await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }, signal).catch(() => {});
+      const kit = readKit();
+      const personality = kit ? botPersonalities(kit).find(each => each.id === bot.described.personality)?.instruction : undefined;
+      const told = kit ? botInstructions(kit, bot.described.name, bot.folder, personality, bot.described.project, jobInMemory(textOf(path.join(bot.folder, "MEMORY.md")) ?? "")) : null;
+      if (told !== null) await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }, signal).catch(() => {});
+      fs.writeFileSync(path.join(bot.folder, "session"), moved.id);
+      fs.writeFileSync(path.join(bot.folder, "via"), "bridge");
+      await call(engine, "DELETE", `/${route}`, undefined, signal).catch(() => {});
+    } else {
+      await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal).catch(() => {});
+      try { holdArchived(id, true); } catch {}
+    }
+    return { status: 200, value: { session: moved.id } };
+  } catch (error) {
+    return no(502, error?.message ?? String(error));
+  } finally {
+    carrying.delete(id);
+  }
+}
+
 export async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   const no = (status, message) => ({ status, value: { message } });
   const here = botHere(id);
@@ -2584,7 +2694,14 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
     // The one it has is kept, whatever; another has to run where its conversation does.
     if (!sameModel(model, described.model)) {
       if (runsWithAgents(model)) {
-        if (!here.agents) return no(422, "Its conversation runs on this machine’s engine, and only your Mac can carry it on with the coding agents: choose another model, or change it on your Mac.");
+        // Its conversation goes on with the coding agents, as it does on a Mac.
+        if (!here.agents) {
+          let agents = null;
+          try { agents = readBridge(); } catch {}
+          const carried = await carryToAgents(here.session, model, readEngine, agents, signal);
+          if (carried.status !== 200) return carried;
+          Object.assign(here, botHere(id) ?? {});
+        }
       } else {
         let engine;
         try {
