@@ -292,10 +292,20 @@ final class PhoneLink {
     }
 
     /// `kuvo/phones`: the phones paired with this Mac (`you`, the one asking); `kuvo/phones/remove`
-    /// (POST, `{"phones": [{key, pairing}]}`): a phone removes others (a lost one, say) or itself.
+    /// (POST, `{"phones": [{key, pairing}]}`): a phone removes others (a lost one, say) or itself;
+    /// `kuvo/phones/pair` (POST): a link for another phone to pair with, as Settings › Phone shows.
     func answerPhones(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
         let encoder = JSONEncoder()
         let me = asking?.base64URL
+        if request.path == "kuvo/phones/pair" {
+            guard request.method.uppercased() == "POST" else { return (405, Data("{}".utf8)) }
+            // (Its keys are made only once the link is on.)
+            guard Self.isEnabled, hasIdentity else { return (409, Self.message("The phone link is off on this Mac.")) }
+            beginPairing()
+            guard let pairing else { return (503, Self.message("Kuvo Code isn't ready yet. Try again in a moment.")) }
+            let ends = Date.now.addingTimeInterval(Double(Self.pairingTime.components.seconds))
+            return (200, Self.json(["link": pairing.url.absoluteString, "ends": ends.timeIntervalSince1970]))
+        }
         if request.path == "kuvo/phones" {
             struct Listed: Encodable { var key: String; var name: String; var added: Double; var pairing: String; var you: Bool }
             let listed = paired.phones.map { Listed(key: $0.key, name: $0.name, added: $0.added.timeIntervalSince1970, pairing: $0.pairing, you: $0.key == me) }
@@ -611,8 +621,8 @@ final class PhoneLink {
             }
         }
         if request.path.split(separator: "?").first == "kuvo/file" { return Self.file(request.path) }
-        // The phones paired with this Mac, and removing some, from any of them.
-        if request.path == "kuvo/phones" || request.path == "kuvo/phones/remove" {
+        // The phones paired with this Mac, removing some, and pairing another, from any of them.
+        if ["kuvo/phones", "kuvo/phones/remove", "kuvo/phones/pair"].contains(request.path) {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = link?.answerPhones(request, asking: asking) ?? (503, Data())
@@ -691,6 +701,17 @@ final class PhoneLink {
                     continuation.finish()
                 }
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
+            }
+        }
+        // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
+        if request.path == "kuvo/claude-code" {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON() ?? (503, Data()) : (405, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
             }
         }
         if request.path == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
@@ -959,6 +980,8 @@ final class PhoneLink {
             return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
         case "kuvo/config":
             return answerConfig(request)
+        case "kuvo/mac":
+            return answerMac(request)
         case "kuvo/mcp/catalog":
             return catalogJSON()
         case "kuvo/personalities":

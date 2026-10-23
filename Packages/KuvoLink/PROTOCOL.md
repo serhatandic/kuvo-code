@@ -615,6 +615,16 @@ itself. A host serves:
   - `POST kuvo/worktrees/remove {"path"}` removes it as Remove… does: its folder and anything in
     it not committed; its branch stays unless it's merged. `200 {}`; `404` for none; `409
     {"message"}` while an agent works there, or its machine isn't connected.
+- On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
+  awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
+  while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;
+  `409 {"message"}` when macOS didn't change Open at Login.
+- On a Mac, `GET kuvo/claude-code`: what Settings › Agents and Settings › Commands offer to bring
+  over from Claude Code (the Mac's `~/.claude/agents` and `~/.claude/commands`): `{"agents":
+  [{name, description, path, settings, imported}], "commands": [...]}`. Import is writing
+  `settings` at `path` (`["agents", "<id>"]` or `["commands", "<name>"]`) through `kuvo/config`,
+  the Mac's or a machine's; `imported` says whether the Mac's settings have it there. A command
+  named as the engine's own or a plugin's comes over as `<name>-claude`.
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
   does on a Mac; what's running in it stops. It answers `202 {}` first: the link goes down with
   the engine, and the computer is back once it answers again (`kuvo/info`). A machine's bridge
@@ -897,6 +907,10 @@ On both, for a paired phone:
   `200 {}`, or `400 {"message"}` when it names a Mac, nothing, too many or something that isn't a
   phone's key, or the one asking isn't paired there. A removal goes to each computer the phone pairs with, Mac
   and machines (`kuvo/hosts`); a Mac passes on the removals it has with its list.
+- On a Mac, `POST kuvo/phones/pair`: a link for another phone to pair with, as Settings › Phone
+  shows it (as a QR code): `{"link": "kuvo-link://pair?…", "ends"}`, good once, until `ends`
+  (seconds since 1970); a new one takes the place of one shown before. `409 {"message"}` while
+  the phone link is off.
 
 A machine keeps itself running (from 0.9.7): its keeper (`bin/kuvo-start keep`, `run/box.pid`)
 starts its engine again when it ends, unless it was stopped on purpose (`run/stopped`), and keeps

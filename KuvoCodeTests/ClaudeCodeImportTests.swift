@@ -61,4 +61,29 @@ import Testing
         #expect(review.description == "Review a pull request")
         #expect(review.template == "Review pull request #$ARGUMENTS: what it changes, and what could break.")
     }
+
+    /// A phone's From Claude Code: each with what Import writes where in a computer's settings,
+    /// and whether this Mac has it; a command named as one of the engine's comes over beside it.
+    @MainActor @Test func aPhoneSeesWhatImportWrites() async throws {
+        defer { try? FileManager.default.removeItem(at: claude) }
+        TestEnvironment.prepare()
+        try write("agents/code-reviewer.md", "---\nname: code-reviewer\ndescription: Reviews code\n---\nList what's wrong, worst first.\n")
+        try write("commands/review.md", "---\ndescription: Review a pull request\n---\nReview #$ARGUMENTS.\n")
+        let app = AppModel()
+        let link = PhoneLink()
+        app.bots.app = app
+        link.bots = app.bots
+
+        let (status, body) = await link.claudeCodeJSON(folder: claude)
+        #expect(status == 200)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let agent = try #require((json["agents"] as? [[String: Any]])?.first)
+        #expect(agent["path"] as? [String] == ["agents", "code-reviewer"])
+        #expect(agent["settings"] as? [String: String] == ["mode": "subagent", "description": "Reviews code", "system": "List what's wrong, worst first."])
+        #expect(agent["imported"] as? Bool == false)
+        let command = try #require((json["commands"] as? [[String: Any]])?.first)
+        #expect(command["name"] as? String == "review-claude", "beside the engine's /review")
+        #expect(command["path"] as? [String] == ["commands", "review-claude"])
+        #expect(command["settings"] as? [String: String] == ["template": "Review #$ARGUMENTS.", "description": "Review a pull request"])
+    }
 }
