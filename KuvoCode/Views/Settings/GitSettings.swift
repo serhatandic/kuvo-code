@@ -56,11 +56,15 @@ private struct InstructionsEditor: View {
 
 /// Worktrees: where they go, and the ones sessions have, with what each takes, on each computer.
 struct WorktreesSettings: View {
+    @Environment(AppModel.self) private var app
     @Environment(Workspace.self) private var workspace
     @Environment(\.settingsBox) private var box
     @State private var sizes: [String: Int64] = [:]
     @State private var removing: Workspace.Worktree?
     @State private var failure: String?
+    /// A machine's: asked for them as they are now (`reading`), and whether it couldn't be.
+    @State private var reading = false
+    @State private var unreached = false
 
     /// One row per worktree (several session folders can share one), this computer's.
     private var trees: [(folder: String, tree: Workspace.Worktree)] {
@@ -81,7 +85,9 @@ struct WorktreesSettings: View {
             }
 
             Section {
-                if trees.isEmpty {
+                if trees.isEmpty && reading {
+                    Spinner(size: 16).frame(maxWidth: .infinity)
+                } else if trees.isEmpty {
                     Text("None yet. Choose Worktree in a new session’s composer to give it one.")
                         .foregroundStyle(.secondary)
                 }
@@ -115,20 +121,27 @@ struct WorktreesSettings: View {
             } footer: {
                 if let failure {
                     Text(failure).foregroundStyle(.red)
+                } else if unreached {
+                    Text("\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
+                        .foregroundStyle(.secondary)
                 } else {
                     Text("Removing one deletes its folder and anything in it that isn’t committed. Its branch stays if it isn’t merged yet.")
                         .foregroundStyle(.secondary)
                 }
             }
         }
-        // A machine's as it keeps them now (one made there from a phone, say).
-        .task(id: box.machine) { if let machine = box.machine { await workspace.takeWorktrees(from: machine) } }
+        // A machine's as it keeps them now (one made there from a phone, say), with the room
+        // each takes there.
+        .task(id: box.machine) {
+            guard let machine = box.machine else { return }
+            reading = true
+            let read = await workspace.takeWorktrees(from: machine, sizes: true)
+            reading = false
+            unreached = read == nil
+            sizes = read ?? [:]
+        }
         .task(id: trees.map(\.tree.root)) {
-            // A machine's take room there: it says how much.
-            if let machine = box.machine {
-                sizes = await workspace.worktreeSizes(on: machine)
-                return
-            }
+            guard box.machine == nil else { return }
             let roots = trees.map(\.tree.root)
             sizes = await Task.detached {
                 Dictionary(uniqueKeysWithValues: roots.map { ($0, StorageReport.size(of: URL(filePath: $0))) })

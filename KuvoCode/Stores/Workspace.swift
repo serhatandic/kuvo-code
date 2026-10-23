@@ -808,7 +808,8 @@ final class Workspace {
             let prefix = GitPreferences.branchPrefix
             let renamed: String?
             if let remote = RemoteFolder.parse(tree.root) {
-                let answer: BoxWorktree.Renamed? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/rename", ["path": remote.path, "branch": prefix + slug])
+                // Only if it's still called that: the machine may have named it already.
+                let answer: BoxWorktree.Renamed? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/rename", ["path": remote.path, "from": tree.branch, "branch": prefix + slug])
                 renamed = answer?.branch
             } else {
                 renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value
@@ -847,8 +848,11 @@ final class Workspace {
             throw GitFailure(message: "An agent is still working in the worktree of \(tree.branch), so it stays. Stop it first, then remove the worktree.")
         }
         if let remote = RemoteFolder.parse(tree.root) {
-            // The machine's own: it checks the same, and removes it as for a phone.
-            let _: Empty = try await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "discard": discardingChanges])
+            // The machine's own: it checks the same, and removes it as for a phone. One it no
+            // longer has (removed from a phone) is gone already.
+            do {
+                let _: Empty = try await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "discard": discardingChanges])
+            } catch let refusal as BoxRefusal where refusal.status == 404 {}
         } else {
             if !discardingChanges, await Task.detached(operation: { Git.hasUncommittedChanges(in: tree.root, includingHidden: true) }).value {
                 throw GitFailure(message: "The worktree of \(tree.branch) has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.")
@@ -866,64 +870,89 @@ final class Workspace {
         Analytics.shared.track("worktree_removed")
     }
 
-    /// A machine's worktrees as it keeps them, read as it connects: this Mac shows them from
-    /// then on. Ones this Mac made there before the machine kept them are handed over first, once.
-    func takeWorktrees(from machine: String) async {
-        guard let kept: BoxWorktree.Kept = try? await onBox(machine, "GET", "kuvo/worktrees?records=1", nil) else { return }
-        var records = kept.worktrees
-        if !kept.kept {
-            for (folder, tree) in worktrees where RemoteFolder.machine(of: tree.root) == machine {
-                guard let project = RemoteFolder.parse(tree.project)?.path, let root = RemoteFolder.parse(tree.root)?.path,
-                      let path = RemoteFolder.parse(folder)?.path else { continue }
-                var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
-                if let base = tree.base { record["base"] = base }
-                let _: Empty? = try? await onBox(machine, "POST", "kuvo/worktrees/record", record)
+    /// A machine's worktrees as it keeps them, read as it connects, and as its Worktrees page
+    /// opens (`sizes`: with the room each takes there, by root as this Mac names it): this Mac
+    /// shows them from then on. Ones this Mac made there before the machine kept them are handed
+    /// over, and ones it no longer has (removed from a phone, say) go here too. Nil when it
+    /// couldn't be asked: what this Mac had stays.
+    @discardableResult func takeWorktrees(from machine: String, sizes: Bool = false) async -> [String: Int64]? {
+        struct Listed: Decodable { var worktrees: [BoxWorktree] }
+        guard let listed: Listed = try? await onBox(machine, "GET", sizes ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
+        var records = listed.worktrees
+        for (folder, tree) in worktrees where RemoteFolder.machine(of: tree.root) == machine {
+            guard let project = RemoteFolder.parse(tree.project)?.path, let root = RemoteFolder.parse(tree.root)?.path,
+                  let path = RemoteFolder.parse(folder)?.path, !records.contains(where: { $0.root == root }) else { continue }
+            var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
+            if let base = tree.base { record["base"] = base }
+            do {
+                let _: Empty = try await onBox(machine, "POST", "kuvo/worktrees/record", record)
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
+            } catch is BoxRefusal {
+                // Not there any more: it goes here too.
+            } catch {
+                // Not asked: kept as it was, for next time.
+                return nil
             }
         }
         var mine = worktrees.filter { RemoteFolder.machine(of: $0.value.root) != machine }
         for record in records {
-            mine[RemoteFolder.folder(record.folder ?? record.root, on: machine)] = Worktree(
-                project: RemoteFolder.folder(record.project, on: machine), root: RemoteFolder.folder(record.root, on: machine), branch: record.branch, base: record.base)
+            let tree = Worktree(project: RemoteFolder.folder(record.project, on: machine), root: RemoteFolder.folder(record.root, on: machine), branch: record.branch, base: record.base)
+            mine[RemoteFolder.folder(record.folder ?? record.root, on: machine)] = tree
+            // Other sessions' folders in it stay its own.
+            for (folder, kept) in worktrees where kept.root == tree.root { mine[folder] = tree }
         }
         if mine != worktrees {
             worktrees = mine
             saveWorktrees()
         }
+        return Dictionary(records.compactMap { record in record.size.map { (RemoteFolder.folder(record.root, on: machine), $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// The room a machine's worktrees take there, by root (as this Mac names them); none when it
-    /// can't say.
-    func worktreeSizes(on machine: String) async -> [String: Int64] {
-        struct Listed: Decodable {
-            struct Entry: Decodable { var path: String; var size: Int64? }
-            var worktrees: [Entry]
-        }
-        guard let listed: Listed = try? await onBox(machine, "GET", "kuvo/worktrees", nil) else { return [:] }
-        return Dictionary(listed.worktrees.compactMap { entry in entry.size.map { (RemoteFolder.folder(entry.path, on: machine), $0) } }, uniquingKeysWith: { first, _ in first })
-    }
-
-    /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths.
-    struct BoxWorktree: Codable {
+    /// A worktree as a machine keeps it (its bridge's `kuvo/worktrees`), in its own paths; as it
+    /// lists them for its Worktrees page, its root is `path` and `size` the room it takes.
+    struct BoxWorktree: Decodable {
         var project: String
         var root: String
         var folder: String?
         var branch: String
         var base: String?
+        var size: Int64?
 
         struct Renamed: Decodable { var branch: String }
-        struct Kept: Decodable { var worktrees: [BoxWorktree]; var kept: Bool }
+
+        init(project: String, root: String, folder: String?, branch: String, base: String?) {
+            (self.project, self.root, self.folder, self.branch, self.base) = (project, root, folder, branch, base)
+        }
+
+        private enum CodingKeys: String, CodingKey { case project, root, path, folder, branch, base, size }
+
+        init(from decoder: any Decoder) throws {
+            let keys = try decoder.container(keyedBy: CodingKeys.self)
+            project = try keys.decode(String.self, forKey: .project)
+            root = try keys.decodeIfPresent(String.self, forKey: .root) ?? keys.decode(String.self, forKey: .path)
+            folder = try keys.decodeIfPresent(String.self, forKey: .folder)
+            branch = try keys.decode(String.self, forKey: .branch)
+            base = try keys.decodeIfPresent(String.self, forKey: .base)
+            size = try keys.decodeIfPresent(Int64.self, forKey: .size)
+        }
     }
 
     private struct Empty: Decodable {}
 
+    /// What a machine's box said when it said no: what to show, and its status.
+    struct BoxRefusal: LocalizedError {
+        var status: Int
+        var message: String
+        var errorDescription: String? { message }
+    }
+
     /// A request to `machine`'s box (`MachineBox.route`): its answer, or what it said when it
-    /// said no.
+    /// said no (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ machine: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
         let (status, data) = try await MachineBox.route(method, path, body: body, on: SSHConnection(destination: machine))
         guard (200..<300).contains(status) else {
             let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-            throw GitFailure(message: said ?? "\(machine) said no (\(status)).")
+            throw BoxRefusal(status: status, message: said ?? "\(machine) said no (\(status)).")
         }
         return try JSONDecoder().decode(Answer.self, from: data)
     }
