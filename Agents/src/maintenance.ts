@@ -12,7 +12,7 @@
 import { existsSync, realpathSync } from "node:fs"
 import { basename, join } from "node:path"
 import { ownEnvironment } from "./machine"
-import { plain, refreshLoginPath, run, which } from "./proc"
+import { plain, refreshLoginPath, run, runGroup, which } from "./proc"
 
 export interface Maintenance {
   /** The version you have, as the program says. */
@@ -39,8 +39,27 @@ export interface MaintenanceDefinition {
 
 const checked = new Map<string, { at: number; value: Maintenance }>()
 const newest = new Map<string, { at: number; value?: string }>()
-const updating = new Map<string, Promise<UpdateResult>>()
-const installing = new Map<string, Promise<InstallResult>>()
+/** Each program's install or update under way, by its name. */
+const underWay = new Map<string, { kind: "install" | "update"; done: Promise<unknown> }>()
+
+/**
+ * One install or update at a time for each program: the same one asked again is the one under
+ * way; the other waits for it (an install and an update writing the same files at once).
+ */
+function oneAtATime<T>(name: string, kind: "install" | "update", task: () => Promise<T>): Promise<T> {
+  const running = underWay.get(name)
+  if (running?.kind === kind) return running.done as Promise<T>
+  const done = (async () => {
+    await running?.done.catch(() => {})
+    return task()
+  })()
+  const entry = { kind, done }
+  underWay.set(name, entry)
+  void done.catch(() => {}).finally(() => {
+    if (underWay.get(name) === entry) underWay.delete(name)
+  })
+  return done
+}
 
 /** What you have, the newest, and how to update, asked at most every ten minutes unless `fresh`. */
 export async function maintenance(definition: MaintenanceDefinition, fresh = false): Promise<Maintenance> {
@@ -68,13 +87,11 @@ export interface UpdateResult {
 
 /** Runs the update, once at a time per program, and says whether the version changed. */
 export function update(definition: MaintenanceDefinition, temporary: string): Promise<UpdateResult> {
-  const running = updating.get(definition.executable)
-  if (running) return running
-  const task = (async (): Promise<UpdateResult> => {
+  return oneAtATime(definition.name, "update", async (): Promise<UpdateResult> => {
     const before = await maintenance(definition, true)
     if (!before.command) return { updated: false, version: before.installed, message: `Update ${definition.name} the way you installed it.` }
     // As you'd run it in your terminal (on a machine, with its own folders, not Kuvo Code's).
-    const ran = await run(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60_000 })
+    const ran = await runGroup(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60_000 })
     const after = await maintenance(definition, true)
     const changed = Boolean(after.installed && after.installed !== before.installed)
     if (changed || (after.installed && !isOutdated(after))) return { updated: changed, version: after.installed }
@@ -84,9 +101,7 @@ export function update(definition: MaintenanceDefinition, temporary: string): Pr
       version: after.installed,
       message: `${definition.name} is still ${after.installed ?? "the same version"} after \`${before.shown}\`.${output ? `\n\n${output}` : ""}`,
     }
-  })().finally(() => updating.delete(definition.executable))
-  updating.set(definition.executable, task)
-  return task
+  })
 }
 
 export interface InstallResult {
@@ -100,24 +115,23 @@ export interface InstallResult {
  * Installs an agent's program with its maker's own installer, the command it shows (`curl … |
  * bash`), run as you'd run it in your terminal (on a machine, with its own folders): it goes where
  * that installer puts it, as if you had, which may add its folder to your shell's profile. Once
- * at a time per agent; then whether `found` finds it.
+ * at a time per agent, and not while it updates; then whether `found` finds it. One that's there
+ * already isn't installed again. `readPath`: reads your login shell's PATH (`now`: again).
  */
-export function install(name: string, command: string, temporary: string, found: () => string | undefined): Promise<InstallResult> {
-  const running = installing.get(command)
-  if (running) return running
-  const task = (async (): Promise<InstallResult> => {
+export function install(name: string, command: string, temporary: string, found: () => string | undefined, readPath: (now?: boolean) => Promise<void> = refreshLoginPath): Promise<InstallResult> {
+  return oneAtATime(name, "install", async (): Promise<InstallResult> => {
     // Your login shell's PATH first (Codex's installer leaves your profile alone when its folder is on it).
-    await refreshLoginPath()
-    const ran = await run("/bin/sh", ["-c", command], { cwd: temporary, env: ownEnvironment(), timeout: 10 * 60_000 })
+    await readPath()
+    const there = found()
+    if (there) return { installed: true, version: await installedVersion(there) }
+    const ran = await runGroup("/bin/sh", ["-c", command], { cwd: temporary, env: ownEnvironment(), timeout: 10 * 60_000 })
     // Where it went (a folder the installer added to your PATH), read again.
-    await refreshLoginPath(true)
+    await readPath(true)
     const executable = found()
     if (executable) return { installed: true, version: await installedVersion(executable) }
     const output = plain(ran.stderr + "\n" + ran.stdout).trim().split("\n").slice(-6).join("\n").trim()
     return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `\n\n${output}` : ""}` }
-  })().finally(() => installing.delete(command))
-  installing.set(command, task)
-  return task
+  })
 }
 
 async function installedVersion(executable: string): Promise<string | undefined> {

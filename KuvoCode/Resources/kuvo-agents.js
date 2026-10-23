@@ -1424,6 +1424,7 @@ function fromPatch(path, patch, status) {
 }
 
 // Agents/src/proc.ts
+import { spawn as spawn2 } from "child_process";
 import { accessSync, constants } from "fs";
 import { delimiter, join as join6 } from "path";
 function which(name, extra = []) {
@@ -1463,18 +1464,64 @@ async function run(command, args, options = {}) {
     clearTimeout(timer);
   return { code, stdout, stderr };
 }
+function runGroup(command, args, options = {}) {
+  const env = { ...process.env, ...options.env };
+  for (const name of Object.keys(env))
+    if (env[name] === undefined)
+      delete env[name];
+  return new Promise((resolve) => {
+    const child = spawn2(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => stdout += chunk);
+    child.stderr?.on("data", (chunk) => stderr += chunk);
+    const stop = (signal) => {
+      try {
+        if (child.pid)
+          process.kill(-child.pid, signal);
+      } catch {}
+    };
+    const timer = options.timeout ? setTimeout(() => {
+      stop("SIGTERM");
+      setTimeout(() => stop("SIGKILL"), 3000);
+    }, options.timeout) : undefined;
+    child.on("error", (error) => {
+      if (timer)
+        clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: stderr + String(error) });
+    });
+    child.on("close", (code) => {
+      if (timer)
+        clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
+  });
+}
+var startPath = process.env.PATH ?? "";
 var pathRead = 0;
+var reading;
 async function refreshLoginPath(now = false) {
+  if (reading) {
+    await reading;
+    if (!now)
+      return;
+  }
   if (!now && Date.now() - pathRead < 5000)
     return;
-  pathRead = Date.now();
+  reading = readLoginPath().finally(() => {
+    pathRead = Date.now();
+    reading = undefined;
+  });
+  await reading;
+}
+async function readLoginPath() {
   const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  for (const flags of ["-ilc", "-lc"]) {
+  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
     try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), DISABLE_AUTO_UPDATE: "true" } });
+      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
       const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
       if (found?.trim()) {
-        process.env.PATH = [process.env.KUVO_BIN, found.trim()].filter(Boolean).join(":");
+        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
         return;
       }
     } catch {}
@@ -3875,8 +3922,23 @@ import { existsSync as existsSync7, realpathSync as realpathSync2 } from "fs";
 import { basename, join as join11 } from "path";
 var checked = new Map;
 var newest = new Map;
-var updating = new Map;
-var installing2 = new Map;
+var underWay = new Map;
+function oneAtATime(name, kind, task) {
+  const running = underWay.get(name);
+  if (running?.kind === kind)
+    return running.done;
+  const done = (async () => {
+    await running?.done.catch(() => {});
+    return task();
+  })();
+  const entry = { kind, done };
+  underWay.set(name, entry);
+  done.catch(() => {}).finally(() => {
+    if (underWay.get(name) === entry)
+      underWay.delete(name);
+  });
+  return done;
+}
 async function maintenance(definition, fresh = false) {
   const kept = checked.get(definition.executable);
   if (!fresh && kept && Date.now() - kept.at < 10 * 60000)
@@ -3891,14 +3953,11 @@ function isOutdated(maintenance2) {
   return Boolean(maintenance2.installed && maintenance2.latest && compareVersions(maintenance2.installed, maintenance2.latest) < 0);
 }
 function update(definition, temporary) {
-  const running = updating.get(definition.executable);
-  if (running)
-    return running;
-  const task = (async () => {
+  return oneAtATime(definition.name, "update", async () => {
     const before = await maintenance(definition, true);
     if (!before.command)
       return { updated: false, version: before.installed, message: `Update ${definition.name} the way you installed it.` };
-    const ran = await run(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60000 });
+    const ran = await runGroup(before.command[0], before.command.slice(1), { cwd: temporary, env: { ...ownEnvironment(), ...before.env }, timeout: 10 * 60000 });
     const after = await maintenance(definition, true);
     const changed = Boolean(after.installed && after.installed !== before.installed);
     if (changed || after.installed && !isOutdated(after))
@@ -3914,18 +3973,16 @@ function update(definition, temporary) {
 
 ${output}` : ""}`
     };
-  })().finally(() => updating.delete(definition.executable));
-  updating.set(definition.executable, task);
-  return task;
+  });
 }
-function install(name, command, temporary, found) {
-  const running = installing2.get(command);
-  if (running)
-    return running;
-  const task = (async () => {
-    await refreshLoginPath();
-    const ran = await run("/bin/sh", ["-c", command], { cwd: temporary, env: ownEnvironment(), timeout: 10 * 60000 });
-    await refreshLoginPath(true);
+function install(name, command, temporary, found, readPath = refreshLoginPath) {
+  return oneAtATime(name, "install", async () => {
+    await readPath();
+    const there = found();
+    if (there)
+      return { installed: true, version: await installedVersion2(there) };
+    const ran = await runGroup("/bin/sh", ["-c", command], { cwd: temporary, env: ownEnvironment(), timeout: 10 * 60000 });
+    await readPath(true);
     const executable = found();
     if (executable)
       return { installed: true, version: await installedVersion2(executable) };
@@ -3936,9 +3993,7 @@ function install(name, command, temporary, found) {
     return { installed: false, message: `${name} isn't installed after \`${command}\`.${output ? `
 
 ${output}` : ""}` };
-  })().finally(() => installing2.delete(command));
-  installing2.set(command, task);
-  return task;
+  });
 }
 async function installedVersion2(executable) {
   const ran = await run(executable, ["--version"], { timeout: 15000 }).catch(() => {
@@ -4278,6 +4333,8 @@ class ClaudeAgent {
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined;
     if (own)
       env.CLAUDE_ENV_FILE = own;
+    if (onMachine)
+      env.DISABLE_AUTOUPDATER = "1";
     return env;
   }
   async removeAccount() {
@@ -4665,6 +4722,8 @@ class ClaudeThread {
     return Boolean(this.query) && this.liveTasks.size > 0;
   }
   open(sdk, modelID, effort, plan, append, hooks, skills) {
+    if (!this.agent.executable())
+      throw new Error(`Install Claude Code first: ${this.agent.install}`);
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
@@ -5953,9 +6012,9 @@ class CodexAgent {
     const thread = this.threads.get(sessionID);
     this.threads.delete(sessionID);
     this.skillRoots.delete(sessionID);
-    for (const [spawn2, owner] of this.spawned)
+    for (const [spawn3, owner] of this.spawned)
       if (owner === thread)
-        this.spawned.delete(spawn2);
+        this.spawned.delete(spawn3);
   }
 }
 
@@ -10770,22 +10829,34 @@ function turnEnd(botName, wrapUp) {
 Wrap up this discussion now, the one since the user last wrote: in a few short lines, what was decided, what's still open, and who does what next. Write to the user as "you". Don't reply PASS.` : `
 Your turn, ${botName}. Reply to the group, or just PASS if you have nothing new to add.`;
 }
-function chatText(bot, group, all, name) {
+function chatText(bot, group, all, name, budget2 = chatBudget) {
   const said2 = all.filter((message) => message.kind !== "note");
   if (said2.length === 0)
     return `Nothing has been said in "${group.name}" yet.
 `;
-  let text = `Everything said in "${group.name}" so far, from the start:
-`;
-  for (const message of said2) {
+  const parts = said2.map((message) => {
     const who = message.author === bot ? "You" + (message.report !== undefined ? " (reporting back on your part of the work)" : message.kind === "wrapUp" ? " (wrap-up)" : "") : label(message, name);
-    text += `
+    return `
 ${who}:
 ${indented(message.text)}
 `;
+  });
+  const encoder = new TextEncoder;
+  let first = parts.length - 1;
+  let size = encoder.encode(parts[first]).length;
+  while (first > 0) {
+    const more = encoder.encode(parts[first - 1]).length;
+    if (size + more > budget2)
+      break;
+    size += more;
+    first--;
   }
-  return text;
+  const header2 = first === 0 ? `Everything said in "${group.name}" so far, from the start:
+` : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):
+`;
+  return header2 + parts.slice(first).join("");
 }
+var chatBudget = 160000;
 function seatStartText(bot, group, all, wrapUp, name, named2) {
   return chatText(bot, group, all, name) + (named2 ? `
 ` + named2 + `
@@ -10799,7 +10870,9 @@ Your turn, ${name(bot)}. Reply to the group, or just PASS if you have nothing to
 }
 function ampersands(text, names) {
   const folded = fold(text);
+  const code = codeUnits(text);
   const marks = new Set;
+  const word2 = (at) => at >= 0 && at < text.length && /^[\p{L}\p{N}]/u.test(text.slice(at));
   for (const name of names.filter((each) => each.length > 0).sort((a, b) => length(b) - length(a))) {
     const needle = fold("@" + name);
     let from = 0;
@@ -10808,7 +10881,10 @@ function ampersands(text, names) {
       if (at < 0)
         break;
       const end = at + needle.length;
-      if (!/[\p{L}\p{N}]$/u.test(text.slice(0, at)) && !/^[\p{L}\p{N}]/u.test(text.slice(end)))
+      const after = text[end];
+      const startsWord = at === 0 || mentionOpeners.includes(text[at - 1]);
+      const endsWord = !word2(end) && !"_/@".includes(after ?? " ") && !(after !== undefined && ".-:".includes(after) && word2(end + 1));
+      if (startsWord && endsWord && !code.has(at))
         marks.add(at);
       from = end;
     }
@@ -10816,6 +10892,38 @@ function ampersands(text, names) {
   if (marks.size === 0)
     return text;
   return text.split("").map((unit, index) => marks.has(index) ? "&" : unit).join("");
+}
+var mentionOpeners = ` 	
+\r\xA0([{"'\u201C\u2018\xAB*_~>`;
+function codeUnits(text) {
+  const code = new Set;
+  let fenced = false;
+  let offset = 0;
+  for (const line of text.split(`
+`)) {
+    const fence = /^[ \t]*```/.test(line);
+    if (fence || fenced) {
+      for (let index = 0;index < line.length; index++)
+        code.add(offset + index);
+    } else {
+      let from = 0;
+      for (;; ) {
+        const open = line.indexOf("`", from);
+        if (open < 0)
+          break;
+        const close = line.indexOf("`", open + 1);
+        if (close < 0)
+          break;
+        for (let index = open;index <= close; index++)
+          code.add(offset + index);
+        from = close + 1;
+      }
+    }
+    if (fence)
+      fenced = !fenced;
+    offset += line.length + 1;
+  }
+  return code;
 }
 function guests(all, members, bots) {
   const last2 = [...all].reverse().find((message) => message.kind !== "note");
@@ -12174,6 +12282,20 @@ class SeatAPI {
     const answer = await this.requester.request("GET", "/api/session/active");
     return new Set(Object.keys(answer?.data ?? {}));
   }
+  async sessions() {
+    const all = [];
+    let query = "limit=100&order=desc";
+    for (let pages = 0;pages < 50; pages++) {
+      const answer = await this.requester.request("GET", `/api/session?${query}`);
+      const data = Array.isArray(answer?.data) ? answer.data : [];
+      all.push(...data);
+      const next2 = answer?.cursor?.next;
+      if (data.length < 100 || !next2)
+        break;
+      query = `limit=100&cursor=${encodeURIComponent(next2)}`;
+    }
+    return all;
+  }
   async session(id) {
     return (await this.requester.request("GET", at(id)))?.data;
   }
@@ -12277,6 +12399,7 @@ class GroupRunner {
   context;
   chats;
   live = new Map;
+  seatBase = new Map;
   runs = 0;
   following = new Set;
   declined = new Set;
@@ -12306,6 +12429,19 @@ class GroupRunner {
   start() {
     this.resumeWork();
     this.scheduleMeetings(1e4);
+    this.dropLeftScratch();
+  }
+  async dropLeftScratch() {
+    const old = Date.now() - 30 * 60000;
+    const bridge = this.context.bridge();
+    for (const api of [new SeatAPI(this.context.engine), ...bridge ? [new SeatAPI(bridge)] : []]) {
+      const sessions = await api.sessions().catch(() => []);
+      for (const session of sessions) {
+        if (session?.metadata?.kuvo?.seat?.scratch !== true || (session?.time?.updated ?? Date.now()) >= old)
+          continue;
+        await api.delete(session.id).catch(() => {});
+      }
+    }
   }
   state(id) {
     let live = this.live.get(id);
@@ -12619,6 +12755,7 @@ class GroupRunner {
     let absent = new Set;
     let saidCount = 0;
     const guested = new Set;
+    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"));
     while (!signal.aborted) {
       const kept3 = this.chat(id);
       if (!kept3)
@@ -12637,15 +12774,24 @@ class GroupRunner {
           names.set(member, bot.name);
       }
       const members = kept3.group.members.filter((member) => names.has(member) && !absent.has(member));
-      const latest = [...kept3.messages].reverse().find((message) => message.kind !== "note");
-      const guest = latest ? guests(kept3.messages, kept3.group.members, this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }))).find((bot) => !guested.has(latest.id + "/" + bot)) : undefined;
-      if (latest && guest) {
-        guested.add(latest.id + "/" + guest);
+      const bots = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }));
+      let named2;
+      for (let index = begun;index < kept3.messages.length && !named2; index++) {
+        const message = kept3.messages[index];
+        if (message.kind === "note")
+          continue;
+        const guest = guests(kept3.messages.slice(0, index + 1), kept3.group.members, bots).find((bot) => !guested.has(message.id + "/" + bot));
+        if (guest)
+          named2 = { message, guest };
+      }
+      if (named2) {
+        const { message, guest } = named2;
+        guested.add(message.id + "/" + guest);
         if (turns >= limit(kept3.group.members.length)) {
           live.paused = true;
           break;
         }
-        const outcome2 = await this.turn(guest, id, signal, false, true);
+        const outcome2 = await this.turn(guest, id, signal, false, message);
         if (signal.aborted)
           return epoch;
         turns++;
@@ -12692,7 +12838,8 @@ class GroupRunner {
     }
     return epoch;
   }
-  async turn(botID, id, signal, wrapUp = false, guest = false) {
+  async turn(botID, id, signal, wrapUp = false, namedIn) {
+    const guest = namedIn !== undefined;
     const bot = this.bot(botID);
     if (!bot)
       return "absent";
@@ -12755,7 +12902,7 @@ class GroupRunner {
       const promptID = newID("msg");
       const retracted = guest ? undefined : current.group.retracted?.[botID];
       const name = (author) => this.name(author);
-      const prompt = guest ? guestText(botID, current.group, all, [...all].reverse().find((message) => message.kind !== "note")?.author, name) : isNew ? seatStartText(botID, current.group, all, wrapUp, name, named2(all)) : turnText(botID, current.group, unheard, wrapUp, name, named2(unheard));
+      const prompt = guest ? guestText(botID, current.group, all, namedIn?.author, name) : isNew ? seatStartText(botID, current.group, all, wrapUp, name, named2(all)) : turnText(botID, current.group, unheard, wrapUp, name, named2(unheard));
       await api.prompt(seat, promptID, prompt, "queue");
       going();
       const last2 = all.at(-1);
@@ -12813,8 +12960,14 @@ class GroupRunner {
         return "absent";
       const reply = await this.reply(seat, promptID, sent, api);
       going();
-      if (!guest && reply.size !== undefined && outgrew(reply.size, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
-        await this.startOver(botID, id);
+      if (!guest && reply.size !== undefined) {
+        const base = this.seatBase.get(seat) ?? reply.size;
+        this.seatBase.set(seat, base);
+        const grown = reply.size - base;
+        if (grown > seatBudget && outgrew(grown, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
+          this.seatBase.delete(seat);
+          await this.startOver(botID, id);
+        }
       }
       if (!reply.text) {
         if (reply.error) {
@@ -13381,7 +13534,12 @@ class GroupRunner {
     const agent = runsWithAgents(model2) && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
     const session = await api.create(bot.directory, title, agent, model2, rules);
     await api.setMetadata(session.id, { kuvo: { seat: { group: group.id, bot: bot.id, scratch: true } } }).catch(() => {});
-    await api.setInstruction(session.id, seatKey, this.seatText(bot, group));
+    try {
+      await api.setInstruction(session.id, seatKey, this.seatText(bot, group));
+    } catch (error3) {
+      await api.delete(session.id).catch(() => {});
+      throw error3;
+    }
     return session.id;
   }
   seatText(bot, group) {
@@ -13735,4 +13893,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 376bfdf8d8b9774d00028c9e3f73b09891ede3d1eb2a8b65fbdc36f0df82e2a5
+// Built from Agents/src b623d7af0b2b546069c275d3855f7c95856a7087ed344308bee6bacb89fcb1c2

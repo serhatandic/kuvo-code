@@ -199,6 +199,9 @@ export class ClaudeAgent implements Agent {
     // Code's folder).
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined
     if (own) env.CLAUDE_ENV_FILE = own
+    // Nor does it update itself there: with Kuvo Code's folders it would put the new version in
+    // them (where your ~/.local/bin/claude would then point). Update does, with your own.
+    if (onMachine) env.DISABLE_AUTOUPDATER = "1"
     return env
   }
 
@@ -676,6 +679,8 @@ class ClaudeThread implements Thread {
   }
 
   private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string) {
+    // (Without it, the SDK's own words would be about a build of its own it doesn't have.)
+    if (!this.agent.executable()) throw new Error(`Install Claude Code first: ${this.agent.install}`)
     let id = this.state.claudeSession as string | undefined
     const resume = Boolean(id && this.state.claudeStarted)
     if (!id) {

@@ -18,7 +18,7 @@ import { kuvoToolName, loadKuvoTools, setToolServer } from "../src/kuvotools"
 import { pictureData, pictureFile, withPictures } from "../src/pictures"
 import { expandCommand } from "../src/server"
 import { commandParts, parseCommands, withTextFiles } from "../src/sessions"
-import { which } from "../src/proc"
+import { refreshLoginPath, which } from "../src/proc"
 import { commandSignIn } from "../src/signin"
 
 describe("diffs", () => {
@@ -117,24 +117,46 @@ describe("keeping an agent's program current", () => {
     expect(homebrewKeg("/Users/me/.local/share/claude/versions/2.1.156")).toBeUndefined()
   })
 
+  test("your login shell's PATH, read again and again, stays as it is (a profile that adds a folder each time, as Ubuntu's does)", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "kuvo-shell-"))
+    const shell = join(folder, "login-shell")
+    // Its profile puts ~/.local/bin first, whatever the PATH already has; then runs what it's given.
+    writeFileSync(shell, '#!/bin/sh\nPATH="/home/me/.local/bin:$PATH"\neval "$2"\n')
+    chmodSync(shell, 0o755)
+    const saved = { SHELL: process.env.SHELL, PATH: process.env.PATH }
+    process.env.SHELL = shell
+    try {
+      await refreshLoginPath(true)
+      const first = process.env.PATH
+      await refreshLoginPath(true)
+      await refreshLoginPath(true)
+      expect(process.env.PATH).toBe(first)
+      expect(first?.split(":").filter((entry) => entry === "/home/me/.local/bin").length).toBe(1)
+    } finally {
+      process.env.SHELL = saved.SHELL
+      process.env.PATH = saved.PATH
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test("installing with its maker's command: there after it, with its version, or why not", async () => {
     const folder = mkdtempSync(join(tmpdir(), "kuvo-install-"))
-    // Your login shell's PATH isn't read here.
-    const remote = process.env.KUVO_AGENTS_REMOTE
-    process.env.KUVO_AGENTS_REMOTE = "1"
+    // (Your login shell's PATH isn't read here.)
+    const readPath = async () => {}
     try {
       const bin = join(folder, "bin")
-      const command = `mkdir -p bin && printf '#!/bin/sh\\necho "fake 1.4.2"\\n' > bin/fake && chmod +x bin/fake`
-      const installed = await install("Fake", command, folder, () => which("fake", [bin]))
+      const command = `mkdir -p bin && printf '#!/bin/sh\\necho "fake 1.4.2"\\n' > bin/fake && chmod +x bin/fake && echo ran >> runs`
+      const installed = await install("Fake", command, folder, () => which("fake", [bin]), readPath)
       expect(installed).toEqual({ installed: true, version: "1.4.2" })
+      // Asked again: it's there, so its installer doesn't run again.
+      expect(await install("Fake", command, folder, () => which("fake", [bin]), readPath)).toEqual({ installed: true, version: "1.4.2" })
+      expect(readFileSync(join(folder, "runs"), "utf8")).toBe("ran\n")
 
-      const failed = await install("Other", "echo 'curl: (6) Could not resolve host' >&2; exit 6", folder, () => which("other", [bin]))
+      const failed = await install("Other", "echo 'curl: (6) Could not resolve host' >&2; exit 6", folder, () => which("other", [bin]), readPath)
       expect(failed.installed).toBe(false)
       expect(failed.message).toContain("Other isn't installed after")
       expect(failed.message).toContain("Could not resolve host")
     } finally {
-      if (remote === undefined) delete process.env.KUVO_AGENTS_REMOTE
-      else process.env.KUVO_AGENTS_REMOTE = remote
       rmSync(folder, { recursive: true, force: true })
     }
   })
