@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.20";
+export const BRIDGE_VERSION = "0.9.21";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -621,6 +621,16 @@ async function* forward(target, path, request, signal, allows) {
   for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
   // A message the phone sends: that it's from the phone goes with it.
   const prompt = method === "POST" && /^\/api\/session\/[^/]+\/prompt$/.test(url.pathname);
+  // A session's metadata changed: whether it was archived before, as the engine has it (null when
+  // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
+  const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
+  let wasArchived = null;
+  if (changed) {
+    try {
+      const before = await fetch(url, { headers, signal });
+      if (before.ok) wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
+    } catch {}
+  }
   const response = await fetch(url, {
     method,
     headers,
@@ -633,12 +643,11 @@ async function* forward(target, path, request, signal, allows) {
     if (value) out[name] = value;
   }
   // Archived or brought back (`kuvo.archived` in its metadata), here with the Mac closed too: its
-  // wake-ups wait, or come back, as a Mac's Archive has it.
-  const changed = method === "PATCH" && response.ok && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
-  if (changed) {
+  // wake-ups wait, or come back, as a Mac's Archive has it. Only when that changed.
+  if (changed && response.ok) {
     let archived;
     try { archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"]; } catch {}
-    if (typeof archived === "boolean") try { holdArchived(decodeURIComponent(changed[1]), archived); } catch {}
+    if (typeof archived === "boolean" && archived !== wasArchived) try { holdArchived(decodeURIComponent(changed[1]), archived); } catch {}
   }
   yield { head: { status: response.status, headers: out } };
   if (!response.body) return;
@@ -1566,7 +1575,6 @@ export function wakeOf(name, note = "") {
   return { id: name, due: Number(due), note, every: repeating ? repeatText(repeating.split("@")[0]) : null, letters };
 }
 
-// The folder keeping a session's wake-ups: its bot's, or its own in `wakes`; null for none.
 /**
  * A conversation archived (or brought back) from a phone: its wake-ups wait while it's archived,
  * as WakeUps.setPaused has a Mac hold them, and come back with it. A hold of your own (`paused`)
@@ -1585,6 +1593,7 @@ export function holdArchived(session, archived) {
   }
 }
 
+// The folder keeping a session's wake-ups: its bot's, or its own in `wakes`; null for none.
 export function wakeFolder(session) {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(session)) return null;
   for (const id of listOf(BOTS)) {

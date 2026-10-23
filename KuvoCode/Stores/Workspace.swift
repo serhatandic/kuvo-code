@@ -381,6 +381,17 @@ final class Workspace {
     /// A session was archived, or brought back. The app sets it.
     @ObservationIgnored var onArchived: ((_ session: String, _ isArchived: Bool) -> Void)?
 
+    /// The sessions read again: one archived or brought back meanwhile (from a phone, while the
+    /// feed was down) is told, as `upsert` tells one.
+    private func noteArchiving(since before: [Session]) {
+        guard let onArchived else { return }
+        let was = Dictionary(before.map { ($0.id, Self.isArchived($0)) }, uniquingKeysWith: { first, _ in first })
+        for session in sessions {
+            let archived = Self.isArchived(session)
+            if let wasArchived = was[session.id], wasArchived != archived { onArchived(session.id, archived) }
+        }
+    }
+
     /// Pins a session to the top of the sidebar, or takes it off.
     func setPinned(_ id: String, _ pinned: Bool) async {
         if pinned { Analytics.shared.track("session_pinned") }
@@ -1002,7 +1013,9 @@ final class Workspace {
             let local = all.filter { !isHidden($0) && movedAway[$0.id] != .some(nil) }
             // (This Mac's: a machine's agents' are its own, with its engine's.)
             let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) }
+            let before = sessions
             sessions = local + theAgents + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
+            noteArchiving(since: before)
             SessionCopies.saveLocalSessions(local + theAgents)
             // Read before the engine was up: so here, and told it now.
             let localIDs = Set(local.map(\.id))
@@ -1048,7 +1061,9 @@ final class Workspace {
             let all = try await api.allSessions()
             Self.dropLeftScratch(all, api: api)
             let listed = all.filter { !isHidden($0) }
+            let before = sessions
             sessions = sessions.filter { !isMacs($0) } + listed
+            noteArchiving(since: before)
             // Read while the bridge was away: so here, and told it now.
             let listedIDs = Set(listed.map(\.id))
             for (id, idle) in unsentViews where listedIDs.contains(id) {
@@ -1262,7 +1277,9 @@ final class Workspace {
             let theirs = listed.filter { !isHidden($0) } + fromBridge + keptBridge
             let reconnected = connectedOnce.contains(machine)
             tellMissedNews(in: theirs, machine: machine)
+            let before = sessions
             sessions = sessions.filter { RemoteFolder.machine(of: $0.location.directory) != machine } + theirs
+            noteArchiving(since: before)
             for session in theirs { sessionMachines[session.id] = machine }
             remoteSessions = remoteSessions.filter { $0.value.machine != machine }
             for session in theirs { remoteSessions[session.id] = RemoteSession(machine: machine, title: session.title) }

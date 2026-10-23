@@ -209,7 +209,20 @@ async function fakeEngine() {
 }
 
 test("a conversation archived from a phone holds its wake-ups, with the Mac closed too, and brought back lets them go; a pause of your own stays", async t => {
-  const engine = await fakeEngine();
+  // An engine that keeps each session's metadata, as a phone changes it.
+  const metadata = {};
+  const server = http.createServer((request, response) => {
+    const id = request.url.split("/").at(-1);
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      if (request.method === "PATCH") metadata[id] = { ...metadata[id], ...JSON.parse(body).metadata };
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { id, metadata: metadata[id] ?? {} } }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const engine = { port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
   t.after(engine.close);
   const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "pw", version: "2.0.30" }));
   const wakes = path.join(home, "wakes", "ses_archived1");
@@ -225,6 +238,14 @@ test("a conversation archived from a phone holds its wake-ups, with the Mac clos
   await archive("ses_archived1", true);
   await archive("ses_archived1", false);
   assert.equal(fs.readFileSync(path.join(wakes, "paused"), "utf8"), "paused");
+  fs.rmSync(path.join(wakes, "paused"));
+  // Archived, its wake-ups let go by hand, then pinned (all its metadata sent again, archived as
+  // it was): they stay going.
+  await archive("ses_archived1", true);
+  fs.rmSync(path.join(wakes, "paused"));
+  const pin = await answer(handle, "PATCH", "api/session/ses_archived1", JSON.stringify({ metadata: { "kuvo.archived": true, "kuvo.pinned": true } }));
+  assert.equal(pin.status, 200);
+  assert.equal(fs.existsSync(path.join(wakes, "paused")), false);
   // A session with no wake-ups has nothing to hold; nor does a name that isn't a session's.
   await archive("ses_nowakes1", true);
   assert.equal(fs.existsSync(path.join(home, "wakes", "ses_nowakes1")), false);

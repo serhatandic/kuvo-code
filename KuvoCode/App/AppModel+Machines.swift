@@ -24,10 +24,7 @@ extension AppModel {
             if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
         }
         // An archived session's wake-ups wait, and come back with it.
-        workspace.onArchived = { [weak self] session, isArchived in
-            guard let found = self?.workspace.session(session) else { return }
-            Task { await self?.wakeUps.archived(found, isArchived) }
-        }
+        workspace.onArchived = { [weak self] session, _ in self?.archivedChanged(session) }
         // A subagent's calls go by the conversation that started it: its folder, its permissions.
         BrowserTools.sessionFolder = { [weak self] session in
             guard let self else { return nil }
@@ -259,6 +256,16 @@ extension AppModel {
     /// phone is tried with, which reaches its bots there with the Mac shut, as with Kuvo Code's own.
     var leavesMachinesRunning: Bool {
         RemoteEngineInstaller.root == ".kuvo-code" || RemoteEngineInstaller.root == ".kuvo-code-demo" && PhoneLink.isEnabled
+    }
+
+    /// A session was archived or brought back (here, from a phone, by another Mac): its wake-ups
+    /// wait, or come back, as it is once this runs, so a list read again meanwhile that flipped it
+    /// back and forth acts on where it ended up.
+    func archivedChanged(_ session: String) {
+        Task {
+            guard let found = workspace.session(session) else { return }
+            await wakeUps.archived(found, Workspace.isArchived(found))
+        }
     }
 
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.

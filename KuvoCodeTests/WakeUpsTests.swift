@@ -211,10 +211,7 @@ import Testing
         await start()
         defer { done() }
         // As the app has it (`startMachines`).
-        app.workspace.onArchived = { [app] session, isArchived in
-            guard let found = app.workspace.session(session) else { return }
-            Task { await app.wakeUps.archived(found, isArchived) }
-        }
+        app.workspace.onArchived = { [app] session, _ in app.archivedChanged(session) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
         func changed(archived: Bool) async throws {
@@ -231,6 +228,21 @@ import Testing
         try await changed(archived: false)
         for _ in 0..<100 where FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(!app.wakeUps.paused.contains(id), "brought back: they come back")
+    }
+
+    /// Archived from a phone while this Mac didn't hear it (its feed was down): once the list is
+    /// read again, its wake-ups wait all the same.
+    @Test func archivedUnheardHoldsItsWakeUpsOnceTheListIsRead() async throws {
+        await start()
+        defer { done() }
+        app.workspace.onArchived = { [app] session, _ in app.archivedChanged(session) }
+        let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
+        try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
+        let listed = StubWeb.json(["data": [Self.session(id, archived: true)]])
+        StubWeb.route(Self.engine + "/api/session") { _ in listed }
+        await app.workspace.refresh()
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(app.wakeUps.paused.contains(id))
     }
 
     /// Wake-ups you paused stay paused when the session is archived and brought back; ones paused
