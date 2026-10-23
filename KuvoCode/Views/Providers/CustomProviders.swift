@@ -115,11 +115,14 @@ struct CustomProviderEditor: View {
                 } footer: {
                     if let problem {
                         Text(problem).foregroundStyle(.red)
+                    } else if !name.trimmingCharacters(in: .whitespaces).isEmpty && Self.providerID(for: name).isEmpty {
+                        // Its id is made of them.
+                        Text("A name needs a letter or a number.")
                     }
                 }
             }
         } footer: {
-            SettingsEditorButtons(create: id == nil ? "Create" : nil, canCreate: !name.trimmingCharacters(in: .whitespaces).isEmpty, onCreate: create,
+            SettingsEditorButtons(create: id == nil ? "Create" : nil, canCreate: !Self.providerID(for: name).isEmpty, onCreate: create,
                                   remove: "Remove Provider…", onRemove: { confirmsRemoval = true }, done: done)
         }
         .settingsDetailTitle(id.flatMap { config.value(at: CustomProvidersSection.path + [$0, "name"])?.string } ?? "New Provider")

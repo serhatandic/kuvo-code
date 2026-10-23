@@ -87,10 +87,9 @@ import Testing
         #expect(forgot == ["openai"])
     }
 
-    /// OpenCode's sign-in page, started as the Mac starts it: with its method's hidden answer (the
-    /// server), which reaches the engine as the phone sent it.
     /// A provider you add with a name in any language gets an id of plain letters, so a phone can
-    /// name it to disconnect it, as the Mac does.
+    /// name it to disconnect it, as the Mac does; one added before keeps the name it was given,
+    /// and a phone can disconnect it too.
     @Test func aProviderNamedInAnyLanguageCanBeDisconnectedFromAPhone() async throws {
         #expect(CustomProviderEditor.providerID(for: "Şirket Proxy") == "sirket-proxy")
         #expect(CustomProviderEditor.providerID(for: "Kırmızı API v2") == "kirmizi-api-v2")
@@ -103,8 +102,22 @@ import Testing
         let id = CustomProviderEditor.providerID(for: "Şirket Proxy")
         #expect(try await ask("kuvo/accounts/\(id)/forget", method: "POST").status == 200)
         #expect(forgotten == ["sirket-proxy"])
+
+        let folder = AppInfo.testRoot.appending(path: "PhoneAccounts/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data(#"{"providers": {"şirket-proxy": {"npm": "@ai-sdk/openai-compatible"}}}"#.utf8).write(to: folder.appending(path: "opencode.json"))
+        let config = EngineConfig(file: folder.appending(path: "opencode.json"))
+        link.engineConfig = config
+        let older = "şirket-proxy".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/")))!
+        #expect(try await ask("kuvo/accounts/\(older)/forget", method: "POST").status == 200)
+        #expect(forgotten == ["sirket-proxy", "şirket-proxy"])
+        let unknown = "kırmızı".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
+        #expect(try await ask("kuvo/accounts/\(unknown)/forget", method: "POST").status == 404, "only one you added")
     }
 
+    /// OpenCode's sign-in page, started as the Mac starts it: with its method's hidden answer (the
+    /// server), which reaches the engine as the phone sent it.
     @Test func aSignInPageStartsWithItsAnswers() async throws {
         defer { StubWeb.stop() }
         let start = #"{"methodID":"console","answer":{"server":"https://opencode.ai"}}"#
