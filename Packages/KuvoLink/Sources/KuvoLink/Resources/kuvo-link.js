@@ -654,6 +654,222 @@ async function* forward(target, path, request, signal, allows) {
   }
 }
 
+// MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
+
+const SKILLS = path.join(K, "config", "opencode", "skills");
+const SKILL_SOURCE = ".kuvo-source.json";
+// GitHub, or a test's stand-in for it, in a test's folder only (never a machine's own).
+const testGitHub = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_GITHUB : undefined;
+const GITHUB = { api: testGitHub ?? "https://api.github.com", raw: testGitHub ?? "https://raw.githubusercontent.com" };
+// The well-known collections, as the Mac lists them (SkillLibrary.repositories).
+export const SKILL_REPOSITORIES = [
+  ["anthropics", "skills", "Anthropic", "The reference set: documents, spreadsheets, slides, PDFs, design and more."],
+  ["openai", "skills", "OpenAI", "Codex's catalog of curated skills."],
+  ["obra", "superpowers", "Superpowers", "Ways of working: test-driven development, debugging, planning, code review."],
+  ["mattpocock", "skills", "Matt Pocock", "Engineering and productivity skills, TypeScript-minded."],
+  ["addyosmani", "agent-skills", "Addy Osmani", "Production engineering practices: performance, accessibility, testing."],
+  ["vercel-labs", "agent-skills", "Vercel", "React, Next.js and deploying to Vercel."],
+  ["github", "awesome-copilot", "GitHub Awesome Copilot", "Hundreds of community skills; quality varies."],
+  ["huggingface", "skills", "Hugging Face", "Models, datasets and training with Hugging Face."],
+  ["cloudflare", "skills", "Cloudflare", "Workers, Pages and the rest of Cloudflare's platform."],
+  ["trailofbits", "skills", "Trail of Bits", "Security auditing and code review."],
+  ["K-Dense-AI", "scientific-agent-skills", "Scientific Skills", "A large library for science: biology, chemistry, data analysis."],
+  ["wshobson", "agents", "wshobson/agents", "A big set of plugins with skills for many languages and tools."],
+].map(([owner, name, title, summary]) => ({ id: `${owner}/${name}`, owner, name, title, summary, branch: "main" }));
+
+class SkillFailure extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+const limited = () => new SkillFailure(503, "GitHub is limiting requests for now. Try again in a while.");
+
+/** A folder's name in the skills folder: not a path, nor hidden. */
+const isSkillFolder = name => typeof name === "string" && name.length > 0 && name.length <= 128 && !name.startsWith(".") && !/[\/\\\0]/.test(name);
+
+/** A skill's name from what's typed, as the Mac's SkillFile.name makes it. */
+export function skillName(text) {
+  const words = String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
+  return words.join("-").slice(0, 64).replace(/-+$/, "");
+}
+
+/** Skills installed from GitHub, by their folder's name, with where they came from. */
+function skillSources() {
+  const sources = {};
+  for (const name of listOf(SKILLS)) {
+    try {
+      const source = JSON.parse(fs.readFileSync(path.join(SKILLS, name, SKILL_SOURCE), "utf8"));
+      if (typeof source?.repository === "string") sources[name] = { repository: source.repository, path: typeof source.path === "string" ? source.path : "" };
+    } catch {}
+  }
+  return sources;
+}
+
+async function github(url, json = true) {
+  const response = await fetch(url, { headers: json ? { accept: "application/vnd.github+json", "user-agent": "Kuvo Code" } : { "user-agent": "Kuvo Code" }, signal: AbortSignal.timeout(30_000) });
+  if (response.status === 403 || response.status === 429) throw limited();
+  return response;
+}
+
+/** One of the well-known collections, or any other by its name on GitHub, with its default branch. */
+async function skillRepository(owner, name) {
+  const known = SKILL_REPOSITORIES.find(each => each.owner.toLowerCase() === owner.toLowerCase() && each.name.toLowerCase() === name.toLowerCase());
+  if (known) return known;
+  const response = await github(`${GITHUB.api}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+  const info = response.status === 200 ? await response.json().catch(() => null) : null;
+  if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn't found on GitHub.`);
+  return { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
+}
+
+/** A repository's skills, from its file list, as SkillLibrary.skills(in:) reads it. */
+export async function skillsIn(repository) {
+  const response = await github(`${GITHUB.api}/repos/${repository.owner}/${repository.name}/git/trees/${repository.branch}?recursive=1`);
+  if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn't found on GitHub.`);
+  const tree = await response.json();
+  const files = (tree.tree ?? []).filter(entry => entry.type === "blob").map(entry => entry.path);
+  const dirname = file => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
+  const folders = new Set(files.filter(file => file.split("/").at(-1) === "SKILL.md").map(dirname).filter(Boolean));
+  const isSkill = files.includes("SKILL.md");
+  const byFolder = new Map();
+  for (const file of files) {
+    let folder = dirname(file);
+    while (folder && !folders.has(folder)) folder = dirname(folder);
+    if (folder) byFolder.set(folder, [...(byFolder.get(folder) ?? []), file]);
+    else if (isSkill && !file.startsWith(".")) byFolder.set("", [...(byFolder.get("") ?? []), file]);
+  }
+  const nameOf = folder => (folder ? folder.split("/").at(-1) : repository.name);
+  let skills = [...(isSkill ? [""] : []), ...[...folders].sort()].map(folder => ({ name: nameOf(folder), path: folder, files: byFolder.get(folder) ?? [] }));
+  // A copy kept for another tool in a hidden folder, of one in plain sight: listed once.
+  const hidden = skill => skill.path.split("/").some(part => part.startsWith("."));
+  const shown = new Set(skills.filter(skill => !hidden(skill)).map(skill => skill.name));
+  skills = skills.filter(skill => !(hidden(skill) && shown.has(skill.name)));
+  return { skills, partial: tree.truncated === true };
+}
+
+const rawURL = (repository, file) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
+
+/** The front matter's name and description, as SkillLibrary.about(markdown:) reads them. */
+export function skillAbout(markdown) {
+  const lines = String(markdown).split(/\r\n|\r|\n/);
+  const about = {};
+  if (lines[0]?.trim() !== "---") return about;
+  for (let index = 1; index < lines.length && lines[index].trim() !== "---"; index++) {
+    const line = lines[index];
+    const colon = line.indexOf(":");
+    if (colon < 0 || line.startsWith(" ")) continue;
+    const key = line.slice(0, colon).trim();
+    let value = line.slice(colon + 1).trim();
+    if ([">", "|", ">-", "|-"].includes(value)) {
+      const parts = [];
+      while (index + 1 < lines.length && lines[index + 1].startsWith(" ")) parts.push(lines[++index].trim());
+      value = parts.join(" ");
+    }
+    value = value.replace(/^["']+|["']+$/g, "");
+    if (key === "name") about.name = value;
+    if (key === "description") about.description = value;
+  }
+  return about;
+}
+
+/** Fetches a skill's files beside the folder, then moves them in whole, so the engine never finds half of it. */
+async function installSkill(repository, skill) {
+  const target = path.join(SKILLS, skill.name);
+  if (fs.existsSync(target)) throw new SkillFailure(409, `A skill named ${skill.name} is already installed.`);
+  const staging = path.join(SKILLS, `.${skill.name}.kuvo-new-${process.pid}`);
+  fs.rmSync(staging, { recursive: true, force: true });
+  try {
+    for (const file of skill.files) {
+      const response = await github(rawURL(repository, file), false);
+      if (response.status !== 200) throw new SkillFailure(404, `${file} wasn't found on GitHub.`);
+      const relative = skill.path ? file.slice(skill.path.length + 1) : file;
+      const into = path.join(staging, relative);
+      if (!into.startsWith(staging + path.sep)) continue;
+      fs.mkdirSync(path.dirname(into), { recursive: true });
+      fs.writeFileSync(into, Buffer.from(await response.arrayBuffer()));
+    }
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(staging, SKILL_SOURCE), JSON.stringify({ branch: repository.branch, path: skill.path, repository: repository.id }, null, 2));
+    if (fs.existsSync(target)) throw new SkillFailure(409, `A skill named ${skill.name} is already installed.`);
+    fs.renameSync(staging, target);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+/** `kuvo/skills…` and `kuvo/skill-library…`, for this machine's own folder. */
+export async function answerSkills(method, requestPath, body) {
+  const [route, query = ""] = requestPath.split("?");
+  const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
+  if (parts.includes(null)) return { status: 400, value: { message: "That isn't a path." } };
+  const message = text => ({ message: text });
+  try {
+    if (parts[1] === "skills" && parts.length === 2) {
+      if (method !== "GET") return { status: 405, value: {} };
+      return { status: 200, value: { folder: SKILLS, github: skillSources() } };
+    }
+    if (parts[1] === "skills" && parts.length === 3) {
+      const name = parts[2];
+      if (!isSkillFolder(name)) return { status: 400, value: message("That isn't a skill's name.") };
+      const folder = path.join(SKILLS, name);
+      const file = path.join(folder, "SKILL.md");
+      if (method === "GET") {
+        const text = textOf(file);
+        return text === null ? { status: 404, value: {} } : { status: 200, value: { text } };
+      }
+      if (method === "PUT") {
+        const text = body?.text;
+        if (typeof text !== "string" || !text.trim()) return { status: 400, value: message('Send the skill\'s SKILL.md as {"text": …}.') };
+        if (body?.new === true) {
+          if (skillName(name) !== name) return { status: 400, value: message("Names use lowercase letters a to z, digits and hyphens.") };
+          if (fs.existsSync(folder)) return { status: 409, value: message(`There's a skill called ${name} already.`) };
+        } else if (!fs.existsSync(folder)) {
+          return { status: 404, value: {} };
+        }
+        fs.mkdirSync(folder, { recursive: true });
+        fs.writeFileSync(`${file}.new`, text);
+        fs.renameSync(`${file}.new`, file);
+        return { status: 200, value: {} };
+      }
+      if (method === "DELETE") {
+        if (!fs.existsSync(folder)) return { status: 404, value: {} };
+        // To Kuvo Code's own trash, kept 30 days, as the Mac puts a machine's away.
+        const trash = path.join(K, "trash", "skills");
+        fs.mkdirSync(trash, { recursive: true });
+        fs.renameSync(folder, path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`));
+        const old = Date.now() - 30 * 86_400_000;
+        for (const each of listOf(trash)) try { if (fs.statSync(path.join(trash, each)).mtimeMs < old) fs.rmSync(path.join(trash, each), { recursive: true, force: true }); } catch {}
+        return { status: 200, value: {} };
+      }
+      return { status: 405, value: {} };
+    }
+    if (parts[1] === "skill-library") {
+      if (parts.length === 2 && method === "GET") return { status: 200, value: { repositories: SKILL_REPOSITORIES.map(({ branch, ...shown }) => shown) } };
+      if (parts.length === 3 && parts[2] === "install" && method === "POST") {
+        const [owner, name] = String(body?.repository ?? "").split("/");
+        if (!owner || !name || typeof body?.path !== "string") return { status: 400, value: message('Send {"repository": "owner/name", "path": …}.') };
+        const repository = await skillRepository(owner, name);
+        const skill = (await skillsIn(repository)).skills.find(each => each.path === body.path);
+        if (!skill) return { status: 404, value: message(`There's no skill at ${body.path} in ${repository.id}.`) };
+        await installSkill(repository, skill);
+        return { status: 200, value: { name: skill.name } };
+      }
+      if (parts.length === 4 && method === "GET") {
+        const repository = await skillRepository(parts[2], parts[3]);
+        const { skills, partial } = await skillsIn(repository);
+        const { branch, ...shown } = repository;
+        return { status: 200, value: { repository: shown, skills, partial } };
+      }
+      if (parts.length === 5 && parts[4] === "about" && method === "GET") {
+        const repository = await skillRepository(parts[2], parts[3]);
+        const at = new URLSearchParams(query).get("path") ?? "";
+        const response = await github(rawURL(repository, at ? `${at}/SKILL.md` : "SKILL.md"), false).catch(() => null);
+        return { status: 200, value: response?.status === 200 ? skillAbout(await response.text()) : {} };
+      }
+    }
+    return { status: 404, value: {} };
+  } catch (error) {
+    return { status: error instanceof SkillFailure ? error.status : 502, value: message(error?.message ?? String(error)) };
+  }
+}
+
 // The handler LinkHost runs for each request.
 export function engineHandler(readEngine = readEngineFile, info = {}, readBridge = readBridgeFile, phonesChanged = () => {}) {
   // The agents' bridge, while it runs: its record, while the process it names is still it.
@@ -705,6 +921,12 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* json(405, {});
     }
     // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
+    // Settings › Skills (PROTOCOL.md, "Skills"): this machine's own skills folder, and GitHub's
+    // collections, which this machine reaches itself, with the Mac closed too.
+    if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {
+      const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body));
+      return yield* json(status, value);
+    }
     if (/^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path)) {
       // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
       if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });

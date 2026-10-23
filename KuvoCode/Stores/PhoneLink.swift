@@ -655,6 +655,17 @@ final class PhoneLink {
                 }
             }
         }
+        // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
+        if request.path.hasPrefix("kuvo/skills") || request.path.hasPrefix("kuvo/skill-library") {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.answerSkills(request) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         if request.path == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
         if request.path == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
         if let id = Self.groupID(in: request.path, then: "events") { return Self.followingGroup(id, link: link) }
@@ -1067,7 +1078,7 @@ final class PhoneLink {
         return (try? encoder.encode(settings)) ?? Data("{}".utf8)
     }
 
-    nonisolated private static func message(_ text: String) -> Data {
+    nonisolated static func message(_ text: String) -> Data {
         (try? JSONEncoder().encode(["message": text])) ?? Data()
     }
 

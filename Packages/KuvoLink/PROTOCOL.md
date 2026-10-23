@@ -532,6 +532,26 @@ itself. A host serves:
   `{file:~/.kuvo-code/box/keys/<name>}` there; on a Mac, `{file:<its keys' folder>/<name>}`.
   "Also Apply to…" on a phone is the same changes (`kuvo/config`) and keys made on each computer
   you pick: a list gets what was added and loses what was taken out, keeping the other's own.
+- Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
+  bridge from 0.9.20 for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
+  engine lists them (`api/skill`) and finds a change within a moment.
+  - `GET kuvo/skills` → `{"folder", "github": {"<name>": {repository, path}}}`: the folder as its
+    engine names skills' paths in it, and which skills came from GitHub (the rest you added).
+  - `kuvo/skills/<name>` (its folder's name): `GET` → `{"text"}`, its SKILL.md; `PUT {"text",
+    "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
+    hyphens, and `409 {"message"}` when the name is taken; without it, `404` for none); `DELETE`
+    puts its folder away (the Mac's Trash, or `~/.kuvo-code/trash/skills`, kept 30 days). `400
+    {"message"}` for a name that isn't a folder's.
+  - GitHub's collections, which the computer reaches, never the phone: `GET kuvo/skill-library`
+    → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
+    kuvo/skill-library/<owner>/<name>` (any repository on GitHub) → `{"repository", "skills":
+    [{name, path, files}], "partial"}` (`partial`: GitHub cut a very big one's list short); `GET
+    kuvo/skill-library/<owner>/<name>/about?path=<path>` → `{name?, description?}` from a skill's
+    SKILL.md, asked for as each one shows (a big collection has hundreds); `POST
+    kuvo/skill-library/install {"repository": "owner/name", "path"}` → `{"name"}`, installed
+    under its folder's name. Errors are `{"message"}`: 404 for a repository or skill there isn't,
+    409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be
+    reached.
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
   does on a Mac; what's running in it stops. It answers `202 {}` first: the link goes down with
   the engine, and the computer is back once it answers again (`kuvo/info`). A machine's bridge
