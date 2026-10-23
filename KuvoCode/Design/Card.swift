@@ -18,6 +18,10 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
     var showsSurface = true
     /// The title being renamed, in place, in the header.
     var rename: CardRename? = nil
+    /// What a click on the icon and title does (`onTitle`), with what it's called: a group
+    /// chat's or a bot's editor, say.
+    private var titleAction: (() -> Void)?
+    private var titleHelp: String?
     @ViewBuilder var icon: () -> Icon
     @ViewBuilder var actions: () -> Actions
     @ViewBuilder var content: () -> Content
@@ -94,25 +98,19 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            icon()
-                .frame(width: 16, height: 16)
-                .foregroundStyle(isFocused ? .primary : .secondary)
-            HStack(spacing: 0) {
-                if let rename {
-                    InlineTitleField(original: rename.original, commit: rename.commit, cancel: rename.cancel)
-                        .frame(maxWidth: 360)
-                        .padding(.trailing, 6)
-                } else {
-                    Text(title)
+            if let titleAction, rename == nil {
+                Button(action: titleAction) {
+                    HStack(spacing: 8) {
+                        headerIcon
+                        headerTitle
+                    }
                 }
-                if let detail {
-                    Text(" | " + detail)
-                }
+                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+                .help(titleHelp ?? "")
+            } else {
+                headerIcon
+                headerTitle
             }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(isFocused ? .primary : .secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
             Spacer(minLength: 8)
             HStack(spacing: 2) {
                 actions()
@@ -126,6 +124,39 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
         // double-click on it does what one on a title bar does, as the cards' tops are the window's.
         .contentShape(.rect)
         .onTapGesture(count: 2) { TitleBarDoubleClick.perform() }
+    }
+
+    private var headerIcon: some View {
+        icon()
+            .frame(width: 16, height: 16)
+            .foregroundStyle(isFocused ? .primary : .secondary)
+    }
+
+    private var headerTitle: some View {
+        HStack(spacing: 0) {
+            if let rename {
+                InlineTitleField(original: rename.original, commit: rename.commit, cancel: rename.cancel)
+                    .frame(maxWidth: 360)
+                    .padding(.trailing, 6)
+            } else {
+                Text(title)
+            }
+            if let detail {
+                Text(" | " + detail)
+            }
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(isFocused ? .primary : .secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+
+    /// The card with its icon and title as a button: `action` on a click, `help` its name.
+    func onTitle(_ help: String?, _ action: (() -> Void)?) -> Self {
+        var card = self
+        card.titleHelp = help
+        card.titleAction = action
+        return card
     }
 
     /// Soft elevation in place of a dark outline: a wide, faint shadow, a little deeper under

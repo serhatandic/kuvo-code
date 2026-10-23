@@ -769,6 +769,7 @@ struct MainView: View {
                 .environment(\.composerFocused) { focus = .split }
                 .largeWidgetHost()
         }
+        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
         .id("split-" + id)
         .simultaneousGesture(TapGesture().onEnded { focus = .split })
@@ -896,6 +897,7 @@ struct MainView: View {
                     GroupChatView(group: group, findRequest: groupFind)
                         .largeWidgetHost()
                 }
+                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { openGroupEditor(group: group) })
                 .id(BotGroups.tabKey(id))
             } else if let id = sessionID, let model = workspace.model(for: id) {
                 let directory = model.session.location.directory
@@ -935,6 +937,7 @@ struct MainView: View {
                         .environment(\.composerFocused) { focus = .conversation }
                         .largeWidgetHost()
                 }
+                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
                 .environment(catalog(for: directory))
             } else if let id = sessionID, let engine = app.machines.engine(workspace.waitingMachine(for: id)) {
                 Card(title: workspace.remoteTitle(id) ?? "Session", detail: engine.machine.name, isFocused: focus == .conversation) {

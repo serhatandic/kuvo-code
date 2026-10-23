@@ -223,8 +223,14 @@ private struct GroupMessageRow: View, Equatable {
         } else {
             HStack(alignment: .top, spacing: 10) {
                 if let author {
-                    // Still: the bot moves in its row, or where it's typing.
-                    BotAvatar(look: author.look, size: 28, noticed: isHovering, animates: false)
+                    // Still: the bot moves in its row, or where it's typing. A click opens its
+                    // conversation, as its name does.
+                    Button { app.open(.session(author.sessionID)) } label: {
+                        BotAvatar(look: author.look, size: 28, noticed: isHovering, animates: false)
+                    }
+                    .buttonStyle(.plain)
+                    .clickablePointer()
+                    .help("Open \(author.name)’s Conversation")
                 } else {
                     Image(systemName: "person.crop.circle.badge.questionmark")
                         .font(.system(size: 22))
@@ -233,8 +239,15 @@ private struct GroupMessageRow: View, Equatable {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(author?.name ?? "A bot that left")
-                            .font(.callout.weight(.semibold))
+                        if let author {
+                            Button(author.name) { app.open(.session(author.sessionID)) }
+                                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+                                .font(.callout.weight(.semibold))
+                                .help("Open \(author.name)’s Conversation")
+                        } else {
+                            Text("A bot that left")
+                                .font(.callout.weight(.semibold))
+                        }
                         if message.kind == .wrapUp {
                             Label("Wrap-Up", systemImage: "checklist")
                                 .font(.caption.weight(.medium))
@@ -428,16 +441,22 @@ private struct WorkState: View {
     }
 }
 
-/// The bot talking now, at work.
+/// The bot talking now, at work. Its face opens its conversation.
 private struct TypingRow: View {
     let bot: Bot
     /// What it's doing, its last step: so a long turn doesn't look stuck.
     var activity: [GroupActivity] = []
+    @Environment(AppModel.self) private var app
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 10) {
-                BotAvatar(look: bot.look, size: 28, mood: .working)
+                Button { app.open(.session(bot.sessionID)) } label: {
+                    BotAvatar(look: bot.look, size: 28, mood: .working)
+                }
+                .buttonStyle(.plain)
+                .clickablePointer()
+                .help("Open \(bot.name)’s Conversation")
                 ShimmerText(text: "\(bot.name) is thinking…")
                     .font(.callout)
             }
