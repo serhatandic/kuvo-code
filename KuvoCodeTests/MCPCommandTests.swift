@@ -47,5 +47,10 @@ import Testing
         #expect(MCPSettings.webAddress("") == nil)
         #expect(MCPSettings.webAddress("not an address") == nil)
         #expect(MCPSettings.webAddress("ftp://example.com") == nil)
+        // A name on your network or a container's, with its scheme: as it is.
+        #expect(MCPSettings.webAddress("http://homeserver:8080/mcp") == "http://homeserver:8080/mcp")
+        #expect(MCPSettings.webAddress("http://LOCALHOST:3000") == "http://LOCALHOST:3000")
+        #expect(MCPSettings.webAddress("LOCALHOST:3000") == "http://LOCALHOST:3000")
+        #expect(MCPSettings.webAddress("homeserver") == nil, "a word alone isn't taken for one")
     }
 }

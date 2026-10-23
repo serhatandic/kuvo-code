@@ -264,8 +264,10 @@ private struct ServerEditor: View {
     @State private var confirmsRemoval = false
     /// "On the web" chosen for a server with no URL yet: nothing's written until you give one.
     @State private var pendingRemote = false
-    /// The address as you type it, saved as `MCPSettings.webAddress` makes it once you're done.
+    /// The address as you type it, saved as `MCPSettings.webAddress` makes it once you're done;
+    /// `loadedAddress`, what it was as it was shown (so one changed elsewhere isn't put back).
     @State private var address = ""
+    @State private var loadedAddress = ""
     /// What you typed isn't an address: said under it, and what was saved stays.
     @State private var addressProblem = false
     @FocusState private var addressFocused: Bool
@@ -353,14 +355,13 @@ private struct ServerEditor: View {
                         // Back before a URL was given: nothing was written.
                         if picked == "local", pendingRemote {
                             pendingRemote = false
-                            address = ""
-                            addressProblem = false
                         } else {
+                            // A URL typed and not saved yet goes aside with the rest.
+                            if picked == "local" { saveAddress(path) }
                             switchKind(of: path, to: picked)
-                            // The address it had before comes back with it, shown as saved.
-                            address = config.value(at: path + ["url"])?.string ?? ""
-                            if pendingRemote { addressFocused = true }
                         }
+                        // The address it had before comes back with it, shown as saved.
+                        showAddress(path)
                     }
                 )) {
                     Text(box.machine == nil ? "On this Mac" : "On the machine").tag("local")
@@ -372,8 +373,11 @@ private struct ServerEditor: View {
                         TextField("URL", text: $address, prompt: Text(verbatim: "https://example.com/mcp"))
                             .focused($addressFocused)
                             .onSubmit { saveAddress(path) }
+                            .onChange(of: addressFocused) { if !addressFocused { saveAddress(path) } }
                             .onDisappear { saveAddress(path) }
                             .onChange(of: address) { addressProblem = false }
+                            // Waiting for one: where you type next.
+                            .onAppear { if pendingRemote { addressFocused = true } }
                     }
                 }
                 if kind == .web {
@@ -434,7 +438,7 @@ private struct ServerEditor: View {
         .onAppear {
             command = Self.commandLine(config.value(at: path + ["command"]))
             shownCommand = command
-            address = config.value(at: path + ["url"])?.string ?? ""
+            showAddress(path)
             #if DEBUG
             if ProcessInfo.processInfo.environment["KUVO_DEMO_MCP_SERVER"] == "\(path.last ?? "")|web" { switchKind(of: path, to: "remote") }
             #endif
@@ -442,6 +446,8 @@ private struct ServerEditor: View {
         // A URL typed into a server that had none turns it on, as a command does. (Switching
         // kinds brings back its own URL, on or off as it was, so that's left alone.)
         .onChange(of: config.value(at: path)) { old, new in
+            // Changed elsewhere (the file, a phone) while you weren't typing here: shown as it is.
+            if !addressFocused, old?["url"] != new?["url"], !pendingRemote { showAddress(path) }
             guard old?["type"] == new?["type"], (old?["url"]?.string ?? "").isEmpty, !(new?["url"]?.string ?? "").isEmpty else { return }
             config.set(nil, at: path + ["disabled"])
         }
@@ -455,30 +461,40 @@ private struct ServerEditor: View {
         name = newID
     }
 
+    /// Closed only with an address that is one, or none typed yet: what isn't one is said, and
+    /// the editor stays for you to fix it.
     private func close(_ path: [String]) {
         saveCommand(path)
-        saveAddress(path)
+        guard saveAddress(path) else { return }
         done()
     }
 
-    /// The address you typed, saved as an address (`MCPSettings.webAddress`): for a server waiting
-    /// for one, it's on the web now, and on. One that isn't an address is said, and what was
-    /// saved stays (never a server on the web without one).
-    private func saveAddress(_ path: [String]) {
+    private func showAddress(_ path: [String]) {
+        address = config.value(at: path + ["url"])?.string ?? ""
+        loadedAddress = address
+        addressProblem = false
+    }
+
+    /// The address you typed, if you changed it, saved as an address (`MCPSettings.webAddress`):
+    /// for a server waiting for one, it's on the web now, and on. One that isn't an address is
+    /// said, and what was saved stays (never a server on the web without one): false.
+    @discardableResult private func saveAddress(_ path: [String]) -> Bool {
         let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        let saved = config.value(at: path + ["url"])?.string
-        guard pendingRemote || config.value(at: path + ["type"])?.string == "remote", typed != (saved ?? "") || pendingRemote, !(typed.isEmpty && pendingRemote) else { return }
+        guard pendingRemote || config.value(at: path + ["type"])?.string == "remote" else { return true }
+        if pendingRemote ? typed.isEmpty : typed == loadedAddress { return true }
         guard let url = MCPSettings.webAddress(typed) else {
             addressProblem = true
-            return
+            return false
         }
         address = url
+        loadedAddress = url
         if pendingRemote {
             pendingRemote = false
             switchKind(of: path, to: "remote", url: url)
-        } else if url != saved {
+        } else {
             config.set(.string(url), at: path + ["url"])
         }
+        return true
     }
 
     /// Switches between running a command and connecting to a URL (`MCPSettings.switched`);
@@ -523,16 +539,19 @@ private struct ServerEditor: View {
 }
 
 extension MCPSettings {
-    /// What you typed for a server on the web, as an address to save: as it is with its scheme;
-    /// without one, https (http for this computer's own, `localhost`); nil for one that isn't an
-    /// address.
+    /// What you typed for a server on the web, as an address to save: as it is with its scheme
+    /// (a name on your network too); without one, https (http for this computer's own,
+    /// `localhost`); nil for one that isn't an address.
     static func webAddress(_ typed: String) -> String? {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.contains(where: \.isWhitespace) else { return nil }
-        let local = ["localhost", "127.0.0.1", "[::1]"].contains { text.hasPrefix($0) }
-        let full = text.contains("://") ? text : (local ? "http://" : "https://") + text
+        let schemed = text.contains("://")
+        let local = ["localhost", "127.0.0.1", "[::1]"].contains { text.lowercased().hasPrefix($0) }
+        let full = schemed ? text : (local ? "http://" : "https://") + text
         guard let url = URL(string: full), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              let host = url.host(), !host.isEmpty, host.contains(".") || host == "localhost" || host.contains(":") else { return nil }
+              let host = url.host(), !host.isEmpty else { return nil }
+        // Without a scheme, a word alone is taken for a typo, not a name on your network.
+        guard schemed || host.contains(".") || host.lowercased() == "localhost" || host.contains(":") else { return nil }
         return full
     }
 
