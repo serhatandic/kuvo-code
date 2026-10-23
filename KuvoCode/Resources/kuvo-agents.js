@@ -3657,6 +3657,7 @@ class AntigravityAgent {
     const argv = [join10(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
     return { argv, env, cleanEnv: true, onExit: () => rmSync7(temporary, { recursive: true, force: true }), signInFile: join10(temporary, "url") };
   }
+  signsInRemotely = true;
   async signIn() {
     let status = { status: "pending" };
     let link2 = "";
@@ -13734,4 +13735,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 2ad8fd8e493d8219b7900267d08ed201b31aff6b7761324b5d3572ffe7f5c177
+// Built from Agents/src 376bfdf8d8b9774d00028c9e3f73b09891ede3d1eb2a8b65fbdc36f0df82e2a5

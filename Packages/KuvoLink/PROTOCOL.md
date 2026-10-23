@@ -426,9 +426,12 @@ itself. A host serves:
     `POST …/connect/key {key}`. With `remote: true` the page is for another device (the phone),
     so it doesn't come back to the computer's `localhost`: Claude Code's ends on a code to paste
     back (`acceptsCode`), Codex's and Grok's are device codes (`userCode`, shown beside the page,
-    to copy), Cursor's finishes by itself. An agent whose sign-in can do that has
-    `metadata.remoteSignIn` true in `…/integration`; for the others (Antigravity, whose Google page
-    comes back to `localhost`) `remote: true` answers 400: sign in on the computer it runs on.
+    to copy), Cursor's finishes by itself, and Antigravity's Google page comes back to
+    `http://127.0.0.1:<port>/?…` on the computer: open it in a web view, stop where it's sent
+    there, and hand that address to the computer with `kuvo/sign-in/return` (below); the attempt
+    then goes on to `complete`. An agent whose sign-in can do that has `metadata.remoteSignIn` true
+    in `…/integration` (all five now); for one that hasn't, `remote: true` answers 400: sign in on
+    the computer it runs on.
     Signed in, an account's Custom Auto limit goes, as when you sign in there.
   - Custom Auto: a session's model `{providerID: "auto", id: <list ID>}` runs down that list,
     going on with the next model at a usage limit or an error. `kuvo/agents/api/kuvo/auto`: `GET`

@@ -496,6 +496,13 @@ export class AntigravityAgent implements Agent {
     return { argv, env, cleanEnv: true, onExit: () => rmSync(temporary, { recursive: true, force: true }), signInFile: join(temporary, "url") }
   }
 
+  /**
+   * Google's page comes back to `localhost` on the computer it runs on: opened on another device
+   * (a phone), that device hands the address it was sent back to the computer
+   * (`kuvo/sign-in/return`), which loads it there for Google's agent.
+   */
+  readonly signsInRemotely = true
+
   async signIn(): Promise<SignInAttempt> {
     // It answers at once: the download (the first time) and Google's page come with its status,
     // which the app shows and opens as they come.
