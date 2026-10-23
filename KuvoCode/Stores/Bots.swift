@@ -427,9 +427,15 @@ final class Bots {
         if Moves.isFrozen(bot.id) { throw Moves.Failure.moving }
         if let machine = bot.machine {
             let folder = SSHConnection.quoted(bot.folder)
+            // Noted there too (`deletedFile`, as its bridge notes one deleted from a phone), so
+            // another Mac lets the bot go as well. A bot's ID is letters and numbers only.
+            let deleted = "$HOME/\(RemoteEngineInstaller.root)/bots/\(Self.deletedFile)"
             let script = """
                 T="$HOME/\(RemoteEngineInstaller.root)/trash/$(date +%Y%m%d-%H%M%S)-$$"
                 [ ! -e \(folder) ] || { mkdir -p "$T" && mv -- \(folder) "$T/"; }
+                D="\(deleted)"; I='"\(bot.id)"'; mkdir -p "$(dirname "$D")"
+                items=""; [ -s "$D" ] && items="$(sed -n 's/^{"deleted":\\[\\(.*\\)\\]}$/\\1/p' "$D" | tr ',' '\\n' | grep -vxF "$I" | head -n 499 | paste -sd, -)"
+                { if [ -n "$items" ]; then printf '{"deleted":[%s,%s]}' "$I" "$items"; else printf '{"deleted":[%s]}' "$I"; fi; } >"$D.new" && mv -f "$D.new" "$D"
                 """
             if let engine = app?.machines.engine(machine) {
                 guard engine.isReady else { throw Failure.stillOn(machine) }
@@ -702,7 +708,8 @@ final class Bots {
         let kept = Self.job(inMemory: text)
         updated.job = kept?.line ?? ""
         updated.instructions = kept?.section ?? ""
-        if updated.job != bot.job { updated.updated = .now }
+        // (Not an edit of its description's: a job the bot wrote itself doesn't make this Mac's
+        // copy newer than a rename from a phone on its machine, which this Mac takes in.)
         if bot.machine == nil { memoryRead[id] = (try? FileManager.default.attributesOfItem(atPath: bot.memoryFile)[.modificationDate]) as? Date }
         guard updated != bot, let index = list.firstIndex(where: { $0.id == id }) else { return }
         list[index] = updated
@@ -997,11 +1004,13 @@ final class Bots {
         let away = Dictionary(grouping: changed.filter { $0.bot.machine != nil }) { $0.bot.machine ?? "" }
         for (machine, entries) in away {
             guard let engine = app?.machines.engine(machine), engine.isReady else { continue }
-            if await Self.write(entries, on: engine.machine.connection) {
-                for (bot, data) in entries { described[bot.id] = data }
-            } else {
+            guard let kept = await Self.write(entries, on: engine.machine.connection) else {
                 log.error("Bots' descriptions weren't written on a machine")
+                continue
             }
+            for (bot, data) in entries where !kept.contains(bot.folder) { described[bot.id] = data }
+            // Edited there since (from a phone, through its bridge): taken in, then written again.
+            if !kept.isEmpty { Task { [weak self] in await self?.adoptMade(on: machine) } }
         }
     }
 
@@ -1015,7 +1024,9 @@ final class Bots {
     /// Writes descriptions on a machine, through one connection: each folder and description, on
     /// its input (a command line has a size limit), each written whole, never into a folder
     /// that isn't there.
-    private static func write(_ entries: [(bot: Bot, data: Data)], on connection: SSHConnection) async -> Bool {
+    /// Writes them on a machine, but for one whose description there is newer (edited there since,
+    /// from a phone): kept, and named in what this answers (its folder). Nil: not written.
+    private static func write(_ entries: [(bot: Bot, data: Data)], on connection: SSHConnection) async -> Set<String>? {
         let lines = entries.map { Data($0.bot.folder.utf8).base64EncodedString() + "\t" + $0.data.base64EncodedString() }.joined(separator: "\n") + "\n"
         let folder = FileManager.default.temporaryDirectory.appending(path: AppInfo.bundleID)
         let input = folder.appending(path: "bot-descriptions-\(UUID().uuidString)")
@@ -1025,16 +1036,28 @@ final class Bots {
             try Data(lines.utf8).write(to: input)
             let output = try await connection.run("""
                 t="$(printf '\\t')"
+                updated() { sed -n 's/.*"updated" *: *"\\([^"]*\\)".*/\\1/p' "$1" 2>/dev/null | head -n 1; }
                 while IFS="$t" read -r f j; do
                   d="$(printf '%s' "$f" | base64 -d)" || exit 1
                   [ -d "$d" ] || continue
-                  printf '%s' "$j" | base64 -d >"$d/\(Bot.Descriptor.file).new" && mv -f "$d/\(Bot.Descriptor.file).new" "$d/\(Bot.Descriptor.file)" || { rm -f "$d/\(Bot.Descriptor.file).new"; exit 1; }
+                  printf '%s' "$j" | base64 -d >"$d/\(Bot.Descriptor.file).new" || { rm -f "$d/\(Bot.Descriptor.file).new"; exit 1; }
+                  old="$(updated "$d/\(Bot.Descriptor.file)")"; new="$(updated "$d/\(Bot.Descriptor.file).new")"
+                  if [ -n "$old" ] && [ "$old" != "$new" ] && [ "$(printf '%s\\n%s\\n' "$old" "$new" | sort | tail -n 1)" = "$old" ]; then
+                    rm -f "$d/\(Bot.Descriptor.file).new"; printf 'kept\\t%s\\n' "$f"; continue
+                  fi
+                  mv -f "$d/\(Bot.Descriptor.file).new" "$d/\(Bot.Descriptor.file)" || { rm -f "$d/\(Bot.Descriptor.file).new"; exit 1; }
                 done
                 echo written
                 """, input: input)
-            return output.contains("written")
+            guard output.contains("written") else { return nil }
+            let kept = output.split(separator: "\n").compactMap { line -> String? in
+                let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+                guard parts.count == 2, parts[0] == "kept", let folder = Data(base64Encoded: parts[1]).flatMap({ String(data: $0, encoding: .utf8) }) else { return nil }
+                return folder
+            }
+            return Set(kept)
         } catch {
-            return false
+            return nil
         }
     }
 
