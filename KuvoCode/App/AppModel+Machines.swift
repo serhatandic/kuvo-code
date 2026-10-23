@@ -502,12 +502,15 @@ extension AppModel {
         }
     }
 
-    func removeMachine(_ id: String) {
+    /// Remove…: the machine off this Mac, running on there as a box of its own, which your phones
+    /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
+    /// phones (`Machines.remove`).
+    func removeMachine(_ id: String, uninstall: Bool = false) {
         machines.engine(id)?.browser.reset()
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
-        machines.remove(id)
-        phoneLink.forget(machine: id)
+        machines.remove(id, uninstall: uninstall)
+        if uninstall { phoneLink.forget(machine: id) }
         AgentMail.shared.machineRemoved(id)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)

@@ -36,11 +36,16 @@ struct MachinesSettings: View {
             MachineForm(style: .settings, added: { _ in showsAdd = false }, cancel: { showsAdd = false })
         }
         #if DEBUG
-        // KUVO_DEMO_ADD_MACHINE: Add a Machine, open.
+        // KUVO_DEMO_ADD_MACHINE: Add a Machine, open. KUVO_DEMO_REMOVE_MACHINE=<id>: its Remove
+        // dialog, open.
         .task {
             if ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_MACHINE"] != nil {
                 try? await Task.sleep(for: .seconds(1))
                 showsAdd = true
+            }
+            if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_REMOVE_MACHINE"] {
+                try? await Task.sleep(for: .seconds(1))
+                removing = app.machines.list.first { $0.id == id }
             }
         }
         #endif
@@ -51,8 +56,9 @@ struct MachinesSettings: View {
         }
         .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { machine in
             Button("Remove", role: .destructive) { app.removeMachine(machine.id) }
-        } message: { _ in
-            Text("Its projects leave the sidebar. Its sessions and the engine stay on the machine, for when you add it again.")
+            Button("Uninstall from \(machine.name)", role: .destructive) { app.removeMachine(machine.id, uninstall: true) }
+        } message: { machine in
+            Text("Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys, and your phones keep it. Uninstall also stops it there and deletes its sign-ins and keys.")
         }
     }
 

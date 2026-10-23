@@ -85,10 +85,22 @@ import Testing
         #expect((two.json["message"] as? String)?.hasPrefix("vps and hetzner are two computers") == true)
         #expect(try await ask("kuvo/machines/vps/same-as", method: "POST", body: ["other": "vps"]).status == 404)
 
-        // Removed, as Remove… does.
+        // Removed, as Remove… does: off this Mac, left running there (nothing waits to stop it).
         #expect(try await ask("kuvo/machines/hetzner", method: "DELETE").status == 200)
         #expect(app.machines.list.map(\.id) == ["lokum", "vps"])
         #expect(try await ask("kuvo/machines/hetzner/connect", method: "POST").status == 404)
+        #expect(Self.waiting("hetzner").isEmpty, "it keeps running there, with its sign-ins and keys")
+        // Uninstalled: stopped there and signed out, the next time it answers (a name that never
+        // answers: nothing runs on a real computer).
+        app.machines.add("gone.invalid")
+        #expect(try await ask("kuvo/machines/gone.invalid/uninstall", method: "POST").status == 200)
+        #expect(app.machines.list.map(\.id) == ["lokum", "vps"])
+        #expect(Self.waiting("gone.invalid").contains { $0.hasPrefix(Machines.removalMark) && $0.contains(Machines.agentsSignOut) })
+    }
+
+    /// What waits to run on a machine the next time it answers.
+    private static func waiting(_ machine: String) -> [String] {
+        (UserDefaults.standard.dictionary(forKey: "machines.waiting") as? [String: [String]])?[machine] ?? []
     }
 
     /// Its events: a line as the phone starts following, and another whenever what it lists

@@ -23,6 +23,9 @@ extension PhoneLink {
         case ("DELETE", nil, 3):
             app.removeMachine(machine.id)
             return (200, Data("{}".utf8))
+        case ("POST", "uninstall", 4):
+            app.removeMachine(machine.id, uninstall: true)
+            return (200, Data("{}".utf8))
         case ("POST", let action?, 4) where ["connect", "disconnect", "start"].contains(action):
             // What the page offers for it now, and only that.
             let offered = action == "connect" ? [.connect, .connectNow].contains(engine.offer) : engine.offer?.rawValue == action

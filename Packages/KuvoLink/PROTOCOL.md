@@ -624,7 +624,10 @@ itself. A host serves:
   - `POST kuvo/machines/<id>/connect`, `/disconnect` or `/start`: the button's action, only when
     it's the one `action` names (`connect` for both `connect` and `connectNow`); `200
     {"machine"}`, `409 {"message"}` otherwise. Disconnect leaves it running there. `DELETE
-    kuvo/machines/<id>` removes it as Remove… does (its sessions and engine stay on it): `200 {}`.
+    kuvo/machines/<id>` removes it as Remove… does: off this Mac, running on there with its
+    sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
+    kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
+    there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
   - `DELETE kuvo/machines/<id>/addresses/<address>` stops using one of its other addresses (`404`
     for its name, or one it doesn't have); `POST kuvo/machines/<id>/same-as {"other"}` makes it one
     of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when

@@ -1001,10 +1001,14 @@ final class Machines {
         onFolded(duplicate, machine)
     }
 
-    func remove(_ id: String) {
-        // Its sessions stay there, for when it's added again; your accounts and integrations'
-        // sign-ins don't.
-        if let engine = engines[id] {
+    /// Takes a machine off this Mac. It keeps running there as a box of its own, with its
+    /// sessions, bots, sign-ins and keys, for your phones and for when you add it again;
+    /// `uninstall` also stops its engine there and deletes the sign-ins and keys it keeps, and how
+    /// it starts after a restart (its sessions stay, for when it's added again).
+    func remove(_ id: String, uninstall: Bool) {
+        if !uninstall {
+            engines[id]?.disconnect()
+        } else if let engine = engines[id] {
             if engine.isReady {
                 // Another Mac's engine: it goes on for that Mac, with what's in it (whose accounts
                 // are whose can't be told there).
