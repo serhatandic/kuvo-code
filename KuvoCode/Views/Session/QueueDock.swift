@@ -96,6 +96,13 @@ private struct QueueRow: View {
                     .font(.system(size: 13))
                     .help(isRunning ? "Steer: the agent takes this at its next step, without waiting for the run to end" : "Send it now")
                 } else if isRunning {
+                    // Steered: said, so a long step of the agent's (one answer, no tools) doesn't
+                    // make it look ignored.
+                    Text("At its next step")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .help("The agent takes this once its current step ends (a tool call, or the answer it's writing). Send Now gives it this right away.")
                     // For its next step already: what's left is not waiting for that.
                     Button {
                         model.sendNow(item)
