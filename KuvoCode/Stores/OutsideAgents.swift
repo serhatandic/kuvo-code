@@ -371,11 +371,12 @@ final class OutsideAgents {
 
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
     /// it, then `refresh`es what the app shows of it; it's updating until then.
-    func update(_ providerID: String, then refresh: @escaping () async -> Void) {
-        guard let api, !updating.contains(providerID) else { return }
+    @discardableResult
+    func update(_ providerID: String, then refresh: @escaping () async -> Void) -> Task<Void, Never>? {
+        guard let api, !updating.contains(providerID) else { return nil }
         updating.insert(providerID)
         updateFailures[providerID] = nil
-        Task {
+        return Task {
             do {
                 let result = try await api.updateAgent(providerID)
                 if !result.updated, let message = result.message { updateFailures[providerID] = message }

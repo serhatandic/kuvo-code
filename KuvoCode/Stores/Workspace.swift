@@ -897,7 +897,7 @@ final class Workspace {
         let kept = await onMovedToAgents?(id, moved) == true
         if !kept { await setArchived(id, true) }
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
-        Task { @MainActor in
+        swapEnding = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(400))
             if swappedTab == swap {
                 swappedTab = nil
@@ -906,6 +906,9 @@ final class Workspace {
         }
         return moved
     }
+
+    /// A move's tab swap ending, a moment after it (what a test waits for).
+    @ObservationIgnored private(set) var swapEnding: Task<Void, Never>?
 
     /// Told when a conversation moved to the coding agents (from, to): true when something else
     /// keeps it (a bot), which then takes it over; the app sets it.

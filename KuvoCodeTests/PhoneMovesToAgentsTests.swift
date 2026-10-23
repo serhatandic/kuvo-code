@@ -69,7 +69,7 @@ import Testing
         let imported = try #require(bridge.requests("POST", "/api/session/import").first)
         #expect((imported.body["messages"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["msg_01"])
         #expect(Workspace.isArchived(try #require(app.workspace.session(id))), "the engine's goes to Archived")
-        try await Task.sleep(for: .milliseconds(600))
+        await app.workspace.swapEnding?.value
         #expect(app.workspace.requestedTab == nil, "nothing opens on the Mac for a move from a phone")
 
         // With them already: turned away.

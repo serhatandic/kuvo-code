@@ -45,7 +45,7 @@ struct SubscriptionsSection: View {
                 }
                 Spacer(minLength: 12)
                 if shows == .agents, !updatable.isEmpty {
-                    Button(action: app.updateAllAgents) {
+                    Button { app.updateAllAgents() } label: {
                         Label("Update All", systemImage: "arrow.down.circle")
                             .font(.callout)
                             .fixedSize()

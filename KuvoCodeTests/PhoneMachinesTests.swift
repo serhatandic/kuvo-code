@@ -96,24 +96,18 @@ import Testing
         defer { Self.clean() }
         app.machines.add("box")
         let request = LinkRequest(method: "GET", path: "kuvo/machines/events", headers: [:], body: Data())
+        var parts = PhoneLink.respond(to: request, link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil).makeAsyncIterator()
         var lines: [[String: Any]] = []
-        var buffer = Data()
-        let stream = PhoneLink.respond(to: request, link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil)
-        let reading = Task { @MainActor in
-            for try await part in stream {
-                guard case .body(let chunk) = part else { continue }
-                buffer += chunk
-                while let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                    if let line = try? JSONSerialization.jsonObject(with: buffer[..<end]) as? [String: Any] { lines.append(line) }
-                    buffer = Data(buffer[buffer.index(after: end)...])
-                }
-            }
+        func machines(_ line: [String: Any]?) -> [[String: Any]] { line?["machines"] as? [[String: Any]] ?? [] }
+        // Each body part is a line.
+        while lines.count < 1, let part = try await parts.next() {
+            if case .body(let chunk) = part, let line = try JSONSerialization.jsonObject(with: chunk) as? [String: Any] { lines.append(line) }
         }
-        defer { reading.cancel() }
-        for _ in 0..<100 where lines.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
-        #expect((lines.first?["machines"] as? [[String: Any]])?.map { $0["id"] as? String } == ["box"])
+        #expect(machines(lines.last).map { $0["id"] as? String } == ["box"])
         app.machines.addAddress("box.tail", to: "box")
-        for _ in 0..<100 where lines.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
-        #expect((lines.last?["machines"] as? [[String: Any]])?.first?["otherAddresses"] as? [String] == ["box.tail"])
+        while lines.count < 2, let part = try await parts.next() {
+            if case .body(let chunk) = part, let line = try JSONSerialization.jsonObject(with: chunk) as? [String: Any] { lines.append(line) }
+        }
+        #expect(machines(lines.last).first?["otherAddresses"] as? [String] == ["box.tail"])
     }
 }

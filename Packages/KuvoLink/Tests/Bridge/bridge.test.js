@@ -758,7 +758,12 @@ test("Start goes through the box's tool, for an engine an older Mac stopped, the
   assert.equal(info.json.chats, path.join(home, "chats"));
   assert.equal(fs.statSync(path.join(home, "chats")).isDirectory(), true, "made, for a phone's first chat");
   assert.equal((await answer(handle, "POST", "kuvo/engine/start")).status, 202);
-  for (let i = 0; i < 100 && !(fs.existsSync(said) && fs.readFileSync(said, "utf8").includes("start")); i++) await new Promise(r => setTimeout(r, 30));
+  // Started on its own, after the answer: once the tool has said so.
+  await new Promise(resolve => {
+    const check = () => { try { if (fs.readFileSync(said, "utf8").includes("start")) { watcher.close(); resolve(); } } catch {} };
+    const watcher = fs.watch(path.dirname(said), check);
+    check();
+  });
   assert.deepEqual(fs.readFileSync(said, "utf8").trim().split("\n"), ["start bun="]);
   assert.equal((await answer(handle, "GET", "kuvo/engine/start")).status, 405);
   for (const name of ["bin/kuvo-start", "bin/kuvo-launch", "run/launch.env", "run/box-said", "run/stopped"]) fs.rmSync(path.join(home, name), { force: true });

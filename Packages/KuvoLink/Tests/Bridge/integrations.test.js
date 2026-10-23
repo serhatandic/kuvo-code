@@ -87,14 +87,17 @@ test("new keys: its server connects again a moment later, as Settings has it", a
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   after(() => { server.closeAllConnections(); server.close(); });
   const engine = { port: server.address().port, password: "pw" };
-  const added = await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_789" } }, engine, undefined);
+  // What waits a moment, run when the test says.
+  const waiting = [];
+  const later = (run, ms) => waiting.push({ run, ms });
+  const added = await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_789" } }, engine, undefined, undefined, later);
   assert.equal(added.status, 200);
   assert.ok(!asked.some(each => each.includes("/connect")), "not before the engine has read them");
-  await new Promise(resolve => setTimeout(resolve, 2_300));
+  assert.deepEqual(waiting.map(each => each.ms), [2_000]);
+  await waiting[0].run();
   assert.ok(asked.includes("POST /api/experimental/mcp/todoist/connect"));
   // Without new keys, nothing to connect again for.
-  asked.length = 0;
-  await link.answerIntegrations("POST", "kuvo/integrations/todoist", {}, engine, undefined);
-  await new Promise(resolve => setTimeout(resolve, 2_300));
-  assert.ok(!asked.some(each => each.includes("/connect")));
+  waiting.length = 0;
+  await link.answerIntegrations("POST", "kuvo/integrations/todoist", {}, engine, undefined, undefined, later);
+  assert.equal(waiting.length, 0);
 });

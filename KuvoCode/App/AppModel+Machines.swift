@@ -260,8 +260,9 @@ extension AppModel {
 
     /// A session was archived or brought back (here, from a phone, by another Mac): its wake-ups
     /// wait, or come back, as it is once this runs, so a list read again meanwhile that flipped it
-    /// back and forth acts on where it ended up.
-    func archivedChanged(_ session: String) {
+    /// back and forth acts on where it ended up. (A test waits for it.)
+    @discardableResult
+    func archivedChanged(_ session: String) -> Task<Void, Never> {
         Task {
             guard let found = workspace.session(session) else { return }
             await wakeUps.archived(found, Workspace.isArchived(found))

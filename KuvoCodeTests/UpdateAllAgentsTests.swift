@@ -80,8 +80,7 @@ import Testing
         let outdated = app.outdatedAgents.map { "\($0.integration.id) on \($0.box.id)" }
         #expect(outdated == ["claude-code on mac", "codex-cli on \(box.machine.id)"])
 
-        app.updateAllAgents()
-        for _ in 0..<100 where !app.outdatedAgents.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
+        for update in app.updateAllAgents() { await update.value }
         #expect(macBridge.updates == ["claude-code"], "once for Claude Code, not again for the account you added; never Grok")
         #expect(boxBridge.updates == ["codex-cli"], "the machine's own Codex, on the machine")
         #expect(app.outdatedAgents.isEmpty, "each lists its new version, so there's nothing left to update")

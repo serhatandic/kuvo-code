@@ -951,7 +951,7 @@ final class BotGroups {
             return .absent
         }
         var scratch: String?
-        defer { if let scratch { Task { await self.dropScratch(scratch, api: api) } } }
+        defer { if let scratch { dropLater(scratch, api: api) } }
         do {
             guard let group = group(id) else { return .absent }
             let seat: String, isNew: Bool
@@ -1384,7 +1384,7 @@ final class BotGroups {
         // every turn after: in a conversation of its own, given the chat up to the wrap-up, which
         // goes once it's answered.
         var scratch: String?
-        defer { if let scratch { Task { await self.dropScratch(scratch, api: api) } } }
+        defer { if let scratch { dropLater(scratch, api: api) } }
         do {
             let session = try await scratchSession(for: bot, in: group, api: api, title: "\(bot.name) handing out the work in \(group.name)")
             scratch = session
@@ -1762,6 +1762,17 @@ final class BotGroups {
         try? await api.deleteSession(session)
         app?.workspace.seats.remove(session)
     }
+
+    /// The same once the turn that used it is over, without holding it up.
+    private func dropLater(_ session: String, api: OpenCodeAPI) {
+        droppingScratch[session] = Task {
+            await dropScratch(session, api: api)
+            droppingScratch[session] = nil
+        }
+    }
+
+    /// Scratch conversations on their way out (what a test waits for).
+    @ObservationIgnored private(set) var droppingScratch: [String: Task<Void, Never>] = [:]
 
     /// A seat talks and looks things up; it doesn't change anything, and never waits for answers.
     /// No shell, subagents or messages to other agents either: a command can write a file however

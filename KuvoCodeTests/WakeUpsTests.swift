@@ -210,8 +210,10 @@ import Testing
     @Test func archivingFromAPhoneHoldsItsWakeUps() async throws {
         await start()
         defer { done() }
-        // As the app has it (`startMachines`).
-        app.workspace.onArchived = { [app] session, _ in app.archivedChanged(session) }
+        // As the app has it (`startMachines`), each change's work handed to the test to wait for.
+        let (heard, told) = AsyncStream.makeStream(of: Task<Void, Never>.self)
+        app.workspace.onArchived = { [app] session, _ in told.yield(app.archivedChanged(session)) }
+        var work = heard.makeAsyncIterator()
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
         func changed(archived: Bool) async throws {
@@ -222,11 +224,11 @@ import Testing
             ])))
         }
         try await changed(archived: true)
-        for _ in 0..<100 where !FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        await work.next()?.value
         #expect(app.wakeUps.paused.contains(id), "archived from the phone: its wake-ups wait")
         #expect((try? String(contentsOfFile: folder(id, "paused"), encoding: .utf8)) == "archived")
         try await changed(archived: false)
-        for _ in 0..<100 where FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        await work.next()?.value
         #expect(!app.wakeUps.paused.contains(id), "brought back: they come back")
     }
 
@@ -235,13 +237,15 @@ import Testing
     @Test func archivedUnheardHoldsItsWakeUpsOnceTheListIsRead() async throws {
         await start()
         defer { done() }
-        app.workspace.onArchived = { [app] session, _ in app.archivedChanged(session) }
+        var work: [Task<Void, Never>] = []
+        app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
         let listed = StubWeb.json(["data": [Self.session(id, archived: true)]])
         StubWeb.route(Self.engine + "/api/session") { _ in listed }
         await app.workspace.refresh()
-        for _ in 0..<100 where !FileManager.default.fileExists(atPath: folder(id, "paused")) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(work.count == 1, "told once, as the list is read")
+        for task in work { await task.value }
         #expect(app.wakeUps.paused.contains(id))
     }
 

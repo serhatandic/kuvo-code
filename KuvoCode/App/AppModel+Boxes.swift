@@ -65,12 +65,14 @@ extension AppModel {
     }
 
     /// Updates each of them, on its own computer, through the installer that owns it.
-    func updateAllAgents() {
-        for outdated in outdatedAgents {
+    /// (Each update under way, for a test to wait for.)
+    @discardableResult
+    func updateAllAgents() -> [Task<Void, Never>] {
+        outdatedAgents.compactMap { outdated in
             let agents = agents(for: outdated.box)
             let catalog = catalog(for: outdated.box)
-            if agents.updating.contains(outdated.integration.id) { continue }
-            agents.update(outdated.integration.id) { await catalog.refreshAgents(fresh: true) }
+            if agents.updating.contains(outdated.integration.id) { return nil }
+            return agents.update(outdated.integration.id) { await catalog.refreshAgents(fresh: true) }
         }
     }
 

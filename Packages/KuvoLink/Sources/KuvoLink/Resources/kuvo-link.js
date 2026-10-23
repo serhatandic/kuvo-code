@@ -730,8 +730,11 @@ function dropBotsIntegration(entry) {
   }
 }
 
-/** `kuvo/integrations…`, for this machine's own. */
-export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE) {
+/** Runs `run` in `ms`, without keeping the bridge up for it. */
+const soon = (run, ms) => setTimeout(run, ms).unref?.();
+
+/** `kuvo/integrations…`, for this machine's own. `later` runs what waits a moment (a test's own). */
+export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE, later = soon) {
   const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return ""; } });
   const catalog = integrationCatalog(file);
   if (parts.length === 2) {
@@ -774,7 +777,7 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     // The engine reads its keys as it reads its settings again: its server connects again a
     // moment later, with the new ones, as Settings does it.
     if (newKeys && engine) {
-      setTimeout(() => call(engine, "POST", `/api/experimental/mcp/${encodeURIComponent(entry.id)}/connect`).catch(() => {}), 2_000).unref?.();
+      later(() => call(engine, "POST", `/api/experimental/mcp/${encodeURIComponent(entry.id)}/connect`).catch(() => {}), 2_000);
     }
     const [listed] = await integrationEntries([entry], engine, signal);
     return { status: 200, value: { integration: listed } };

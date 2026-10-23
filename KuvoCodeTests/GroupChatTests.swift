@@ -209,7 +209,7 @@ import Testing
         #expect(asked.heard.contains("&Cy, what do you think?"))
         #expect(app.groups.group(group.id)?.members == ["bot_ada", "bot_ben"])
         #expect(app.groups.group(group.id)?.seats["bot_cy"] == nil)
-        for _ in 0..<100 where !seats.deleted.contains(where: { $0.bot == "Cy" }) { try await Task.sleep(for: .milliseconds(20)) }
+        for going in app.groups.droppingScratch.values { await going.value }
         #expect(seats.deleted.contains { $0.bot == "Cy" }, "its conversation for the turn goes once it has answered")
     }
 
