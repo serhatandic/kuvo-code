@@ -1216,6 +1216,13 @@ public final class RemoteServer: @unchecked Sendable {
         (try? await connection.run("mkdir -p \"\(run)/present\" && touch \"\(run)/present/\(mac)\"")) != nil
     }
 
+    /// Notes on the machine that the Mac `mac` is connected now, phone link or not: while it is (a
+    /// minute or two after its last note), the machine leaves to it what a Mac does for it (reading
+    /// its bots' jobs, naming worktrees' branches), so nothing's done twice.
+    public static func markConnected(_ mac: String, on connection: SSHConnection) async -> Bool {
+        (try? await connection.run("mkdir -p \"\(run)/connected\" && touch \"\(run)/connected/\(mac)\"")) != nil
+    }
+
     /// Takes the Mac `mac` out of the machine's present ones, as it quits: what `stopNow` runs first.
     public static func leavingScript(_ mac: String) -> String {
         "rm -f \"\(run)/present/\(mac)\"\n"

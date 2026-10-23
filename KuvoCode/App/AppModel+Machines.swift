@@ -441,6 +441,8 @@ extension AppModel {
             engine.agentSync?.cancel()
             engine.agentSync = Task { [weak self, weak engine] in
                 while !Task.isCancelled {
+                    // This Mac is here: the machine leaves what a Mac does to it.
+                    if let engine { _ = await RemoteServer.markConnected(MachineEngine.macID, on: engine.machine.connection) }
                     try? await Task.sleep(for: .seconds(60))
                     guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
                     await AgentMail.shared.share(with: engine)

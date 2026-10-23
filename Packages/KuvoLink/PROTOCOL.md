@@ -698,8 +698,9 @@ itself. A host serves:
   job as the Mac last wrote them there (`bot.json`, which the Mac writes when they change and
   each time it connects, and the bridge when a phone changes them; one it hasn't written yet
   isn't listed). With no Mac connected, the bridge (from 0.9.23) also reads a bot's job from its
-  memory as each of its runs ends, as a Mac does, and tells its conversation when it changed. For
-  a machine's bot, its machine's list is the newer while it answers.
+  memory as each of its runs ends, as a Mac does, and tells its conversation when it changed (a
+  Mac notes it's connected, phone link or not, in `run/connected/<its id>` every minute). For a
+  machine's bot, its machine's list is the newer while it answers.
 - On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
   `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],
   "personalities": [{id, name, description, custom}], "looks": {colors, shapes, faces},
@@ -757,8 +758,8 @@ itself. A host serves:
   listed at once (`machine` is ignored); a group chat of its own bots, which lives and runs there.
   What New Bot needs comes from the Mac, which gives it to the machine each time it connects, or
   from the box's own release (`bin/bot-kit.json`, from 0.9.23) where that's newer (it updated
-  itself since) or no Mac gave it one, with what's the machine's own filled in; one with neither
-  answers `409 {"message"}`. The Mac takes in the bots a machine made
+  itself since) or no Mac gave it one, with what's the machine's own filled in (its name, and the
+  time zone a Mac gave it, or else its own); one with neither answers `409 {"message"}`. The Mac takes in the bots a machine made
   the next time it connects (its group chats it follows there already).
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,

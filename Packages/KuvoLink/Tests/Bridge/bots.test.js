@@ -661,3 +661,14 @@ test("a machine makes bots with its release's words where they're newer than a M
     fs.rmSync(releaseKit, { force: true });
   }
 });
+
+test("a Mac connected, phone link or not, is one the machine leaves a Mac's work to, for a couple of minutes after its last note", () => {
+  const marker = path.join(home, "run", "connected", "mac_1");
+  assert.equal(link.macConnected(), false);
+  write(marker, "");
+  assert.equal(link.macConnected(), true);
+  const old = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(marker, old, old);
+  assert.equal(link.macConnected(), false, "gone quiet: the machine does it again");
+  fs.rmSync(path.join(home, "run"), { recursive: true, force: true });
+});

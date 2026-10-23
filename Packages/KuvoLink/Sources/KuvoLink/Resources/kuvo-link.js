@@ -2559,6 +2559,7 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
+    toldBots.set(session.id, told);
     fs.writeFileSync(path.join(folder, "session"), session.id);
     fs.writeFileSync(path.join(folder, "directory"), directory);
     if (kit.timeZone) fs.writeFileSync(path.join(folder, "timezone"), kit.timeZone);
@@ -2697,7 +2698,7 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
       const kit = readKit();
       const personality = kit ? botPersonalities(kit).find(each => each.id === bot.described.personality)?.instruction : undefined;
       const told = kit ? botInstructions(kit, bot.described.name, bot.folder, personality, bot.described.project, jobInMemory(textOf(path.join(bot.folder, "MEMORY.md")) ?? "")) : null;
-      if (told !== null) await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }).catch(() => {});
+      if (told !== null && await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }).then(() => true, () => false)) toldBots.set(moved.id, told);
       fs.writeFileSync(path.join(bot.folder, "session"), moved.id);
       fs.writeFileSync(path.join(bot.folder, "via"), "bridge");
       await call(engine, "DELETE", `/${route}`).catch(() => {});
@@ -2800,7 +2801,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
       const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
       const personality = personalities.find(each => each.id === changed.personality)?.instruction;
       const told = botInstructions(kit, changed.name, here.folder, personality, described.project, job);
-      if (told !== null) await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).catch(() => {});
+      if (told !== null && await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).then(() => true, () => false)) toldBots.set(here.session, told);
     }
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
@@ -3077,6 +3078,10 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
 // each minute, and tells your phones itself for two minutes after; the bridge waits longer.
 const PRESENT = path.join(RUN, "present");
 const PRESENT_MS = 150_000;
+// The Macs connected now, phone link or not (RemoteServer.markConnected): while one is, what a Mac
+// does for this box (reading its bots' jobs, naming worktrees' branches) is left to it.
+const CONNECTED = path.join(RUN, "connected");
+export const macConnected = (now = Date.now()) => macPresent(CONNECTED, now) || macPresent(PRESENT, now);
 export const NOTICE_LIMIT = 2500;
 
 export function macPresent(folder = PRESENT, now = Date.now()) {
@@ -3301,9 +3306,13 @@ async function watchEvents(read, tell) {
       attempt = 0;
       for await (const event of serverEvents(response.body)) {
         // A worktree's branch named after its session, and a bot's job read from its memory as
-        // its run ends, as a Mac does while it's here.
-        if (event.type === "session.renamed" && !macPresent()) nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-        if (event.type === "session.execution.succeeded" && !macPresent()) refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        // its run ends, as a Mac does while it's here (which may tell its bots otherwise meanwhile).
+        if (macConnected()) {
+          toldBots.clear();
+        } else {
+          if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+          if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        }
         if ((!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) || macPresent()) continue;
         if (GROUP_NEWS.has(event.type)) {
           const notice = groupNotice(event);
