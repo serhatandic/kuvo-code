@@ -41,8 +41,9 @@ async function standIn(answer) {
 // 250 messages, two pages, the newest first as the engine pages them; a message waiting with a file.
 const conversation = Array.from({ length: 250 }, (_, at) => ({ id: `msg_${String(at).padStart(4, "0")}`, type: at % 2 ? "assistant" : "user", text: `${at}` }));
 function engineFor(session, { running = false } = {}) {
-  return standIn((method, url) => {
+  return standIn((method, url, body) => {
     const base = `/api/session/${session.id}`;
+    if (method === "PATCH" && url === base) session.metadata = { ...(session.metadata ?? {}), ...(body?.metadata ?? {}) };
     if (method === "GET" && url === base) return [200, { data: session }];
     if (method === "GET" && url === "/api/session/active") return [200, { data: running ? { [session.id]: {} } : {} }];
     if (method === "GET" && url === `${base}/message?limit=200&order=desc`) return [200, { data: conversation.slice(50).reverse(), cursor: { next: "older" } }];
@@ -63,8 +64,18 @@ test("a conversation goes on with the coding agents whole, with what was waiting
   const engine = await engineFor({ id: "ses_fix", title: "Fix the total", agent: "build", location: { directory: project }, permissions: [{ action: "edit", resource: "*", effect: "allow" }], metadata: { pinned: true } }, { running: true });
   const agents = await agentsBridge();
   const handle = link.engineHandler(() => engine.at, { name: "lab" }, () => null);
+  // A daily wake-up it has goes with it.
+  const wakes = path.join(home, "wakes");
+  write(path.join(wakes, "ses_fix", "session"), "ses_fix");
+  write(path.join(wakes, "ses_fix", "wakes", "1900000000-abc-1d"), "Check the build");
   const moved = await link.carryToAgents("ses_fix", sonnet, () => engine.at, agents.at, undefined);
   assert.deepEqual(moved, { status: 200, value: { session: "ses_theirs" } });
+  assert.equal(fs.existsSync(path.join(wakes, "ses_fix")), false);
+  assert.equal(fs.readFileSync(path.join(wakes, "ses_theirs", "session"), "utf8"), "ses_theirs");
+  assert.equal(fs.readFileSync(path.join(wakes, "ses_theirs", "via"), "utf8"), "bridge");
+  assert.equal(link.readWakes(path.join(wakes, "ses_theirs")).wakes[0].note, "Check the build");
+  // Carried on already: not again.
+  assert.equal((await link.carryToAgents("ses_fix", sonnet, () => engine.at, agents.at, undefined)).status, 409);
   const imported = agents.asked.find(each => each.url === "/api/session/import").body;
   assert.equal(imported.title, "Fix the total");
   assert.deepEqual(imported.model, sonnet);
@@ -78,7 +89,7 @@ test("a conversation goes on with the coding agents whole, with what was waiting
   const urls = engine.asked.map(each => `${each.method} ${each.url}`);
   assert.ok(urls.indexOf("POST /api/session/ses_fix/interrupt") < urls.indexOf("GET /api/session/ses_fix/message?limit=200&order=desc"));
   assert.ok(urls.includes("DELETE /api/session/ses_fix/inbox/inb_1"));
-  assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { pinned: true, "kuvo.archived": true } });
+  assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { pinned: true, "kuvo.archived": true, "kuvo.carriedTo": "ses_theirs" } });
   // From a phone, the same.
   assert.equal((await (async () => {
     const parts = [];
@@ -121,5 +132,8 @@ test("what can't be is said, and nothing moves", async () => {
   assert.deepEqual(await tried("ses_mine", sonnet, null), { status: 503, value: { message: "The coding agents aren’t running on this machine." } });
   assert.deepEqual(await tried("ses_mine", sonnet), { status: 422, value: { message: "Claude Code needs a sign-in on this machine: sign in in Settings › Accounts, or choose another model." } });
   assert.equal((await tried("ses_gone", sonnet)).status, 404);
+  // On its way to another computer.
+  write(path.join(home, "wakes", "ses_mine", "paused"), "moving");
+  assert.equal((await link.carryToAgents("ses_mine", sonnet, () => engine.at, (await agentsBridge()).at, undefined)).status, 409);
   assert.equal(signedOut.asked.some(each => each.url === "/api/session/import"), false);
 });

@@ -487,7 +487,9 @@ itself. A host serves:
   with them already, or while it moves; 422 for a model it can't use where it is (signed out);
   503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
   the Mac. A machine's bridge does the same for its own (from 0.9.23), with the Mac closed: a
-  phone asks the computer the conversation lives on. Changing a machine's bot's model there to
+  phone asks the computer the conversation lives on. There the session's wake-ups and watches go
+  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, and once
+  started it goes to its end, whatever becomes of the request. Changing a machine's bot's model there to
   one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
   takes in its new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
@@ -758,9 +760,10 @@ itself. A host serves:
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,
   `about` its job) then the latest sessions with a title (`kind: "session"`, `project` its
-  project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else the
-  machine's name. A machine's bridge answers it too (from 0.9.23), with the Mac closed: its own,
-  then those its other computers told it of (`Peers`). Insert
+  project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else where it
+  lives: a machine's id, or, asked of a machine, a Mac's name for that Mac's own. A machine's
+  bridge answers it too (from 0.9.23), with the Mac closed: its own, then those its other
+  computers told it of (`Peers`). Insert
   `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
   agent reads, so a machine's bridge, with the Mac closed, sends it without. Show a message

@@ -895,22 +895,31 @@ test("a phone paired with a machine gets a link there for another phone, which p
 });
 
 test("a phone asks a machine who & can name: its own bots and sessions, then its other computers'", async () => {
-  fs.mkdirSync(path.join(home, "run"), { recursive: true });
-  fs.writeFileSync(path.join(home, "run", "agents.json"), JSON.stringify({ machine: "lab", agents: [
-    { session: "ses_scout", name: "Scout", kind: "bot", about: "Finds things", machine: "lab" },
-    { session: "ses_fix", name: "Fix the login", kind: "session", project: "shop", machine: "lab" },
-    { session: "ses_mac", name: "Write the notes", kind: "session", machine: "Studio" },
-  ] }));
-  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
-  const parts = [];
-  for await (const part of handle({ method: "GET", path: "kuvo/named", headers: {}, body: Buffer.alloc(0) }, { key: crypto.randomBytes(32) }, undefined)) parts.push(part);
-  assert.equal(parts[0].head.status, 200);
-  assert.deepEqual(JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()).agents, [
-    { session: "ses_scout", name: "Scout", kind: "bot", machine: null, project: null, about: "Finds things" },
-    { session: "ses_fix", name: "Fix the login", kind: "session", machine: null, project: "shop", about: null },
-    { session: "ses_mac", name: "Write the notes", kind: "session", machine: "Studio", project: null, about: null },
-  ]);
-  fs.rmSync(path.join(home, "run", "agents.json"), { force: true });
+  // Its own, from its engine.
+  const engine = http.createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.url.startsWith("/api/session?") ? { data: [{ id: "ses_fix", title: "Fix the login", location: { directory: "/srv/shop" }, time: { updated: 2 } }] } : {}));
+  });
+  await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.address().port, password: "p" }), {}, () => null);
+    const parts = [];
+    for await (const part of handle({ method: "GET", path: "kuvo/named", headers: {}, body: Buffer.alloc(0) }, { key: crypto.randomBytes(32) }, undefined)) parts.push(part);
+    assert.equal(parts[0].head.status, 200);
+    assert.deepEqual(JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()).agents,
+      [{ session: "ses_fix", name: "Fix the login", kind: "session", machine: null, project: "shop", about: null }]);
+  } finally {
+    engine.closeAllConnections();
+    engine.close();
+  }
+  // Its other computers': a machine's by its id, a Mac's own by the Mac's name, a machine the Mac speaks for by its.
+  const mac = { key: "m".repeat(43), kind: "mac", name: "Studio" }, box = { key: "b".repeat(43), kind: "machine", id: "pi", name: "pi" };
+  const told = {
+    [mac.key]: { list: [{ session: "ses_notes", name: "Write the notes", kind: "session" }, { session: "ses_old", name: "Old box's", kind: "session", machine: "oldbox" }] },
+    [box.key]: { list: [{ session: "ses_scout", name: "Scout", kind: "bot", about: "Finds things" }] },
+  };
+  assert.deepEqual(link.namedAgents([{ session: "ses_own", name: "Own", kind: "bot" }], [mac, box], told).map(agent => [agent.session, agent.machine]),
+    [["ses_own", null], ["ses_notes", "Studio"], ["ses_old", "oldbox"], ["ses_scout", "pi"]]);
 });
 
 test("a phone answers what an agent asks for while it browses on a machine, with the Mac closed: listed and answered as on the Mac, the answer going to the machine's browser", async () => {

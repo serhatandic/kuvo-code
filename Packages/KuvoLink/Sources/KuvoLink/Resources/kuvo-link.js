@@ -1559,15 +1559,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     // latest sessions (`machine` null), then those its other computers told it of.
     if (request.path === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
-      if (!fs.existsSync(AGENTS_FILE)) await refreshOwn(readEngine).catch(() => {});
-      let composed = {};
-      try { composed = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8")) ?? {}; } catch {}
-      const agents = (Array.isArray(composed.agents) ? composed.agents : []).map(agent => ({
-        session: agent.session, name: agent.name, kind: agent.kind,
-        machine: agent.machine && agent.machine !== composed.machine ? agent.machine : null,
-        project: agent.project ?? null, about: agent.about ?? null,
-      }));
-      return yield* json(200, { agents });
+      const link = readLink();
+      const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
+      return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)) });
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
     // as a Mac's), and answered.
@@ -2643,9 +2637,9 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
     const theirs = await engineGet(agents, route).catch(() => null);
     return theirs?.data ? no(409, "It’s with the coding agents already.") : no(404, "That conversation isn’t there any more.");
   }
-  if (session.metadata?.kuvoAgent) return no(409, "It’s with the coding agents already.");
+  if (session.metadata?.kuvoAgent || session.metadata?.["kuvo.carriedTo"]) return no(409, "It’s with the coding agents already.");
   const bot = listOf(BOTS).map(botHere).find(here => here?.session === id) ?? null;
-  if (bot && isMoving(bot.folder)) return no(409, MOVING);
+  if (isMoving(bot?.folder ?? path.join(SESSION_WAKES, id))) return no(409, MOVING);
   // Signed in there, unless it's Auto, which picks among those that are.
   if (model.providerID !== "auto") {
     const integration = (await engineGet(agents, `api/integration/${encodeURIComponent(model.providerID)}`).catch(() => null))?.data;
@@ -2656,52 +2650,70 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
   if (carrying.has(id)) return no(409, "It’s being carried on with the coding agents already.");
   carrying.add(id);
   try {
-    // Not partway through a turn.
-    const active = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
-    if (id in active) {
-      await call(engine, "POST", `/${route}/interrupt`, undefined, signal).catch(() => {});
-      await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`, undefined, signal).catch(() => {});
-    }
-    // Its whole conversation, page by page (a great many messages at most).
-    let page = await engineGet(engine, `${route}/message?limit=200&order=desc`);
-    let messages = [...(page?.data ?? [])].reverse();
-    while ((page?.data?.length ?? 0) >= 200 && messages.length < 20_000) {
-      const cursor = page.cursor?.next ?? page.cursor?.previous;
-      if (!cursor) break;
-      page = await engineGet(engine, `${route}/message?limit=200&cursor=${encodeURIComponent(cursor)}`);
-      if (!page?.data?.length) break;
-      messages = [...page.data].reverse().concat(messages);
-    }
-    // An undo waiting to be kept: the conversation as it is now, without what it took back.
-    const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert.messageID) : -1;
-    if (cut >= 0) messages = messages.slice(0, cut);
-    // What was sent and waiting comes along, still waiting.
-    const waiting = ((await engineGet(engine, `${route}/inbox`).catch(() => null))?.data ?? []).filter(item => item?.type === "user" && typeof item.text === "string");
+    // From here on it goes to its end, whatever becomes of the phone's request: cut off halfway, it
+    // would be in two places, or what waited would run twice.
     const directory = session.location?.directory ?? session.directory;
+    let messages = [], waiting = [];
+    for (let round = 0; round < 3; round++) {
+      // Not partway through a turn (one a client started again from what waited, since).
+      const active = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
+      if (id in active) {
+        await call(engine, "POST", `/${route}/interrupt`).catch(() => {});
+        await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`).catch(() => {});
+      }
+      // Its whole conversation, page by page (a great many messages at most).
+      let page = await engineGet(engine, `${route}/message?limit=200&order=desc`);
+      messages = [...(page?.data ?? [])].reverse();
+      while ((page?.data?.length ?? 0) >= 200 && messages.length < 20_000) {
+        const cursor = page.cursor?.next ?? page.cursor?.previous;
+        if (!cursor) break;
+        page = await engineGet(engine, `${route}/message?limit=200&cursor=${encodeURIComponent(cursor)}`);
+        if (!page?.data?.length) break;
+        messages = [...page.data].reverse().concat(messages);
+      }
+      // An undo waiting to be kept: the conversation as it is now, without what it took back.
+      const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert.messageID) : -1;
+      if (cut >= 0) messages = messages.slice(0, cut);
+      // What was sent and waiting comes along, still waiting.
+      waiting = ((await engineGet(engine, `${route}/inbox`).catch(() => null))?.data ?? []).filter(item => item?.type === "user" && typeof item.text === "string");
+      const still = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
+      if (!(id in still)) break;
+    }
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, messages,
       waiting: waiting.map(item => ({ id: messageID(), text: item.text, files: promptFiles(item.payload) })),
-    }, signal);
+    });
     if (typeof moved?.id !== "string") return no(502, "The coding agents didn’t take it.");
-    for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`, undefined, signal).catch(() => {});
+    for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
     const tree = readWorktrees().find(each => (each.folder ?? each.root) === directory);
     if (tree) {
       const told = `You work in a git worktree of this project, on the branch ${tree.branch}, so your changes stay apart from the user's own checkout at ${tree.project} until they merge them. Make your changes here, not there.`;
-      await call(agents, "PUT", `${entries}/kuvo.worktree`, { value: told }, signal).catch(() => {});
+      await call(agents, "PUT", `${entries}/kuvo.worktree`, { value: told }).catch(() => {});
     }
     if (bot) {
       // The bot's conversation is the new one, marked as its, told what it is.
-      await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }, signal).catch(() => {});
+      await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }).catch(() => {});
       const kit = readKit();
       const personality = kit ? botPersonalities(kit).find(each => each.id === bot.described.personality)?.instruction : undefined;
       const told = kit ? botInstructions(kit, bot.described.name, bot.folder, personality, bot.described.project, jobInMemory(textOf(path.join(bot.folder, "MEMORY.md")) ?? "")) : null;
-      if (told !== null) await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }, signal).catch(() => {});
+      if (told !== null) await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }).catch(() => {});
       fs.writeFileSync(path.join(bot.folder, "session"), moved.id);
       fs.writeFileSync(path.join(bot.folder, "via"), "bridge");
-      await call(engine, "DELETE", `/${route}`, undefined, signal).catch(() => {});
+      await call(engine, "DELETE", `/${route}`).catch(() => {});
     } else {
-      await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal).catch(() => {});
+      // Its wake-ups and watches go with it, as on a Mac (WakeUps.carry).
+      const from = path.join(SESSION_WAKES, id), to = path.join(SESSION_WAKES, moved.id);
+      if (fs.existsSync(path.join(from, "session")) && !fs.existsSync(to)) {
+        try {
+          fs.renameSync(from, to);
+          fs.writeFileSync(path.join(to, "session"), moved.id);
+          fs.writeFileSync(path.join(to, "directory"), directory ?? "");
+          fs.writeFileSync(path.join(to, "via"), "bridge");
+        } catch {}
+      }
+      // Archived, and marked as carried on, so it isn't carried twice.
+      await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true, "kuvo.carriedTo": moved.id } }).catch(() => {});
       try { holdArchived(id, true); } catch {}
     }
     return { status: 200, value: { session: moved.id } };
@@ -2992,16 +3004,17 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     }
     if (isMoving(folder)) return yield* json(409, { message: MOVING });
     if (readWakes(folder).wakes.length >= WAKE_LIMIT) return yield* json(409, { message: `There are ${WAKE_LIMIT} wake-ups waiting already. Cancel some first.` });
-    const added = spawnSync(path.join(K, "bin", "kuvo-wake"), [folder, "add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note], { encoding: "utf8", timeout: 30_000 });
-    if (added.error) return yield* json(503, { message: "Wake-ups aren’t set up on this machine yet. Connect to it from your Mac once, then try again." });
-    if (added.status !== 0) return yield* json(400, { message: oneLine(`${added.stderr ?? ""} ${added.stdout ?? ""}`.trim(), 300) || "The wake-up couldn’t be added." });
+    const failed = await new Promise(resolve => execFile(path.join(K, "bin", "kuvo-wake"), [folder, "add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note],
+      { encoding: "utf8", timeout: 30_000 }, error => resolve(error)));
+    if (failed?.code === "ENOENT") return yield* json(503, { message: "Wake-ups aren’t set up on this machine yet. Connect to it from your Mac once, then try again." });
+    if (failed) return yield* json(503, { message: "The wake-up couldn’t be added. Try again." });
     return yield* json(200, listed());
   }
+  if (action === "pause" && typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });
   if (!folder) return yield* json(action === "pause" ? 200 : 404, action === "pause" ? listed() : {});
   if (isMoving(folder)) return yield* json(409, { message: MOVING });
   if (action === "pause") {
     // A hold of your own, until you take it away (archiving's and a move's are theirs).
-    if (typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });
     if (given.paused) fs.writeFileSync(path.join(folder, "paused"), "paused");
     else fs.rmSync(path.join(folder, "paused"), { force: true });
     return yield* json(200, listed());
@@ -4167,6 +4180,23 @@ export function composeAgents(own, ownID, peers, told, moved = new Map()) {
     }
   }
   return { machine: ownID ?? null, agents };
+}
+
+// Who `&` can name here (`kuvo/named`), as a Mac's composer offers them: this box's own (`machine`
+// null), then each peer's it alone lists (`peerOf`): a machine's by its id, a Mac's own by the
+// Mac's name, and those of machines a Mac speaks for by theirs.
+export function namedAgents(own, peers, told, moved = new Map()) {
+  const entry = (agent, machine) => ({ session: agent.session, name: agent.name, kind: agent.kind, machine, project: agent.project ?? null, about: agent.about ?? null });
+  const agents = own.map(agent => entry(agent, null));
+  const seen = new Set(agents.map(agent => agent.session));
+  for (const peer of peers) {
+    for (const agent of told[peer.key]?.list ?? []) {
+      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
+      seen.add(agent.session);
+      agents.push(entry(agent, peer.kind === "machine" ? peer.id ?? peer.name ?? null : agent.machine ?? peer.name ?? null));
+    }
+  }
+  return agents;
 }
 
 // This box's own agents: its bots, then its latest sessions, its engine's and its coding
