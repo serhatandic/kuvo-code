@@ -8,6 +8,9 @@ import ServiceManagement
 /// Login Items.
 @MainActor @Observable
 final class OpenAtLogin {
+    /// One for Settings and a phone, so each sees what the other changed.
+    static let shared = OpenAtLogin()
+
     private(set) var isOn = SMAppService.mainApp.status == .enabled
     /// Why it couldn't change, when macOS said no.
     private(set) var failure: String?

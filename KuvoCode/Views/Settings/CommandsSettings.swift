@@ -19,14 +19,10 @@ struct CommandsSettings: View {
     /// The engine's own, and ones from plugins and MCP servers.
     private var others: [Command] { catalog.commands.filter { !names.contains($0.name) } }
 
-    /// The name a Claude Code command comes over as: its own, or with "-claude" where it's one of
-    /// the engine's (/init, /review), which it would take the place of.
+    /// The name a Claude Code command comes over as.
     private func importedName(_ command: ClaudeCommands.Command) -> String {
-        others.contains { $0.name == command.id } || Self.engineOwn.contains(command.id) ? command.id + "-claude" : command.id
+        ClaudeCommands.importedName(command, others: Set(others.map(\.name)))
     }
-
-    /// The engine's own commands, taken also before its list has loaded.
-    private static let engineOwn: Set<String> = ["init", "review"]
 
     var body: some View {
         ScrollingSettingsForm {
@@ -81,7 +77,7 @@ struct CommandsSettings: View {
                                     .foregroundStyle(.secondary)
                             } else {
                                 Button("Import") {
-                                    config.set(.object(["template": .string(command.template), "description": .string(command.description)]), at: Self.path + [name])
+                                    config.set(command.settings, at: Self.path + [name])
                                     Analytics.shared.track("command_created", ["from": "claude"])
                                 }
                             }

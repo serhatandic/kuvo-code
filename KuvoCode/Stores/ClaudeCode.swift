@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 /// What Claude Code keeps in ~/.claude that the engine doesn't read on its own (it does read
 /// skills): its subagents and slash commands, to bring over. Each is a Markdown file with a
@@ -91,6 +92,13 @@ nonisolated enum ClaudeAgents {
     }
 }
 
+extension ClaudeAgents.Agent {
+    /// What Import writes at `agents.<id>` in the engine's settings: a subagent.
+    var settings: JSONValue {
+        .object(["mode": .string("subagent"), "description": .string(description), "system": .string(instructions)])
+    }
+}
+
 /// Claude Code's slash commands (~/.claude/commands), to bring over as the engine's. Both fill
 /// $ARGUMENTS with what's typed after the name.
 nonisolated enum ClaudeCommands {
@@ -109,5 +117,22 @@ nonisolated enum ClaudeCommands {
             return Command(id: id, description: fields["description"] ?? "", template: body)
         }
         .sorted { $0.id < $1.id }
+    }
+
+    /// The engine's own commands, taken also before its list has loaded.
+    static let engineOwn: Set<String> = ["init", "review"]
+
+    /// The name `command` comes over as: its own, or with "-claude" where it's one of the
+    /// engine's (/init, /review) or another that isn't yours (a plugin's, an MCP server's), which
+    /// it would take the place of. `others`: those other commands' names.
+    static func importedName(_ command: Command, others: Set<String>) -> String {
+        others.contains(command.id) || engineOwn.contains(command.id) ? command.id + "-claude" : command.id
+    }
+}
+
+extension ClaudeCommands.Command {
+    /// What Import writes at `commands.<name>` in the engine's settings.
+    var settings: JSONValue {
+        .object(["template": .string(template), "description": .string(description)])
     }
 }

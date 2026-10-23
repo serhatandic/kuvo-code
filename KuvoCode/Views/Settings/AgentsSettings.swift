@@ -130,7 +130,7 @@ struct AgentsSettings: View {
     }
 
     private func importAgent(_ agent: ClaudeAgents.Agent) {
-        config.set(.object(["mode": .string("subagent"), "description": .string(agent.description), "system": .string(agent.instructions)]), at: ["agents", agent.id])
+        config.set(agent.settings, at: ["agents", agent.id])
         Analytics.shared.track("agent_created", ["from": "claude"])
     }
 

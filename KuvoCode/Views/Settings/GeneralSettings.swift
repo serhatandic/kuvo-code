@@ -17,7 +17,7 @@ struct GeneralSettings: View {
     @State private var importing: ImportRequest?
     @State private var reading = false
     @State private var importNote: String?
-    @State private var openAtLogin = OpenAtLogin()
+    private var openAtLogin: OpenAtLogin { .shared }
 
     var body: some View {
         ScrollingSettingsForm {
