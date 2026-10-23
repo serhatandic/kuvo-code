@@ -127,14 +127,19 @@ import Testing
         #expect(mac.stored("mcp_linear").map(\.secret) == ["rt_mac"])
     }
 
-    @Test func aNewMachineStartsWithThisMacsIntegrationSignIns() async {
+    /// A new machine signs in to an integration itself, rather than starting with a copy of this
+    /// Mac's: two computers renewing one sign-in end it on the other. A copy an earlier version
+    /// made stays one sign-in, the newer winning.
+    @Test func aNewMachineSignsInToIntegrationsItself() async {
         defer { done() }
         mac.serve("linear", integration: "mcp_linear")
         machine.serve("linear", integration: "mcp_linear")
         mac.store("mcp_linear", value: linear("personal", refresh: "rt_mac"))
         await sync(accounts: true)
-        #expect(machine.stored("mcp_linear").map(\.secret) == ["rt_mac"])
-        // Renewed there later (a new refresh token): the same account, so it comes back here.
+        #expect(machine.stored("mcp_linear").isEmpty)
+        // A copy made before: renewed there later (a new refresh token), it comes back here.
+        machine.store("mcp_linear", value: linear("personal", refresh: "rt_mac"))
+        await sync()
         machine.store("mcp_linear", value: linear("personal", refresh: "rt_renewed", expires: 9))
         await sync()
         #expect(mac.stored("mcp_linear").contains { $0.active && $0.secret == "rt_renewed" })

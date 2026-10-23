@@ -3,13 +3,14 @@ import OpenCodeKit
 
 extension AppModel {
     /// Each computer signs in to integrations (Notion, Linear…) on its own, in its own tab in
-    /// Settings. A new machine starts with this Mac's sign-ins and accounts, once
-    /// (`MachineEngine.seededNow`); after that, only a copy of the same account on both stays one
-    /// sign-in, the newer one winning (a service may hand out a new refresh token each time it's
-    /// used, and the other copy then stops working), and the older copy goes, so they don't pile
-    /// up. A machine's sign-in to another account, or none, is its own. Your accounts (API keys,
-    /// sign-ins like GitHub Copilot's) are each computer's own. Sign-outs it hasn't taken yet
-    /// (from before computers kept their own) go first.
+    /// Settings. A new machine starts with this Mac's accounts (API keys, GitHub Copilot's
+    /// sign-in), once (`MachineEngine.seededNow`), and with its integrations' sign-ins that don't
+    /// renew themselves; never one that does, as two computers renewing it end it on the other.
+    /// After that, only a copy of the same account on both (made before) stays one sign-in, the
+    /// newer one winning (a service may hand out a new refresh token each time it's used, and the
+    /// other copy then stops working), and the older copy goes, so they don't pile up. A machine's
+    /// sign-in to another account, or none, is its own. Sign-outs it hasn't taken yet (from before
+    /// computers kept their own) go first.
     ///
     /// Once after another with each machine (two at once would each copy the same sign-in), and
     /// each to its end: what it changes is a change that asks for it again, and cut off halfway it
@@ -49,8 +50,10 @@ extension AppModel {
             guard let local = server.integrationID, let match = there.first(where: { $0.name == server.name }), let far = match.integrationID,
                   let mine = ours.first(where: { $0.integrationID == local && $0.active && $0.isOAuth }) else { continue }
             let yours = theirs.first { $0.integrationID == far && $0.active && $0.isOAuth }
-            // The machine's own (another account, or none: it signs in there), unless it's new.
-            guard copyingAccounts || yours.map({ Self.isSameAccount(mine, $0, copy: Self.copy(on: machine, of: far), byLabel: true) }) == true else { continue }
+            // The machine's own (another account, or none: it signs in there); a new one starts
+            // with one that doesn't renew itself.
+            guard yours.map({ Self.isSameAccount(mine, $0, copy: Self.copy(on: machine, of: far), byLabel: true) }) == true
+                || (copyingAccounts && !Self.renewsItself(mine)) else { continue }
             switch await exchange(mine, yours, here: local, there: far, mac: mac, remote: remote, machine: machine, ours: ours) {
             case true?: await reconnect(match.name, api: remote, machine: machine)
             case false?: await reconnect(server.name, api: mac, machine: nil)

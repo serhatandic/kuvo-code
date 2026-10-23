@@ -5,8 +5,9 @@ import SwiftUI
 /// agents (Claude Code, Codex, Cursor, Grok, Antigravity) run as their makers built them, on this
 /// Mac or a machine, and each signs in to them on its own (picked in their section); the plans
 /// (GitHub Copilot, GitLab Duo, Poe, OpenCode) bring their models to Kuvo Code's own agent, signed
-/// in to on this Mac or a machine too. A machine gets a copy of the keys and of GitHub Copilot's
-/// sign-in; a sign-in that renews itself can't be shared (AppModel.renewsItself).
+/// in to on this Mac or a machine too. A new machine starts with a copy of the keys and of GitHub
+/// Copilot's sign-in, then signs in on its own; a sign-in that renews itself can't be shared
+/// (AppModel.renewsItself).
 ///
 /// What you use is in a card, a product to a block: its name with what it needs from you on the
 /// right (an update), and under it your accounts with it, side by side (none is the main one). The
@@ -126,8 +127,8 @@ struct SubscriptionsSection: View {
             if let machine { return "Signed in on \(machine.machine.name) on its own. Signing in finishes in your browser here." }
             return app.machines.list.isEmpty ? "Sign in with a plan or account you already have." : "Sign in with a plan or account you already have. Each of your machines signs in to these on its own."
         case .plans:
-            if let machine { return "Their models, in Kuvo Code's own agent on \(machine.machine.name), which signs in on its own. GitHub Copilot comes from this Mac, signed in to there." }
-            return app.machines.list.isEmpty ? "Their models, in Kuvo Code's own agent." : "Their models, in Kuvo Code's own agent. Your machines sign in to them on their own, but for GitHub Copilot, which they get from here."
+            if let machine { return "Their models, in Kuvo Code's own agent on \(machine.machine.name), which signs in on its own." }
+            return app.machines.list.isEmpty ? "Their models, in Kuvo Code's own agent." : "Their models, in Kuvo Code's own agent. Each of your machines signs in to these on its own."
         }
     }
 
@@ -163,8 +164,7 @@ struct SubscriptionsSection: View {
             let added = accounts.filter { OutsideAgents.account($0.id) != nil }
             all.append(Product(kind: .agent(own: own, added: added)))
         }
-        // GitHub Copilot's sign-in comes to a machine from this Mac, so it's signed in to here.
-        for id in Catalog.planProviders where shows == .plans && !(machine != nil && id == "github-copilot") {
+        for id in Catalog.planProviders where shows == .plans {
             guard let plan = catalog.providers.first(where: { $0.id == id }) else { continue }
             all.append(Product(kind: .plan(plan)))
         }
