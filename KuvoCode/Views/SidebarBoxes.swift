@@ -36,45 +36,51 @@ extension EnvironmentValues {
     @Entry var marksMachines = true
 }
 
-/// The top of a box's page, one slim line: its name, and every box's icon to switch with beside
-/// the two-finger swipe (this one's lit, a machine that needs you or is connecting marked). Under
-/// it, a machine that isn't connected: what it's doing, and the way to connect it or start its
-/// engine.
-struct BoxHeading: View {
-    let box: SidebarBox
+/// Above the sidebar's pages, staying put while they slide: the computer in view by name, and every
+/// computer's icon to switch with beside the two-finger swipe (the one in view lit, a machine that
+/// needs you or is connecting marked).
+struct BoxSwitchLine: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox
     @Environment(AppModel.self) private var app
+    @Namespace private var lit
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(app.name(of: box))
+            Text(app.name(of: selected))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .contentTransition(.opacity)
             Spacer(minLength: 8)
             HStack(spacing: 0) {
-                ForEach(boxes) { other in
-                    let isOn = other == box
+                ForEach(boxes) { box in
+                    let isOn = box == selected
                     Button {
                         guard !isOn else { return }
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { selected = other }
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { selected = box }
                     } label: {
-                        Image(systemName: other.symbol)
+                        Image(systemName: box.symbol)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                             .overlay(alignment: .topTrailing) {
-                                if let connection = app.machines.engine(other.machine)?.connection {
+                                if let connection = app.machines.engine(box.machine)?.connection {
                                     MachineIndicator(connection: connection, size: 5, quiet: true)
                                         .offset(x: 4, y: -2)
                                 }
                             }
                     }
                     .buttonStyle(IconButtonStyle(width: 24, height: 20))
-                    .background(isOn ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
-                    .help(app.name(of: other))
-                    .accessibilityLabel(app.name(of: other))
+                    .background {
+                        if isOn {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Pressable.hoverFill)
+                                .matchedGeometryEffect(id: "lit", in: lit)
+                        }
+                    }
+                    .help(app.name(of: box))
+                    .accessibilityLabel(app.name(of: box))
                     .accessibilityAddTraits(isOn ? .isSelected : [])
                 }
             }
@@ -82,7 +88,16 @@ struct BoxHeading: View {
         .frame(height: 22)
         .padding(.leading, 10)
         .padding(.trailing, 4)
-        .padding(.bottom, 2)
+    }
+}
+
+/// The top of a box's page: a machine that isn't connected, with what it's doing and the way to
+/// connect it or start its engine.
+struct BoxHeading: View {
+    let box: SidebarBox
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
         if let engine = app.machines.engine(box.machine), !engine.isReady {
             HStack(spacing: 8) {
                 MachineStatus(engine: engine)

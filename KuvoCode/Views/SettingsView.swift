@@ -382,6 +382,10 @@ private struct SettingsSidebar: View {
                 .padding(.horizontal, 10)
                 .frame(height: SidebarMetrics.rowHeight)
             SidebarSearchRow(text: $search)
+            if boxes.count > 1, search.isEmpty {
+                BoxSwitchLine(boxes: boxes, selected: shownBinding)
+                    .padding(.top, 8)
+            }
             if !search.isEmpty {
                 ScrollView {
                     results
@@ -417,7 +421,7 @@ private struct SettingsSidebar: View {
         ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    if boxes.count > 1 { BoxHeading(box: box, boxes: boxes, selected: shownBinding) }
+                    if boxes.count > 1 { BoxHeading(box: box) }
                     let pages = SettingsPage.shown(on: box)
                     ForEach(SettingsPage.Group.allCases, id: \.self) { group in
                         let members = pages.filter { $0.group == group }

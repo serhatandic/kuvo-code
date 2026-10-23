@@ -89,6 +89,11 @@ struct SidebarView: View {
 
                 SidebarSearchRow(text: $search)
 
+                if boxes.count > 1, search.isEmpty {
+                    BoxSwitchLine(boxes: boxes, selected: boxBinding)
+                        .padding(.top, 8)
+                }
+
             }
             .padding(.top, 10)
 
@@ -260,7 +265,7 @@ struct SidebarView: View {
 
     /// One box's page: what's on that computer.
     @ViewBuilder private func page(_ box: SidebarBox) -> some View {
-        if boxes.count > 1 { BoxHeading(box: box, boxes: boxes, selected: boxBinding) }
+        if boxes.count > 1 { BoxHeading(box: box) }
         let pinned = pinned(on: box)
         if !pinned.isEmpty {
             SectionHeader(title: "Pinned", isFolded: folded("pinned")) { EmptyView() }
