@@ -15,17 +15,13 @@ struct AgentsSettings: View {
 
     private var config: EngineConfig { app.config(for: box) }
 
-    /// The engine's own agents that people see; the hidden ones (titles, summaries) aren't
-    /// listed, but their models can be set above.
-    static let builtIn = BuiltInAgents.shown
-    static let hiddenBuiltIn = BuiltInAgents.hidden
 
     /// Built-in ones first, then yours: from the engine's list and from the settings (one
     /// that's turned off is only there).
     private var agents: [(id: String, name: String, mode: String, description: String?, isBuiltIn: Bool, isOff: Bool)] {
         let configured = config.value(at: ["agents"])?.object ?? [:]
         var rows: [(id: String, name: String, mode: String, description: String?, isBuiltIn: Bool, isOff: Bool)] = []
-        for id in Self.builtIn + configured.keys.sorted() where !rows.contains(where: { $0.id == id }) && !Self.hiddenBuiltIn.contains(id) {
+        for id in BuiltInAgents.shown + configured.keys.sorted() where !rows.contains(where: { $0.id == id }) && !BuiltInAgents.hidden.contains(id) {
             let live = catalog.agents.first { $0.id == id }
             let settings = configured[id]
             rows.append((
@@ -33,7 +29,7 @@ struct AgentsSettings: View {
                 live?.name ?? id,
                 settings?["mode"]?.string ?? live?.mode ?? "primary",
                 settings?["description"]?.string ?? live?.description,
-                Self.builtIn.contains(id),
+                BuiltInAgents.shown.contains(id),
                 settings?["disabled"]?.bool == true
             ))
         }
@@ -217,7 +213,7 @@ private struct AgentEditor: View {
         let name = newID.lowercased()
         let configured = (app.config(for: box).value(at: ["agents"])?.object ?? [:]).keys
         let isTaken = configured.contains { $0.lowercased() == name } || catalog.agents.contains { $0.id.lowercased() == name || $0.name.lowercased() == name }
-            || AgentsSettings.builtIn.contains(name) || AgentsSettings.hiddenBuiltIn.contains(name)
+            || BuiltInAgents.contains(name)
         return isTaken ? "There's an agent called \(newID) already." : nil
     }
 

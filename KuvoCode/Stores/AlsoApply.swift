@@ -41,15 +41,40 @@ enum AlsoApply {
 
     /// What `changes` make of `target`'s settings, there: the path and the value to set.
     static func translated(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [(path: [String], value: JSONValue?)] {
+        translation(changes, onto: target, to: machine).made
+    }
+
+    /// What `target` doesn't have that `changes` are to (an agent, a command, a server), so
+    /// they aren't made there: by entry (`describe` says each), once each.
+    static func leftOut(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [[String]] {
+        translation(changes, onto: target, to: machine).leftOut
+    }
+
+    /// An entry `leftOut` names, as the bar says it: "the agent review".
+    static func describe(_ entry: [String]) -> String {
+        let name = entry.last ?? ""
+        return switch entry.first {
+        case "agents": "the agent \(name)"
+        case "commands": "the command /\(name)"
+        default: Integrations.service(name)?.title ?? "the MCP server \(name)"
+        }
+    }
+
+    private static func translation(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> (made: [(path: [String], value: JSONValue?)], leftOut: [[String]]) {
         var settings = target
         var result: [(path: [String], value: JSONValue?)] = []
+        var leftOut: [[String]] = []
         for change in changes {
             // Integrations that use a Mac's own apps stay on Macs.
             if machine != nil, change.path.count >= 3, change.path[0] == "mcp", change.path[1] == "servers",
                Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) { continue }
-            // A field of a server, agent or command the target doesn't have: none made there with
-            // only that (adding or removing a whole one still goes).
-            if let entry = Self.entry(of: change.path), EngineConfig.value(at: entry, in: settings) == nil { continue }
+            // A field of a server, agent or command the target doesn't have, or the mode new
+            // sessions start in when it's an agent it doesn't have: none made there with only
+            // that (adding or removing a whole one still goes).
+            if let entry = Self.needs(change), EngineConfig.value(at: entry, in: settings) == nil {
+                if !leftOut.contains(entry) { leftOut.append(entry) }
+                continue
+            }
             var value = change.after.map { keysNamed($0, on: machine) }
             // Rules: none is an empty list, so the first one added (or the last taken out) joins
             // (or leaves) the other's, rather than standing in for them.
@@ -67,7 +92,14 @@ enum AlsoApply {
             result.append((change.path, value))
             settings = setting(value, at: change.path[...], in: settings)
         }
-        return result
+        return (result, leftOut)
+    }
+
+    /// What a computer needs to have for `change` to be made there: the entry it's a field of, or
+    /// the agent `default_agent` names (the engine's own are on every computer).
+    static func needs(_ change: EngineConfig.Change) -> [String]? {
+        if change.path == ["default_agent"], let agent = change.after?.string, !BuiltInAgents.contains(agent) { return ["agents", agent] }
+        return entry(of: change.path)
     }
 
     /// The named entry (an MCP server, an agent, a command) `path` is a field of, when it's one
@@ -93,16 +125,26 @@ enum AlsoApply {
         Set(changes.compactMap(\.value).flatMap(Integrations.keyNames).filter { !IntegrationKeys.isBots($0) })
     }
 
+    /// What applying did on one computer: whether anything there changed or was already so, and
+    /// what it doesn't have that some of the changes were to (`describe`d).
+    struct Outcome {
+        var leftOut: [String] = []
+        /// Something was made there, or every change was already so.
+        var applied = true
+    }
+
     /// `changes`, made on `source`, made on `target` too: its settings, then the keys they name.
-    @MainActor static func apply(_ changes: [EngineConfig.Change], from source: SidebarBox, to target: SidebarBox, app: AppModel) async throws {
+    @discardableResult
+    @MainActor static func apply(_ changes: [EngineConfig.Change], from source: SidebarBox, to target: SidebarBox, app: AppModel) async throws -> Outcome {
         let config = app.config(for: target)
         if !config.isLoaded {
             config.reload()
             for _ in 0..<150 where !config.isLoaded && config.problem == nil { try await Task.sleep(for: .milliseconds(100)) }
             guard config.isLoaded else { throw Failure.unread(app.name(of: target)) }
         }
-        let made = translated(net(changes), onto: config.settings, to: target.machine)
-        guard !made.isEmpty else { return }
+        let (made, missing) = translation(net(changes), onto: config.settings, to: target.machine)
+        let outcome = Outcome(leftOut: missing.map(describe), applied: !made.isEmpty || missing.isEmpty)
+        guard !made.isEmpty else { return outcome }
         // The keys first, so the settings that name them find them there; one the other computer
         // has of its own (another account's token, say) stays.
         for name in keys(in: made) {
@@ -113,6 +155,7 @@ enum AlsoApply {
         config.set(made, noted: false)
         // Applied once it's there, or why it isn't.
         if let failure = await config.settled() { throw Failure.refused(failure) }
+        return outcome
     }
 
     /// A key's value where `box` keeps it.

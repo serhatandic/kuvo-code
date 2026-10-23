@@ -140,6 +140,24 @@ import Testing
         #expect(Set(AlsoApply.translated(AlsoApply.net(here.changes), onto: [:], to: "lab").map(\.path)) == [["agents", "plan", "model"], ["agents", "title", "model"]])
     }
 
+    /// A change to something the other computer doesn't have (an agent, a command, a server) is
+    /// said, not passed over as if made; and the mode new sessions start in isn't set there to an
+    /// agent it doesn't have (the engine's own it always has).
+    @Test func whatAComputerDoesntHaveIsSaid() throws {
+        let here = try config(["agents": .object(["review": .object(["mode": .string("primary"), "model": .string("a/b")])]),
+                               "commands": .object(["ship": .object(["template": .string("Ship it")])])])
+        here.set(.string("c/d"), at: ["agents", "review", "model"])
+        here.set(.string("Ships"), at: ["commands", "ship", "description"])
+        here.set(.string("review"), at: ["default_agent"])
+        let changes = AlsoApply.net(here.changes)
+        #expect(AlsoApply.translated(changes, onto: [:], to: "lab").isEmpty, "nothing made there with only a field, nor a mode it hasn't")
+        #expect(AlsoApply.leftOut(changes, onto: [:], to: "lab").map(AlsoApply.describe) == ["the agent review", "the command /ship"])
+        let plan = try config([:])
+        plan.set(.string("plan"), at: ["default_agent"])
+        #expect(AlsoApply.translated(AlsoApply.net(plan.changes), onto: [:], to: "lab").map(\.path) == [["default_agent"]])
+        #expect(AlsoApply.leftOut(AlsoApply.net(plan.changes), onto: [:], to: "lab").isEmpty)
+    }
+
     @Test func whatsAppliedIsntOfferedBack() throws {
         let there = try config([:])
         there.set([(["model"], .string("anthropic/sonnet"))], noted: false)

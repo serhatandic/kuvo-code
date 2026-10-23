@@ -62,15 +62,6 @@ nonisolated enum ClaudeCode {
     }
 }
 
-/// The engine's own agents, on every computer whether its settings name them or not: the ones
-/// people pick and hand work to, and the hidden ones that write titles, summaries and compactions.
-nonisolated enum BuiltInAgents {
-    static let shown = ["build", "plan", "general", "explore"]
-    static let hidden: Set = ["compaction", "title", "summary"]
-
-    static func contains(_ id: String) -> Bool { shown.contains(id) || hidden.contains(id) }
-}
-
 /// Claude Code's subagents (~/.claude/agents), to bring over as the engine's subagents.
 nonisolated enum ClaudeAgents {
     struct Agent: Identifiable, Sendable {
@@ -80,7 +71,6 @@ nonisolated enum ClaudeAgents {
         var description: String
         var instructions: String
     }
-
 
     static func load(from folder: URL = ClaudeCode.folder.appending(path: "agents")) -> [Agent] {
         ClaudeCode.files(in: folder).compactMap { parse($0.text, fallbackName: $0.name) }

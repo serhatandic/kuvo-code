@@ -651,8 +651,16 @@ private struct AlsoApplyBar: View {
     /// The changes already dealt with (or made before the page opened), by the last one's number.
     @State private var seen: Int?
     @State private var applying: String?
-    @State private var applied: String?
+    @State private var applied: Applied?
     @State private var failure: String?
+
+    /// How it went: where it's made now, and what stayed here because a computer doesn't have it
+    /// (an agent, a command, a server), which stays said until Done.
+    private struct Applied: Equatable {
+        var title: String
+        var note: String?
+        var anywhere: Bool
+    }
 
     private var config: EngineConfig { app.config(for: box) }
     private var fresh: [EngineConfig.Change] { config.changes.filter { $0.id > (seen ?? .max) } }
@@ -668,10 +676,24 @@ private struct AlsoApplyBar: View {
                         Text("Applying to \(applying)…")
                             .font(.system(size: 13))
                     } else if let applied {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Also applied on \(applied)")
-                            .font(.system(size: 13))
+                        Image(systemName: applied.anywhere ? "checkmark.circle.fill" : "info.circle")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(applied.anywhere ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(applied.title)
+                                .font(.system(size: 13, weight: applied.note == nil ? .regular : .medium))
+                                .lineLimit(1)
+                            if let note = applied.note {
+                                Text(note)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        if applied.note != nil {
+                            Spacer(minLength: 8)
+                            Button("Done") { withAnimation(.ui) { self.applied = nil } }
+                        }
                     } else {
                         Image(systemName: box.symbol)
                             .font(.system(size: 13, weight: .medium))
@@ -735,12 +757,18 @@ private struct AlsoApplyBar: View {
         failure = nil
         Task {
             var done: [String] = []
+            var notDone: [String] = []
+            var notes: [String] = []
             for target in targets {
                 let name = app.name(of: target)
                 applying = name
                 do {
-                    try await AlsoApply.apply(changes, from: box, to: target, app: app)
-                    done.append(name)
+                    let outcome = try await AlsoApply.apply(changes, from: box, to: target, app: app)
+                    if outcome.applied { done.append(name) } else { notDone.append(name) }
+                    if !outcome.leftOut.isEmpty {
+                        let what = outcome.leftOut.formatted(.list(type: .or))
+                        notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
+                    }
                 } catch {
                     failure = "Not applied on \(name): \(error.localizedDescription)"
                 }
@@ -749,9 +777,15 @@ private struct AlsoApplyBar: View {
             Analytics.shared.track("settings_also_applied", ["computers": done.count])
             guard failure == nil else { return }
             seen = max(seen ?? 0, last)
-            applied = done.joined(separator: ", ")
+            let result = Applied(
+                title: done.isEmpty ? "Not applied on \(notDone.formatted(.list(type: .and)))" : "Also applied on \(done.formatted(.list(type: .and)))",
+                note: notes.isEmpty ? nil : notes.joined(separator: " "),
+                anywhere: !done.isEmpty)
+            applied = result
+            // Said and gone, unless something stayed here: that waits for Done.
+            guard result.note == nil else { return }
             try? await Task.sleep(for: .seconds(2.5))
-            withAnimation(.ui) { applied = nil }
+            if applied == result { withAnimation(.ui) { applied = nil } }
         }
     }
 }
