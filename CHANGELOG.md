@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- A new app icon: Kuvo Code's five bots huddled together, each in its own color, with the coral one in front, on cream in light mode and on black in dark mode.
+- A new app icon: Kuvo Code's bots peeking out from behind a big coral one, on a light tile in light mode and a dark one in dark mode.
 - A remote machine's engine runs on its own, with its sessions, bots and group chats: quitting Kuvo Code or clicking Disconnect leaves it running, it no longer stops after a day without Kuvo Code, and it starts again by itself if it crashes.
 - Stop Engine in Settings › Machines stops a machine's engine until you click Start Engine, through restarts of the machine too.
 - Open at login, in Settings › General: Kuvo Code opens in the background when you log in, without its window, so your bots and sessions on this Mac keep working from then on. Its engine also starts with the app now, whether or not the window is open.
