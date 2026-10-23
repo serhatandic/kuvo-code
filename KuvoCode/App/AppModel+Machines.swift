@@ -126,9 +126,12 @@ extension AppModel {
             if let machine { machines.engine(machine)?.browser.expectAsk() }
         }
         utilities.machineBrowser = { [weak self] machine in self?.machines.engine(machine)?.browser }
+        utilities.isMainTerminal = { [weak self] key in self?.mainTerminals.entry(key) != nil }
         // A subagent shows in the session that started it, a group chat's seat in its chat.
         utilities.shownIn = { [weak self] session in
             guard let self else { return session }
+            // An agent in a terminal shows in that terminal's panel.
+            if let panel = utilities.terminalPanel(session) { return panel }
             if let group = chats.group(seat: session) { return BotGroups.tabKey(group.id) }
             return workspace.root(of: session)
         }

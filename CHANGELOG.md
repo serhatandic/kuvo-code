@@ -39,6 +39,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - An agent can put a file in the conversation for you to see, like a chart it made or a PDF it found: a picture shows large, and any other file as a card that opens it in the side panel.
 - In a composer, Backspace right after an agent you named with &, like &Finance, removes the whole name at once.
 - A loader beside text, like a message card's "Waiting for its answer", sits in line with the words rather than below them.
+- An agent running in a terminal of Kuvo Code can use the panel's browser and open files and folders in the panel, as the agents in conversations do. Every terminal has `KUVO_MCP_URL`, `KUVO_MCP_TOKEN`, `KUVO_MCP_SCRIPT` and its own `KUVO_TERMINAL` in its environment, and `kuvo-mcp.sh` is an MCP server over stdio the agent can be given (nothing is set up for it). Each terminal tab has a panel of its own, so two agents in two terminals work in two browsers. A bar over the panel says so while a project's command runs in a terminal, with the setup one click away; it goes once that terminal's agent has used the tools, or when you close it. Not for projects on a machine.
 
 ## 0.7.0
 

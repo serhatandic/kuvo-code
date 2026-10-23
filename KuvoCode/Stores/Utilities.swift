@@ -119,6 +119,29 @@ final class Utilities {
     /// ID), a group chat seat's the chat's, a subagent's the session that started it. The app sets it.
     @ObservationIgnored var panelOf: (String) -> String = { $0 }
 
+    /// What an agent in a terminal needs to reach Kuvo Code's tools (see `BrowserToolServer.terminalVariables`),
+    /// added to the environment of the panel's terminals. The app sets it.
+    @ObservationIgnored var toolVariables: () -> [String: String] = { [:] }
+    /// Whether a key is a terminal tab of the window (see `MainTerminals`), which is its own panel.
+    @ObservationIgnored var isMainTerminal: (String) -> Bool = { _ in false }
+
+    private static let panelTerminalPrefix = "panel-terminal:"
+
+    /// The panel a terminal's agent works in: a main terminal's own (its key), a panel terminal's
+    /// the panel its tab is in. Nil for a key that isn't a terminal here (or one that has ended).
+    func terminalPanel(_ key: String) -> String? {
+        if key.hasPrefix(Self.panelTerminalPrefix) {
+            guard let id = UUID(uuidString: String(key.dropFirst(Self.panelTerminalPrefix.count))) else { return nil }
+            return tabs.first { $0.id == id }?.owner
+        }
+        return isMainTerminal(key) ? key : nil
+    }
+
+    /// The environment for a panel terminal: the app's, the tools' and the terminal's own name.
+    private func terminalEnvironment(_ environment: [String: String], tab: Tab) -> [String: String] {
+        environment.merging(toolVariables()) { _, new in new }.merging(["KUVO_TERMINAL": Self.panelTerminalPrefix + tab.id.uuidString]) { _, new in new }
+    }
+
     /// The conversation whose panel shows: the group chat in view, else the session you work in
     /// (either half of a split); "" for none (a new session's draft).
     var panelKey: String { panelKey() }
@@ -236,7 +259,7 @@ final class Utilities {
     func newTerminal(in directory: String?, environment: [String: String]) {
         Analytics.shared.track("panel_opened", ["tool": "terminal"])
         let tab = Tab(kind: .terminal, owner: panelKey)
-        let terminal = TerminalSession(directory: directory ?? NSHomeDirectory(), environment: environment)
+        let terminal = TerminalSession(directory: directory ?? NSHomeDirectory(), environment: terminalEnvironment(environment, tab: tab))
         terminal.addToMessage = { [weak self] text in self?.addToMessage?(text) }
         terminals[tab.id] = terminal
         add(tab)
@@ -254,7 +277,7 @@ final class Utilities {
             return
         }
         let tab = Tab(kind: .terminal, owner: panelKey)
-        let terminal = TerminalSession(directory: directory, environment: environment, command: command)
+        let terminal = TerminalSession(directory: directory, environment: terminalEnvironment(environment, tab: tab), command: command)
         terminal.addToMessage = { [weak self] text in self?.addToMessage?(text) }
         terminals[tab.id] = terminal
         runs[run] = tab.id

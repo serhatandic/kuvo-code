@@ -111,6 +111,11 @@ struct MainView: View {
         selection.flatMap { SidebarView.draftDirectory(from: $0) == nil && BotGroups.groupID(fromTab: $0) == nil && !MainTerminals.isTerminal($0) ? $0 : nil }
     }
 
+    /// The terminal tab in view, which has a panel of its own.
+    private var terminalInView: String? {
+        selection.flatMap { MainTerminals.isTerminal($0) && terminals.entry($0) != nil ? $0 : nil }
+    }
+
     /// The group chat in view.
     private var groupID: String? {
         selection.flatMap(BotGroups.groupID(fromTab:))
@@ -463,8 +468,12 @@ struct MainView: View {
         }
         // Its agent's browsing brings pages forward; others' stay where they are.
         .onChange(of: sessionID, initial: true) { _, id in
-            utilities.sessionInView = id
+            utilities.sessionInView = id ?? terminalInView
             showBotTabs()
+        }
+        // A terminal tab has a panel of its own, as a conversation does.
+        .onChange(of: terminalInView, initial: true) { _, key in
+            if sessionID == nil { utilities.sessionInView = key }
         }
         // The one beside it shows you files in the panel too.
         .onChange(of: besideID, initial: true) { _, id in utilities.besideInView = id }
@@ -1049,6 +1058,18 @@ struct MainView: View {
         givesWay.append(pane)
     }
 
+    /// Closing the bar that says an agent in a terminal needs Kuvo Code's tools (see `TerminalToolsNotice`) keeps it closed.
+    @AppStorage("terminalToolsNoticeClosed") private var terminalNoticeClosed = false
+
+    /// How to close that bar, while it shows: with a project's command running in the tab in view, and
+    /// until an agent there has used the tools.
+    private var closeTerminalNotice: (() -> Void)? {
+        // Not for a project on a machine: its terminal runs over SSH, which doesn't reach the tools here.
+        guard !terminalNoticeClosed, let key = selection, !app.terminalsUsingTools.contains(key),
+              let entry = terminals.entry(key), entry.runsCommand, !RemoteFolder.isRemote(entry.directory) else { return nil }
+        return { withAnimation(.ui) { terminalNoticeClosed = true } }
+    }
+
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
         // files and terminals.
@@ -1059,7 +1080,8 @@ struct MainView: View {
             model: focusedModel,
             environment: app.shellEnvironment,
             isExpanded: $panelExpanded,
-            isFocused: focus == .changes
+            isFocused: focus == .changes,
+            closeTerminalNotice: closeTerminalNotice
         )
         .environment(catalog(for: focusedDirectory))
         .simultaneousGesture(TapGesture().onEnded { focus = .changes })
@@ -1206,7 +1228,11 @@ struct MainView: View {
             splitPairs[key] = nil
         }
         if remember && !MainTerminals.isTerminal(key) { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
-        terminals.close(key)
+        if MainTerminals.isTerminal(key) {
+            terminals.close(key)
+            utilities.closeTabs(of: key)
+            app.terminalsUsingTools.remove(key)
+        }
         withAnimation(.ui) {
             self.tabs = tabs
             if selection == key {
@@ -1222,7 +1248,11 @@ struct MainView: View {
         rememberClosed(tabs.enumerated().filter { $0.element != key && !MainTerminals.isTerminal($0.element) }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
         for closed in tabs where closed != key {
             Analytics.shared.sessionEnded(closed)
-            terminals.close(closed)
+            if MainTerminals.isTerminal(closed) {
+                terminals.close(closed)
+                utilities.closeTabs(of: closed)
+                app.terminalsUsingTools.remove(closed)
+            }
             if let beside = splitPairs[closed] { Analytics.shared.sessionEnded(beside) }
         }
         withAnimation(.ui) {
