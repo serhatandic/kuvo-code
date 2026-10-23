@@ -54,7 +54,7 @@ extension PhoneLink {
                 if local, !FileManager.default.fileExists(atPath: tree.root) { continue }
                 let uncommitted = Git.uncommittedChanges(in: tree.root, includingHidden: true)
                 looks[tree.root] = Look(uncommitted: uncommitted,
-                                        ahead: uncommitted == nil ? nil : tree.base.map { Git.commitsAhead(of: $0, in: tree.root) },
+                                        ahead: uncommitted == nil ? nil : tree.base.flatMap { Git.commitsAhead(of: $0, in: tree.root) },
                                         size: local ? StorageReport.size(of: URL(filePath: tree.root)) : nil)
             }
             return looks

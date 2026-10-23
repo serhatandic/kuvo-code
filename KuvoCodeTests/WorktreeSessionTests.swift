@@ -178,21 +178,26 @@ import Testing
     /// Settings › Worktrees from a phone: each worktree with what to know before removing it
     /// (changes not committed, commits its base doesn't have, an agent at work), and removed as
     /// the page removes it, but not while its agent works.
+    /// What a paired phone asks this Mac, as it answers it.
+    private func ask(_ link: PhoneLink, _ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {
+        let request = LinkRequest(method: method, path: path, headers: [:], body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
+        var status = 0
+        var answer = Data()
+        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: Self.engine)!, password: nil, agents: nil) {
+            switch part {
+            case .head(let code, _): status = code
+            case .body(let chunk): answer += chunk
+            }
+        }
+        return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
+    }
+
     @Test func aPhoneListsAndRemovesWorktrees() async throws {
         defer { done() }
         let link = PhoneLink()
         link.workspace = workspace
         func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]) {
-            let request = LinkRequest(method: method, path: path, headers: [:], body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
-            var status = 0
-            var answer = Data()
-            for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: Self.engine)!, password: nil, agents: nil) {
-                switch part {
-                case .head(let code, _): status = code
-                case .body(let chunk): answer += chunk
-                }
-            }
-            return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
+            try await self.ask(link, path, method: method, body: body)
         }
         let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
         let folder = session.location.directory
@@ -226,6 +231,28 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: folder), "its changes go with it, as the page says")
         #expect((try await ask("kuvo/worktrees").json["worktrees"] as? [[String: Any]])?.isEmpty == true)
         #expect(try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root]).status == 404)
+    }
+
+    /// What git can't say about a worktree isn't said as if it could (its base branch gone, its
+    /// folder deleted by hand), and an engine that couldn't remove one says so as the engine's
+    /// failure, not as a refusal.
+    @Test func whatGitCantSayIsLeftOut() async throws {
+        defer { done() }
+        let link = PhoneLink()
+        link.workspace = workspace
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let tree = try #require(workspace.worktrees[session.location.directory])
+        try repository.git("branch", "-m", "main", "trunk")
+        let listed = try #require(try await ask(link, "kuvo/worktrees").json["worktrees"] as? [[String: Any]])
+        #expect(listed.first?["uncommitted"] as? Bool == false)
+        #expect(listed.first?["ahead"] == nil, "its base is gone: not none ahead")
+
+        StubWeb.route(Self.engine + "/api/worktree", sent: { _, _ in StubWeb.json(["error": "The engine is busy"], status: 500) })
+        #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: ["path": tree.root]).status == 502)
+
+        try FileManager.default.removeItem(atPath: tree.root)
+        let gone = try #require(try await ask(link, "kuvo/worktrees").json["worktrees"] as? [[String: Any]]).first
+        #expect(gone?["uncommitted"] == nil && gone?["ahead"] == nil && gone?["size"] == nil)
     }
 
     /// While its agent works there, the worktree stays, whatever you were told.

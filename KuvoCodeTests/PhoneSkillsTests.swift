@@ -88,6 +88,7 @@ import Testing
         #expect(listing.json["partial"] as? Bool == false)
         let about = try await ask("kuvo/skill-library/acme/skills/about?path=skills%2Fpdf")
         #expect(about.json["description"] as? String == "Fills PDF forms")
+        #expect(try await ask("kuvo/skill-library/acme/skills/about?path=skills%2F%E0%A4%A").status == 400, "a path that can't be read, as a machine answers it")
 
         let installed = try await ask("kuvo/skill-library/install", method: "POST", body: ["repository": "acme/skills", "path": "skills/pdf"])
         #expect(installed.status == 200)

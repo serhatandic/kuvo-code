@@ -113,11 +113,17 @@ enum SkillsPlace {
                 try? FileManager.default.removeItem(at: archive)
             }
             try await Self.tar(staging, into: archive)
-            // Unpacked beside it, then moved into place whole, so the engine never finds half of it.
+            // Unpacked beside it in a hidden folder of its own (two installs at once never share
+            // one; one that fails leaves nothing), then moved into place whole, so the engine
+            // never finds half of it.
             try await connection.run(RemoteEngineInstaller.script("""
                 d="$K/config/opencode/skills/"\(SSHConnection.quoted(skill.name))
                 [ -e "$d" ] && { echo "taken" >&2; exit 3; }
-                t="$d.kuvo-new"; rm -rf "$t"; mkdir -p "$t" && tar -xf - -C "$t" && mv "$t" "$d"
+                t="$K/config/opencode/skills/."\(SSHConnection.quoted(skill.name))".kuvo-new-$$"
+                trap 'rm -rf "$t"' EXIT
+                mkdir -p "$t" && tar -xf - -C "$t" || exit 1
+                [ -e "$d" ] && { echo "taken" >&2; exit 3; }
+                mv "$t" "$d"
                 """), input: archive)
         }
     }

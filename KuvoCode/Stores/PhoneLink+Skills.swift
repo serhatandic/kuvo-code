@@ -9,7 +9,6 @@ extension PhoneLink {
     /// `kuvo/skills…` and `kuvo/skill-library…`.
     func answerSkills(_ request: LinkRequest) async -> (Int, Data) {
         guard let app = bots?.app else { return (503, Self.message("Kuvo Code isn't ready yet. Try again in a moment.")) }
-        let parts = URLComponents(string: request.path)
         // Split as written, then each part read: a name can't bring a "/" of its own in. (Not
         // through URLComponents, which takes a "%" that starts nothing as a "%" of the name.)
         let path = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
@@ -32,7 +31,10 @@ extension PhoneLink {
         case ("GET", 4, "skill-library"):
             return await listing(segments[2], segments[3])
         case ("GET", 5, "skill-library") where segments[4] == "about":
-            let skillPath = parts?.queryItems?.first { $0.name == "path" }?.value ?? ""
+            // Read as written, as the path is (a "+" is a plus).
+            let query = request.path.split(separator: "?", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            let given = query.split(separator: "&").first { $0.hasPrefix("path=") }.map { String($0.dropFirst(5)) }
+            guard let skillPath = given.map({ $0.removingPercentEncoding }) ?? "" else { return (400, Self.message("That isn't a path.")) }
             return await about(segments[2], segments[3], skillPath)
         default:
             return (404, Data("{}".utf8))

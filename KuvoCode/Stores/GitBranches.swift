@@ -74,9 +74,10 @@ nonisolated extension Git {
         return run(["status", "--porcelain"] + hidden, in: directory).map { !$0.isEmpty }
     }
 
-    /// How many commits `directory`'s branch has that `base` doesn't.
-    static func commitsAhead(of base: String, in directory: String) -> Int {
-        Int(run(["rev-list", "--count", base + "..HEAD"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+    /// How many commits `directory`'s branch has that `base` doesn't; nil when git can't say (its
+    /// base is gone, a machine's connection dropped).
+    static func commitsAhead(of base: String, in directory: String) -> Int? {
+        run(["rev-list", "--count", base + "..HEAD"], in: directory).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     enum MergeResult: Equatable, Sendable {
