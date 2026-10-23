@@ -1893,7 +1893,8 @@ final class PhoneLink {
         let parts = request.path.split(separator: "?").first?.split(separator: "/").map(String.init) ?? []
         guard parts.count >= 3, let session = parts[2].removingPercentEncoding, let app = AgentMail.shared.app,
               let found = app.workspace.session(session) else { return (404, Data("{}".utf8)) }
-        let owner = WakeUps.owner(of: found)
+        // A bot's are in its own folder, as Edit Bot shows them.
+        let owner = app.bots.bot(forSession: session)?.wakeOwner ?? WakeUps.owner(of: found)
         let wakeUps = app.wakeUps
         // As they are now: a machine session's aren't read until something asks.
         await wakeUps.read(owner)
