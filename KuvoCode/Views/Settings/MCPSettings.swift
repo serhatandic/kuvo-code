@@ -111,6 +111,17 @@ struct MCPSettings: View {
             }
         }
         .modifier(LiveMCPServers(servers: $live, api: { app.api(for: box) }, change: config.settings))
+        #if DEBUG
+        // KUVO_DEMO_MCP_SERVER=<name>[|web]: that server's editor, open (added, off, if it isn't
+        // there); `web`: switched to On the web.
+        .onAppear {
+            guard let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MCP_SERVER"], let name = demo.split(separator: "|").first.map(String.init) else { return }
+            if config.value(at: Self.path + [name]) == nil {
+                config.set(.object(["type": .string("local"), "command": .array([]), "disabled": .bool(true), "codemode": .bool(false)]), at: Self.path + [name])
+            }
+            editing = ServerEdit(name: name)
+        }
+        #endif
         .settingsDetail(item: $editing, title: { $0.name ?? "Add Server" }, onDismiss: removePending) { edit in
             ServerEditor(name: edit.name, taken: Set(live.map(\.name))) { editing = nil } remove: { path in
                 removal = path
@@ -251,11 +262,11 @@ private struct ServerEditor: View {
     /// it was on), to bring back if you switch back while this is open.
     @State private var putAside: [String: JSONValue] = [:]
     @State private var confirmsRemoval = false
+    /// "On the web" chosen for a server with no URL yet: nothing's written until you give one.
+    @State private var pendingRemote = false
+    @State private var pendingURL = ""
 
     private var config: EngineConfig { app.config(for: box) }
-    /// The fields only one kind has: a command and what it runs with, or a URL and how it
-    /// signs in.
-    private static let kindFields = ["command", "cwd", "environment", "url", "headers", "oauth"]
     /// Under headers and environment variables alike.
     private static var keyNote: some View {
         Text("To keep a key out of the settings file, write {env:NAME} to use one of your environment variables.")
@@ -311,7 +322,7 @@ private struct ServerEditor: View {
     private var naming: some View {
         Section {
             SettingsTextRow(title: "Name") {
-                TextField("Name", text: $newName, prompt: Text("github"))
+                TextField("Name", text: $newName, prompt: Text(verbatim: "files"))
                     .onSubmit(add)
             }
         } footer: {
@@ -326,18 +337,32 @@ private struct ServerEditor: View {
     }
 
     @ViewBuilder private func editor(_ path: [String]) -> some View {
-        let isRemote = config.value(at: path + ["type"])?.string == "remote"
+        let isRemote = pendingRemote || config.value(at: path + ["type"])?.string == "remote"
         Group {
             Section {
                 Picker("Runs", selection: Binding(
                     get: { isRemote ? "remote" : "local" },
-                    set: { switchKind(of: path, to: $0) }
+                    set: { kind in
+                        // Back before a URL was given: nothing was written.
+                        if kind == "local", pendingRemote {
+                            pendingRemote = false
+                            pendingURL = ""
+                        } else {
+                            switchKind(of: path, to: kind)
+                        }
+                    }
                 )) {
-                    Text("On this Mac").tag("local")
+                    Text(box.machine == nil ? "On this Mac" : "On \(app.name(of: box))").tag("local")
                     Text("On the web").tag("remote")
                 }
                 .pickerStyle(.segmented)
-                if isRemote {
+                if pendingRemote {
+                    SettingsTextRow(title: "URL") {
+                        TextField("URL", text: $pendingURL, prompt: Text(verbatim: "https://example.com/mcp"))
+                            .onSubmit { saveURL(path) }
+                            .onDisappear { saveURL(path) }
+                    }
+                } else if isRemote {
                     ConfigTextField(title: "URL", path: path + ["url"], prompt: "https://example.com/mcp")
                     // Sign-in set up by hand (an object) isn't this switch's to replace.
                     let customSignIn = config.value(at: path + ["oauth"])?.object != nil
@@ -353,7 +378,7 @@ private struct ServerEditor: View {
                     // A command is often long: it wraps, in a typeface that keeps its flags apart.
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Command")
-                        TextField("Command", text: $command, prompt: Text(verbatim: "npx -y @modelcontextprotocol/server-github"), axis: .vertical)
+                        TextField("Command", text: $command, prompt: Text(verbatim: "npx -y @modelcontextprotocol/server-filesystem ~/Documents"), axis: .vertical)
                             .labelsHidden()
                             .font(.body.monospaced())
                             .lineLimit(1...8)
@@ -366,8 +391,13 @@ private struct ServerEditor: View {
                     Text("Let the agent call its tools from code")
                     Text("Code Mode: the agent looks up this server's tools and combines several in one step, which keeps each message small for a server with many tools. Smaller models may not find its tools this way.")
                 }
+            } footer: {
+                if pendingRemote {
+                    Text("Add its URL to save it.")
+                        .foregroundStyle(.secondary)
+                }
             }
-            if isRemote {
+            if isRemote, !pendingRemote {
                 Section {
                     ConfigKeyValueList(path: path + ["headers"], keyPrompt: "Header, like Authorization", valuePrompt: "Value")
                 } header: {
@@ -375,7 +405,7 @@ private struct ServerEditor: View {
                 } footer: {
                     Self.keyNote
                 }
-            } else {
+            } else if !isRemote {
                 Section {
                     ConfigKeyValueList(path: path + ["environment"], keyPrompt: "Variable, like GITHUB_TOKEN", valuePrompt: "Value")
                 } header: {
@@ -388,6 +418,9 @@ private struct ServerEditor: View {
         .onAppear {
             command = Self.commandLine(config.value(at: path + ["command"]))
             shownCommand = command
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["KUVO_DEMO_MCP_SERVER"]?.hasSuffix("|web") == true { switchKind(of: path, to: "remote") }
+            #endif
         }
         // A URL typed into a server that had none turns it on, as a command does. (Switching
         // kinds brings back its own URL, on or off as it was, so that's left alone.)
@@ -407,28 +440,32 @@ private struct ServerEditor: View {
 
     private func close(_ path: [String]) {
         saveCommand(path)
+        saveURL(path)
         done()
     }
 
-    /// Switches between running a command and connecting to a URL. What the kind you leave
-    /// has is put aside, and what the other had comes back; one with nothing to run yet is
-    /// off, as a new server is, until you give it a command or URL.
-    private func switchKind(of path: [String], to kind: String) {
+    /// The URL given for a server switched to "On the web": it's one now, and on.
+    private func saveURL(_ path: [String]) {
+        let url = pendingURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard pendingRemote, let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased()), parsed.host() != nil else { return }
+        pendingRemote = false
+        pendingURL = ""
+        switchKind(of: path, to: "remote", url: url)
+    }
+
+    /// Switches between running a command and connecting to a URL (`MCPSettings.switched`);
+    /// "On the web" with no URL to bring back waits for one (`pendingRemote`).
+    private func switchKind(of path: [String], to kind: String, url: String? = nil) {
         let isRemote = config.value(at: path + ["type"])?.string == "remote"
         guard kind != (isRemote ? "remote" : "local") else { return }
         // A command you typed and didn't press Return on is put aside with the rest.
         saveCommand(path)
-        var settings = config.value(at: path)?.object ?? [:]
-        var leaving: [String: JSONValue] = [:]
-        for key in Self.kindFields + ["disabled"] { leaving[key] = settings.removeValue(forKey: key) }
-        if putAside.isEmpty {
-            settings["disabled"] = .bool(true)
-        } else {
-            for (key, value) in putAside { settings[key] = value }
+        guard let switched = MCPSettings.switched(config.value(at: path)?.object ?? [:], to: kind, putAside: putAside, url: url) else {
+            pendingRemote = true
+            return
         }
-        putAside = leaving
-        settings["type"] = .string(kind)
-        if kind == "local", settings["command"] == nil { settings["command"] = .array([]) }
+        let settings = switched.settings
+        putAside = switched.putAside
         config.set(.object(settings), at: path)
         // The field shows the command that came back, or none, as saved.
         command = Self.commandLine(settings["command"])
@@ -455,6 +492,38 @@ private struct ServerEditor: View {
 
     static func words(_ line: String) -> [String] { CommandWords.split(line) }
     static func quoted(_ word: String) -> String { CommandWords.quoted(word) }
+}
+
+extension MCPSettings {
+    /// The fields only one kind of server has: a command and what it runs with, or a URL and how
+    /// it signs in.
+    static let kindFields = ["command", "cwd", "environment", "url", "headers", "oauth"]
+
+    /// A server's settings switched to running a command (`local`) or to a URL (`remote`): what
+    /// the kind it leaves had is put aside, and what the other had comes back (`putAside`); one
+    /// with nothing to run yet is off, as a new server is, until it has a command or URL. `url`:
+    /// one given as it's switched, which turns it on. Nil for a server on the web with no URL,
+    /// which the engine doesn't take: nothing's written until there's one.
+    static func switched(_ settings: [String: JSONValue], to kind: String, putAside: [String: JSONValue], url: String? = nil) -> (settings: [String: JSONValue], putAside: [String: JSONValue])? {
+        var settings = settings
+        var leaving: [String: JSONValue] = [:]
+        for key in kindFields + ["disabled"] { leaving[key] = settings.removeValue(forKey: key) }
+        if putAside.isEmpty {
+            settings["disabled"] = .bool(true)
+        } else {
+            for (key, value) in putAside { settings[key] = value }
+        }
+        settings["type"] = .string(kind)
+        if kind == "local", settings["command"] == nil { settings["command"] = .array([]) }
+        if kind == "remote" {
+            if let url, !url.isEmpty {
+                settings["url"] = .string(url)
+                settings["disabled"] = nil
+            }
+            guard !(settings["url"]?.string ?? "").isEmpty else { return nil }
+        }
+        return (settings, leaving)
+    }
 }
 
 /// A command line, as the MCP server editor reads and writes it.

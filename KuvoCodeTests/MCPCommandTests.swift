@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
@@ -20,5 +21,18 @@ import Testing
     @Test(arguments: [["npx", "-y", "@acme/server"], ["run", "two words", "it's", "a\\.b", "say \"hi\"", ""]])
     func writtenBackItReadsTheSame(words: [String]) {
         #expect(CommandWords.split(words.map(CommandWords.quoted).joined(separator: " ")) == words)
+    }
+
+    /// A server switched to "On the web" is never written without a URL, which the engine doesn't
+    /// take; given one, it's on; switched back, its command comes back as it was.
+    @Test func aServerOnTheWebIsWrittenOnlyWithItsURL() throws {
+        let local: [String: JSONValue] = ["type": .string("local"), "command": .array([.string("files")]), "codemode": .bool(false)]
+        #expect(MCPSettings.switched(local, to: "remote", putAside: [:]) == nil, "no URL: nothing written")
+        let remote = try #require(MCPSettings.switched(local, to: "remote", putAside: [:], url: "https://example.com/mcp"))
+        #expect(remote.settings == ["type": .string("remote"), "url": .string("https://example.com/mcp"), "codemode": .bool(false)])
+        let back = try #require(MCPSettings.switched(remote.settings, to: "local", putAside: remote.putAside))
+        #expect(back.settings == local)
+        // Its URL from before comes back with it.
+        #expect(MCPSettings.switched(back.settings, to: "remote", putAside: back.putAside)?.settings["url"] == .string("https://example.com/mcp"))
     }
 }
