@@ -1262,7 +1262,8 @@ extension Bots {
     /// What was changed or deleted on a machine while this Mac was away (from a phone, through its
     /// bridge), taken in as it connects: of a bot's description there, what changed since this Mac
     /// last saw it (its name, look, personality or model, as Edit Bot gives them) is taken in, and
-    /// what didn't stays as this Mac has it, however the two computers' clocks differ; one deleted
+    /// what didn't stays as this Mac has it, however the two computers' clocks differ; its
+    /// conversation, carried on with the coding agents there, is the one it has there. One deleted
     /// there, whose folder has gone, goes here too, as Delete Bot… leaves it. One on its way to
     /// another computer is left as it is.
     func takeIn(_ found: [Found], deleted: Set<String>, on machine: String) async {
@@ -1270,8 +1271,17 @@ extension Bots {
         decoder.dateDecodingStrategy = .iso8601
         for entry in found {
             guard let described = try? decoder.decode(Bot.Descriptor.self, from: entry.descriptor), described.kuvo == Bot.Descriptor.version,
-                  (entry.folder as NSString).lastPathComponent == described.id, let known = bot(described.id), known.machine == machine,
+                  (entry.folder as NSString).lastPathComponent == described.id, var known = bot(described.id), known.machine == machine,
                   !Moves.isFrozen(known.id) else { continue }
+            let agents = entry.via == "bridge"
+            if !entry.session.isEmpty, entry.session != known.sessionID || agents != (known.agents == true),
+               let index = list.firstIndex(where: { $0.id == known.id }) {
+                list[index].sessionID = entry.session
+                list[index].agents = agents
+                known = list[index]
+                save()
+                noteSessions()
+            }
             let seen = seenThere[known.id]
             guard seen != entry.descriptor else { continue }
             let before = seen.flatMap { try? decoder.decode(Bot.Descriptor.self, from: $0) }

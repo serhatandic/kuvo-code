@@ -20,6 +20,11 @@ extension AppModel {
         workspace.onMachineBrowsing = { [weak self] machine, session in self?.utilities.revealMachineBrowser(machine, for: session) }
         workspace.onDeleted = { [weak self] session in
             self?.utilities.closeTabs(of: session)
+            // A machine's bot's conversation gone there (carried on with the coding agents from a
+            // phone, say): what it has now is read from the machine.
+            if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
+                Task { await self.bots.adoptMade(on: machine) }
+            }
             // Its wake-ups and watches go with it.
             if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
         }

@@ -134,6 +134,21 @@ import Testing
         #expect(app.bots.bot("bot_herald0001") != nil)
     }
 
+    /// A machine's bot whose conversation went on with the coding agents there (from a phone, with
+    /// this Mac closed): the new conversation is its, as it is there.
+    @Test func aBotsConversationCarriedOnThereIsTakenIn() async throws {
+        defer { done() }
+        let folder = "/home/me/.kuvo-code/bots/bot_herald0001"
+        let described = try descriptor("bot_herald0001", model: ModelRef(id: "big-pickle", providerID: "opencode"))
+        app.bots.adopt([Bots.Found(folder: folder, descriptor: described, session: "ses_engine", via: "")], on: "box")
+        #expect(app.bots.bot("bot_herald0001")?.agents != true)
+        await app.bots.takeIn([Bots.Found(folder: folder, descriptor: described, session: "ses_theirs", via: "bridge")], deleted: [], on: "box")
+        let herald = try #require(app.bots.bot("bot_herald0001"))
+        #expect(herald.sessionID == "ses_theirs" && herald.agents == true)
+        #expect(app.workspace.botSessions.contains("ses_theirs"))
+        #expect(Bots().bot("bot_herald0001")?.sessionID == "ses_theirs", "kept")
+    }
+
     /// A machine whose clock is behind this Mac's (by an hour here): a rename made there from a
     /// phone, after this Mac last saw the bot, is still taken in, though its time reads earlier
     /// than this Mac's last edit; what was changed here and not there (its look) stays.
