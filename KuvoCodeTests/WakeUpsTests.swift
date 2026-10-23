@@ -153,6 +153,47 @@ import Testing
         #expect(try await ask("kuvo/wakes/\(id)/cancel", ["wake": once]).status == 404)
     }
 
+    /// From a phone: a wake-up added to a session, as the bar over the composer adds one, which
+    /// repeats; its wake-ups paused and let go; what can't be is said, and nothing's added.
+    @Test func aPhoneAddsOneAndPausesThem() async throws {
+        await start()
+        defer { done() }
+        let link = PhoneLink()
+        link.wakeUps = app.wakeUps
+        let before = AgentMail.shared.app
+        AgentMail.shared.app = app
+        defer { AgentMail.shared.app = before }
+        func ask(_ path: String, _ body: [String: Any]) async throws -> (status: Int, json: [String: Any]?) {
+            let request = LinkRequest(method: "POST", path: path, headers: ["content-type": "application/json"], body: try JSONSerialization.data(withJSONObject: body))
+            var status = 0
+            var data = Data()
+            for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: Self.engine + "/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): data += chunk
+                }
+            }
+            return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        let due = Date.now.addingTimeInterval(3600).timeIntervalSince1970
+        let added = try await ask("kuvo/wakes/\(id)", ["due": due, "every": "1d", "note": "Look at the build"])
+        #expect(added.status == 200)
+        let wakes = try #require(added.json?["wakes"] as? [[String: Any]])
+        #expect(wakes.compactMap { $0["note"] as? String } == ["Look at the build"])
+        #expect(wakes.first?["every"] as? String == "1d")
+        #expect(abs((wakes.first?["due"] as? Double ?? 0) - due) < 120)
+
+        #expect(try await ask("kuvo/wakes/\(id)/pause", ["paused": true]).json?["paused"] as? Bool == true)
+        #expect(FileManager.default.fileExists(atPath: folder(id, "paused")))
+        #expect(try await ask("kuvo/wakes/\(id)/pause", ["paused": false]).json?["paused"] as? Bool == false)
+
+        #expect(try await ask("kuvo/wakes/\(id)", ["due": Date.now.addingTimeInterval(10).timeIntervalSince1970, "note": "Too soon"]).status == 400)
+        #expect(try await ask("kuvo/wakes/\(id)", ["due": due, "every": "08h", "note": "A bad repeat"]).status == 400)
+        #expect(try await ask("kuvo/wakes/\(id)", ["due": due, "note": "  "]).status == 400)
+        #expect(try await ask("kuvo/wakes/ses_nobody", ["due": due, "note": "Hi"]).status == 404)
+        #expect(app.wakeUps.wakes[WakeUps.owner(of: try #require(app.workspace.session(id))).key]?.count == 1)
+    }
+
     /// The prompts the engine was sent for the session, each a wake-up's.
     nonisolated final class Prompts: @unchecked Sendable {
         private let lock = NSLock()

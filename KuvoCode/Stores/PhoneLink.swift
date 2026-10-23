@@ -1877,9 +1877,11 @@ final class PhoneLink {
     }
 
     /// `GET kuvo/wakes/<session>`: its wake-ups, watches and whether they're paused, read now;
-    /// `POST kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}`
-    /// cancels one, and `…/now` with `{"wake": "<id>"}` sends one now (one that repeats still
-    /// comes back at its time), as the bar over the Mac's composer does. Times are seconds since 1970.
+    /// `POST kuvo/wakes/<session>` with `{"due", "every"?, "note"}` adds one; `…/cancel` with
+    /// `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one, `…/now` with `{"wake": "<id>"}`
+    /// sends one now (one that repeats still comes back at its time), and `…/pause` with
+    /// `{"paused"}` holds them or lets them go, as the bar over the Mac's composer does. Adding and
+    /// pausing answer the list as it is then. Times are seconds since 1970.
     /// A wake-up that couldn't go or be taken back: 409 while its conversation is on its way to
     /// another computer (as a machine's bridge says it), else 503.
     nonisolated private static func status(of error: any Error) -> Int {
@@ -1904,7 +1906,31 @@ final class PhoneLink {
             }
             return (200, Data("{}".utf8))
         }
-        if parts.count == 4, parts[3] == "cancel", request.method.uppercased() == "POST" {
+        if parts.count == 3, request.method.uppercased() == "POST" {
+            struct Given: Decodable { var due: Double; var every: String?; var note: String }
+            guard let given = try? JSONDecoder().decode(Given.self, from: request.body),
+                  !given.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return (400, Self.message("Send when it comes (`due`, seconds since 1970) and what it says (`note`)."))
+            }
+            let every = given.every.flatMap(Wakes.Repeat.init)
+            if given.every != nil, every == nil { return (400, Self.message("That isn’t a repeat: 30m, 2h, 1d, 1w or weekdays.")) }
+            do {
+                try await wakeUps.add(to: owner, at: Date(timeIntervalSince1970: given.due), every: every, note: given.note)
+            } catch WakeUps.Failure.tooSoon {
+                return (400, Self.message(WakeUps.Failure.tooSoon.localizedDescription))
+            } catch WakeUps.Failure.tooMany {
+                return (409, Self.message(WakeUps.Failure.tooMany.localizedDescription))
+            } catch {
+                return (Self.status(of: error), Self.message(error.localizedDescription))
+            }
+            await wakeUps.read(owner)
+        } else if parts.count == 4, parts[3] == "pause", request.method.uppercased() == "POST" {
+            struct Given: Decodable { var paused: Bool }
+            guard let given = try? JSONDecoder().decode(Given.self, from: request.body) else { return (400, Self.message("Send {\"paused\": true} or false.")) }
+            do { try await wakeUps.setPaused(given.paused, owner) } catch {
+                return (Self.status(of: error), Self.message(error.localizedDescription))
+            }
+        } else if parts.count == 4, parts[3] == "cancel", request.method.uppercased() == "POST" {
             struct Given: Decodable { var wake: String?; var watch: String? }
             let given = try? JSONDecoder().decode(Given.self, from: request.body)
             do {
@@ -1919,8 +1945,9 @@ final class PhoneLink {
                 return (Self.status(of: error), (try? JSONEncoder().encode(["message": error.localizedDescription])) ?? Data())
             }
             return (200, Data("{}".utf8))
+        } else if parts.count != 3 {
+            return (404, Data("{}".utf8))
         }
-        guard parts.count == 3 else { return (404, Data("{}".utf8)) }
         struct Listed: Encodable {
             struct Wake: Encodable { var id: String; var due: Double; var note: String; var every: String? }
             struct Watch: Encodable { var letters: String; var every: String; var check: String; var note: String }

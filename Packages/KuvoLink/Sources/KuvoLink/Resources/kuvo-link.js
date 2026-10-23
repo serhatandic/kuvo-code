@@ -1741,7 +1741,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       yield { body: Buffer.from(JSON.stringify({ sessions: listWakes() })) };
       return;
     }
-    const wakes = request.path.split("?")[0].match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now))?$/);
+    const wakes = request.path.split("?")[0].match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
     if (wakes) {
       let session;
       try {
@@ -2840,6 +2840,31 @@ export async function makeGroup(given, target, signal) {
 }
 
 const LETTERS = /^[A-Za-z0-9]+$/;
+// The most wake-ups a conversation keeps waiting, as the Mac's (Wakes.limit).
+const WAKE_LIMIT = 50;
+
+// A folder for a session's wake-ups here, made as a Mac makes one (WakeUps.makeFolder): its
+// session, its folder, whether the coding agents run it, and held while it's archived. Null when
+// it isn't a conversation here.
+async function wakeFolderFor(session, readEngine, bridge) {
+  if (!/^ses_[A-Za-z0-9]+$/.test(session)) return null;
+  const ask = async target => target ? (await engineGet(target, `api/session/${encodeURIComponent(session)}`).catch(() => null))?.data ?? null : null;
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  let found = await ask(engine), agents = false;
+  if (!found) {
+    found = await ask(bridge());
+    agents = Boolean(found);
+  }
+  if (!found) return null;
+  const folder = path.join(SESSION_WAKES, session);
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(folder, "session"), session);
+  fs.writeFileSync(path.join(folder, "directory"), found.location?.directory ?? found.directory ?? "");
+  if (agents) fs.writeFileSync(path.join(folder, "via"), "bridge");
+  if (found.metadata?.["kuvo.archived"] === true) fs.writeFileSync(path.join(folder, "paused"), "archived");
+  return folder;
+}
 
 // Takes a wake-up off the schedule by its letters, which a repeating one keeps as its time moves on.
 function cancelWake(folder, letters) {
@@ -2892,20 +2917,47 @@ const wakingNow = new Set();
 async function* answerWakes(session, action, request, readEngine, bridge, signal) {
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const method = request.method.toUpperCase();
-  const folder = wakeFolder(session);
-  if (!action) {
-    if (method !== "GET" && method !== "HEAD") return yield* json(405, {});
-    if (!folder) return yield* json(200, { wakes: [], watches: [], paused: false });
+  let folder = wakeFolder(session);
+  const listed = () => {
+    if (!folder) return { wakes: [], watches: [], paused: false };
     const { wakes, watches, paused } = readWakes(folder);
-    return yield* json(200, { wakes: wakes.map(({ id, due, note, every }) => ({ id, due, note, every: every ?? undefined })), watches, paused });
-  }
+    return { wakes: wakes.map(({ id, due, note, every }) => ({ id, due, note, every: every ?? undefined })), watches, paused };
+  };
+  if (!action && (method === "GET" || method === "HEAD")) return yield* json(200, listed());
   if (method !== "POST") return yield* json(405, {});
-  if (!folder) return yield* json(404, {});
-  if (isMoving(folder)) return yield* json(409, { message: MOVING });
   let given = {};
   try {
     given = JSON.parse(Buffer.from(request.body ?? []).toString("utf8") || "{}") ?? {};
   } catch {}
+  if (!action) {
+    // One added as the bar over a Mac's composer adds one, with this machine's own kuvo-wake (its
+    // clock, its weekends).
+    const due = Number(given.due), note = typeof given.note === "string" ? given.note.trim() : "";
+    const every = given.every == null ? null : String(given.every);
+    if (!Number.isFinite(due) || !note) return yield* json(400, { message: "Send when it comes (`due`, seconds since 1970) and what it says (`note`)." });
+    if (every !== null && !/^(weekdays|[1-9][0-9]{0,5}[mhdw])$/.test(every)) return yield* json(400, { message: "That isn’t a repeat: 30m, 2h, 1d, 1w or weekdays." });
+    if (due < Date.now() / 1000 + 60) return yield* json(400, { message: "Pick a time at least a minute from now." });
+    if (!folder) {
+      const made = await wakeFolderFor(session, readEngine, bridge);
+      if (!made) return yield* json(404, {});
+      folder = made;
+    }
+    if (isMoving(folder)) return yield* json(409, { message: MOVING });
+    if (readWakes(folder).wakes.length >= WAKE_LIMIT) return yield* json(409, { message: `There are ${WAKE_LIMIT} wake-ups waiting already. Cancel some first.` });
+    const added = spawnSync(path.join(K, "bin", "kuvo-wake"), [folder, "add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note], { encoding: "utf8", timeout: 30_000 });
+    if (added.error) return yield* json(503, { message: "Wake-ups aren’t set up on this machine yet. Connect to it from your Mac once, then try again." });
+    if (added.status !== 0) return yield* json(400, { message: oneLine(`${added.stderr ?? ""} ${added.stdout ?? ""}`.trim(), 300) || "The wake-up couldn’t be added." });
+    return yield* json(200, listed());
+  }
+  if (!folder) return yield* json(action === "pause" ? 200 : 404, action === "pause" ? listed() : {});
+  if (isMoving(folder)) return yield* json(409, { message: MOVING });
+  if (action === "pause") {
+    // A hold of your own, until you take it away (archiving's and a move's are theirs).
+    if (typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });
+    if (given.paused) fs.writeFileSync(path.join(folder, "paused"), "paused");
+    else fs.rmSync(path.join(folder, "paused"), { force: true });
+    return yield* json(200, listed());
+  }
   const { wakes, watches } = readWakes(folder);
   const wake = typeof given.wake === "string" ? wakes.find(each => each.id === given.wake || each.letters === given.wake) : undefined;
   if (action === "cancel") {
