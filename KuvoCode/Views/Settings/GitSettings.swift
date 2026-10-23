@@ -87,6 +87,9 @@ struct WorktreesSettings: View {
             Section {
                 if trees.isEmpty && reading {
                     Spinner(size: 16).frame(maxWidth: .infinity)
+                } else if trees.isEmpty && unreached {
+                    Text("\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
+                        .foregroundStyle(.secondary)
                 } else if trees.isEmpty {
                     Text("None yet. Choose Worktree in a new session’s composer to give it one.")
                         .foregroundStyle(.secondary)
@@ -121,7 +124,7 @@ struct WorktreesSettings: View {
             } footer: {
                 if let failure {
                     Text(failure).foregroundStyle(.red)
-                } else if unreached {
+                } else if unreached && !trees.isEmpty {
                     Text("\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
                         .foregroundStyle(.secondary)
                 } else {
