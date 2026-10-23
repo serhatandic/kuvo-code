@@ -87,26 +87,38 @@ All paths on the right are in `../kuvo-web`.
 | `Config/App.xcconfig`, `KuvoCode.entitlements`, the Xcode project's packages, `scripts/*` | `src/content/docs/code/installation.md` (requirements, Build from source), `architecture.md` (third-party pieces); this repo's `CONTRIBUTING.md`; rerun `./scripts/third-party-licenses.sh` when packages or copied code change |
 | `KuvoCode/Stores/PhoneLink.swift`, `Views/Settings/PhoneSettings.swift`, `Packages/KuvoLink/*` (the phone link and the machines' bridge; switched off for users until the iPhone app ships, so no docs yet) | When it's switched on: a new phone page, `privacy.md` (`phone-link.json`, the `.phone-link` Keychain items, the relay connection, a machine's `~/.kuvo-code/run/link.json` and `bin/kuvo-link.js`), `uninstall.md`, `settings.md` (Phone), `machines.md`, `architecture.md` |
 | Files, folders, defaults or website data Kuvo Code creates on the user's Mac | `src/content/docs/code/privacy.md`, `uninstall.md`, `troubleshooting.md` |
-| `scripts/icon.py`, `KuvoCode/AppIcon.icon` (the app icon) | `public/code/icon.png`, `icon-dark.png`, `public/code/apple-touch-icon.png` and `public/code/og.jpg` (redraw with `python3 scripts/og-image.py code`) must show the same mark, and so must this repo's `docs/images/icon.png` (the README) |
+| `scripts/icon.py`, `KuvoCode/AppIcon.icon` (the app icon) | `public/code/icon.png`, `public/code/apple-touch-icon.png` and `public/code/og.jpg` (redraw with `python3 scripts/og-image.py code`) must show the same mark, and so must this repo's `docs/images/icon.png` (the README) |
 | The version number | `src/lib/site.ts` (`code.version`), and `CHANGELOG.md` here |
 
 Screenshots in `kuvo-web/public/code/screens`, and the README's `docs/images/screenshot-light.webp` and `screenshot-dark.webp` here (the same shot as the website's), show the real app. If a UI change makes one visibly wrong, tell the user it needs recapturing. They're captured from a separate demo copy of the app (built with `APP_BUNDLE_ID=run.kuvo.code.demo` into `build/DemoDerivedData`, launched with `KUVO_DEMO_USAGE=off` and a `KUVO_DEMO_NAME`) on a sample project, with the `KUVO_DEMO_*` launch variables listed in `CONTRIBUTING.md`, so the user's own app, sessions and logins are never touched and nothing personal shows. Sign the demo copy with the team (leave out `CODE_SIGN_IDENTITY=-` and `DEVELOPMENT_TEAM=`, so the git-ignored `Config/Signing.local.xcconfig` signs it), never ad-hoc. macOS takes each ad-hoc build for a new app and asks again for the Desktop and the Keychain, and a launch nobody is there to answer hangs on that prompt. Capture the window only (`screencapture -l`), never the full screen. `crop-usage.webp` is the Bars view rendered with sample numbers, not a capture.
 
-## The iPhone app keeps up with the Mac
+## The iPhone app is a client, like the Mac app
 
-**A feature isn't done until the phone has it too, wherever it makes sense there.** Kuvo Code for
-iPhone (`../kuvo-code-ios`) is the same app on the go: sessions, bots, group chats, the panel's
-tools, what agents ask you, usage. When you add or change something people use on the Mac, do the
-phone's side in the same task:
+**The phone is just another client, like the Mac app, and it gets every feature the Mac app has,
+wherever it makes sense on a phone.** Both are clients of every box: this Mac's and each machine.
+So anything you can see or do in the Mac app, you can see or do from Kuvo Code for iPhone
+(`../kuvo-code-ios`) on any box, with the Mac's window closed too. That covers sessions, bots,
+group chats, the panel's tools, settings, accounts, what agents ask you and usage. A feature isn't
+done until the phone has it.
 
-- The Mac's side: what the phone reads or does, as routes in `KuvoCode/Stores/PhoneLink.swift`
-  (and in the machines' bridge, `Packages/KuvoLink`, for what works with the Mac closed), written
-  up in `Packages/KuvoLink/PROTOCOL.md`.
-- The phone's side, in `../kuvo-code-ios`: the screen or control for it, built the same way as
-  the Mac's. If another session is working on the phone app, hand it the routes and their shapes
-  (dates, streams, errors) and the commit, rather than editing its code.
-- Leave out only what has no place on a phone (window layout, Mac-only settings, the Mac's own
-  apps), and say so when you report the task as finished.
+When you add or change something people use:
+
+- **The box's side**: what a client reads or does is a route. It goes in
+  `KuvoCode/Stores/PhoneLink.swift` for this Mac's box, and in the machines' bridge
+  (`Packages/KuvoLink`) so it works on a machine with the Mac closed. Write it up in
+  `Packages/KuvoLink/PROTOCOL.md`. Never build a feature that only the Mac app's own code path
+  can reach.
+- **Tell the phone session, in the same task.** Usually a session is working on the phone app
+  ("Mobile App Development"; find it with ListAgents or the session list). Send it:
+  - what changed and how the Mac app shows it;
+  - the routes and their shapes (fields, dates, streams, errors);
+  - the commit;
+  - whether the routes are final or still moving.
+
+  Don't edit its code. If no session is working on the phone, build the phone's side yourself,
+  the same way the Mac's is built.
+- **Leave out only what has no place on a phone**: window layout, Mac-only settings, the Mac's
+  own apps. When you report the task, say what you left out and why.
 
 ### It shares the Mac's look
 
