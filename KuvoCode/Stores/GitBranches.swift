@@ -65,9 +65,13 @@ nonisolated extension Git {
     /// `includingHidden`: also changes in submodules their `ignore` setting leaves out, for
     /// before a worktree is removed, which would delete them unasked.
     static func hasUncommittedChanges(in directory: String, includingHidden: Bool = false) -> Bool {
+        uncommittedChanges(in: directory, includingHidden: includingHidden) ?? true
+    }
+
+    /// The same, or nil when git can't say.
+    static func uncommittedChanges(in directory: String, includingHidden: Bool = false) -> Bool? {
         let hidden = ["--untracked-files=normal"] + (includingHidden ? ["--ignore-submodules=none"] : [])
-        guard let status = run(["status", "--porcelain"] + hidden, in: directory) else { return true }
-        return !status.isEmpty
+        return run(["status", "--porcelain"] + hidden, in: directory).map { !$0.isEmpty }
     }
 
     /// How many commits `directory`'s branch has that `base` doesn't.

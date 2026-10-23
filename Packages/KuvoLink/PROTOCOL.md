@@ -533,7 +533,7 @@ itself. A host serves:
   "Also Apply to…" on a phone is the same changes (`kuvo/config`) and keys made on each computer
   you pick: a list gets what was added and loses what was taken out, keeping the other's own.
 - Integrations, as Settings › Integrations has them, each computer its own (a Mac for its own,
-  keys in its Keychain; a machine's bridge from 0.9.20 for the machine's, keys in
+  keys in its Keychain; a machine's bridge from 0.9.21 for the machine's, keys in
   `~/.kuvo-code/box/keys`, from the catalog its Mac leaves in `bin/integrations.json`, with the
   Mac closed too; `409 {"message"}` until its settings are its own).
   - `GET kuvo/integrations` → `{"integrations": [{id, title, summary, kind, symbol, site, how,
@@ -559,7 +559,7 @@ itself. A host serves:
     notes what it removed with its Mac closed (`box/integrations-removed.json`), and its Mac
     takes its bots' keys for it from your Keychain as it connects.
 - Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
-  bridge from 0.9.20 for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
+  bridge from 0.9.21 for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
   engine lists them (`api/skill`) and finds a change within a moment.
   - `GET kuvo/skills` → `{"folder", "github": {"<name>": {repository, path}}}`: the folder as its
     engine names skills' paths in it, and which skills came from GitHub (the rest you added).
@@ -589,8 +589,8 @@ itself. A host serves:
     page shows for it now: `disconnect`, `start` (its engine was stopped by a Mac with an older
     Kuvo Code), `connect` or `connectNow` (it's trying again by itself). `hosts`: the hosts in the
     Mac's `~/.ssh/config` not added yet, as Add a Machine suggests them. `folded` `{address,
-    machine}`: the address last found to be a machine already here, to say so.
-    `kuvo/machines/events` follows the same, a line each time it changes (NDJSON).
+    machine}`: the address last found to be a machine already here, to say so. `GET
+    kuvo/machines/events` follows the same, a line each time it changes (NDJSON).
   - `POST kuvo/machines {"destination"}` adds one as Add a Machine does (a Host from the Mac's
     `~/.ssh/config`, or `user@host`): checked over SSH first, which can take a while, and stopped
     if the request goes. `200 {"machine", "known"}`: `known` when it was one already here (at that
@@ -603,20 +603,22 @@ itself. A host serves:
     kuvo/machines/<id>` removes it as Remove… does (its sessions and engine stay on it): `200 {}`.
   - `DELETE kuvo/machines/<id>/addresses/<address>` stops using one of its other addresses (`404`
     for its name, or one it doesn't have); `POST kuvo/machines/<id>/same-as {"other"}` makes it one
-    of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other, or `409
-    {"message"}` when the two told Kuvo Code different names and stay two machines.
+    of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when
+    `other` isn't another of the Mac's machines; `409 {"message"}` when the two told Kuvo Code
+    different names and stay two machines.
 - On a Mac, Settings › Worktrees: the worktrees its sessions run in, on it and on your machines.
   - `GET kuvo/worktrees` → `{"worktrees": [{path, project, projectName, branch, base?, machine?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder (a
     machine's as its sessions name their folders, with `machine`), `project` its project's,
     `sessions` how many run there and `working` whether an agent is at work in one. What git says,
-    while it can be asked (a machine's while it's connected): `uncommitted`, changes not
-    committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
-    stays when it's removed. `size` in bytes, on the Mac only. Where new ones go is `kuvo/config`'s
-    `worktree.directory`.
+    left out when it can't say (a machine that isn't connected, a folder deleted by hand):
+    `uncommitted`, changes not committed, which go when it's removed; `ahead`, commits `base`
+    doesn't have, whose branch stays when it's removed. `size` in bytes, on the Mac only. Where
+    new ones go is `kuvo/config`'s `worktree.directory`.
   - `POST kuvo/worktrees/remove {"path"}` removes it as Remove… does: its folder and anything in
     it not committed; its branch stays unless it's merged. `200 {}`; `404` for none; `409
-    {"message"}` while an agent works there, or its machine isn't connected.
+    {"message"}` while an agent works there, or its machine isn't connected; `502 {"message"}`
+    when the engine couldn't remove it.
 - On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
   awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
   while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;
@@ -739,8 +741,9 @@ itself. A host serves:
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds
   since 1970, `every` like `1d` or null; paused while it's archived: archive it as the Mac does,
   `PATCH api/session/<id>` with `{"metadata": {"kuvo.archived": true}}` (`false` brings it back),
-  and its wake-ups wait, or come back; a Mac sees to it, and a machine's bridge (from 0.9.20) does
-  with the Mac closed too; a pause of your own stays through both). `POST
+  and its wake-ups wait, or come back, when the flag changes (it can go with every change to its
+  metadata); a Mac sees to it, and a machine's bridge (from 0.9.21) does with the Mac closed too;
+  a pause of your own stays through both). `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still
   comes back at its time). Both answer `200 {}`, `404 {}` when there's no such one, `409

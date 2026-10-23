@@ -690,7 +690,7 @@ final class PhoneLink {
         // Settings › Machines and Settings › Worktrees: this Mac's machines, and the worktrees its
         // sessions run in. Adding a machine checks it first: the phone going stops that (and
         // nothing else, which would leave a removal half done).
-        if request.path == "kuvo/machines/events" { return Self.following { link?.machinesJSON() } }
+        if request.path == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
         let route = request.path.split(separator: "?").first.map(String.init) ?? request.path
         if ["kuvo/machines", "kuvo/worktrees"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             return AsyncThrowingStream { continuation in
