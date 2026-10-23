@@ -310,7 +310,8 @@ final class Bots {
     /// Saves what Edit Bot changes (its name, look, model and personality), and tells its session
     /// about a new name, personality or model; its group chats hear about them too. The rest is
     /// kept as it is now: its job may have changed in its memory while Edit Bot was open.
-    func update(_ edited: Bot) async {
+    /// `time`: when it was changed (on its machine, for a change taken in from there).
+    func update(_ edited: Bot, at time: Date = .now) async {
         // Moving to another computer: the edit comes once it's there (for ten minutes at most: a
         // move cut short whose other computer doesn't answer keeps it here, where it's saved).
         for _ in 0..<600 where Moves.isFrozen(edited.id) {
@@ -323,7 +324,7 @@ final class Bots {
         bot.look = edited.look
         bot.model = edited.model
         bot.personality = edited.personality
-        if bot != old { bot.updated = .now }
+        if bot != old { bot.updated = time }
         list[index] = bot
         save()
         var edits: Set<String> = []
@@ -439,6 +440,20 @@ final class Bots {
                 app?.machines.runLater(script, on: machine)
             }
         }
+        await forget(bot)
+        if bot.machine == nil, FileManager.default.fileExists(atPath: bot.folder) {
+            do {
+                try FileManager.default.moveToTrash(URL(filePath: bot.folder))
+            } catch {
+                log.error("A deleted bot's folder couldn't go to the Trash: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        Analytics.shared.track("bot_deleted")
+    }
+
+    /// What this Mac keeps of a bot that's gone (deleted here, or on its machine from a phone):
+    /// its place in the list and its group chats, its wake-ups, tabs, conversation and keys.
+    private func forget(_ bot: Bot) async {
         await app?.groups.remove(bot)
         await app?.machineGroups.remove(bot)
         list.removeAll { $0.id == bot.id }
@@ -448,15 +463,7 @@ final class Bots {
         app?.utilities.closeTabs(of: bot.id)
         noteSessions()
         await app?.workspace.delete(bot.sessionID)
-        if bot.machine == nil, FileManager.default.fileExists(atPath: bot.folder) {
-            do {
-                try FileManager.default.moveToTrash(URL(filePath: bot.folder))
-            } catch {
-                log.error("A deleted bot's folder couldn't go to the Trash: \(error.localizedDescription, privacy: .public)")
-            }
-        }
         await BotKeys.forget(bot, app: app)
-        Analytics.shared.track("bot_deleted")
     }
 
     /// A personality you changed or deleted: the bots with it hear the new words, or go back to
@@ -1083,6 +1090,9 @@ extension Bots {
         var startingModel: ModelRef?
         var projects: [Project]
         var instructions: String
+        /// What a bot with a job is told, for one changed there: as `instructions`, with ⟦job⟧ for
+        /// its job in a few words and ⟦jobDetails⟧ for all of it, as its memory has them.
+        var jobInstructions: String
         var projectNote: String
         var identityNote: String
         var memory: String
@@ -1097,6 +1107,9 @@ extension Bots {
     func kit(for machine: String) -> MachineKit {
         let sample = Bot(id: "bot_sample", name: "⟦name⟧", job: "", instructions: "", look: .random(), machine: machine, project: nil,
                          folder: "⟦folder⟧", sessionID: "", created: .now)
+        var working = sample
+        working.job = "⟦job⟧"
+        working.instructions = "⟦jobDetails⟧"
         let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
         let catalog = app?.machines.engine(machine)?.catalog
         return MachineKit(
@@ -1108,6 +1121,7 @@ extension Bots {
             projects: (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
                 .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) },
             instructions: Self.instructions(for: sample, personality: "⟦personality⟧"),
+            jobInstructions: Self.instructions(for: working, personality: "⟦personality⟧"),
             projectNote: Self.projectNote, identityNote: Self.identityNote, memory: Self.blankMemory("⟦name⟧"), greeting: Self.greeting,
             rules: approval.rules(settings: EngineConfig.rules(on: machine)),
             timeZone: TimeZone.current.identifier, zoneinfo: WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString())
@@ -1168,21 +1182,62 @@ extension Bots {
         return adopted
     }
 
-    /// The bots a machine made while this Mac was away, read there and taken in, as it connects.
+    /// The bots a machine made while this Mac was away, read there and taken in, as it connects,
+    /// with what was changed or deleted there meanwhile (`takeIn`).
     func adoptMade(on machine: String) async {
+        let deletedFile = "$HOME/\(RemoteEngineInstaller.root)/bots/\(Self.deletedFile)"
         guard let connection = app?.machines.engine(machine)?.machine.connection,
               let output = try? await connection.run("""
                 for d in "$HOME/\(RemoteEngineInstaller.root)/bots"/bot_*; do
                   [ -f "$d/\(Bot.Descriptor.file)" ] && [ -s "$d/session" ] || continue
                   printf '%s\t%s\t%s\t%s\n' "$d" "$(base64 <"$d/\(Bot.Descriptor.file)" | tr -d '\n')" "$(head -c 200 "$d/session" | tr -d '\n\t')" "$(head -c 20 "$d/via" 2>/dev/null | tr -d '\n\t')"
                 done
+                if [ -f "\(deletedFile)" ]; then printf 'deleted\t%s\n' "$(base64 <"\(deletedFile)" | tr -d '\n')"; fi
                 """) else { return }
+        var deleted: Set<String> = []
         let found = output.split(separator: "\n").compactMap { line -> Found? in
             let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            if parts.count == 2, parts[0] == "deleted" {
+                struct Deleted: Decodable { var deleted: [String] }
+                deleted = Set(Data(base64Encoded: parts[1]).flatMap { try? JSONDecoder().decode(Deleted.self, from: $0) }?.deleted ?? [])
+                return nil
+            }
             guard parts.count == 4, let descriptor = Data(base64Encoded: parts[1]) else { return nil }
             return Found(folder: parts[0], descriptor: descriptor, session: parts[2], via: parts[3])
         }
         let adopted = adopt(found, on: machine)
         for bot in adopted { await syncJob(of: bot.id) }
+        await takeIn(found, deleted: deleted, on: machine)
+    }
+
+    /// The bots a machine's bridge deleted (from a phone, with this Mac closed), kept there in
+    /// `~/.kuvo-code/bots/deleted.json` as `{"deleted": [<bot id>…]}`, the latest first.
+    static let deletedFile = "deleted.json"
+
+    /// What was changed or deleted on a machine while this Mac was away (from a phone, through its
+    /// bridge), taken in as it connects: a bot whose description there is newer than this Mac's
+    /// takes its name, look, personality and model, as Edit Bot gives them; one deleted there,
+    /// whose folder has gone, goes here too, as Delete Bot… leaves it. One on its way to another
+    /// computer is left as it is.
+    func takeIn(_ found: [Found], deleted: Set<String>, on machine: String) async {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for entry in found {
+            guard let described = try? decoder.decode(Bot.Descriptor.self, from: entry.descriptor), described.kuvo == Bot.Descriptor.version,
+                  (entry.folder as NSString).lastPathComponent == described.id, let known = bot(described.id), known.machine == machine,
+                  !Moves.isFrozen(known.id), described.updated > (known.updated ?? known.created) else { continue }
+            var edited = known
+            let name = Self.oneLine(described.name)
+            if !name.isEmpty { edited.name = name }
+            edited.look = described.look
+            edited.personality = described.personality
+            edited.model = described.model
+            if edited != known { await update(edited, at: described.updated) }
+        }
+        let there = Set(found.map { ($0.folder as NSString).lastPathComponent })
+        for id in deleted where !there.contains(id) {
+            guard let known = bot(id), known.machine == machine, !Moves.isFrozen(id) else { continue }
+            await forget(known)
+        }
     }
 }

@@ -66,7 +66,7 @@ final class PhoneLink {
     @ObservationIgnored var endedSignIns: () -> [String] = { [] }
     /// (Whether it was one of your plans: nothing else is signed out.)
     @ObservationIgnored var forgetSignIn: (String) -> Bool = { _ in false }
-    /// Whether a group chat is on its way to another computer; set by AppModel.
+    /// Whether a group chat or a bot is on its way to another computer; set by AppModel.
     @ObservationIgnored var isMoving: (String) -> Bool = { Moves.isFrozen($0) }
     /// This Mac's engine settings, for `kuvo/config` and `kuvo/mcp/catalog`; set by AppModel.
     @ObservationIgnored weak var engineConfig: EngineConfig?
@@ -627,6 +627,17 @@ final class PhoneLink {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await (request.path == "kuvo/bots" ? link?.makeBot(request.body) : link?.makeGroup(request.body)) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
+        // A bot changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
+        if let id = Self.botID(in: request.path), ["PATCH", "DELETE"].contains(request.method.uppercased()) {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await (request.method.uppercased() == "PATCH" ? link?.changeBot(id, with: request.body) : link?.deleteBot(id)) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1380,12 +1391,15 @@ final class PhoneLink {
 
     /// A bot as `kuvo/bots` lists it: by its session (here or on a machine), with its name, look
     /// and job, and what the Mac knows of it that its session doesn't say: paused, when it next
-    /// wakes (in seconds since 1970), how many things it watches.
+    /// wakes (in seconds since 1970), how many things it watches, and the personality and model
+    /// Edit Bot shows for it.
     struct BotEntry: Encodable {
         var id: String, session: String, name: String, look: BotLook, machine: String?, job: String
         var paused: Bool, wakes: Double?, watching: Int
         /// Its conversation is with the coding agents: read through `kuvo/agents/api/…`.
         var agents: Bool
+        /// Left out for none: the model's own way, or a bot made before bots had a model.
+        var personality: String?, model: ModelRef?
     }
 
     private func entry(_ bot: Bot) -> BotEntry {
@@ -1393,7 +1407,8 @@ final class PhoneLink {
                  paused: bots?.paused.contains(bot.id) == true,
                  wakes: bots?.wakes[bot.id]?.map(\.due).min()?.timeIntervalSince1970,
                  watching: bots?.watches[bot.id]?.count ?? 0,
-                 agents: bot.agents == true)
+                 agents: bot.agents == true,
+                 personality: bot.personality, model: bot.model)
     }
 
     /// `kuvo/bots/templates`: what New Bot offers: its templates, the personalities (yours too),
@@ -1461,11 +1476,7 @@ final class PhoneLink {
         } else if app.workspace.api == nil {
             return (503, Self.message("The engine isn’t running."))
         }
-        let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
-        if let model = given.model {
-            guard ModelScope.on(machine: machine).allows(model.providerID) else { return (422, Self.message("That model can’t run on \(place ?? "this Mac"): choose another.")) }
-            if catalog.needsSignIn(model) { return (422, Self.message(catalog.unavailable(model, on: place))) }
-        }
+        if let model = given.model, let refusal = Self.refusal(of: model, on: machine, called: place, app: app) { return (422, Self.message(refusal)) }
         do {
             let bot = try await bots.create(name: name, look: given.look ?? template?.look ?? .random(), personality: personality, model: given.model, machine: machine, project: given.project)
             let first = template.map { BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions) }
@@ -1486,6 +1497,86 @@ final class PhoneLink {
         } catch {
             return (503, Self.message(error.localizedDescription))
         }
+    }
+
+    /// Why a bot living on `machine` (nil for this Mac; `place` is its name) can't use `model`, as
+    /// New Bot and Edit Bot offer models there: nil when it can.
+    private static func refusal(of model: ModelRef, on machine: String?, called place: String?, app: AppModel) -> String? {
+        guard ModelScope.on(machine: machine).allows(model.providerID) else { return "That model can’t run on \(place ?? "this Mac"): choose another." }
+        let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
+        return catalog.needsSignIn(model) ? catalog.unavailable(model, on: place) : nil
+    }
+
+    /// `PATCH kuvo/bots/<id>`: its name, look, personality or model changed, as Edit Bot changes
+    /// them, wherever it lives: `{name?, look?, personality?, model?}` (`personality: null` for the
+    /// model's own way). A machine's bot is told once its machine is connected, as from Edit Bot.
+    /// Answers 200 `{bot}`, as `kuvo/bots` lists it; 400 for an empty name, or a look or
+    /// personality there isn't; 422 for a model it can't use where it lives (the one it has is
+    /// kept, whatever); 404 for no such bot, 409 while it moves.
+    func changeBot(_ id: String, with body: Data) async -> (Int, Data) {
+        guard let bots, let app = bots.app else { return (503, Self.message("Bots aren’t ready yet. Try again in a moment.")) }
+        guard var bot = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
+        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
+        guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return (400, Self.message("That isn’t a change to a bot.")) }
+        /// A field as its type, from the JSON it came in.
+        func decoded<Value: Decodable>(_ key: String, as type: Value.Type) -> Value? {
+            guard let value = fields[key], let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else { return nil }
+            return try? JSONDecoder().decode(type, from: data)
+        }
+        if fields["name"] != nil {
+            let name = Bots.oneLine(fields["name"] as? String ?? "")
+            guard !name.isEmpty else { return (400, Self.message("A bot needs a name.")) }
+            bot.name = name
+        }
+        if fields["look"] != nil {
+            guard let look = decoded("look", as: BotLook.self) else { return (400, Self.message("That isn’t a look a bot can have.")) }
+            bot.look = look
+        }
+        if let given = fields["personality"] {
+            if given is NSNull {
+                bot.personality = nil
+            } else {
+                guard let personality = given as? String, Personalities.shared.personality(personality) != nil else {
+                    return (400, Self.message("There’s no personality “\(given as? String ?? "")”."))
+                }
+                bot.personality = personality
+            }
+        }
+        if fields["model"] != nil {
+            guard let model = decoded("model", as: ModelRef.self) else { return (400, Self.message("That isn’t a model.")) }
+            let place = bot.machine.map { machine in app.machines.list.first { $0.id == machine }?.name ?? machine }
+            if model != bot.model, let refusal = Self.refusal(of: model, on: bot.machine, called: place, app: app) { return (422, Self.message(refusal)) }
+            bot.model = model
+        }
+        await bots.update(bot)
+        guard let changed = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
+        return (200, (try? JSONEncoder().encode(["bot": entry(changed)])) ?? Data())
+    }
+
+    /// `DELETE kuvo/bots/<id>`, as Delete Bot… deletes it: its conversation and wake-ups, and its
+    /// folder to the Trash (on a machine, to Kuvo Code's trash there). Answers 200 `{}`; 404 for
+    /// no such bot; 409 while it moves, or while the machine it lives on isn't connected.
+    func deleteBot(_ id: String) async -> (Int, Data) {
+        guard let bots else { return (503, Self.message("Bots aren’t ready yet. Try again in a moment.")) }
+        guard let bot = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
+        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
+        do {
+            try await bots.delete(bot)
+        } catch let failure as Moves.Failure {
+            return (409, Self.message(failure.localizedDescription))
+        } catch let failure as Bots.Failure {
+            return (409, Self.message(failure.localizedDescription))
+        } catch {
+            return (503, Self.message(error.localizedDescription))
+        }
+        return (200, Data("{}".utf8))
+    }
+
+    /// The bot in `kuvo/bots/<id>` (not `kuvo/bots/templates`).
+    nonisolated private static func botID(in path: String) -> String? {
+        let parts = path.split(separator: "/")
+        guard parts.count == 3, parts[0] == "kuvo", parts[1] == "bots", parts[2] != "templates" else { return nil }
+        return String(parts[2]).removingPercentEncoding
     }
 
     /// A meeting as a phone sends it: `{next, every, topic}`, `next` in seconds since 1970 and

@@ -190,4 +190,112 @@ import Testing
         let gone = try await ask("kuvo/groups/grp_none000001", method: "PATCH", body: ["name": "X"])
         #expect(gone.status == 404 && gone.json?["message"] as? String == "That group chat isn’t there any more.")
     }
+
+    /// The models known, as Edit Bot offers them: Luna's account signed out of, Sol's signed in.
+    private func knowModels() async {
+        func model(_ id: String, _ provider: String, _ name: String) -> [String: Any] {
+            ["id": id, "modelID": id, "providerID": provider, "name": name, "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [],
+             "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+        }
+        engine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
+            ["id": "openai", "name": "OpenAI", "methods": [["type": "key"]], "connections": []],
+            ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]], "connections": [["type": "credential", "id": "c1", "label": "Mine"]]]]])
+        engine.on("GET", "/api/model", json: ["location": ["directory": "/"], "data": [model("luna", "openai", "Luna"), model("sol", "anthropic", "Sol")]])
+        engine.on("GET", "/api/model/default", json: ["location": ["directory": "/"], "data": NSNull()])
+        engine.on("GET", "/api/agent", json: ["location": ["directory": "/"], "data": []])
+        engine.on("GET", "/api/command", json: ["location": ["directory": "/"], "data": []])
+        app.catalog.api = engine.api
+        await app.catalog.refresh()
+    }
+
+    /// A bot changed from a phone as Edit Bot changes it: its name, look, personality and model,
+    /// kept, with its conversation told; listed with them as `kuvo/bots` lists it.
+    @Test func aBotChangedFromAPhone() async throws {
+        defer { done() }
+        await knowModels()
+        await app.workspace.refresh()
+        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let changed = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: [
+            "name": " Ada\nPrime ", "look": ["color": "sky", "shape": "gem", "face": "wink"], "personality": "preset.straight",
+            "model": ["providerID": "anthropic", "id": "sol", "variant": "high"],
+        ])
+        #expect(changed.status == 200)
+        let listed = try #require(changed.json?["bot"] as? [String: Any])
+        #expect(listed["id"] as? String == ada.id && listed["name"] as? String == "Ada Prime" && listed["personality"] as? String == "preset.straight")
+        #expect(listed["look"] as? [String: String] == ["color": "sky", "shape": "gem", "face": "wink"])
+        #expect(listed["model"] as? [String: String] == ["providerID": "anthropic", "id": "sol", "variant": "high"])
+        let bot = try #require(app.bots.bot(ada.id))
+        #expect(bot.name == "Ada Prime" && bot.look == BotLook(color: .sky, shape: .gem, face: .wink) && bot.personality == "preset.straight")
+        #expect(bot.model == ModelRef(id: "sol", providerID: "anthropic", variant: "high"))
+        #expect(Bots().list.first?.name == "Ada Prime", "kept")
+        // Its conversation hears of it, as from Edit Bot: its title, its model, what it's told.
+        #expect(engine.requests("PATCH", "/api/session/\(ada.sessionID)").contains { $0.body["title"] as? String == "Ada Prime" })
+        #expect(engine.requests("POST", "/api/session/\(ada.sessionID)/model").last?.body["model"] as? [String: String] == ["id": "sol", "providerID": "anthropic", "variant": "high"])
+        let told = try #require(engine.requests("PUT", "/api/experimental/session/\(ada.sessionID)/instructions/entries/kuvo.bot").last?.body["value"] as? String)
+        #expect(told == Bots.instructions(for: bot) && told.contains("Straight Shooter"))
+
+        // Its own way again; only what's sent changes.
+        let plain = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["personality": NSNull()])
+        #expect(plain.status == 200 && plain.json?["bot"].flatMap { ($0 as? [String: Any])?["personality"] } == nil)
+        #expect(app.bots.bot(ada.id)?.personality == nil && app.bots.bot(ada.id)?.name == "Ada Prime")
+    }
+
+    @Test func aChangeThatCantBeIsSaid() async throws {
+        defer { done() }
+        await knowModels()
+        await app.workspace.refresh()
+        let luna = ModelRef(id: "luna", providerID: "openai")
+        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let before = try #require(app.bots.bot(ada.id))
+        for (body, status, words) in [
+            (["name": " "], 400, "A bot needs a name."),
+            (["look": ["color": "plaid", "shape": "round", "face": "calm"]], 400, "That isn’t a look a bot can have."),
+            (["personality": "custom.gone"], 400, "There’s no personality “custom.gone”."),
+            (["model": ["id": "x"]], 400, "That isn’t a model."),
+        ] as [([String: Any], Int, String)] {
+            let answer = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: body.merging(["name": "Renamed"]) { given, _ in given })
+            #expect(answer.status == status && message(answer) == words, "\(body)")
+        }
+        // A model whose account isn't signed in where it lives: said as Edit Bot would say it.
+        let signedOut = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "Renamed", "model": ["id": "luna", "providerID": "openai"]])
+        #expect(signedOut.status == 422 && message(signedOut) == app.catalog.unavailable(luna))
+        #expect(app.bots.bot(ada.id) == before, "nothing changed")
+        // The one it has stays, signed out of or not.
+        var onLuna = before
+        onLuna.model = luna
+        await app.bots.update(onLuna)
+        #expect(try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "Renamed", "model": ["id": "luna", "providerID": "openai"]]).status == 200)
+
+        let gone = try await ask("kuvo/bots/bot_none000001", method: "PATCH", body: ["name": "X"])
+        #expect(gone.status == 404 && message(gone) == "That bot isn’t there any more.")
+        #expect(try await ask("kuvo/bots/bot_none000001", method: "DELETE").status == 404)
+        // On its way to another computer: neither, until it's there.
+        link.isMoving = { $0 == ada.id }
+        let moving = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "X"])
+        #expect(moving.status == 409 && message(moving) == Moves.Failure.moving.localizedDescription)
+        #expect(try await ask("kuvo/bots/\(ada.id)", method: "DELETE").status == 409)
+        #expect(app.bots.bot(ada.id)?.name == "Renamed")
+    }
+
+    /// Deleted from a phone as Delete Bot… deletes it: gone from the list and its group chat, its
+    /// conversation deleted, its folder in the Trash.
+    @Test func aBotDeletedFromAPhone() async throws {
+        defer { done() }
+        engine.on("DELETE", "/api/session/*", json: [:])
+        await app.workspace.refresh()
+        let ada = try await app.bots.create(name: "Ada", look: .random(), model: nil, machine: nil, project: nil)
+        let ben = try await app.bots.create(name: "Ben", look: .random(), model: nil, machine: nil, project: nil)
+        let cy = try await app.bots.create(name: "Cy", look: .random(), model: nil, machine: nil, project: nil)
+        let group = app.groups.create(name: "Release", purpose: nil, members: [ada.id, ben.id, cy.id], meeting: nil)
+
+        let deleted = try await ask("kuvo/bots/\(ada.id)", method: "DELETE")
+        #expect(deleted.status == 200 && deleted.json?.isEmpty == true)
+        #expect(app.bots.bot(ada.id) == nil && Bots().list.map(\.id) == [ben.id, cy.id])
+        #expect(engine.requests("DELETE", "/api/session/\(ada.sessionID)").count == 1, "its conversation is deleted")
+        #expect(!FileManager.default.fileExists(atPath: ada.folder), "its folder went to the Trash")
+        #expect(app.groups.group(group.id)?.members == [ben.id, cy.id])
+        let listed = try #require(try await ask("kuvo/bots").json?["bots"] as? [[String: Any]])
+        #expect(listed.map { $0["id"] as? String } == [ben.id, cy.id])
+        #expect(try await ask("kuvo/bots/\(ada.id)", method: "DELETE").status == 404)
+    }
 }

@@ -525,11 +525,13 @@ itself. A host serves:
   are paused, the next one (`wakes`, left out when none waits), how many things each watches,
   `machine` (the machine it lives on, left out for the Mac), and `agents`: its conversation is
   with the coding agents, so it's read and written through `kuvo/agents/api/…` (a group chat's
-  members carry the same flag). A Mac lists all of yours, wherever they live. A machine's bridge
-  (from 0.6.0) lists the bots that live on that machine, as their folders are now, with the Mac
-  closed too: their name, look and job as the Mac last wrote them there (`bot.json`, which the
-  Mac writes when they change and each time it connects; one it hasn't written yet isn't
-  listed). For a machine's bot, its machine's list is the newer while it answers.
+  members carry the same flag). `personality` (its id) and `model` (`{providerID, id, variant}`)
+  are the ones Edit Bot shows, left out when it has none (a machine's bridge from 0.9.19). A Mac
+  lists all of yours, wherever they live. A machine's bridge (from 0.6.0) lists the bots that
+  live on that machine, as their folders are now, with the Mac closed too: their name, look and
+  job as the Mac last wrote them there (`bot.json`, which the Mac writes when they change and
+  each time it connects, and the bridge when a phone changes them; one it hasn't written yet
+  isn't listed). For a machine's bot, its machine's list is the newer while it answers.
 - On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
   `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],
   "personalities": [{id, name, description, custom}], "looks": {colors, shapes, faces},
@@ -546,6 +548,21 @@ itself. A host serves:
   and the bot writes first. Errors are `{"message"}`: 400 for a missing name or an unknown
   template, personality, machine or project; 409 while its machine isn't connected; 422 for a
   model that can't run there (its account isn't signed in there); 503 when it couldn't be made.
+- `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model}` changes a bot as Edit Bot
+  does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`):
+  `200 {"bot": <as kuvo/bots lists one>}`. Errors are `{"message"}`: 400 for an empty name, or a
+  look or personality there isn't; 422 for a model it can't use where it lives (the one it has is
+  always kept); 404 for no such bot; 409 while it moves; 503 when it couldn't be changed (a
+  machine's engine is stopped). `DELETE kuvo/bots/<id>` deletes it as Delete Bot… does, its
+  conversation, wake-ups and folder (to the Trash, or to `~/.kuvo-code/trash` on a machine):
+  `200 {}`, 404, or 409 `{"message"}` while it moves. A Mac answers both for every bot it lists:
+  a machine's bot is changed at once and its conversation told once the machine is connected, as
+  from Edit Bot, while deleting one answers 409 `{"message"}` until it's connected. A machine's
+  bridge (from 0.9.19) answers both for its own bots, with the Mac closed too: a change reaches
+  the bot's conversation as the Mac words it, except that only a Mac carries a conversation on the
+  engine over to the coding agents (422 for a coding agent's model there); a deleted bot leaves
+  the group chats there too, and is noted in `~/.kuvo-code/bots/deleted.json`. The Mac takes both
+  in the next time it connects. Send them to the Mac while it answers.
 - On a Mac, `POST kuvo/groups` with `{name, members, purpose?, meeting?}` (members by bot `id`,
   at least two) makes a group chat on the Mac, as New Group Chat does: `201 {"group": <as
   kuvo/groups lists one>}`, 400 `{"message"}` without a name or two bots, 404 `{"message"}` for

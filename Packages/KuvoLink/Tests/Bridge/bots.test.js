@@ -98,8 +98,9 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   assert.deepEqual(answer.json.bots.map(each => each.name), ["First", "Scout"], "described ones, in the order they were made");
   assert.deepEqual(answer.json.bots[1], {
     id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout", look: { color: "sky", shape: "round", face: "calm" }, machine: "my-server",
-    job: "Watches the build", paused: true, wakes: 1792000100, watching: 1, agents: true,
+    job: "Watches the build", paused: true, wakes: 1792000100, watching: 1, agents: true, model: { id: "big-pickle", providerID: "opencode" },
   });
+  assert.equal("personality" in answer.json.bots[1], false, "none: left out, as the Mac leaves it out");
   assert.equal("wakes" in answer.json.bots[0], false, "none waiting: left out, as the Mac leaves it out");
   // Before the Mac ever gave it what New Bot needs, it says so.
   for (const [method, route] of [["POST", "kuvo/bots"], ["GET", "kuvo/bots/templates"]]) {
@@ -425,5 +426,180 @@ test("with the Mac closed, a group chat's meeting is set up here, by the bridge 
     assert.equal((await ask(handle, "PATCH", "kuvo/groups/grp_none000001", { name: "X" })).status, 404);
   } finally {
     agents.close();
+  }
+});
+
+// The Mac's and the coding agents' bridge's job readers are held to these (Bots.job(inMemory:)).
+const groupVectors = JSON.parse(fs.readFileSync(new URL("../../../../Agents/test/groups-vectors.json", import.meta.url), "utf8"));
+
+test("a bot's job is read from its memory as the Mac reads it", () => {
+  assert.ok(groupVectors.job.length > 5);
+  for (const vector of groupVectors.job) {
+    const job = link.jobInMemory(vector.memory);
+    assert.deepEqual([job?.line ?? null, job?.section ?? null], [vector.line, vector.section], vector.memory);
+  }
+});
+
+// The kit as a Mac with words for a bot that has a job gives it (Bots.MachineKit.jobInstructions).
+const jobKit = {
+  ...kit,
+  jobInstructions: "You are ⟦name⟧, one of the user's bots: ⟦job⟧.\n\n⟦personality⟧\n\nYour job, as your memory has it:\n⟦jobDetails⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
+};
+
+// What a phone's change asked of the conversation, by what it did there.
+const told = (asked, session) => ({
+  title: asked.find(each => each.method === "PATCH" && each.url === `/api/session/${session}`)?.body?.title,
+  model: asked.find(each => each.method === "POST" && each.url === `/api/session/${session}/model`)?.body?.model,
+  instructions: asked.find(each => each.method === "PUT" && each.url === `/api/experimental/session/${session}/instructions/entries/kuvo.bot`)?.body?.value,
+});
+
+test("with the Mac closed, a bot here is changed from a phone as Edit Bot changes it, and its conversation told", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  const folder = bot("bot_scout00001");
+  write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the build.\nTells you when it breaks.\n\n## Notes\nnone\n");
+  const engine = await makingEngine(["opencode", "anthropic"]);
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const before = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
+    const changed = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", {
+      name: " Scout\nPrime ", look: { color: "mint", shape: "round", face: "happy" }, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+    });
+    assert.equal(changed.status, 200, JSON.stringify(changed.json));
+    assert.deepEqual({ ...changed.json.bot, wakes: undefined }, {
+      id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout Prime", look: { color: "mint", shape: "round", face: "happy" }, machine: "my-server",
+      job: "Watches the build", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+    });
+    // Its description, for what runs here and for the Mac as it next connects: newer than before.
+    const described = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
+    assert.equal(described.name, "Scout Prime");
+    assert.equal(described.personality, "preset.straight");
+    assert.equal(described.created, before.created);
+    assert.match(described.updated, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    assert.ok(described.updated > before.updated);
+    // Its conversation: its title, its model, and what it's told, with its job as its memory has it.
+    assert.deepEqual(told(engine.asked, "ses_bot_scout00001"), {
+      title: "Scout Prime", model: { id: "opus", providerID: "anthropic", variant: "high" },
+      instructions: `You are Scout Prime, one of the user's bots: Watches the build.\n\nYour personality: Straight Shooter. Direct.\n\nYour job, as your memory has it:\nWatches the build.\nTells you when it breaks.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nWho sets what.`,
+    });
+
+    // Its own way again: told without a personality; nothing else is touched.
+    engine.asked.length = 0;
+    const plain = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { personality: null });
+    assert.equal(plain.status, 200);
+    assert.equal("personality" in plain.json.bot, false);
+    assert.deepEqual(told(engine.asked, "ses_bot_scout00001").title, undefined, "the same name isn't sent again");
+    assert.ok(!told(engine.asked, "ses_bot_scout00001").instructions.includes("Straight Shooter"));
+    // Nothing changed: nothing written, nothing told.
+    engine.asked.length = 0;
+    const kept = fs.readFileSync(path.join(folder, "bot.json"), "utf8");
+    assert.equal((await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime" })).status, 200);
+    assert.equal(fs.readFileSync(path.join(folder, "bot.json"), "utf8"), kept);
+    assert.deepEqual(engine.asked, []);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a change that can't be is said, and nothing changes", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  const folder = bot("bot_scout00001");
+  const engine = await makingEngine(["opencode"]);
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const kept = fs.readFileSync(path.join(folder, "bot.json"), "utf8");
+    for (const [body, status, words] of [
+      [{ name: "  " }, 400, "A bot needs a name."],
+      [{ name: null }, 400, "A bot needs a name."],
+      [{ look: { color: "plaid", shape: "round", face: "calm" } }, 400, "That isn’t a look a bot can have."],
+      [{ personality: "custom.gone" }, 400, "There’s no personality “custom.gone”."],
+      [{ model: { id: "x" } }, 400, "That isn’t a model."],
+      [{ model: { id: "luna", providerID: "openai" } }, 422, "luna needs a sign-in on this machine: sign in to it in Settings › Accounts, or choose another model."],
+      [{ model: { id: "sonnet", providerID: "claude-code" } }, 422, "Its conversation runs on this machine’s engine, and only your Mac can carry it on with the coding agents: choose another model, or change it on your Mac."],
+    ]) {
+      const answer = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Renamed", ...body });
+      assert.equal(answer.status, status, JSON.stringify(body));
+      assert.equal(answer.json.message, words);
+    }
+    assert.equal(fs.readFileSync(path.join(folder, "bot.json"), "utf8"), kept);
+    assert.equal(engine.asked.some(each => each.url.startsWith("/api/session/ses_bot_scout00001") || each.url.includes("/instructions/")), false);
+
+    // The model it has stays, signed in here or not.
+    write(path.join(folder, "bot.json"), JSON.stringify({ ...JSON.parse(kept), model: { id: "luna", providerID: "openai" } }));
+    assert.equal((await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Renamed", model: { id: "luna", providerID: "openai" } })).status, 200);
+
+    const gone = await ask(handle, "PATCH", "kuvo/bots/bot_gone000001", { name: "X" });
+    assert.equal(gone.status, 404);
+    assert.equal(gone.json.message, "That bot isn’t there any more.");
+    assert.equal((await ask(handle, "PATCH", "kuvo/bots/..%2Fkit.json", { name: "X" })).status, 404);
+    write(path.join(folder, "paused"), "moving");
+    const moving = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "X" });
+    assert.equal(moving.status, 409);
+    assert.match(moving.json.message, /moving/);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a bot with a job, changed where the Mac's kit has no words for one, is told its name later", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_scout00001");
+  write(path.join(folder, "MEMORY.md"), "## Job\nWatches the build\n");
+  const engine = await makingEngine();
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    assert.equal((await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime" })).status, 200);
+    const asked = told(engine.asked, "ses_bot_scout00001");
+    assert.equal(asked.title, "Scout Prime");
+    assert.equal(asked.instructions, undefined, "not told it has no job: the Mac tells it as it next connects");
+  } finally {
+    engine.close();
+  }
+});
+
+test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… deletes it, and noted for the Mac", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const scout = bot("bot_scout00001", { name: "Scout" });
+  bot("bot_ada0000001", { name: "Ada" });
+  bot("bot_ben0000001", { name: "Ben" });
+  const keys = path.join(home, "keys");
+  write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN__BOT_SCOUT00001"), "its own");
+  write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN__BOT_ADA0000001"), "another's");
+  write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN"), "shared");
+  fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
+  const engine = await makingEngine();
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => ({ port: engine.port, password: "p", pid: process.pid }));
+    const chat = await ask(handle, "POST", "kuvo/groups", { name: "Release", members: ["bot_scout00001", "bot_ada0000001", "bot_ben0000001"] });
+    assert.equal(chat.status, 201);
+
+    const deleted = await ask(handle, "DELETE", "kuvo/bots/bot_scout00001");
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.json));
+    assert.deepEqual(deleted.json, {});
+    // Its folder, with its memory, to the trash here; no longer listed.
+    assert.equal(fs.existsSync(scout), false);
+    const [trashed] = fs.readdirSync(path.join(home, "trash"));
+    assert.match(trashed, /^\d{8}-\d{6}-\d+$/);
+    assert.ok(fs.existsSync(path.join(home, "trash", trashed, "bot_scout00001", "MEMORY.md")));
+    assert.deepEqual(link.listBots().map(each => each.id), ["bot_ada0000001", "bot_ben0000001"]);
+    // Noted for the Mac, which lets it go as it next connects.
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bots, "deleted.json"), "utf8")), { deleted: ["bot_scout00001"] });
+    // Its keys of its own go; others' and the shared one stay.
+    assert.deepEqual(fs.readdirSync(keys).sort(), ["KUVO_KEY_GITHUB_TOKEN", "KUVO_KEY_GITHUB_TOKEN__BOT_ADA0000001"]);
+    // Its group chat goes on without it, and its conversation is deleted.
+    const left = engine.asked.filter(each => each.method === "PATCH" && each.url === `/api/kuvo/groups/${chat.json.group.id}`).at(-1);
+    assert.deepEqual(left.body, { members: ["bot_ada0000001", "bot_ben0000001"] });
+    assert.ok(engine.asked.some(each => each.method === "DELETE" && each.url === "/api/session/ses_bot_scout00001"));
+
+    assert.equal((await ask(handle, "DELETE", "kuvo/bots/bot_scout00001")).status, 404);
+    // On its way to another computer: it stays.
+    write(path.join(bots, "bot_ada0000001", "paused"), "moving");
+    assert.equal((await ask(handle, "DELETE", "kuvo/bots/bot_ada0000001")).status, 409);
+    assert.ok(fs.existsSync(path.join(bots, "bot_ada0000001")));
+    assert.equal((await ask(handle, "DELETE", "kuvo/bots/bot_ben0000001")).status, 200);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bots, "deleted.json"), "utf8")).deleted, ["bot_ben0000001", "bot_scout00001"], "the latest first");
+  } finally {
+    engine.close();
+    fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
+    fs.rmSync(keys, { recursive: true, force: true });
   }
 });

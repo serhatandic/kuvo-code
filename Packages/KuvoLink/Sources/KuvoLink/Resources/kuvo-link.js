@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.18";
+export const BRIDGE_VERSION = "0.9.19";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -857,6 +857,20 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
       return yield* json(status, value);
     }
+    // A bot here changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
+    const oneBot = route.match(/^kuvo\/bots\/([^/]+)$/);
+    if (oneBot && ["PATCH", "DELETE"].includes(request.method.toUpperCase())) {
+      let id;
+      try {
+        id = decodeURIComponent(oneBot[1]);
+      } catch {
+        return yield* json(404, { message: "That bot isn’t there any more." });
+      }
+      const { status, value } = request.method.toUpperCase() === "PATCH"
+        ? await changeBot(id, parsed(request.body), readEngine, bridge, info.name, signal)
+        : await deleteBot(id, readEngine, bridge, signal);
+      return yield* json(status, value);
+    }
     if (request.method.toUpperCase() === "POST" && route === "kuvo/groups") {
       const target = bridge();
       if (!target) return yield* json(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
@@ -1405,23 +1419,41 @@ async function* fileAt(requestPath, json) {
   for await (const piece of fs.createReadStream(file, { highWaterMark: 32 * 1024 })) yield { body: piece };
 }
 
+// A bot that lives here, as its folder has it now: its description (as the app last wrote it, or
+// as changed here), its conversation, and whether that runs with the coding agents; null for one
+// without a description (made before them, until the Mac connects) or a conversation.
+function botHere(id) {
+  if (typeof id !== "string" || !/^bot_[A-Za-z0-9]+$/.test(id)) return null;
+  const folder = path.join(BOTS, id);
+  let described;
+  try {
+    described = JSON.parse(textOf(path.join(folder, "bot.json")) ?? "");
+  } catch {
+    return null;
+  }
+  const session = (textOf(path.join(folder, "session")) ?? "").trim();
+  if (described?.kuvo !== DESCRIPTION || described.id !== id || typeof described.name !== "string" || !session) return null;
+  return { folder, described, session, agents: (textOf(path.join(folder, "via")) ?? "").trim() === "bridge" };
+}
+
+// On its way to another computer: a move holds its wake-ups (the Mac's Moves.hold), and nothing
+// reaches it or changes here until it's there, as on the Mac.
+const isMoving = folder => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
+const MOVING = "It’s moving to another computer. Try again once it’s there.";
+
+const isModel = model => Boolean(model) && typeof model.id === "string" && typeof model.providerID === "string";
+const sameModel = (a, b) => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
+
 // This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
-// look and job as the app last described it, and what its folder says now (paused, its next
-// wake-up, how many things it watches, whether it runs with the coding agents). One without a
-// description (made before them, until the Mac connects) or a session isn't listed.
+// look, job, personality and model as the app last described it (or as changed here), and what its
+// folder says now (paused, its next wake-up, how many things it watches, whether it runs with the
+// coding agents). One without a description or a session isn't listed.
 export function listBots(machine) {
   const bots = [];
   for (const id of listOf(BOTS)) {
-    if (!id.startsWith("bot_")) continue;
-    const folder = path.join(BOTS, id);
-    let described;
-    try {
-      described = JSON.parse(textOf(path.join(folder, "bot.json")) ?? "");
-    } catch {
-      continue;
-    }
-    const session = (textOf(path.join(folder, "session")) ?? "").trim();
-    if (described?.kuvo !== DESCRIPTION || described.id !== id || typeof described.name !== "string" || !session) continue;
+    const here = botHere(id);
+    if (!here) continue;
+    const { folder, described, session, agents } = here;
     const { wakes, watches, paused } = readWakes(folder);
     bots.push({
       created: String(described.created ?? ""),
@@ -1435,7 +1467,9 @@ export function listBots(machine) {
         paused,
         wakes: wakes.length ? Math.min(...wakes.map(wake => wake.due)) : undefined,
         watching: watches.length,
-        agents: (textOf(path.join(folder, "via")) ?? "").trim() === "bridge",
+        agents,
+        personality: typeof described.personality === "string" ? described.personality : undefined,
+        model: isModel(described.model) ? described.model : undefined,
       },
     });
   }
@@ -1498,12 +1532,93 @@ async function call(target, method, route, body, signal) {
   return value?.data ?? value;
 }
 
-// What a bot is told, from the kit's words with its own name, folder, personality and project.
-export function botInstructions(kit, name, folder, personality, project) {
-  let text = kit.instructions.replaceAll("⟦name⟧", name).replaceAll("⟦folder⟧", folder);
-  text = personality ? text.replace("⟦personality⟧", personality) : text.replace("\n⟦personality⟧\n", "");
-  if (project) text = text.replace(`\n\n${kit.identityNote}`, `\n\n${kit.projectNote}\n\n${kit.identityNote}`);
+// What a bot is told, from the kit's words with its own name, folder, personality and project,
+// and its job as its memory has it (`jobInMemory`), for one that has one; null when the kit, from
+// a Mac before Kuvo Code had its words for that, can't say it.
+export function botInstructions(kit, name, folder, personality, project, job) {
+  const working = Boolean(job?.section);
+  if (working && typeof kit.jobInstructions !== "string") return null;
+  let text = (working ? kit.jobInstructions : kit.instructions).replaceAll("⟦name⟧", () => name).replaceAll("⟦folder⟧", () => folder);
+  text = personality ? text.replace("⟦personality⟧", () => personality) : text.replace("\n⟦personality⟧\n", "");
+  if (project) text = text.replace(`\n\n${kit.identityNote}`, () => `\n\n${kit.projectNote}\n\n${kit.identityNote}`);
+  if (working) text = text.replace(": ⟦job⟧", () => (job.line ? `: ${job.line}` : "")).replace("⟦jobDetails⟧", () => job.section);
   return text;
+}
+
+// A bot's job as its memory keeps it, as the Mac reads it (Bots.job(inMemory:), and the coding
+// agents' bridge's jobInMemory, all held to `Agents/test/groups-vectors.json`): its line, what
+// shows under its name, and its section, all of it; null for a memory without one.
+const spaces = text => text.replace(/^[\p{Zs}\t]+|[\p{Zs}\t]+$/gu, "");
+const trimmed = text => text.replace(/^[\p{Z}\t\n\v\f\r\u0085]+|[\p{Z}\t\n\v\f\r\u0085]+$/gu, "");
+function headingLevel(line) {
+  const text = spaces(line);
+  let marks = 0;
+  while (marks < text.length && text[marks] === "#") marks++;
+  if (marks < 1 || marks > 6) return undefined;
+  const after = text.slice(marks);
+  return after.length === 0 || after[0] === " " ? marks : undefined;
+}
+function isJobHeading(line) {
+  const text = spaces(line);
+  if (!text.startsWith("#")) return false;
+  const title = spaces(text.replace(/^#+/, "")).toLowerCase();
+  if (title === "job" || title === "my job" || title === "the job" || title.startsWith("job:")) return true;
+  if (!title.startsWith("job ")) return false;
+  const first = spaces(title.slice(4))[0];
+  return first !== undefined && "-–—:(".includes(first);
+}
+// What a job heading says after "Job" ("Job: …", "Job — …", "Job (…)"), and whether after a colon.
+function jobInHeading(line) {
+  const title = spaces(spaces(line).replace(/^#+/, ""));
+  if (!title.toLowerCase().startsWith("job")) return undefined;
+  let rest = spaces(title.slice(3));
+  const mark = rest[0];
+  if (mark === undefined || !":-–—(".includes(mark)) return undefined;
+  rest = spaces(rest.slice(1));
+  if (mark === "(" && rest.endsWith(")")) rest = spaces(rest.slice(0, -1));
+  return rest.length === 0 ? undefined : { text: rest, isColon: mark === ":" };
+}
+export function jobInMemory(text) {
+  const all = text.split("\n");
+  const start = all.findIndex(isJobHeading);
+  if (start < 0) return null;
+  const level = headingLevel(all[start]) ?? 1;
+  let end = all.length;
+  let inCode = false;
+  for (let index = start + 1; index < all.length; index++) {
+    const line = spaces(all[index]);
+    if (line.startsWith("```") || line.startsWith("~~~")) {
+      inCode = !inCode;
+      continue;
+    }
+    const other = inCode ? undefined : headingLevel(all[index]);
+    if (other !== undefined && other <= level) {
+      end = index;
+      break;
+    }
+  }
+  let section = trimmed(all.slice(start + 1, end).join("\n"));
+  const inline = jobInHeading(all[start]);
+  if (inline && (inline.isColon || section.length === 0)) section = [inline.text, section].filter(part => part.length > 0).join("\n");
+  let line = section.split("\n").map(spaces).find(part => part.length > 0) ?? "";
+  for (const mark of ["- ", "* ", "> "]) if (line.startsWith(mark)) line = line.slice(mark.length);
+  line = line.replaceAll("**", "").replaceAll("__", "");
+  if (line.toLowerCase().startsWith("job:")) line = line.slice(4);
+  line = spaces(line);
+  // Long: its first sentence. (In characters as Swift counts them, what you'd see.)
+  if ([...characters.segment(line)].length > 48 && line.includes(". ")) line = line.slice(0, line.indexOf(". "));
+  if (line.endsWith(".") && !line.endsWith("..")) line = line.slice(0, -1);
+  return { line, section };
+}
+
+const fitsLook = (looks, look) => Boolean(look) && looks.colors.includes(look.color) && looks.shapes.includes(look.shape) && looks.faces.includes(look.face);
+
+// Why a model of the engine's can't run here: its account isn't signed in here, and the engine
+// would drop a message on it without a word; null when it can (or the engine doesn't say).
+async function signInRefusal(model, engine, signal) {
+  const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => undefined);
+  const ids = Array.isArray(ready) ? ready.map(each => each?.id) : [];
+  return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on this machine: sign in to it in Settings › Accounts, or choose another model.` : null;
 }
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
@@ -1527,9 +1642,8 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   if (project !== undefined && !(kit.projects ?? []).some(each => each.directory === project)) return no(400, "That project isn’t in Kuvo Code.");
   const looks = kit.looks;
   const pick = list => list[crypto.randomInt(list.length)];
-  const fits = look => look && looks.colors.includes(look.color) && looks.shapes.includes(look.shape) && looks.faces.includes(look.face);
-  const look = fits(given.look) ? given.look : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = given.model && typeof given.model.id === "string" && typeof given.model.providerID === "string" ? given.model : kit.startingModel;
+  const look = fitsLook(looks, given.look) ? given.look : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
+  const model = isModel(given.model) ? given.model : kit.startingModel;
   if (!model) return no(422, "There’s no model to start it on here: sign in to an account on this machine first.");
   const agents = runsWithAgents(model);
   let target;
@@ -1537,11 +1651,9 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     target = agents ? readBridge() : readEngine();
   } catch {}
   if (!target) return no(503, agents ? "The coding agents aren’t running on this machine." : "The engine isn’t running.");
-  // A model of the engine's whose account isn't signed in here: said now, as the engine would drop it.
   if (!agents) {
-    const ready = await call(target, "GET", "/api/provider", undefined, signal).catch(() => undefined);
-    const ids = Array.isArray(ready) ? ready.map(each => each?.id) : [];
-    if (ids.length && !ids.includes(model.providerID)) return no(422, `${model.id} needs a sign-in on this machine: sign in to it in Settings › Accounts, or choose another model.`);
+    const refused = await signInRefusal(model, target, signal);
+    if (refused) return no(422, refused);
   }
 
   const id = newID("bot_");
@@ -1576,6 +1688,147 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   if (!template) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
   const bot = listBots(machine).find(each => each.id === id);
   return { status: 201, value: { bot, firstMessage: template?.firstMessage ?? null } };
+}
+
+// `PATCH kuvo/bots/<id>`, as the Mac's: a bot that lives here changed as Edit Bot changes it (its
+// name, look, personality or model), in its description and in its conversation, which is told as
+// the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
+// change in as it next connects (Bots.takeIn).
+export async function changeBot(id, given, readEngine, readBridge, machine, signal) {
+  const no = (status, message) => ({ status, value: { message } });
+  const here = botHere(id);
+  if (!here) return no(404, "That bot isn’t there any more.");
+  if (isMoving(here.folder)) return no(409, MOVING);
+  const kit = readKit();
+  if (!kit) return no(409, "Connect to this machine from your Mac once, then try again.");
+  if (!isObject(given)) return no(400, "That isn’t a change to a bot.");
+  const { described } = here;
+  const changed = { ...described };
+  if ("name" in given) {
+    changed.name = plainName(given.name);
+    if (!changed.name) return no(400, "A bot needs a name.");
+  }
+  if ("look" in given) {
+    if (!fitsLook(kit.looks, given.look)) return no(400, "That isn’t a look a bot can have.");
+    changed.look = { color: given.look.color, shape: given.look.shape, face: given.look.face };
+  }
+  const personalities = botPersonalities(kit);
+  if ("personality" in given) {
+    if (given.personality === null) delete changed.personality;
+    else if (personalities.some(each => each.id === given.personality)) changed.personality = given.personality;
+    else return no(400, `There’s no personality “${given.personality}”.`);
+  }
+  if ("model" in given) {
+    if (!isModel(given.model)) return no(400, "That isn’t a model.");
+    const model = { id: given.model.id, providerID: given.model.providerID, ...(typeof given.model.variant === "string" ? { variant: given.model.variant } : {}) };
+    // The one it has is kept, whatever; another has to run where its conversation does.
+    if (!sameModel(model, described.model)) {
+      if (runsWithAgents(model)) {
+        if (!here.agents) return no(422, "Its conversation runs on this machine’s engine, and only your Mac can carry it on with the coding agents: choose another model, or change it on your Mac.");
+      } else {
+        let engine;
+        try {
+          engine = readEngine();
+        } catch {}
+        if (!engine) return no(503, "The engine isn’t running.");
+        const refused = await signInRefusal(model, engine, signal);
+        if (refused) return no(422, refused);
+      }
+    }
+    changed.model = model;
+  }
+  let target;
+  try {
+    target = here.agents ? readBridge() : readEngine();
+  } catch {}
+  if (!target) return no(503, here.agents ? "The coding agents aren’t running on this machine." : "The engine isn’t running.");
+  const renamed = changed.name !== described.name;
+  const retold = renamed || changed.personality !== described.personality;
+  const switched = !sameModel(changed.model, described.model);
+  const looks = ["color", "shape", "face"].some(part => changed.look?.[part] !== described.look?.[part]);
+  if (retold || switched || looks) {
+    changed.updated = stamp();
+    try {
+      const file = path.join(here.folder, "bot.json");
+      fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
+      fs.renameSync(`${file}.new`, file);
+    } catch (error) {
+      return no(503, `The bot couldn’t be changed: ${error?.message ?? error}`);
+    }
+    // Its conversation hears of a new name, personality or model, as from Edit Bot.
+    const session = encodeURIComponent(here.session);
+    if (renamed) await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, signal).catch(() => {});
+    if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, signal).catch(() => {});
+    if (retold) {
+      const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
+      const personality = personalities.find(each => each.id === changed.personality)?.instruction;
+      const told = botInstructions(kit, changed.name, here.folder, personality, described.project, job);
+      if (told !== null) await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).catch(() => {});
+    }
+  }
+  return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
+}
+
+// The bots deleted here, the latest first (the last 500), for the Mac to let go of as it next
+// connects: `{"deleted": [<bot id>…]}` (Bots.deletedFile).
+const DELETED_FILE = path.join(BOTS, "deleted.json");
+
+function noteDeleted(id) {
+  let kept = [];
+  try {
+    const listed = JSON.parse(textOf(DELETED_FILE) ?? "");
+    if (Array.isArray(listed?.deleted)) kept = listed.deleted.filter(each => typeof each === "string" && each !== id);
+  } catch {}
+  fs.mkdirSync(BOTS, { recursive: true });
+  fs.writeFileSync(`${DELETED_FILE}.new`, JSON.stringify({ deleted: [id, ...kept].slice(0, 500) }));
+  fs.renameSync(`${DELETED_FILE}.new`, DELETED_FILE);
+}
+
+// `DELETE kuvo/bots/<id>`, as the Mac's Delete Bot…: a bot that lives here goes, its folder (its
+// memory, wake-ups and what it made) to Kuvo Code's trash here, then its keys of its own, its
+// place in the group chats here and its conversation. It's noted for the Mac (`noteDeleted`) first,
+// so it lets the bot go too.
+export async function deleteBot(id, readEngine, readBridge, signal) {
+  const no = (status, message) => ({ status, value: { message } });
+  const here = botHere(id);
+  if (!here) return no(404, "That bot isn’t there any more.");
+  if (isMoving(here.folder)) return no(409, MOVING);
+  try {
+    noteDeleted(id);
+    // To the trash as the Mac sends one there: a folder by when, and this process.
+    const now = new Date();
+    const two = number => String(number).padStart(2, "0");
+    const when = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
+    const trash = path.join(K, "trash", `${when}-${process.pid}`);
+    fs.mkdirSync(trash, { recursive: true });
+    fs.renameSync(here.folder, path.join(trash, id));
+  } catch (error) {
+    return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
+  }
+  // Its keys of its own (`KUVO_KEY_…__<ID>`, as the Mac names them).
+  const own = `__${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  for (const name of listOf(path.join(K, "keys"))) {
+    if (name.startsWith("KUVO_KEY_") && name.endsWith(own)) fs.rmSync(path.join(K, "keys", name), { force: true });
+  }
+  let agents;
+  try {
+    agents = readBridge();
+  } catch {}
+  // Its group chats here go on without it, as the Mac's leave it.
+  if (agents) {
+    const listed = await askGroups(agents, "GET", "", undefined, signal).catch(() => null);
+    for (const chat of listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []) {
+      const members = chat?.group?.members;
+      if (!Array.isArray(members) || !members.includes(id)) continue;
+      await askGroups(agents, "PATCH", `/${encodeURIComponent(chat.group.id)}`, { members: members.filter(member => member !== id) }, signal).catch(() => {});
+    }
+  }
+  let target;
+  try {
+    target = here.agents ? agents : readEngine();
+  } catch {}
+  if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, signal).catch(() => {});
+  return { status: 200, value: {} };
 }
 
 // `POST kuvo/groups`, as the Mac's: a group chat of this machine's bots, which lives here and runs
@@ -1671,11 +1924,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   }
   if (method !== "POST") return yield* json(405, {});
   if (!folder) return yield* json(404, {});
-  // On its way to another computer (a move holds its wake-ups, as the Mac's Moves.hold): nothing
-  // reaches it or changes here until it's there, as on the Mac.
-  if ((textOf(path.join(folder, "paused")) ?? "").trim() === "moving") {
-    return yield* json(409, { message: "It's moving to another computer. Try again once it's there." });
-  }
+  if (isMoving(folder)) return yield* json(409, { message: MOVING });
   let given = {};
   try {
     given = JSON.parse(Buffer.from(request.body ?? []).toString("utf8") || "{}") ?? {};
