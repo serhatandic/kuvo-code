@@ -22,6 +22,29 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## Tests: what users rely on (strict)
+
+- **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
+- **Use the real components.** Stub only what's outside the app or unpredictable: the engine's HTTP API, SSH, the network. Never write a test that only proves a stub returns what it was given.
+- **A bug fix starts with a test** that fails on the old code for the right reason. Then fix the cause, not the symptom. Never loosen a test to make it pass.
+- **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
+- **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
+- **Running them:**
+  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md`;
+  - each package's own suite (`swift test`);
+  - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
+  - the coding agents bridge's, with `bun test` in `Agents`.
+
+  Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
+
+## The same care for every task, start to finish
+
+Quality slips as a session goes on. The context fills up, hours pass, a task looks small or familiar, and corners get cut. Watch for this in yourself, and don't let it happen.
+
+- Give the last task of a long session the same care as the first. Read the code before you change it, test what you changed, look at the UI, run the reviews, and check the docs and the changelog.
+- No task is too small for the rules in this file. A one-line fix still gets its test, its docs check and a look in the app.
+- When you notice yourself skimming, guessing, or about to report something done that you haven't checked, stop and do it properly. If the context is too full to work well, say so and suggest a fresh session. Never lower the bar.
+
 ## Keep what Kuvo Code leaves on people's computers contained (strict)
 
 Kuvo Code must never spread files across the user's Mac or their machines. Everything it needs is packaged, kept in its own folders, organized inside them, and gone when those folders are deleted.
@@ -84,21 +107,33 @@ All paths on the right are in `../kuvo-web`.
 
 Screenshots in `kuvo-web/public/code/screens`, and the README's `docs/images/screenshot-light.webp` and `screenshot-dark.webp` here (the same shot as the website's), show the real app. If a UI change makes one visibly wrong, tell the user it needs recapturing. They're captured from a separate demo copy of the app (built with `APP_BUNDLE_ID=run.kuvo.code.demo` into `build/DemoDerivedData`, launched with `KUVO_DEMO_USAGE=off` and a `KUVO_DEMO_NAME`) on a sample project, with the `KUVO_DEMO_*` launch variables listed in `CONTRIBUTING.md`, so the user's own app, sessions and logins are never touched and nothing personal shows. Sign the demo copy with the team (leave out `CODE_SIGN_IDENTITY=-` and `DEVELOPMENT_TEAM=`, so the git-ignored `Config/Signing.local.xcconfig` signs it), never ad-hoc. macOS takes each ad-hoc build for a new app and asks again for the Desktop and the Keychain, and a launch nobody is there to answer hangs on that prompt. Capture the window only (`screencapture -l`), never the full screen. `crop-usage.webp` is the Bars view rendered with sample numbers, not a capture.
 
-## The iPhone app keeps up with the Mac
+## The iPhone app is a client, like the Mac app
 
-**A feature isn't done until the phone has it too, wherever it makes sense there.** Kuvo Code for
-iPhone (`../kuvo-code-ios`) is the same app on the go: sessions, bots, group chats, the panel's
-tools, what agents ask you, usage. When you add or change something people use on the Mac, do the
-phone's side in the same task:
+**The phone is just another client, like the Mac app, and it gets every feature the Mac app has,
+wherever it makes sense on a phone.** Both are clients of every box: this Mac's and each machine.
+So anything you can see or do in the Mac app, you can see or do from Kuvo Code for iPhone
+(`../kuvo-code-ios`) on any box, with the Mac's window closed too. That covers sessions, bots,
+group chats, the panel's tools, settings, accounts, what agents ask you and usage. A feature isn't
+done until the phone has it.
 
-- The Mac's side: what the phone reads or does, as routes in `KuvoCode/Stores/PhoneLink.swift`
-  (and in the machines' bridge, `Packages/KuvoLink`, for what works with the Mac closed), written
-  up in `Packages/KuvoLink/PROTOCOL.md`.
-- The phone's side, in `../kuvo-code-ios`: the screen or control for it, built the same way as
-  the Mac's. If another session is working on the phone app, hand it the routes and their shapes
-  (dates, streams, errors) and the commit, rather than editing its code.
-- Leave out only what has no place on a phone (window layout, Mac-only settings, the Mac's own
-  apps), and say so when you report the task as finished.
+When you add or change something people use:
+
+- **The box's side**: what a client reads or does is a route. It goes in
+  `KuvoCode/Stores/PhoneLink.swift` for this Mac's box, and in the machines' bridge
+  (`Packages/KuvoLink`) so it works on a machine with the Mac closed. Write it up in
+  `Packages/KuvoLink/PROTOCOL.md`. Never build a feature that only the Mac app's own code path
+  can reach.
+- **Tell the phone session, in the same task.** Usually a session is working on the phone app
+  ("Mobile App Development"; find it with ListAgents or the session list). Send it:
+  - what changed and how the Mac app shows it;
+  - the routes and their shapes (fields, dates, streams, errors);
+  - the commit;
+  - whether the routes are final or still moving.
+
+  Don't edit its code. If no session is working on the phone, build the phone's side yourself,
+  the same way the Mac's is built.
+- **Leave out only what has no place on a phone**: window layout, Mac-only settings, the Mac's
+  own apps. When you report the task, say what you left out and why.
 
 ### It shares the Mac's look
 

@@ -2,97 +2,31 @@
   "fill-specializations": [
     {
       "value": {
-        "linear-gradient": [
-          "srgb:0.96078,0.94902,0.92157,1.00000",
-          "srgb:0.90980,0.89020,0.85098,1.00000"
-        ],
-        "orientation": {
-          "start": {
-            "x": 0.5,
-            "y": 0
-          },
-          "stop": {
-            "x": 0.5,
-            "y": 1
-          }
-        }
+        "solid": "srgb:0.96718,0.96477,0.97054,1.00000"
       }
     },
     {
       "appearance": "dark",
       "value": {
-        "linear-gradient": [
-          "srgb:0.10588,0.10196,0.12549,1.00000",
-          "srgb:0.05490,0.05098,0.06667,1.00000"
-        ],
-        "orientation": {
-          "start": {
-            "x": 0.5,
-            "y": 0
-          },
-          "stop": {
-            "x": 0.5,
-            "y": 1
-          }
-        }
+        "solid": "srgb:0.11162,0.12062,0.15375,1.00000"
       }
     }
   ],
   "groups": [
     {
-      "name": "Team",
+      "name": "Artwork",
       "layers": [
         {
-          "image-name": "round.png",
-          "name": "round",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "squircle.png",
-          "name": "squircle",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "pebble.png",
-          "name": "pebble",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "gem.png",
-          "name": "gem",
-          "glass": false,
-          "position": {
-            "scale": 1,
-            "translation-in-points": [
-              0,
-              0
-            ]
-          }
-        },
-        {
-          "image-name": "bloom.png",
-          "name": "bloom",
+          "name": "artwork",
+          "image-name-specializations": [
+            {
+              "value": "artwork-light.png"
+            },
+            {
+              "appearance": "dark",
+              "value": "artwork-dark.png"
+            }
+          ],
           "glass": false,
           "position": {
             "scale": 1,
