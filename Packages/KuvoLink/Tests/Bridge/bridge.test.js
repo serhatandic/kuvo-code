@@ -862,6 +862,57 @@ test("a phone lists the phones paired with a machine and removes a lost one ther
   fs.rmSync(path.join(home, "run", "link.json"), { force: true });
 });
 
+test("a phone paired with a machine gets a link there for another phone, which pairs with the machine itself, once, with the Mac closed", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const mine = crypto.randomBytes(32), other = crypto.randomBytes(32);
+  link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: crypto.randomBytes(32).toString("base64url"), relay: "wss://relay.test", name: "lab",
+    phones: [{ key: mine.toString("base64url"), name: "Mine", added: 1, from: "mac", pairing: "a" }] });
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
+  const as = async (method, p) => {
+    const parts = [];
+    for await (const part of handle({ method, path: p, headers: {}, body: Buffer.alloc(0) }, { key: mine }, undefined)) parts.push(part);
+    const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+    return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+  };
+  const asked = await as("POST", "kuvo/phones/pair");
+  assert.equal(asked.status, 200);
+  const given = new URL(asked.json.link);
+  assert.equal(given.protocol, "kuvo-link:");
+  assert.equal(given.searchParams.get("relay"), "wss://relay.test");
+  assert.equal(given.searchParams.get("name"), "lab");
+  assert.ok(asked.json.ends > Date.now() / 1000);
+  const token = given.searchParams.get("token");
+  assert.equal(link.authorizePhone(other, { pair: token, name: "Other" }, undefined), true);
+  assert.ok(link.readLink().phones.some(phone => phone.name === "Other" && phone.from === "pair"), "paired with the machine itself");
+  assert.equal(link.authorizePhone(crypto.randomBytes(32), { pair: token, name: "Third" }, undefined), false, "once");
+
+  // Ended before it's used: it lets no one in.
+  const again = new URL((await as("POST", "kuvo/phones/pair")).json.link).searchParams.get("token");
+  assert.equal((await as("DELETE", "kuvo/phones/pair")).status, 200);
+  assert.equal(link.authorizePhone(crypto.randomBytes(32), { pair: again, name: "Late" }, undefined), false);
+  assert.equal((await as("GET", "kuvo/phones/pair")).status, 405);
+  fs.rmSync(path.join(home, "run", "link.json"), { force: true });
+});
+
+test("a phone asks a machine who & can name: its own bots and sessions, then its other computers'", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "agents.json"), JSON.stringify({ machine: "lab", agents: [
+    { session: "ses_scout", name: "Scout", kind: "bot", about: "Finds things", machine: "lab" },
+    { session: "ses_fix", name: "Fix the login", kind: "session", project: "shop", machine: "lab" },
+    { session: "ses_mac", name: "Write the notes", kind: "session", machine: "Studio" },
+  ] }));
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
+  const parts = [];
+  for await (const part of handle({ method: "GET", path: "kuvo/named", headers: {}, body: Buffer.alloc(0) }, { key: crypto.randomBytes(32) }, undefined)) parts.push(part);
+  assert.equal(parts[0].head.status, 200);
+  assert.deepEqual(JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()).agents, [
+    { session: "ses_scout", name: "Scout", kind: "bot", machine: null, project: null, about: "Finds things" },
+    { session: "ses_fix", name: "Fix the login", kind: "session", machine: null, project: "shop", about: null },
+    { session: "ses_mac", name: "Write the notes", kind: "session", machine: "Studio", project: null, about: null },
+  ]);
+  fs.rmSync(path.join(home, "run", "agents.json"), { force: true });
+});
+
 test("a phone answers what an agent asks for while it browses on a machine, with the Mac closed: listed and answered as on the Mac, the answer going to the machine's browser", async () => {
   const run = path.join(home, "run");
   fs.mkdirSync(run, { recursive: true });

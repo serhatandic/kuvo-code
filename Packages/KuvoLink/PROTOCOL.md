@@ -748,10 +748,12 @@ itself. A host serves:
   What New Bot needs comes from the Mac, which gives it to the machine each time it connects; one
   never connected from a Mac answers `409 {"message"}`. The Mac takes in the bots a machine made
   the next time it connects (its group chats it follows there already).
-- On a Mac, `kuvo/named`: who you can name with `&` in a message, as the Mac's composer
-  offers them: `{"agents": [{session, name, kind, machine, project, about}]}`, every bot
-  (`kind: "bot"`, `about` its job) then the latest sessions with a title (`kind: "session"`,
-  `project` its project's name, `"Chats"` for a chat); `machine` is null on the Mac. Insert
+- `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
+  `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,
+  `about` its job) then the latest sessions with a title (`kind: "session"`, `project` its
+  project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else the
+  machine's name. A machine's bridge answers it too (from 0.9.23), with the Mac closed: its own,
+  then those its other computers told it of (`Peers`). Insert
   `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
   agent reads, so a machine's bridge, with the Mac closed, sends it without. Show a message
@@ -952,12 +954,14 @@ On both, for a paired phone:
   `200 {}`, or `400 {"message"}` when it names a Mac, nothing, too many or something that isn't a
   phone's key, or the one asking isn't paired there. A removal goes to each computer the phone pairs with, Mac
   and machines (`kuvo/hosts`); a Mac passes on the removals it has with its list.
-- On a Mac, `POST kuvo/phones/pair`: a link for another phone to pair with, as Settings › Phone
-  shows one (as a QR code): `{"link": "kuvo-link://pair?…", "ends"}`, good once, until `ends`
-  (seconds since 1970). It's the phones' own, apart from the one Settings › Phone shows, so
+- `POST kuvo/phones/pair`: a link for another phone to pair with, as Settings › Phone shows one
+  (as a QR code): `{"link": "kuvo-link://pair?…", "ends"}`, good once, until `ends` (seconds
+  since 1970). On a Mac it's the phones' own, apart from the one Settings › Phone shows, so
   neither ends the other; a new one takes the place of one a phone asked for before. `DELETE
   kuvo/phones/pair` ends it, as Done does (`200 {}`, with or without one). `409 {"message"}`
-  while the phone link is off.
+  while the phone link is off. A machine's bridge answers it too (from 0.9.23), with the Mac
+  closed: the phone it pairs is the machine's own (as `kuvo-link.js pair` pairs one), and `409`
+  when the machine has no relay.
 
 A machine keeps itself running (from 0.9.7): its keeper (`bin/kuvo-start keep`, `run/box.pid`)
 starts its engine again when it ends, unless it was stopped on purpose (`run/stopped`), and keeps

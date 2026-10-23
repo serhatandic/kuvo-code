@@ -1538,6 +1538,37 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       setTimeout(() => phonesChanged(readLink() ?? changed), 200);
       return yield* json(200, {});
     }
+    // A link for another phone to pair with this machine, as `kuvo-link.js pair` shows one: good
+    // once, for a while; a new one takes the place of the last. DELETE ends it.
+    if (request.path === "kuvo/phones/pair") {
+      const method = request.method.toUpperCase();
+      if (method === "DELETE") {
+        updateLink(link => {
+          if (!link?.pairing) return null;
+          delete link.pairing;
+          return link;
+        });
+        return yield* json(200, {});
+      }
+      if (method !== "POST") return yield* json(405, {});
+      const link = updateLink(current => current?.relay ? { ...current, pairing: newPairingToken() } : null);
+      if (!link) return yield* json(409, { message: "This machine has no relay to pair through." });
+      return yield* json(200, { link: pairingLink(link), ends: Math.floor(link.pairing.expires / 1000) });
+    }
+    // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
+    // latest sessions (`machine` null), then those its other computers told it of.
+    if (request.path === "kuvo/named") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      if (!fs.existsSync(AGENTS_FILE)) await refreshOwn(readEngine).catch(() => {});
+      let composed = {};
+      try { composed = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8")) ?? {}; } catch {}
+      const agents = (Array.isArray(composed.agents) ? composed.agents : []).map(agent => ({
+        session: agent.session, name: agent.name, kind: agent.kind,
+        machine: agent.machine && agent.machine !== composed.machine ? agent.machine : null,
+        project: agent.project ?? null, about: agent.about ?? null,
+      }));
+      return yield* json(200, { agents });
+    }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
     // as a Mac's), and answered.
     if (request.path === "kuvo/asks" || request.path === "kuvo/asks/events") {
@@ -5274,18 +5305,11 @@ export function leave(mac) {
   return true;
 }
 
-function pair(relay) {
-  const link = updateLink(current => {
-    const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
-    if (relay) next.relay = relay;
-    if (!next.relay) return null;
-    next.pairing = { token: crypto.randomBytes(16).toString("base64url"), expires: Date.now() + PAIRING_MINUTES * 60_000 };
-    return next;
-  });
-  if (!link) {
-    console.error("Give the relay's address: kuvo-link.js pair wss://…");
-    process.exit(1);
-  }
+// A pairing's token, good once, for `PAIRING_MINUTES`.
+const newPairingToken = () => ({ token: crypto.randomBytes(16).toString("base64url"), expires: Date.now() + PAIRING_MINUTES * 60_000 });
+
+// The link a phone pairs with, for `link`'s pairing.
+export function pairingLink(link) {
   const query = new URLSearchParams({
     v: "1",
     relay: link.relay,
@@ -5294,7 +5318,22 @@ function pair(relay) {
     token: link.pairing.token,
     name: link.name,
   });
-  console.log(`kuvo-link://pair?${query}`);
+  return `kuvo-link://pair?${query}`;
+}
+
+function pair(relay) {
+  const link = updateLink(current => {
+    const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
+    if (relay) next.relay = relay;
+    if (!next.relay) return null;
+    next.pairing = newPairingToken();
+    return next;
+  });
+  if (!link) {
+    console.error("Give the relay's address: kuvo-link.js pair wss://…");
+    process.exit(1);
+  }
+  console.log(pairingLink(link));
   console.error(`Open this link on your phone within ${PAIRING_MINUTES} minutes. It works once.`);
   if (!runningBridge()) startBridge();
 }
