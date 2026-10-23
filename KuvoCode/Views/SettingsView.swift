@@ -738,9 +738,21 @@ private struct AlsoApplyBar: View {
         .onAppear {
             if seen == nil { seen = config.changes.last?.id ?? 0 }
             #if DEBUG
-            // KUVO_DEMO_ALSO_APPLY: a change on this page, as if made (nothing's saved).
-            if ProcessInfo.processInfo.environment["KUVO_DEMO_ALSO_APPLY"] != nil, fresh.isEmpty {
-                config.noteForDemo(["snapshots"], to: .bool(config.value(at: ["snapshots"])?.bool == false))
+            // KUVO_DEMO_ALSO_APPLY: a change on this page, as if made (nothing's saved). `missing`:
+            // one to an agent the other computers don't have, applied to them once they're
+            // connected, for what the bar says stayed here (nothing's made there either).
+            if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_ALSO_APPLY"], fresh.isEmpty {
+                if demo == "missing" {
+                    config.noteForDemo(["agents", "kuvo-demo-reviewer", "model"], to: .string("anthropic/claude-sonnet-4-5"))
+                    Task {
+                        while !others.allSatisfy({ $0.machine.map { app.machines.engine($0)?.isReady == true } ?? true }) {
+                            try? await Task.sleep(for: .seconds(1))
+                        }
+                        apply(to: others)
+                    }
+                } else {
+                    config.noteForDemo(["snapshots"], to: .bool(config.value(at: ["snapshots"])?.bool == false))
+                }
             }
             #endif
         }
