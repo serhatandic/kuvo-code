@@ -218,7 +218,11 @@ extension AppModel {
     /// feeds its sessions into the workspace.
     /// A demo or test copy's own folder on machines (`KUVO_DEMO_MACHINE_ROOT`): what it starts
     /// there stops when it's done with it, leaving nothing running. Kuvo Code's own runs on its own.
-    var leavesMachinesRunning: Bool { RemoteEngineInstaller.root == ".kuvo-code" }
+    /// The demo copy's (`.kuvo-code-demo`) runs on too while its phone link is on: it's the copy a
+    /// phone is tried with, which reaches its bots there with the Mac shut, as with Kuvo Code's own.
+    var leavesMachinesRunning: Bool {
+        RemoteEngineInstaller.root == ".kuvo-code" || RemoteEngineInstaller.root == ".kuvo-code-demo" && PhoneLink.isEnabled
+    }
 
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
