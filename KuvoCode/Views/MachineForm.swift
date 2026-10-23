@@ -126,9 +126,10 @@ struct MachineForm: View {
 
     private var trimmed: String { destination.trimmingCharacters(in: .whitespaces) }
 
-    /// Hosts from `~/.ssh/config` that match what's typed, leaving out the ones added already.
+    /// Hosts from `~/.ssh/config` that match what's typed, leaving out the ones added already (as
+    /// a machine, or one of a machine's addresses).
     private var suggestions: [String] {
-        let added = Set(app.machines.list.map(\.id))
+        let added = Set(app.machines.list.flatMap(\.addresses))
         let matches = hosts.filter { !added.contains($0) && $0 != trimmed && (trimmed.isEmpty || $0.localizedCaseInsensitiveContains(trimmed)) }
         return Array(matches.prefix(4))
     }
@@ -136,40 +137,15 @@ struct MachineForm: View {
     private func add() {
         let destination = trimmed
         guard !destination.isEmpty, !isChecking else { return }
-        // A machine's folders are named "<destination>/<path>", and an address with a port or
-        // a path in it (ssh://…, an IPv6 address) can't be told apart from them.
-        if let problem = Self.problem(with: destination) {
-            failure = problem
-            return
-        }
-        if app.machines.engine(destination) != nil || app.machines.list.contains(where: { $0.addresses.contains(destination) }) {
-            added(app.machines.list.first { $0.addresses.contains(destination) }?.id ?? destination)
-            return
-        }
         isChecking = true
         failure = nil
         checking = Task {
             defer { isChecking = false }
             do {
-                try await RemoteEngineInstaller(connection: SSHConnection(destination: destination), cache: AppInfo.supportDirectory.appending(path: "engine-linux")).check()
+                added(try await app.addMachine(checking: destination).id)
             } catch {
                 if !Task.isCancelled { failure = error.localizedDescription }
-                return
             }
-            // Canceled meanwhile: not added, nor your accounts copied to it.
-            guard !Task.isCancelled else { return }
-            // A machine already here, at another address (its local name, its Tailscale one): one
-            // of its addresses, not another machine to set up.
-            if let identity = await Machine.identity(at: destination), let known = app.machines.machine(calling: identity) {
-                guard !Task.isCancelled else { return }
-                app.machines.addAddress(destination, to: known.id)
-                app.machines.noteAdded(destination, to: known.id)
-                added(known.id)
-                return
-            }
-            guard !Task.isCancelled else { return }
-            app.addMachine(destination)
-            added(destination)
         }
     }
 }

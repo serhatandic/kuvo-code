@@ -27,7 +27,7 @@ struct MachinesSettings: View {
                     if let folded = app.machines.folded {
                         Text("\(folded.address) is \(folded.machine), reached another way, so it’s one of its addresses rather than another machine. Kuvo Code uses whichever answers.")
                     }
-                    Text("Kuvo Code installs its engine in ~/.kuvo-code on each, and stops it when you quit. A machine with several addresses is added once.")
+                    Text("Kuvo Code installs its engine in ~/.kuvo-code on each, and it keeps running there when you quit or disconnect. A machine with several addresses is added once.")
                 }
                 .foregroundStyle(.secondary)
             }
@@ -74,16 +74,15 @@ struct MachinesSettings: View {
             }
             .settingsText()
             HStack {
-                switch engine.state {
-                case .ready:
+                switch engine.offer {
+                case .disconnect:
                     Button("Disconnect") { app.disconnect(engine) }
                         .help("Close this Mac’s connection; \(engine.machine.name) keeps running on its own")
-                // (Stopped by a Mac with an older Kuvo Code: there's no Stop any more.)
-                case .preparing where engine.isStopped:
+                case .start:
                     Button("Start Engine") { app.startEngine(engine) }
-                case .failed, .preparing:
-                    Button(engine.isRetrying ? "Connect Now" : "Connect") { app.connect(engine) }
-                default:
+                case .connect, .connectNow:
+                    Button(engine.offer == .connectNow ? "Connect Now" : "Connect") { app.connect(engine) }
+                case nil:
                     EmptyView()
                 }
                 Button("Remove…") { removing = engine.machine }

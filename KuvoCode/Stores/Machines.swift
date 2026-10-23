@@ -181,7 +181,7 @@ final class MachineEngine {
     var engineVersion: String? { server?.engine.version }
 
     /// Where its connection is, as every view says it.
-    enum Connection: Equatable {
+    enum Connection: String, Equatable {
         case notConnected, connecting, reconnecting, installing, connected, failed, stopped
 
         /// It's getting there by itself (a spinner), nothing to do.
@@ -227,6 +227,23 @@ final class MachineEngine {
         case .connected: "Connected to \(name)"
         case .failed: "Couldn’t connect to \(name)"
         case .stopped: "\(name)’s engine is stopped"
+        }
+    }
+
+    /// What Settings › Machines offers to do with it now, and a phone with it.
+    enum Offer: String {
+        case disconnect
+        /// Its engine was stopped by a Mac with an older Kuvo Code (there's no Stop any more).
+        case start
+        case connect, connectNow
+    }
+
+    var offer: Offer? {
+        switch state {
+        case .ready: .disconnect
+        case .preparing where isStopped: .start
+        case .failed, .preparing: isRetrying ? .connectNow : .connect
+        default: nil
         }
     }
 

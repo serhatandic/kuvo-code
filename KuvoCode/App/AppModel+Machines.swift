@@ -169,6 +169,41 @@ extension AppModel {
         return engine
     }
 
+    /// Adds the machine at `destination` as Add Machine does, here or from a phone: checked first
+    /// (reached with your SSH keys, a Linux its engine runs on), and one already here, at this
+    /// address or at another that reaches the same computer, isn't added again: the address
+    /// becomes one of its own. Answers its id, and whether it was one already here. Throws why it
+    /// can't be added, and `CancellationError` when stopped meanwhile (nothing is added then).
+    func addMachine(checking destination: String) async throws -> (id: String, known: Bool) {
+        // A machine's folders are named "<destination>/<path>", and an address with a port or
+        // a path in it (ssh://…, an IPv6 address) can't be told apart from them.
+        if let problem = MachineForm.problem(with: destination) { throw MachineFailure(message: problem) }
+        let here = { self.machines.list.first { $0.addresses.contains(destination) } }
+        if let known = here() { return (known.id, true) }
+        try await RemoteEngineInstaller(connection: SSHConnection(destination: destination), cache: AppInfo.supportDirectory.appending(path: "engine-linux")).check()
+        // Canceled meanwhile: not added, nor your accounts copied to it.
+        try Task.checkCancellation()
+        // Added meanwhile (from a phone and here at once).
+        if let known = here() { return (known.id, true) }
+        // A machine already here, at another address (its local name, its Tailscale one): one of
+        // its addresses, not another machine to set up.
+        if let identity = await Machine.identity(at: destination), let known = machines.machine(calling: identity) {
+            try Task.checkCancellation()
+            machines.addAddress(destination, to: known.id)
+            machines.noteAdded(destination, to: known.id)
+            return (known.id, true)
+        }
+        try Task.checkCancellation()
+        addMachine(destination)
+        return (destination, false)
+    }
+
+    /// Why a machine can't be added, in a sentence.
+    struct MachineFailure: LocalizedError {
+        var message: String
+        var errorDescription: String? { message }
+    }
+
     /// Connects again now, rather than waiting for the connection to come back by itself.
     func reconnectNow(_ engine: MachineEngine) {
         // Already connecting.
