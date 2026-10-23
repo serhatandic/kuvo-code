@@ -92,6 +92,23 @@ import Testing
         #expect(told == Bots.instructions(for: working))
     }
 
+    /// The kit a release brings boxes (for one that updated itself, or that no Mac gave a kit):
+    /// filled in for a machine, it tells a bot what this Mac's kit tells one there; none of what's
+    /// a machine's own comes with it.
+    @Test func aBoxsOwnReleaseTellsANewBotWhatThisMacWould() {
+        defer { done() }
+        let release = Bots.releaseKit(), mac = app.bots.kit(for: "box")
+        func filled(_ text: String) -> String {
+            text.replacingOccurrences(of: "⟦machine⟧", with: "box").replacingOccurrences(of: "⟦timeZone⟧", with: TimeZone.current.identifier)
+        }
+        #expect(filled(release.instructions) == mac.instructions)
+        #expect(filled(release.jobInstructions) == mac.jobInstructions)
+        #expect(release.templates.map(\.id) == mac.templates.map(\.id))
+        #expect(release.version == AppInfo.version)
+        #expect(release.startingModel == nil && release.projects.isEmpty && release.rules.isEmpty && release.zoneinfo == nil)
+        #expect(release.personalities.allSatisfy { !$0.custom })
+    }
+
     /// What a machine's bridge changed or deleted while this Mac was away, taken in as it
     /// connects: a description there newer than this Mac's gives the bot its name, look,
     /// personality and model; an older one, or one on its way to another computer, is left; a bot

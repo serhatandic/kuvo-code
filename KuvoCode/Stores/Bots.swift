@@ -760,7 +760,7 @@ final class Bots {
     /// wake itself up.
     /// `personality`: what its personality tells it, when not its own (a machine's kit, see
     /// `MachineKit`, has a stand-in there).
-    static func instructions(for bot: Bot, personality: String? = nil) -> String {
+    static func instructions(for bot: Bot, personality: String? = nil, timeZone: String = TimeZone.current.identifier) -> String {
         let place = bot.machine.map { "the Linux machine \"\($0)\"" } ?? "this Mac"
         let job = bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         let told = personality ?? Personalities.shared.personality(bot.personality)?.instruction
@@ -780,7 +780,7 @@ final class Bots {
         run in the background, on a timer or on a schedule: schedule a wake-up instead.
 
         To schedule a wake-up, use schedule_wake_up: <when> is +5m, +2h, +1d, or a time like 2026-10-16T09:00 \
-        \(bot.machine == nil ? "on this Mac's clock" : "in the user's time zone, \(TimeZone.current.identifier)"), at least a minute from now. At \
+        \(bot.machine == nil ? "on this Mac's clock" : "in the user's time zone, \(timeZone)"), at least a minute from now. At \
         that time this conversation gets your note as a new message starting with \
         "\(Wakes.marker.trimmingCharacters(in: .whitespaces))", and you carry on. For something that repeats, schedule it once \
         with every (30m, 2h, 1d, 1w, at least 5m, or weekdays; days, weeks and weekdays keep the same time of day), and it \
@@ -1126,6 +1126,8 @@ extension Bots {
         struct Looks: Encodable { var colors: [String], shapes: [String], faces: [String] }
         struct Project: Encodable { var directory: String, name: String }
         var kuvo = 1
+        /// The Kuvo Code it's from: a box takes the newer of a Mac's and its own release's words.
+        var version = AppInfo.version
         var templates: [Template]
         var personalities: [Personality]
         /// What a bot is told of a personality made there, by its name and description.
@@ -1149,26 +1151,42 @@ extension Bots {
     }
 
     func kit(for machine: String) -> MachineKit {
+        var kit = Self.kitWords(machine: machine, timeZone: TimeZone.current.identifier)
+        let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
+        kit.personalities = Personalities.shared.all.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: $0.isCustom, instruction: $0.instruction) }
+        kit.startingModel = app?.machines.engine(machine)?.catalog.startingModel(LastModel.current, scope: .on(machine: machine))
+        kit.projects = (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
+            .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) }
+        kit.rules = approval.rules(settings: EngineConfig.rules(on: machine))
+        kit.zoneinfo = WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString()
+        return kit
+    }
+
+    /// The kit as a release for boxes has it (`BoxRelease`): its words, with ⟦machine⟧ and
+    /// ⟦timeZone⟧ for the box to fill in, and none of what's a machine's own (its starting model,
+    /// projects and rules): a box that updated itself makes bots with this version's words, and
+    /// one no Mac gave a kit to can make them at all.
+    static func releaseKit() -> MachineKit {
+        kitWords(machine: "⟦machine⟧", timeZone: "⟦timeZone⟧")
+    }
+
+    /// What every machine's kit has alike, for `machine`, in `timeZone`; the preset personalities.
+    private static func kitWords(machine: String, timeZone: String) -> MachineKit {
         let sample = Bot(id: "bot_sample", name: "⟦name⟧", job: "", instructions: "", look: .random(), machine: machine, project: nil,
                          folder: "⟦folder⟧", sessionID: "", created: .now)
         var working = sample
         working.job = "⟦job⟧"
         working.instructions = "⟦jobDetails⟧"
-        let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
-        let catalog = app?.machines.engine(machine)?.catalog
         return MachineKit(
             templates: BotTemplate.all.map { .init(id: $0.id, name: $0.name, job: $0.job, instructions: $0.instructions, look: $0.look, personality: $0.personality,
                                                    wantsProject: $0.wantsProject, firstMessage: BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions)) },
-            personalities: Personalities.shared.all.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: $0.isCustom, instruction: $0.instruction) },
+            personalities: Personalities.presets.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: false, instruction: $0.instruction) },
             looks: .init(colors: BotLook.Tint.allCases.map(\.rawValue), shapes: BotLook.Form.allCases.map(\.rawValue), faces: BotLook.Face.allCases.map(\.rawValue)),
-            startingModel: catalog?.startingModel(LastModel.current, scope: .on(machine: machine)),
-            projects: (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
-                .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) },
-            instructions: Self.instructions(for: sample, personality: "⟦personality⟧"),
-            jobInstructions: Self.instructions(for: working, personality: "⟦personality⟧"),
-            projectNote: Self.projectNote, identityNote: Self.identityNote, memory: Self.blankMemory("⟦name⟧"), greeting: Self.greeting,
-            rules: approval.rules(settings: EngineConfig.rules(on: machine)),
-            timeZone: TimeZone.current.identifier, zoneinfo: WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString())
+            startingModel: nil, projects: [],
+            instructions: instructions(for: sample, personality: "⟦personality⟧", timeZone: timeZone),
+            jobInstructions: instructions(for: working, personality: "⟦personality⟧", timeZone: timeZone),
+            projectNote: projectNote, identityNote: identityNote, memory: blankMemory("⟦name⟧"), greeting: greeting,
+            rules: [], timeZone: timeZone, zoneinfo: nil)
     }
 
     /// Gives a machine its kit, as it connects.

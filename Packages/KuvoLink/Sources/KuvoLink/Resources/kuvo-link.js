@@ -2350,13 +2350,37 @@ const KIT_FILE = path.join(BOTS, "kit.json");
 const AGENT_PROVIDERS = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"];
 const runsWithAgents = model => model?.providerID === "auto" || AGENT_PROVIDERS.includes(String(model?.providerID ?? "").split("@")[0]);
 
+// What this box's release brought to make bots with (BoxRelease): its words, with ⟦machine⟧ and
+// ⟦timeZone⟧ to fill in, and nothing that's a machine's own.
+const RELEASE_KIT_FILE = path.join(K, "bin", "bot-kit.json");
+
+// What this machine makes bots with: what a Mac last gave it, or its release's words where those
+// are newer (it updated itself since) or no Mac gave it any, with what's a machine's own from the
+// Mac's (its name, your time zone, the starting model, projects and rules), or else its own.
 export function readKit() {
-  try {
-    const kit = JSON.parse(textOf(KIT_FILE) ?? "");
-    return kit?.kuvo === 1 && Array.isArray(kit.templates) && Array.isArray(kit.personalities) && typeof kit.instructions === "string" ? kit : null;
-  } catch {
-    return null;
-  }
+  const read = file => {
+    try {
+      const kit = JSON.parse(textOf(file) ?? "");
+      return kit?.kuvo === 1 && Array.isArray(kit.templates) && Array.isArray(kit.personalities) && typeof kit.instructions === "string" ? kit : null;
+    } catch {
+      return null;
+    }
+  };
+  const mac = read(KIT_FILE), release = read(RELEASE_KIT_FILE);
+  if (!release || (mac && !newerVersion(release.version, mac.version))) return mac;
+  const machine = readLink()?.id || os.hostname();
+  let timeZone = mac?.timeZone;
+  if (!timeZone) try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+  const filled = JSON.parse(JSON.stringify(release)
+    .replaceAll("⟦machine⟧", JSON.stringify(machine).slice(1, -1))
+    .replaceAll("⟦timeZone⟧", JSON.stringify(timeZone || "UTC").slice(1, -1)));
+  return {
+    ...filled,
+    // The release's presets, and the ones you made that a Mac's kit has.
+    personalities: [...filled.personalities, ...(mac?.personalities ?? []).filter(each => each.custom)],
+    startingModel: mac?.startingModel ?? null, projects: mac?.projects ?? [], rules: mac?.rules ?? [], timeZone: timeZone || "UTC",
+    ...(mac?.zoneinfo ? { zoneinfo: mac.zoneinfo } : {}),
+  };
 }
 
 const parsed = body => {

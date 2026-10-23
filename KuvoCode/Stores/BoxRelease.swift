@@ -27,6 +27,8 @@ enum BoxRelease {
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: link.path)
         try MachineBox.catalogJSON().write(to: bin.appending(path: "mcp-catalog.json"))
         try MachineBox.integrationsJSON().write(to: bin.appending(path: "integrations.json"))
+        // What a box makes bots with, when it's newer than what a Mac gave it.
+        try JSONEncoder().encode(Bots.releaseKit()).write(to: bin.appending(path: "bot-kit.json"))
         try Data(MachineBrowserInstaller.helper.text.utf8).write(to: bin.appending(path: "kuvo-browser.js"))
         // Never a release without it: a box would keep its old one beside a new engine.
         guard let agents = MachineEngine.agentsBridge else { throw CocoaError(.fileNoSuchFile) }

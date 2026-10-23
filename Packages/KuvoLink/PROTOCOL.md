@@ -750,8 +750,10 @@ itself. A host serves:
   offers there (`startingModel` has one key, the machine's name as its bots' `machine` has it,
   and `projects` are its own); a bot made there, with its folder, conversation and instructions,
   listed at once (`machine` is ignored); a group chat of its own bots, which lives and runs there.
-  What New Bot needs comes from the Mac, which gives it to the machine each time it connects; one
-  never connected from a Mac answers `409 {"message"}`. The Mac takes in the bots a machine made
+  What New Bot needs comes from the Mac, which gives it to the machine each time it connects, or
+  from the box's own release (`bin/bot-kit.json`, from 0.9.23) where that's newer (it updated
+  itself since) or no Mac gave it one, with what's the machine's own filled in; one with neither
+  answers `409 {"message"}`. The Mac takes in the bots a machine made
   the next time it connects (its group chats it follows there already).
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,

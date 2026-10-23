@@ -631,3 +631,33 @@ test("with no Mac there, a bot whose run ended has its job read from its memory:
     engine.close();
   }
 });
+
+test("a machine makes bots with its release's words where they're newer than a Mac's kit, or no Mac gave it one, with what's its own", async () => {
+  const releaseKit = path.join(home, "bin", "bot-kit.json");
+  const words = { ...kit, version: "0.9.0", startingModel: null, projects: [], rules: [], timeZone: "⟦timeZone⟧", instructions: "You are ⟦name⟧, on ⟦machine⟧, in ⟦timeZone⟧." };
+  delete words.zoneinfo;
+  write(releaseKit, JSON.stringify(words));
+  try {
+    // No Mac's kit: its own name and clock.
+    const own = link.readKit();
+    assert.equal(own.instructions, `You are ⟦name⟧, on ${os.hostname()}, in ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`);
+    assert.deepEqual([own.startingModel, own.projects, own.rules], [null, [], []]);
+    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
+    assert.equal((await ask(handle, "GET", "kuvo/bots/templates")).status, 200, "New Bot works there");
+
+    // An older Mac's kit: the release's words, the Mac's time zone, projects and personalities you made.
+    const custom = { id: "custom.calm", name: "Calm", description: "Calm.", custom: true, instruction: "Your personality: Calm." };
+    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.8.0", personalities: [...kit.personalities, custom], instructions: "Older words." }));
+    const newer = link.readKit();
+    assert.match(newer.instructions, /^You are ⟦name⟧, on .+, in Europe\/Istanbul\.$/);
+    assert.deepEqual(newer.projects, kit.projects);
+    assert.deepEqual(newer.rules, kit.rules);
+    assert.deepEqual(newer.personalities.map(each => each.id), ["preset.straight", "custom.calm"]);
+
+    // A newer Mac's kit: the Mac's, as it gave it.
+    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.9.1", instructions: "Newer words." }));
+    assert.equal(link.readKit().instructions, "Newer words.");
+  } finally {
+    fs.rmSync(releaseKit, { force: true });
+  }
+});
