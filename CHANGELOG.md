@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Swiping between computers works in Settings' sidebar too, and Settings › General sets which way a swipe turns them.
 - Coding agents on your machines are the machine's own: Kuvo Code uses the Claude Code, Codex and Grok installed there, as its terminal finds them, rather than copies of its own. Install one from Accounts, on your Mac or a machine, and it runs its maker's installer; Update updates one on a machine too. Machines that had Kuvo Code's copies need Install once (your sign-ins stay).
 - Update All, at the top of Coding Agents in Accounts, updates every coding agent that's out of date, on your Mac and your machines.
 - Group chats answer sooner: a message you write while the lead works out who does what comes first, and bots stay quick in a long chat, as what they looked up along the way no longer weighs on every turn. A bot new to a chat reads all of it, not only the latest messages.

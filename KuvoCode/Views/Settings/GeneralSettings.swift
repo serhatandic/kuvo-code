@@ -7,6 +7,7 @@ import UsageKit
 struct GeneralSettings: View {
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
     @AppStorage(PairStyle.key) private var pairStyle = PairStyle.halves
+    @AppStorage(SidebarSwipe.reversesKey) private var swipeReverses = false
     @AppStorage(OpenWith.editorKey) private var editor = ""
     @AppStorage(Awake.key) private var keepsAwake = true
     @Environment(Updates.self) private var updates
@@ -39,6 +40,19 @@ struct GeneralSettings: View {
                     Text(showsTabBar ? "How a split shows in the tab bar." : "Needs the tab bar.")
                 }
                 .disabled(!showsTabBar)
+                if !app.machines.list.isEmpty {
+                    LabeledContent {
+                        Picker("Swipe between computers", selection: $swipeReverses) {
+                            Text("Pages follow your fingers").tag(false)
+                            Text("Reversed").tag(true)
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    } label: {
+                        Text("Swipe between computers")
+                        Text("Two fingers sideways on the sidebar, in Settings too.")
+                    }
+                }
             }
             Section("While Agents Work") {
                 Toggle(isOn: Binding(get: { openAtLogin.isOn }, set: { openAtLogin.set($0) })) {

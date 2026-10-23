@@ -114,6 +114,12 @@ struct BoxHeading: View {
     }
 }
 
+/// Which way a two-finger swipe takes the sidebar's pages, in Settings › General: they follow the
+/// fingers (the next computer comes in from the side the fingers leave), or the other way.
+enum SidebarSwipe {
+    static let reversesKey = "sidebarSwipeReverses"
+}
+
 /// Where the sidebar's two-finger swipes go: the page's offset, read only by the track that
 /// slides, so a swipe moves the pages without building them again.
 @Observable final class BoxPagerMotion {
@@ -130,6 +136,7 @@ struct BoxPager<Page: View>: View {
     @ViewBuilder let page: (SidebarBox) -> Page
 
     @State private var motion = BoxPagerMotion()
+    @AppStorage(SidebarSwipe.reversesKey) private var reverses = false
     /// The room it's given, for how far a swipe has to go: read from what the sidebar offers, never
     /// from the pages, so their size can't feed back into it.
     @State private var width: CGFloat = 0
@@ -162,8 +169,10 @@ struct BoxPager<Page: View>: View {
         .animation(.spring(response: 0.38, dampingFraction: 0.9), value: index)
     }
 
-    /// Fingers moved `dx` sideways: the pages follow, with give past the first and the last.
-    private func drag(_ dx: CGFloat) {
+    /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), with give past
+    /// the first and the last.
+    private func drag(_ moved: CGFloat) {
+        let dx = reverses ? -moved : moved
         let pulled = motion.offset + dx
         let pastEnd = (pulled > 0 && index == 0) || (pulled < 0 && index == boxes.count - 1)
         motion.offset = pastEnd ? motion.offset + dx * 0.3 : pulled
@@ -171,7 +180,8 @@ struct BoxPager<Page: View>: View {
 
     /// Fingers lifted, moving at `velocity` points a step: on to the next box when pulled far
     /// enough or flicked, else back.
-    private func settle(_ velocity: CGFloat) {
+    private func settle(_ speed: CGFloat) {
+        let velocity = reverses ? -speed : speed
         let threshold = max(width * 0.22, 40)
         var target = index
         if (motion.offset < -threshold || velocity < -6) && index < boxes.count - 1 { target += 1 }
@@ -200,25 +210,36 @@ private struct BoxTrack<Content: View>: View {
 /// points, rightward positive, as the fingers go whatever the scrolling direction) and as they
 /// lift (`onEnd`, with the last step's speed). Up and down is left to the lists. Once a swipe is
 /// sideways the list holds still, and what the trackpad carries on with after it is dropped.
+/// Disabled (the sessions' sidebar under Settings, which lies where Settings' own is), it leaves
+/// swipes to what's in view.
 struct TrackpadSwipe: NSViewRepresentable {
     let onDrag: (CGFloat) -> Void
     let onEnd: (CGFloat) -> Void
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> SwipeView {
         let view = SwipeView()
-        view.onDrag = onDrag
-        view.onEnd = onEnd
+        updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: SwipeView, context: Context) {
         view.onDrag = onDrag
         view.onEnd = onEnd
+        view.listens = isEnabled
     }
 
     final class SwipeView: NSView {
         var onDrag: (CGFloat) -> Void = { _ in }
         var onEnd: (CGFloat) -> Void = { _ in }
+        /// It takes swipes only while it's enabled; one it was following when it stops ends there.
+        var listens = true {
+            didSet {
+                guard !listens, way == .sideways else { return }
+                way = .notOurs
+                onEnd(0)
+            }
+        }
 
         private enum Way { case undecided, sideways, along, notOurs }
         private var way = Way.notOurs
@@ -254,7 +275,7 @@ struct TrackpadSwipe: NSViewRepresentable {
                 return drops ? nil : event
             }
             if event.phase == .began {
-                let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+                let inside = listens && bounds.contains(convert(event.locationInWindow, from: nil))
                 way = inside ? .undecided : .notOurs
                 moved = .zero
                 lastStep = 0
