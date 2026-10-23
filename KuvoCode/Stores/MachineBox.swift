@@ -146,43 +146,6 @@ enum MachineBox {
         }
     }
 
-    // MARK: Updates (PROTOCOL.md, "Updates")
-
-    /// How a machine's own updates stand: whether they're set up (a release key pinned), whether
-    /// it updates by itself, its version and engine, the newest heard of, how the last went, what
-    /// it's doing now, and why it can't, when it can't.
-    struct UpdateStatus: Decodable, Equatable {
-        struct Last: Decodable, Equatable {
-            var at: Double?
-            var result: String
-            var message: String?
-            var to: String?
-            var version: String?
-        }
-        var setUp: Bool
-        var auto: Bool
-        var version: String?
-        var engine: String?
-        var latest: String?
-        var last: Last?
-        var updating: String?
-        var blocked: String?
-    }
-
-    static func updateStatus(on connection: SSHConnection) async throws -> UpdateStatus {
-        try JSONDecoder().decode(UpdateStatus.self, from: try await answer("update-status", input: nil, on: connection))
-    }
-
-    /// Turns updating by itself on or off.
-    static func setAutoUpdate(_ auto: Bool, on connection: SSHConnection) async throws -> UpdateStatus {
-        try JSONDecoder().decode(UpdateStatus.self, from: try await answer("update-auto", input: Data((auto ? "true" : "false").utf8), on: connection))
-    }
-
-    /// Update Now: it starts there, on its own; how it goes shows in `updateStatus`.
-    static func updateNow(on connection: SSHConnection) async throws -> UpdateStatus {
-        try JSONDecoder().decode(UpdateStatus.self, from: try await answer("update-now", input: nil, on: connection))
-    }
-
     /// `kuvo-link.js box <arguments>` there, with `input` on its standard input, with whichever
     /// engine runtime the machine has (this version's, or the one at work there).
     private static func run(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Answer {

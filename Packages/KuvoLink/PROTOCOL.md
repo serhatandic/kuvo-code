@@ -229,9 +229,10 @@ always did. The box keeps working as itself:
   Ed25519 over `"kuvo-box v1\n"` and the manifest's bytes, by a pinned key
   (`scripts/sign-box.mjs`). The pack holds `box.json` (each file's SHA-256) and the files, laid
   out as `~/.kuvo-code`.
-- **When**: the night's window, 02:00 to 05:00 in `KUVO_TZ`, once a night, with
-  `box/update.json`'s `auto` on (the default), for a release at least three days old. Or now
-  (Update Now), whatever its age.
+- **When**: the night's window, 02:00 to 05:00 in `KUVO_TZ`, once a night, always (from 0.9.20
+  there's no switch: a machine keeps up with the Macs and phones that use it; an earlier
+  bridge's `box/update.json` goes), for a release at least three days old. Or now (Update Now),
+  whatever its age.
 - **Never**:
   - in another folder than `~/.kuvo-code`;
   - while its engine is stopped on purpose (`run/stopped`), or its version (`bin/box-version`)
@@ -280,11 +281,12 @@ always did. The box keeps working as itself:
   - `GET` answers `{setUp, auto, version, engine, latest, last, updating, blocked}`.
     `updating` is the step under way (`checking`, `downloading`, `downloading the engine`,
     `checking it`, `installing`, `starting`) or null. `blocked` is why it can't update, or null.
-  - `PATCH {auto: bool}` turns updating by itself on or off.
+  - `PATCH` answers 400 `{message}` (from 0.9.20; before, `{auto: bool}` turned it off): it
+    always updates by itself, and `auto` is always true.
   - `POST {now: true}` starts one: 202 with the status, or 409 `{message}` when it's not set up,
     is blocked, or is updating already.
-  - A Mac does the same over SSH with `kuvo-link.js box update-status`, `update-auto`
-    (`true`/`false` on stdin) and `update-now`.
+  - A Mac does the same over SSH with `kuvo-link.js box update-status` and `update-now`
+    (`update-auto`, an older Mac's switch, answers 400).
 - `kuvo-link.js update [--now]` updates from a shell. Only in a test's folder, it also takes
   `--url <boxes.json> --key <public key>`.
 
@@ -385,8 +387,9 @@ itself. A host serves:
   came up, in seconds since 1970 (null while none runs; a machine's bridge from 0.9.2): a restart
   changes it, so a phone tells the new engine from the old. A machine's bridge (from 0.9.7) also
   says whether its engine is `running`, and whether it's `stopped` on purpose (it stays down until
-  it's started, from a Mac or a phone); a Mac also names its folder of chats
-  (conversations of no project), and `integrations`, each integration's name by its MCP server's
+  it's started, from a Mac or a phone); a Mac, and a machine's bridge from 0.9.20, also name the
+  folder of chats (`chats`: conversations of no project, made if it isn't there yet, so a phone can
+  start the first one there through the engine, as for a project); a Mac also names `integrations`, each integration's name by its MCP server's
   (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
@@ -535,13 +538,12 @@ itself. A host serves:
   (from 0.9.0) starts its engine over as it was last started (with its coding agents' bridge), and
   a Mac connected to it goes on with the new one; from 0.9.7 the link stays up meanwhile. One
   never started from a Mac answers `409 {"message"}`.
-- `POST kuvo/engine/stop` and `POST kuvo/engine/start` (a machine's bridge, from 0.9.7): Stop
-  ends the machine's engine and its coding agents' bridge, and it stays down, through restarts of
+- `POST kuvo/engine/start` (a machine's bridge, from 0.9.7): for an engine a Mac with an older
+  Kuvo Code stopped (its Stop; `kuvo/info` says `stopped`), which stays down, through restarts of
   the machine too, until Start; meanwhile the link answers and the routes that need the engine
-  answer 503. Stop answers `200 {}` once it's down (`202 {}` when a start under way holds it up
-  past a minute: it's down once that's done), or `503 {"message"}`; Start answers `202 {}`
-  and the engine is up once `kuvo/info` says `running`; it answers `409 {"message"}` on a machine
-  never started from a Mac, as restart does.
+  answer 503. Start answers `202 {}` and the engine is up once `kuvo/info` says `running`; it
+  answers `409 {"message"}` on a machine never started from a Mac, as restart does. From 0.9.20
+  there's no `kuvo/engine/stop`: a machine's engine keeps running.
 - `kuvo/bots`: bots by their session, with their `id` (`bot_…`, as group chats name their
   members; a machine's bridge from 0.9.4), their name, look and job, whether their wake-ups
   are paused, the next one (`wakes`, left out when none waits), how many things each watches,

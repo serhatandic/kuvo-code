@@ -16,7 +16,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A message you steer into a session says At its next step until the agent takes it.
 - A new app icon: Kuvo Code's five bots together, each in its own color with a small pair of eyes, on cream in light mode and on black in dark mode.
 - A remote machine's engine runs on its own, with its sessions, bots and group chats: quitting Kuvo Code or clicking Disconnect leaves it running, it no longer stops after a day without Kuvo Code, and it starts again by itself if it crashes.
-- Stop Engine in Settings › Machines stops a machine's engine until you click Start Engine, through restarts of the machine too.
 - Open at login, in Settings › General: Kuvo Code opens in the background when you log in, without its window, so your bots and sessions on this Mac keep working from then on. Its engine also starts with the app now, whether or not the window is open.
 - Each computer has its own settings: with machines, Settings' sidebar has a page for each, and a machine's Accounts, Custom Auto, Agents, Permissions, Commands, Skills, Integrations, MCP Servers, Engine and Worktrees are its own, in tabs named for it. Your Mac no longer copies its settings, keys and sign-ins to machines; a new machine starts with a copy, once.
 - Also Apply to…: after you change a setting on one computer, a bar at the bottom of the page makes the same change on another computer, or every one, keys included.
@@ -26,7 +25,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Agents on your machines write to agents on your other machines, and wait for their answers, with your Mac off too: your computers reach each other through Kuvo Code's relay.
 - A machine another Mac set up with a newer Kuvo Code is used as it is, rather than taken back to older versions.
 - A Mac with an older Kuvo Code can still use a machine a newer one set up: the machine keeps its own tools, keeps running by itself, and goes back to its own settings once nothing runs there.
-- Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start. Turn it off, or update now, on the machine's Engine page in Settings.
+- Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start.
 
 ## 0.7.2
 

@@ -692,7 +692,7 @@ test("a phone list a Mac mails through the relay is taken from the Macs that set
   assert.equal(later.removed.some(entry => entry.key === k(others)), false);
   fs.rmSync(path.join(home, "run", "link.json"));
 });
-test("Start and Stop go through the box's tool, the bridge staying up; kuvo/info says whether it runs and whether it's stopped", async () => {
+test("Start goes through the box's tool, for an engine an older Mac stopped, the bridge staying up; there's no Stop; kuvo/info says whether it runs and whether it's stopped, and names its chats folder", async () => {
   const bin = path.join(home, "bin");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
@@ -703,13 +703,20 @@ test("Start and Stop go through the box's tool, the bridge staying up; kuvo/info
   assert.equal((await answer(handle, "POST", "kuvo/engine/start")).status, 409);
   fs.writeFileSync(path.join(bin, "kuvo-launch"), "#!/bin/sh\n");
   fs.writeFileSync(path.join(home, "run", "launch.env"), "PATH=/usr/bin\n");
-  assert.equal((await answer(handle, "POST", "kuvo/engine/stop")).status, 200);
+  const stop = [];
+  for await (const part of handle({ method: "POST", path: "kuvo/engine/stop", headers: {}, body: Buffer.from("") }, {}, undefined)) stop.push(part);
+  assert.notEqual(stop[0].head.status, 200);
+  assert.equal(fs.existsSync(said), false, "nothing stopped");
+  // An older Mac's Stop.
+  fs.writeFileSync(path.join(home, "run", "stopped"), "");
   let info = await answer(handle, "GET", "kuvo/info");
   assert.equal(info.json.running, false);
   assert.equal(info.json.stopped, true);
+  assert.equal(info.json.chats, path.join(home, "chats"));
+  assert.equal(fs.statSync(path.join(home, "chats")).isDirectory(), true, "made, for a phone's first chat");
   assert.equal((await answer(handle, "POST", "kuvo/engine/start")).status, 202);
-  for (let i = 0; i < 100 && !fs.readFileSync(said, "utf8").includes("start"); i++) await new Promise(r => setTimeout(r, 30));
-  assert.deepEqual(fs.readFileSync(said, "utf8").trim().split("\n"), ["stop bun=", "start bun="]);
+  for (let i = 0; i < 100 && !(fs.existsSync(said) && fs.readFileSync(said, "utf8").includes("start")); i++) await new Promise(r => setTimeout(r, 30));
+  assert.deepEqual(fs.readFileSync(said, "utf8").trim().split("\n"), ["start bun="]);
   assert.equal((await answer(handle, "GET", "kuvo/engine/start")).status, 405);
   for (const name of ["bin/kuvo-start", "bin/kuvo-launch", "run/launch.env", "run/box-said", "run/stopped"]) fs.rmSync(path.join(home, name), { force: true });
 });

@@ -57,7 +57,6 @@ struct EngineSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let machine { MachineUpdates(engine: machine) }
             ConfigProblem()
             Section("Behavior") {
                 Toggle(isOn: config.bool(["compaction", "auto"], default: true)) {
@@ -243,88 +242,6 @@ private struct StatusText: View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(title)
-        }
-    }
-}
-
-/// A machine's own updates (PROTOCOL.md, "Updates"): its Kuvo Code's version, whether it updates by
-/// itself at night, Update Now, and how the last went. Shown once updates are set up (a release
-/// key is pinned in what the machine runs).
-private struct MachineUpdates: View {
-    let engine: MachineEngine
-    @State private var status: MachineBox.UpdateStatus?
-    @State private var failure: String?
-
-    var body: some View {
-        Group {
-            if let status, status.setUp {
-                Section {
-                    LabeledContent("Kuvo Code", value: status.version ?? "Not marked yet")
-                    Toggle(isOn: Binding(get: { status.auto }, set: { auto in act { try await MachineBox.setAutoUpdate(auto, on: engine.machine.connection) } })) {
-                        Text("Update automatically")
-                        Text("At night where you are, while nothing runs there, a few days after a release is out.")
-                    }
-                    LabeledContent {
-                        Button("Update Now") { act { try await MachineBox.updateNow(on: engine.machine.connection) } }
-                            .disabled(status.updating != nil || status.blocked != nil)
-                    } label: {
-                        Text(Self.words(status))
-                    }
-                } header: {
-                    Text("Updates")
-                } footer: {
-                    if let words = failure ?? status.blocked {
-                        Text(words)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        // Read when it's connected, and again every few seconds while it's updating (its engine
-        // starts over meanwhile, and the connection with it).
-        .task(id: engine.isReady) {
-            guard engine.isReady else { return }
-            repeat {
-                if let read = try? await MachineBox.updateStatus(on: engine.machine.connection) { status = read }
-                guard status?.updating != nil else { break }
-                try? await Task.sleep(for: .seconds(3))
-            } while !Task.isCancelled && engine.isReady
-        }
-    }
-
-    private func act(_ work: @escaping () async throws -> MachineBox.UpdateStatus) {
-        Task {
-            do {
-                status = try await work()
-                failure = nil
-                while status?.updating != nil, engine.isReady, !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(3))
-                    if let read = try? await MachineBox.updateStatus(on: engine.machine.connection) { status = read }
-                }
-            } catch {
-                failure = error.localizedDescription
-            }
-        }
-    }
-
-    /// What it's doing, or how the last went.
-    static func words(_ status: MachineBox.UpdateStatus) -> String {
-        switch status.updating {
-        case "downloading": return "Downloading…"
-        case "downloading the engine": return "Downloading the engine…"
-        case "checking it", "installing", "starting": return "Installing…"
-        case .some: return "Checking for updates…"
-        case nil: break
-        }
-        guard let last = status.last else { return status.latest.map { "Version \($0) is the newest" } ?? "Not checked yet" }
-        let when = last.at.map { " " + Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(presentation: .named)) } ?? ""
-        switch last.result {
-        case "updated": return "Updated to \(last.to ?? status.version ?? "")\(when)"
-        case "current": return "Up to date"
-        case "waiting": return "Version \(last.version ?? status.latest ?? "") comes a few days after its release"
-        case "busy": return "Waiting until nothing runs there"
-        case "failed": return "Couldn't update: \(last.message ?? "")"
-        default: return last.message ?? "Not checked yet"
         }
     }
 }

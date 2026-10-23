@@ -249,15 +249,6 @@ extension AppModel {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
     }
 
-    /// Stops a machine's engine until it's started again, from here or a phone (Stop): its sessions
-    /// stay there, and its bots' wake-ups wait.
-    func stopEngine(_ engine: MachineEngine) {
-        engine.browser.reset()
-        utilities.closeMachineBrowser(engine.machine.id)
-        workspace.forget(engine.machine.id)
-        Task { await engine.stopEngine() }
-    }
-
     func connect(_ engine: MachineEngine) {
         let machine = engine.machine.id
         // Its pages are the panel's browser tabs while a session there is in view.

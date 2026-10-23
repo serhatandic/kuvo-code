@@ -23,7 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.19";
+export const BRIDGE_VERSION = "0.9.20";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -671,22 +671,22 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       // Whether it runs now, and whether it's stopped on purpose (until it's started, from anywhere).
       const running = Boolean(engine.pid && runs(engine.pid, `${K}/engine/`));
       const stopped = fs.existsSync(path.join(RUN, "stopped"));
+      // Its folder of chats (conversations of no project), as a Mac names its own: made if it isn't
+      // there yet, so a phone can start the first one.
+      const chats = path.join(K, "chats");
+      try { fs.mkdirSync(chats, { recursive: true }); } catch {}
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), ...info })) };
+      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, ...info })) };
       return;
     }
     const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
     if (request.path.split("?")[0] === "kuvo/file") return yield* fileAt(request.path, json);
-    // This box's updates (PROTOCOL.md, "Updates"): how it stands, its switch, Update Now.
+    // This box's updates (PROTOCOL.md, "Updates"): how it stands, Update Now. It always updates
+    // by itself: there's no switch.
     if (request.path.split("?")[0] === "kuvo/update") {
       const method = request.method.toUpperCase();
       if (method === "GET") return yield* json(200, updateStatus());
-      if (method === "PATCH") {
-        const auto = parsed(request.body)?.auto;
-        if (typeof auto !== "boolean") return yield* json(400, { message: "Say whether it updates by itself (auto)." });
-        setAutoUpdate(auto);
-        return yield* json(200, updateStatus());
-      }
+      if (method === "PATCH") return yield* json(400, { message: ALWAYS_UPDATES });
       if (method === "POST") {
         if (parsed(request.body)?.now !== true) return yield* json(400, { message: "Say to update now (now)." });
         if (!UPDATE_KEYS.length) return yield* json(409, { message: "Updates aren't set up for this machine yet." });
@@ -788,7 +788,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!answer) return yield* json(400, given?.saved != null ? { message: "Saved passwords are on your Mac: type this one." } : {});
       return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});
     }
-    const control = request.path.match(/^kuvo\/engine\/(start|stop|restart)$/);
+    // (No Stop: a machine's engine keeps running, and up to date. Start is for one an older Mac stopped.)
+    const control = request.path.match(/^kuvo\/engine\/(start|restart)$/);
     if (control) {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const { status, message } = await engineControl(control[1]);
@@ -3521,6 +3522,7 @@ export function confirmPhone(phone) {
 // box updates itself.
 export const UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 const UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
+// Where an earlier bridge kept its update switch (`{auto}`), which there isn't any more.
 const UPDATE_SETTINGS = path.join(BOX, "update.json");
 const UPDATE_STATE = path.join(RUN, "update.json");
 const UPDATE_TRIAL = path.join(RUN, "update-trial");
@@ -3574,14 +3576,8 @@ export const boxVersion = () => {
   return versionOrder(version) ? version : null;
 };
 
-export function updateSettings() {
-  try { return { auto: JSON.parse(fs.readFileSync(UPDATE_SETTINGS, "utf8"))?.auto !== false }; } catch { return { auto: true }; }
-}
-
-export function setAutoUpdate(auto) {
-  fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
-  writePrivate(UPDATE_SETTINGS, JSON.stringify({ auto: auto !== false }));
-}
+/** Why a machine's updates can't be turned off: it keeps up with the Macs and phones that use it. */
+const ALWAYS_UPDATES = "A machine always keeps itself up to date.";
 
 const updateState = () => { try { return JSON.parse(fs.readFileSync(UPDATE_STATE, "utf8")) ?? {}; } catch { return {}; } };
 function noteUpdate(change) {
@@ -3998,7 +3994,7 @@ export function updateStatus() {
   try { engine = readEngineFile()?.version ?? null; } catch {}
   return {
     setUp: UPDATE_KEYS.length > 0,
-    auto: updateSettings().auto,
+    auto: true,
     version: boxVersion(),
     engine,
     latest: state.latest ?? null,
@@ -4194,9 +4190,10 @@ async function run() {
     noteOlderMacs();
     try { checkDrift(); } catch {}
     const night = updateNight();
-    if (!night || !updateSettings().auto || updateState().night === night || !UPDATE_KEYS.length) return;
+    if (!night || updateState().night === night || !UPDATE_KEYS.length) return;
     startUpdate({})?.then(outcome => { if (outcome && outcome.result !== "busy") noteUpdate({ night }); });
   };
+  try { fs.rmSync(UPDATE_SETTINGS, { force: true }); } catch {}
   setTimeout(nightly, 60_000);
   setInterval(nightly, 600_000);
   setInterval(() => {
@@ -4293,12 +4290,9 @@ async function box(command) {
     }
     case "update-status":
       return say({ status: 200, ...updateStatus() });
-    case "update-auto": {
-      const value = (await input()).trim();
-      if (value !== "true" && value !== "false") return say({ status: 400, message: "Say true or false." });
-      setAutoUpdate(value === "true");
-      return say({ status: 200, ...updateStatus() });
-    }
+    case "update-auto":
+      // (An older Mac's switch.)
+      return say({ status: 400, message: ALWAYS_UPDATES });
     case "update-now": {
       // On its own, outliving this command: what it does shows in update-status.
       if (!UPDATE_KEYS.length) return say({ status: 409, message: "Updates aren't set up for this machine yet." });

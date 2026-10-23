@@ -78,8 +78,7 @@ struct MachinesSettings: View {
                 case .ready:
                     Button("Disconnect") { app.disconnect(engine) }
                         .help("Close this Mac’s connection; \(engine.machine.name) keeps running on its own")
-                    Button("Stop Engine") { app.stopEngine(engine) }
-                        .help("Stop its engine, with its sessions, bots and group chats, until you start it again")
+                // (Stopped by a Mac with an older Kuvo Code: there's no Stop any more.)
                 case .preparing where engine.isStopped:
                     Button("Start Engine") { app.startEngine(engine) }
                 case .failed, .preparing:

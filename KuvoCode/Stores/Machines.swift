@@ -524,19 +524,6 @@ final class MachineEngine {
         state = .preparing
     }
 
-    /// Stops the engine on the machine until it's started again, from here or anywhere (Stop).
-    /// Its keeper and phone link stay, so a phone can start it.
-    func stopEngine() async {
-        startWanted = false
-        disconnect()
-        let attempt = connections
-        let stopped = (try? await RemoteServer.stopEngine(on: machine.connection)) != nil
-        // Unless it was connected again meanwhile.
-        guard stopped, attempt == connections, case .preparing = state else { return }
-        isStopped = true
-        watchWhileStopped()
-    }
-
     /// While it's stopped, each minute: started from elsewhere (a phone, another Mac), it connects.
     private func watchWhileStopped() {
         stoppedWatch?.cancel()
