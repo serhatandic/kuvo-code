@@ -562,8 +562,8 @@ itself. A host serves:
     be changed. A Mac's Remove… for a machine is the machine's own, through `box route`.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
-  lives on (a Mac's bots' in its Keychain; a machine's in `~/.kuvo-code/keys`, from bridge 0.9.22,
-  with the Mac closed too). Each computer answers for its own bots; a Mac asked about a machine's
+  lives on (a Mac's bots' in its Keychain; a machine's in `~/.kuvo-code/box/bot-keys`, from bridge
+  0.9.22, with the Mac closed too). Each computer answers for its own bots; a Mac asked about a machine's
   bot answers `409 {"message"}`. A bot that works in a project uses that project's keys, and
   answers `409 {"message"}`.
   - `GET kuvo/bots/<id>/keys` → `{"keys": [{integration, own, shared}]}`: each integration a bot can

@@ -92,6 +92,38 @@ struct RemoteEngineTests {
         }
     }
 
+    /// A start from the Mac puts its keys in place of what it sent before, and leaves the box's
+    /// own alone: its shared keys and its bots' own, which no Mac sends.
+    @Test func aStartFromTheMacLeavesTheBoxsOwnKeys() throws {
+        let setup = try #require(RemoteServer.launchScript.components(separatedBy: "mkdir -p \"$K/keys\";").first)
+        for shell in WakesTests.shells {
+            let home = FileManager.default.temporaryDirectory.appending(path: "opencodekit-home-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: home) }
+            let root = home.appending(path: RemoteEngineInstaller.root)
+            let sent = root.appending(path: "keys/KUVO_KEY_SENT")
+            let botKey = root.appending(path: "box/bot-keys/KUVO_KEY_GITHUB_TOKEN__BOT_SCOUT")
+            let shared = root.appending(path: "box/keys/KUVO_KEY_GITHUB_TOKEN")
+            for file in [sent, botKey, shared] {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("secret".utf8).write(to: file)
+            }
+            let process = Process()
+            process.executableURL = URL(filePath: shell)
+            process.arguments = ["-c", setup]
+            process.environment = ["PATH": "/usr/bin:/bin", "HOME": home.path]
+            let stdin = Pipe()
+            process.standardInput = stdin
+            process.standardOutput = FileHandle.nullDevice
+            try process.run()
+            stdin.fileHandleForWriting.write(Data("KUVO_PORT=1\n\n".utf8))
+            try stdin.fileHandleForWriting.close()
+            process.waitUntilExit()
+            #expect(!FileManager.default.fileExists(atPath: sent.path), "what a Mac sent before goes: \(shell)")
+            #expect(FileManager.default.fileExists(atPath: botKey.path), "a bot's own key stays: \(shell)")
+            #expect(FileManager.default.fileExists(atPath: shared.path), "the box's shared key stays: \(shell)")
+        }
+    }
+
     @Test func linuxBuildsAreThePinnedVersion() {
         for machine in ["x86_64", "aarch64"] {
             let release = EngineRelease.linux(machine: machine)

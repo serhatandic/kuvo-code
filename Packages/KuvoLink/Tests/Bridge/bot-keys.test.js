@@ -37,7 +37,7 @@ const bot = (id, name, project = null) => {
 };
 bot("bot_scout", "Scout");
 bot("bot_atlas", "Atlas", "/srv/app");
-const own = path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT");
+const own = path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT");
 const folderSettings = path.join(home, "bots", "bot_scout", "workspace", ".opencode", "opencode.json");
 const settings = () => JSON.parse(fs.readFileSync(folderSettings, "utf8"));
 // What waits a moment (its server connecting again), run when the test says.
@@ -72,7 +72,7 @@ test("given a key of its own: kept here, its folder's settings naming its server
   assert.equal(given.status, 200);
   assert.equal(fs.readFileSync(own, "utf8"), "tok_scout");
   assert.equal((fs.statSync(own).mode & 0o777).toString(8), "600", "only you can read it");
-  assert.deepEqual(settings().mcp.servers.todoist.environment, { API_KEY: "{file:~/.kuvo-code/keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" });
+  assert.deepEqual(settings().mcp.servers.todoist.environment, { API_KEY: "{file:~/.kuvo-code/box/bot-keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" });
   assert.deepEqual(settings().mcp.servers.notes, { type: "local", command: ["notes"] });
   assert.deepEqual(settings().instructions, ["notes.md"]);
   assert.deepEqual(waiting.map(each => each.ms), [2_000], "once the engine has read it");
@@ -90,6 +90,13 @@ test("its servers follow the machine's integrations (a newer version), and taken
 
   waiting.length = 0;
   assert.equal((await ask("DELETE", "kuvo/bots/bot_scout/keys/todoist")).status, 200);
+  // Settings naming keys it no longer has (moved here from another computer, which named its
+  // own there): tidied as the machine refreshes.
+  const moved = settings();
+  moved.mcp.servers.github = { type: "remote", headers: { Authorization: "Bearer {file:/Users/me/keys/KUVO_KEY_GITHUB_TOKEN__BOT_SCOUT}" } };
+  fs.writeFileSync(folderSettings, JSON.stringify(moved));
+  link.refreshBotsKeys();
+  assert.equal(settings().mcp.servers.github, undefined);
   assert.equal(fs.existsSync(own), false);
   assert.equal(settings().mcp.servers.todoist, undefined);
   assert.deepEqual(settings().mcp.servers.notes, { type: "local", command: ["notes"] });
@@ -99,10 +106,10 @@ test("its servers follow the machine's integrations (a newer version), and taken
 test("all of them, as it leaves the machine: gone, and with nothing else in its folder's settings, the file too", async () => {
   fs.writeFileSync(folderSettings, "{}");
   await ask("PUT", "kuvo/bots/bot_scout/keys/todoist", { keys: { API_KEY: "tok_again" } });
-  fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_GONE_TOKEN__BOT_SCOUT"), "from an integration no longer here");
-  fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUTER"), "another bot's");
+  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_GONE_TOKEN__BOT_SCOUT"), "from an integration no longer here");
+  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUTER"), "another bot's");
   assert.equal((await ask("DELETE", "kuvo/bots/bot_scout/keys")).status, 200);
-  assert.deepEqual(fs.readdirSync(path.join(home, "keys")), ["KUVO_KEY_TODOIST_API_KEY__BOT_SCOUTER"], "its own, every one; never another bot's");
+  assert.deepEqual(fs.readdirSync(path.join(home, "box", "bot-keys")), ["KUVO_KEY_TODOIST_API_KEY__BOT_SCOUTER"], "its own, every one; never another bot's");
   assert.equal(fs.existsSync(path.dirname(folderSettings)), false);
 });
 

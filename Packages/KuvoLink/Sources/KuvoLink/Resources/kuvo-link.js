@@ -667,8 +667,9 @@ async function* forward(target, path, request, signal, allows) {
 
 const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
 const INTEGRATION_DATA = path.join(K, "integrations");
-// Bots' own keys (`answerBotKeys`), apart from the machine's shared ones.
-const BOT_KEYS = path.join(K, "keys");
+// Bots' own keys (`answerBotKeys`), the box's own beside its shared ones: a start from a Mac
+// replaces what it sent in `keys`, and leaves `box` alone.
+const BOT_KEYS = path.join(K, "box", "bot-keys");
 
 function integrationCatalog(file = INTEGRATIONS_FILE) {
   try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && !each.macOnly); } catch { return []; }
@@ -797,7 +798,7 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
 }
 
 // MARK: Bots' own keys (PROTOCOL.md, "Bots' own keys"): keys a bot here has of its own for the
-// integrations you bring a key for, kept on this machine (`keys/<variable>__<BOT>`) and named by a
+// integrations you bring a key for, kept on this machine (`box/bot-keys/<variable>__<BOT>`) and named by a
 // settings file of its folder's own, so only its conversation uses them. A bot that works in a
 // project uses that project's.
 
@@ -813,7 +814,7 @@ const hasOwnKeys = (bot, entry) => Object.values(entry.variables).every(variable
 /** `entry`'s server as `bot`'s conversation runs it: its own keys in place of the shared ones. */
 function botServer(entry, bot) {
   let text = JSON.stringify(entry.settings);
-  for (const variable of Object.values(entry.variables)) text = text.split(`/box/keys/${variable}}`).join(`/keys/${botVariable(variable, bot)}}`);
+  for (const variable of Object.values(entry.variables)) text = text.split(`/box/keys/${variable}}`).join(`/box/bot-keys/${botVariable(variable, bot)}}`);
   return JSON.parse(text);
 }
 
@@ -857,15 +858,14 @@ function writeBotSettings(bot, catalog) {
   return { status: 200 };
 }
 
-/** Each bot here that has keys of its own: its folder's settings as its keys and this machine's
- * integrations are now (a server's newer version, say). As the bridge starts, and from a Mac. */
+/** Each bot here: its folder's settings as its keys and this machine's integrations are now (a
+ * server's newer version, say, or settings that came with it from another computer naming its
+ * keys there). As the bridge starts, and from a Mac. */
 export function refreshBotsKeys(file = INTEGRATIONS_FILE) {
   const catalog = integrationCatalog(file);
-  const suffixes = listOf(BOT_KEYS).filter(name => name.includes("__"));
   for (const bot of listOf(BOTS)) {
     const here = botHere(bot);
-    if (!here || here.described.project || !suffixes.some(name => name.endsWith(botVariable("", bot)))) continue;
-    writeBotSettings(bot, catalog);
+    if (here && !here.described.project) writeBotSettings(bot, catalog);
   }
 }
 

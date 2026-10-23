@@ -49,12 +49,12 @@ test("listed from the Mac's catalog, added with its keys or the ones it has, nev
 
 test("removed with its keys, what its server kept, and its bots' own keys and folder settings", async () => {
   fs.mkdirSync(path.join(home, "integrations", "todoist"), { recursive: true });
-  fs.mkdirSync(path.join(home, "keys"), { recursive: true });
-  fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT"), "theirs");
-  fs.writeFileSync(path.join(home, "keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "stays");
+  fs.mkdirSync(path.join(home, "box", "bot-keys"), { recursive: true });
+  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT"), "theirs");
+  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "stays");
   const own = path.join(home, "bots", "bot_scout", "workspace", ".opencode");
   fs.mkdirSync(own, { recursive: true });
-  fs.writeFileSync(path.join(own, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "local", environment: { API_KEY: "{file:~/.kuvo-code/keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" } } } } }));
+  fs.writeFileSync(path.join(own, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "local", environment: { API_KEY: "{file:~/.kuvo-code/box/bot-keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" } } } } }));
   // Another bot's, written by hand without keys of its own: it stays, as the Mac leaves it.
   const theirs = path.join(home, "bots", "bot_atlas", "workspace", ".opencode");
   fs.mkdirSync(theirs, { recursive: true });
@@ -64,8 +64,8 @@ test("removed with its keys, what its server kept, and its bots' own keys and fo
   assert.equal(settings().mcp?.servers?.todoist, undefined);
   assert.equal(fs.existsSync(path.join(home, "box", "keys", "KUVO_KEY_TODOIST_API_KEY")), false);
   assert.equal(fs.existsSync(path.join(home, "integrations", "todoist")), false);
-  assert.equal(fs.existsSync(path.join(home, "keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT")), false);
-  assert.equal(fs.readFileSync(path.join(home, "keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "utf8"), "stays");
+  assert.equal(fs.existsSync(path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT")), false);
+  assert.equal(fs.readFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "utf8"), "stays");
   assert.equal(fs.existsSync(own), false, "a bot's settings naming only it go, with their folder");
   assert.equal(JSON.parse(fs.readFileSync(path.join(theirs, "opencode.json"), "utf8")).mcp.servers.todoist.type, "remote");
   assert.equal(fs.existsSync(path.join(home, "box", "integrations-removed.json")), false, "nothing for a Mac to see to: the machine has done it all");

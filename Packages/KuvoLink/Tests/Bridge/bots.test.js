@@ -561,10 +561,10 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
   const scout = bot("bot_scout00001", { name: "Scout" });
   bot("bot_ada0000001", { name: "Ada" });
   bot("bot_ben0000001", { name: "Ben" });
-  const keys = path.join(home, "keys");
+  const keys = path.join(home, "box", "bot-keys");
   write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN__BOT_SCOUT00001"), "its own");
   write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN__BOT_ADA0000001"), "another's");
-  write(path.join(keys, "KUVO_KEY_GITHUB_TOKEN"), "shared");
+  write(path.join(home, "box", "keys", "KUVO_KEY_GITHUB_TOKEN"), "shared");
   fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
   const engine = await makingEngine();
   try {
@@ -584,7 +584,8 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
     // Noted for the Mac, which lets it go as it next connects.
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bots, "deleted.json"), "utf8")), { deleted: ["bot_scout00001"] });
     // Its keys of its own go; others' and the shared one stay.
-    assert.deepEqual(fs.readdirSync(keys).sort(), ["KUVO_KEY_GITHUB_TOKEN", "KUVO_KEY_GITHUB_TOKEN__BOT_ADA0000001"]);
+    assert.deepEqual(fs.readdirSync(keys).sort(), ["KUVO_KEY_GITHUB_TOKEN__BOT_ADA0000001"]);
+    assert.equal(fs.readFileSync(path.join(home, "box", "keys", "KUVO_KEY_GITHUB_TOKEN"), "utf8"), "shared");
     // Its group chat goes on without it, and its conversation is deleted.
     const left = engine.asked.filter(each => each.method === "PATCH" && each.url === `/api/kuvo/groups/${chat.json.group.id}`).at(-1);
     assert.deepEqual(left.body, { members: ["bot_ada0000001", "bot_ben0000001"] });
