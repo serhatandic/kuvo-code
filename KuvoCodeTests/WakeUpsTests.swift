@@ -211,24 +211,26 @@ import Testing
         await start()
         defer { done() }
         // As the app has it (`startMachines`), each change's work handed to the test to wait for.
-        let (heard, told) = AsyncStream.makeStream(of: Task<Void, Never>.self)
-        app.workspace.onArchived = { [app] session, _ in told.yield(app.archivedChanged(session)) }
-        var work = heard.makeAsyncIterator()
+        var work: [Task<Void, Never>] = []
+        app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
+        // The engine says it changed; this Mac reads it again, and does what that calls for.
         func changed(archived: Bool) async throws {
             let one = StubWeb.json(["data": Self.session(id, archived: archived)])
             StubWeb.route(Self.engine + "/api/session/\(id)") { _ in one }
             app.workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: [
                 "id": UUID().uuidString, "type": "session.metadata.updated", "created": 1, "data": ["sessionID": id],
             ])))
+            await app.workspace.reloading[id]?.value
+            #expect(work.count == 1, "told once it's read")
+            for task in work { await task.value }
+            work = []
         }
         try await changed(archived: true)
-        await work.next()?.value
         #expect(app.wakeUps.paused.contains(id), "archived from the phone: its wake-ups wait")
         #expect((try? String(contentsOfFile: folder(id, "paused"), encoding: .utf8)) == "archived")
         try await changed(archived: false)
-        await work.next()?.value
         #expect(!app.wakeUps.paused.contains(id), "brought back: they come back")
     }
 

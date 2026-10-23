@@ -384,12 +384,17 @@ final class Workspace {
     /// The sessions read again: one archived or brought back meanwhile (from a phone, while the
     /// feed was down) is told, as `upsert` tells one.
     private func noteArchiving(since before: [Session]) {
-        guard let onArchived else { return }
+        guard onArchived != nil else { return }
         let was = Dictionary(before.map { ($0.id, Self.isArchived($0)) }, uniquingKeysWith: { first, _ in first })
         for session in sessions {
-            let archived = Self.isArchived(session)
-            if let wasArchived = was[session.id], wasArchived != archived { onArchived(session.id, archived) }
+            if let wasArchived = was[session.id] { noteArchiving(session, was: wasArchived) }
         }
+    }
+
+    /// `session` as it is now, archived or brought back since it was `wasArchived`: told.
+    private func noteArchiving(_ session: Session, was wasArchived: Bool) {
+        let archived = Self.isArchived(session)
+        if archived != wasArchived { onArchived?(session.id, archived) }
     }
 
     /// Pins a session to the top of the sidebar, or takes it off.
@@ -1670,7 +1675,10 @@ final class Workspace {
 
         switch event.type {
         case "session.created", "session.renamed", "session.moved", "session.metadata.updated", "session.revert.staged", "session.revert.cleared", "session.revert.committed":
-            Task { await reload(id) }
+            reloading[id] = Task {
+                await reload(id)
+                reloading[id] = nil
+            }
         case "session.deleted":
             // Its original, left where it was as it moved to another computer (`Moves`): the
             // conversation lives on there, as it is.
@@ -2039,6 +2047,9 @@ final class Workspace {
     /// Sessions read while their machine was away, with what was read, to tell it when it's back.
     @ObservationIgnored private var unsentViews: [String: Milliseconds] = [:]
 
+    /// Sessions being read again as the engine said they changed (what a test waits for).
+    @ObservationIgnored private(set) var reloading: [String: Task<Void, Never>] = [:]
+
     private func reload(_ id: String, depth: Int = 0) async {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
         // Only root sessions get a row; subagent sessions show inside their parent.
@@ -2235,7 +2246,7 @@ final class Workspace {
             sessions[index] = session
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)
-            if Self.isArchived(session) != wasArchived { onArchived?(session.id, !wasArchived) }
+            noteArchiving(session, was: wasArchived)
         } else {
             sessions.insert(session, at: 0)
         }

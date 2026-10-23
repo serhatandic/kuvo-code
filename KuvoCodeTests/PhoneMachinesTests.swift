@@ -91,23 +91,25 @@ import Testing
         #expect(try await ask("kuvo/machines/hetzner/connect", method: "POST").status == 404)
     }
 
-    /// Its events: a line now, and another once a machine changes.
+    /// Its events: a line as the phone starts following, and another whenever what it lists
+    /// changes (the stream sends a line each time what it reads changes).
     @Test func itsEventsFollowTheMachines() async throws {
         defer { Self.clean() }
         app.machines.add("box")
         let request = LinkRequest(method: "GET", path: "kuvo/machines/events", headers: [:], body: Data())
         var parts = PhoneLink.respond(to: request, link: link, engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil).makeAsyncIterator()
-        var lines: [[String: Any]] = []
-        func machines(_ line: [String: Any]?) -> [[String: Any]] { line?["machines"] as? [[String: Any]] ?? [] }
-        // Each body part is a line.
-        while lines.count < 1, let part = try await parts.next() {
-            if case .body(let chunk) = part, let line = try JSONSerialization.jsonObject(with: chunk) as? [String: Any] { lines.append(line) }
+        var first: [String: Any]?
+        while first == nil, let part = try await parts.next() {
+            if case .body(let chunk) = part { first = try JSONSerialization.jsonObject(with: chunk) as? [String: Any] }
         }
-        #expect(machines(lines.last).map { $0["id"] as? String } == ["box"])
+        #expect((first?["machines"] as? [[String: Any]])?.map { $0["id"] as? String } == ["box"])
+
+        nonisolated final class Heard: @unchecked Sendable { var changed = false }
+        let heard = Heard()
+        withObservationTracking { _ = link.machinesJSON() } onChange: { heard.changed = true }
         app.machines.addAddress("box.tail", to: "box")
-        while lines.count < 2, let part = try await parts.next() {
-            if case .body(let chunk) = part, let line = try JSONSerialization.jsonObject(with: chunk) as? [String: Any] { lines.append(line) }
-        }
-        #expect(machines(lines.last).first?["otherAddresses"] as? [String] == ["box.tail"])
+        #expect(heard.changed, "the stream sends its next line")
+        let now = try #require(link.machinesJSON().flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        #expect((now["machines"] as? [[String: Any]])?.first?["otherAddresses"] as? [String] == ["box.tail"])
     }
 }

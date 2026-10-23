@@ -1406,12 +1406,20 @@ export async function engineControl(command) {
   }
   try {
     const child = spawn("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
+    lastToolRun = { child, ended: new Promise(resolve => { child.on("exit", resolve); child.on("error", resolve); }) };
     child.unref();
   } catch {
     return { status: 503, message: "It couldn't be started." };
   }
   return { status: 202 };
 }
+
+// The box's tool, as last started here, ending as it does (what a test waits for).
+let lastToolRun = null;
+export const toolRun = () => {
+  lastToolRun?.child.ref();
+  return lastToolRun?.ended ?? Promise.resolve();
+};
 
 // `kuvo/sign-in/return` with {"url"}: where a sign-in's page sent the browser back to this
 // machine (an MCP server's, or a coding agent's), which a phone can't load, loaded here as the
