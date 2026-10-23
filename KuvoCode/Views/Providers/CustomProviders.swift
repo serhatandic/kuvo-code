@@ -218,9 +218,16 @@ struct CustomProviderEditor: View {
         }
     }
 
+    /// The id a provider named `name` gets: its words in plain lowercase letters and digits,
+    /// joined by hyphens ("Şirket Proxy" is sirket-proxy), which every client can name it by.
+    nonisolated static func providerID(for name: String) -> String {
+        let plain = name.applyingTransform(StringTransform(rawValue: "Any-Latin; Latin-ASCII; Lower"), reverse: false) ?? name.lowercased()
+        return plain.split { !($0.isASCII && ($0.isLetter || $0.isNumber)) }.joined(separator: "-")
+    }
+
     private func create() {
         let title = name.trimmingCharacters(in: .whitespaces)
-        let slug = title.lowercased().replacingOccurrences(of: " ", with: "-").filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let slug = Self.providerID(for: title)
         guard !slug.isEmpty else { return }
         // Not one the engine already has: that would change it instead.
         guard config.value(at: CustomProvidersSection.path + [slug]) == nil, !catalog.providers.contains(where: { $0.id == slug }) else {

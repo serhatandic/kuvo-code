@@ -89,6 +89,22 @@ import Testing
 
     /// OpenCode's sign-in page, started as the Mac starts it: with its method's hidden answer (the
     /// server), which reaches the engine as the phone sent it.
+    /// A provider you add with a name in any language gets an id of plain letters, so a phone can
+    /// name it to disconnect it, as the Mac does.
+    @Test func aProviderNamedInAnyLanguageCanBeDisconnectedFromAPhone() async throws {
+        #expect(CustomProviderEditor.providerID(for: "Şirket Proxy") == "sirket-proxy")
+        #expect(CustomProviderEditor.providerID(for: "Kırmızı API v2") == "kirmizi-api-v2")
+        #expect(CustomProviderEditor.providerID(for: "  ★ ") == "")
+        var forgotten: [String] = []
+        link.forgetSignIn = { provider in
+            forgotten.append(provider)
+            return true
+        }
+        let id = CustomProviderEditor.providerID(for: "Şirket Proxy")
+        #expect(try await ask("kuvo/accounts/\(id)/forget", method: "POST").status == 200)
+        #expect(forgotten == ["sirket-proxy"])
+    }
+
     @Test func aSignInPageStartsWithItsAnswers() async throws {
         defer { StubWeb.stop() }
         let start = #"{"methodID":"console","answer":{"server":"https://opencode.ai"}}"#
