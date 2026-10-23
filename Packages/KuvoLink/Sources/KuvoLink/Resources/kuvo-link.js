@@ -976,7 +976,7 @@ function freeBranch(folder, name) {
 
 /** Its engine's project for a folder, as it names projects. */
 async function projectOf(engine, folder, signal) {
-  const located = await call(engine, "GET", `/api/location?directory=${encodeURIComponent(folder)}`, undefined, signal);
+  const located = await call(engine, "GET", "/api/location", undefined, signal, folder);
   const id = located?.project?.id;
   if (typeof id !== "string") throw new Error("The engine didn't say which project that is.");
   return id;
@@ -1041,7 +1041,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     let id, root;
     try {
       id = await projectOf(engine, project, signal);
-      root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal))?.directory;
+      root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal, project))?.directory;
     } catch (error) {
       return { status: 502, value: message(error?.message ?? String(error)) };
     }
@@ -1049,7 +1049,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     // The engine leaves it on no branch; one of its own makes the work easy to commit, push and merge.
     const branch = freeBranch(root, prefix + path.basename(root));
     if (!branch || gitIn(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
-      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal).catch(() => {});
+      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message("Its branch couldn't be made.") };
     }
     const tree = { project, root, folder: subpath ? path.join(root, subpath) : root, branch, ...(base ? { base } : {}) };
@@ -1087,7 +1087,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
     try {
       const id = await projectOf(engine, tree.project, signal);
-      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal);
+      await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force: discard }, signal, tree.project);
     } catch (error) {
       return { status: 502, value: message(error?.message ?? String(error)) };
     }
@@ -2283,10 +2283,15 @@ export function botTemplates(kit, machine) {
   };
 }
 
-async function call(target, method, route, body, signal) {
+async function call(target, method, route, body, signal, folder) {
   const response = await fetch(`http://127.0.0.1:${target.port}${route}`, {
     method,
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
+    headers: {
+      authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`,
+      ...(body ? { "content-type": "application/json" } : {}),
+      // The folder it's about, as the engine reads it (a query naming one is ignored).
+      ...(folder ? { "x-opencode-directory": encodeURIComponent(folder) } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
     signal,
   });

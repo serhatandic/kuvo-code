@@ -22,7 +22,10 @@ fs.writeFileSync(path.join(project, "README.md"), "# Shop\n");
 git(project, "add", "-A");
 git(project, "commit", "-q", "-m", "First");
 
-// The engine: its project, worktrees made beside the project with git, and its sessions.
+// The engine: its project, worktrees made beside the project with git, and its sessions. Like
+// the real one, it knows which folder a request is about only from its header: without it, it's
+// about its own workspace, which isn't a repository.
+const folderOf = request => decodeURIComponent(request.headers["x-opencode-directory"] ?? encodeURIComponent(path.join(home, "workspace")));
 const sessions = [];
 const active = new Set();
 const engine = http.createServer((request, response) => {
@@ -31,7 +34,8 @@ const engine = http.createServer((request, response) => {
   request.on("end", () => {
     const url = new URL(request.url, "http://x");
     const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-    if (url.pathname === "/api/location") return send({ directory: url.searchParams.get("directory"), project: { id: "prj_shop" } });
+    if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: folderOf(request) === project ? "prj_shop" : "prj_workspace" } });
+    if (url.pathname.startsWith("/api/worktree") && JSON.parse(body || "{}").projectID !== "prj_shop") return send({ message: "Not a git project" }, 400);
     if (url.pathname === "/api/worktree" && request.method === "POST") {
       const folder = path.join(home, "worktrees", `brave-otter-${sessions.length}`);
       git(project, "worktree", "add", "--detach", folder);
