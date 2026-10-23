@@ -22,6 +22,21 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## Tests: what users rely on (strict)
+
+- **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
+- **Use the real components.** Stub only what's outside the app or unpredictable: the engine's HTTP API, SSH, the network. Never write a test that only proves a stub returns what it was given.
+- **A bug fix starts with a test** that fails on the old code for the right reason. Then fix the cause, not the symptom. Never loosen a test to make it pass.
+- **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
+- **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
+- **Running them:**
+  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md`;
+  - each package's own suite (`swift test`);
+  - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
+  - the coding agents bridge's, with `bun test` in `Agents`.
+
+  Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
+
 ## The same care for every task, start to finish
 
 Quality slips as a session goes on. The context fills up, hours pass, a task looks small or familiar, and corners get cut. Watch for this in yourself, and don't let it happen.
