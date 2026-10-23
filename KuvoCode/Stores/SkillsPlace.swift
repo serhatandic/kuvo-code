@@ -91,7 +91,9 @@ enum SkillsPlace {
             try await connection.run(RemoteEngineInstaller.script("""
                 d="$K/config/opencode/skills/"\(SSHConnection.quoted(name))
                 [ -e "$d" ] || exit 0
-                mkdir -p "$K/trash/skills" && mv "$d" "$K/trash/skills/"\(SSHConnection.quoted(name))"-$(date +%s)"
+                t="$K/trash/skills/"\(SSHConnection.quoted(name))"-$(date +%s)"
+                # Dated now: moving it kept its own date, and an old one would go at once.
+                mkdir -p "$K/trash/skills" && mv "$d" "$t" && touch "$t"
                 find "$K/trash/skills" -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2>/dev/null
                 true
                 """))

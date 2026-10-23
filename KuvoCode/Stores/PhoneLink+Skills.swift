@@ -1,5 +1,6 @@
 import Foundation
 import KuvoLink
+import OpenCodeKit
 
 /// Settings › Skills for a phone (PROTOCOL.md, "Skills"): this Mac's skills folder, the skills you
 /// write there, and GitHub's collections, which this Mac reaches, never the phone. A machine's
@@ -9,16 +10,21 @@ extension PhoneLink {
     func answerSkills(_ request: LinkRequest) async -> (Int, Data) {
         guard let app = bots?.app else { return (503, Self.message("Kuvo Code isn't ready yet. Try again in a moment.")) }
         let parts = URLComponents(string: request.path)
-        // Split as written, then each part read: a name can't bring a "/" of its own in.
-        let path = parts?.percentEncodedPath ?? request.path
+        // Split as written, then each part read: a name can't bring a "/" of its own in. (Not
+        // through URLComponents, which takes a "%" that starts nothing as a "%" of the name.)
+        let path = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
         let method = request.method.uppercased()
         let place = SkillsPlace.mac(app.skillsFolder)
-        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map { String($0).removingPercentEncoding ?? String($0) }
+        let decoded = path.split(separator: "/", omittingEmptySubsequences: false).map { String($0).removingPercentEncoding }
+        guard decoded.allSatisfy({ $0 != nil }) else { return (400, Self.message("That isn't a path.")) }
+        let segments = decoded.compactMap { $0 }
         switch (method, segments.count, segments.dropFirst().first) {
         case ("GET", 2, "skills"):
-            return (200, Self.json(["folder": await place.path() ?? app.skillsFolder.path, "github": Self.sources(await place.installed())]))
+            return (200, Self.json(["folder": app.skillsFolder.path, "github": Self.sources(await place.installed())]))
+        case (_, 2, "skills"):
+            return (405, Data("{}".utf8))
         case (_, 3, "skills"):
-            return await answerSkill(segments[2], method, request.body, place)
+            return await answerSkill(segments[2], method, request.body, place, app: app)
         case ("GET", 2, "skill-library"):
             return (200, Self.json(["repositories": SkillLibrary.repositories.map(Self.described)]))
         case ("POST", 3, "skill-library") where segments[2] == "install":
@@ -29,17 +35,18 @@ extension PhoneLink {
             let skillPath = parts?.queryItems?.first { $0.name == "path" }?.value ?? ""
             return await about(segments[2], segments[3], skillPath)
         default:
-            return (404, Data())
+            return (404, Data("{}".utf8))
         }
     }
 
     /// One skill: GET its SKILL.md (`{text}`); PUT `{text, new?}` writes it (`new`: a name that's
-    /// taken is turned away); DELETE puts its folder in the Trash.
-    private func answerSkill(_ name: String, _ method: String, _ body: Data, _ place: SkillsPlace) async -> (Int, Data) {
+    /// taken, here or in the engine's list, is turned away; one from GitHub isn't edited, as in
+    /// Settings); DELETE puts its folder in the Trash.
+    private func answerSkill(_ name: String, _ method: String, _ body: Data, _ place: SkillsPlace, app: AppModel) async -> (Int, Data) {
         guard Self.isFolderName(name) else { return (400, Self.message("That isn't a skill's name.")) }
         switch method {
         case "GET":
-            guard let text = await place.read(name) else { return (404, Data()) }
+            guard let text = await place.read(name) else { return (404, Data("{}".utf8)) }
             return (200, Self.json(["text": text]))
         case "PUT":
             let given = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
@@ -49,9 +56,12 @@ extension PhoneLink {
             let isNew = given["new"] as? Bool == true
             if isNew {
                 guard SkillFile.name(from: name) == name else { return (400, Self.message("Names use lowercase letters a to z, digits and hyphens.")) }
-                if await place.exists(name) { return (409, Self.message("There's a skill called \(name) already.")) }
+                let listed = ((try? await app.api(for: .mac)?.skills()) ?? []).map(\.id)
+                if await place.exists(name) || listed.contains(name) { return (409, Self.message("There's a skill called \(name) already.")) }
             } else if !(await place.exists(name)) {
-                return (404, Data())
+                return (404, Data("{}".utf8))
+            } else if await place.installed()[name] != nil {
+                return (409, Self.message("\(name) came from GitHub, so it isn't edited here."))
             }
             do {
                 try await place.write(name, text)
@@ -61,7 +71,7 @@ extension PhoneLink {
                 return (500, Self.message(error.localizedDescription))
             }
         case "DELETE":
-            guard await place.exists(name) else { return (404, Data()) }
+            guard await place.exists(name) else { return (404, Data("{}".utf8)) }
             do {
                 try await place.remove(name)
                 return (200, Data("{}".utf8))
@@ -69,7 +79,7 @@ extension PhoneLink {
                 return (500, Self.message(error.localizedDescription))
             }
         default:
-            return (405, Data())
+            return (405, Data("{}".utf8))
         }
     }
 
@@ -119,13 +129,22 @@ extension PhoneLink {
         }
     }
 
-    /// One of the well-known collections as listed, or any other by its name on GitHub.
+    /// One of the well-known collections as listed, or any other by its name on GitHub,
+    /// remembered a while: a collection's skills' descriptions are asked for one by one, and
+    /// GitHub allows few lookups an hour.
     private static func repository(_ owner: String, _ name: String) async throws -> SkillLibrary.Repository {
         if let known = SkillLibrary.repositories.first(where: { $0.owner.lowercased() == owner.lowercased() && $0.name.lowercased() == name.lowercased() }) {
             return known
         }
-        return try await SkillLibrary.repository(named: owner + "/" + name)
+        let key = "\(owner)/\(name)".lowercased()
+        if let kept = lookedUp[key], kept.at.duration(to: .now) < .seconds(15 * 60) { return kept.repository }
+        let repository = try await SkillLibrary.repository(named: owner + "/" + name)
+        if lookedUp.count > 50 { lookedUp.removeAll() }
+        lookedUp[key] = (repository, .now)
+        return repository
     }
+
+    private static var lookedUp: [String: (repository: SkillLibrary.Repository, at: ContinuousClock.Instant)] = [:]
 
     private static func described(_ repository: SkillLibrary.Repository) -> [String: Any] {
         ["id": repository.id, "owner": repository.owner, "name": repository.name, "title": repository.title, "summary": repository.summary]

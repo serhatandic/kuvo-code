@@ -55,6 +55,8 @@ import Testing
         // Changed, as it's edited.
         #expect(try await ask("kuvo/skills/release-notes", method: "PUT", body: ["text": text + "And kind.\n"]).status == 200)
         #expect(try await ask("kuvo/skills/nowhere").status == 404)
+        #expect(try await ask("kuvo/skills", method: "POST").status == 405)
+        #expect(try await ask("kuvo/skills/%E0%A4%A").status == 400, "a name that can't be read")
     }
 
     /// A machine's bridge lists the same well-known collections as this Mac, in the same order.
@@ -95,5 +97,7 @@ import Testing
         #expect(github?["pdf"] == ["repository": "acme/skills", "path": "skills/pdf"])
         #expect(try await ask("kuvo/skill-library/install", method: "POST", body: ["repository": "acme/skills", "path": "skills/pdf"]).status == 409)
         #expect(try await ask("kuvo/skill-library/install", method: "POST", body: ["repository": "acme/skills", "path": "skills/none"]).status == 404)
+        // As it came, as Settings has it: not edited.
+        #expect(try await ask("kuvo/skills/pdf", method: "PUT", body: ["text": "---\nname: pdf\n---\nMine now.\n"]).status == 409)
     }
 }

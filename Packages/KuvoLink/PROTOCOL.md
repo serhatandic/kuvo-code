@@ -565,9 +565,11 @@ itself. A host serves:
     engine names skills' paths in it, and which skills came from GitHub (the rest you added).
   - `kuvo/skills/<name>` (its folder's name): `GET` → `{"text"}`, its SKILL.md; `PUT {"text",
     "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
-    hyphens, and `409 {"message"}` when the name is taken; without it, `404` for none); `DELETE`
-    puts its folder away (the Mac's Trash, or `~/.kuvo-code/trash/skills`, kept 30 days). `400
-    {"message"}` for a name that isn't a folder's.
+    hyphens, and `409 {"message"}` when the name is taken, by a folder there or a skill the engine
+    lists from elsewhere; without it, `404` for none, and `409 {"message"}` for one from GitHub,
+    which stays as it came, as in Settings); `DELETE` puts its folder away (the Mac's Trash, or
+    `~/.kuvo-code/trash/skills`, kept 30 days from then). `400 {"message"}` for a name that isn't
+    a folder's. A 404 or 405 answers `{}`.
   - GitHub's collections, which the computer reaches, never the phone: `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
     kuvo/skill-library/<owner>/<name>` (any repository on GitHub) → `{"repository", "skills":

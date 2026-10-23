@@ -836,14 +836,40 @@ async function github(url, json = true) {
   return response;
 }
 
+/** Repositories looked up on GitHub lately, by their name in lowercase: a collection's skills'
+ * descriptions are asked for one by one, and GitHub allows few lookups an hour. */
+const lookedUp = new Map();
+
 /** One of the well-known collections, or any other by its name on GitHub, with its default branch. */
 async function skillRepository(owner, name) {
   const known = SKILL_REPOSITORIES.find(each => each.owner.toLowerCase() === owner.toLowerCase() && each.name.toLowerCase() === name.toLowerCase());
   if (known) return known;
+  const key = `${owner}/${name}`.toLowerCase();
+  const kept = lookedUp.get(key);
+  if (kept && Date.now() - kept.at < 15 * 60_000) return kept.repository;
   const response = await github(`${GITHUB.api}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
   const info = response.status === 200 ? await response.json().catch(() => null) : null;
   if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn't found on GitHub.`);
-  return { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
+  const repository = { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
+  if (lookedUp.size > 50) lookedUp.clear();
+  lookedUp.set(key, { repository, at: Date.now() });
+  return repository;
+}
+
+/** The names of the skills the engine lists (its own, and those in other tools' folders), which a
+ * new one mustn't take; none when it doesn't answer. */
+async function engineSkillNames(engine) {
+  if (!engine?.port) return [];
+  try {
+    const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    const listed = response.ok ? (await response.json())?.data : null;
+    return Array.isArray(listed) ? listed.map(skill => skill?.id).filter(id => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 /** A repository's skills, from its file list, as SkillLibrary.skills(in:) reads it. */
@@ -900,8 +926,8 @@ export function skillAbout(markdown) {
 async function installSkill(repository, skill) {
   const target = path.join(SKILLS, skill.name);
   if (fs.existsSync(target)) throw new SkillFailure(409, `A skill named ${skill.name} is already installed.`);
-  const staging = path.join(SKILLS, `.${skill.name}.kuvo-new-${process.pid}`);
-  fs.rmSync(staging, { recursive: true, force: true });
+  // Its own: two installs at once never share one.
+  const staging = path.join(SKILLS, `.${skill.name}.kuvo-new-${crypto.randomUUID()}`);
   try {
     for (const file of skill.files) {
       const response = await github(rawURL(repository, file), false);
@@ -922,7 +948,7 @@ async function installSkill(repository, skill) {
 }
 
 /** `kuvo/skills…` and `kuvo/skill-library…`, for this machine's own folder. */
-export async function answerSkills(method, requestPath, body) {
+export async function answerSkills(method, requestPath, body, engine = null) {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
   if (parts.includes(null)) return { status: 400, value: { message: "That isn't a path." } };
@@ -946,9 +972,12 @@ export async function answerSkills(method, requestPath, body) {
         if (typeof text !== "string" || !text.trim()) return { status: 400, value: message('Send the skill\'s SKILL.md as {"text": …}.') };
         if (body?.new === true) {
           if (skillName(name) !== name) return { status: 400, value: message("Names use lowercase letters a to z, digits and hyphens.") };
-          if (fs.existsSync(folder)) return { status: 409, value: message(`There's a skill called ${name} already.`) };
+          if (fs.existsSync(folder) || (await engineSkillNames(engine)).includes(name)) return { status: 409, value: message(`There's a skill called ${name} already.`) };
         } else if (!fs.existsSync(folder)) {
           return { status: 404, value: {} };
+        } else if (skillSources()[name]) {
+          // As Settings has it: one from GitHub is as it came, not edited.
+          return { status: 409, value: message(`${name} came from GitHub, so it isn't edited here.`) };
         }
         fs.mkdirSync(folder, { recursive: true });
         fs.writeFileSync(`${file}.new`, text);
@@ -960,7 +989,11 @@ export async function answerSkills(method, requestPath, body) {
         // To Kuvo Code's own trash, kept 30 days, as the Mac puts a machine's away.
         const trash = path.join(K, "trash", "skills");
         fs.mkdirSync(trash, { recursive: true });
-        fs.renameSync(folder, path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`));
+        const away = path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`);
+        fs.renameSync(folder, away);
+        // Dated now: moving it kept its own date, and an old one would go at once.
+        const now = new Date();
+        fs.utimesSync(away, now, now);
         const old = Date.now() - 30 * 86_400_000;
         for (const each of listOf(trash)) try { if (fs.statSync(path.join(trash, each)).mtimeMs < old) fs.rmSync(path.join(trash, each), { recursive: true, force: true }); } catch {}
         return { status: 200, value: {} };
@@ -986,7 +1019,10 @@ export async function answerSkills(method, requestPath, body) {
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
         const repository = await skillRepository(parts[2], parts[3]);
-        const at = new URLSearchParams(query).get("path") ?? "";
+        // As written: a "+" is a plus, as the Mac reads it.
+        const pair = query.split("&").find(each => each.startsWith("path="));
+        let at = "";
+        try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn't a path.") }; }
         const response = await github(rawURL(repository, at ? `${at}/SKILL.md` : "SKILL.md"), false).catch(() => null);
         return { status: 200, value: response?.status === 200 ? skillAbout(await response.text()) : {} };
       }
@@ -1047,7 +1083,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return yield* json(405, {});
     }
-    // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
     // Settings › Integrations (PROTOCOL.md, "Integrations"): this machine's own, added and removed
     // here from the catalog the Mac leaves (`bin/integrations.json`), with the Mac closed too.
     if (/^kuvo\/integrations(\/|\?|$)/.test(request.path)) {
@@ -1060,9 +1095,12 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     // Settings › Skills (PROTOCOL.md, "Skills"): this machine's own skills folder, and GitHub's
     // collections, which this machine reaches itself, with the Mac closed too.
     if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {
-      const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body));
+      let engine = null;
+      try { engine = readEngine(); } catch {}
+      const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
       return yield* json(status, value);
     }
+    // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
     if (/^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path)) {
       // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
       if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
