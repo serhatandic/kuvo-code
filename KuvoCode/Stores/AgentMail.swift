@@ -23,6 +23,10 @@ final class AgentMail {
         var project: String?
         /// A bot's job.
         var about: String?
+        /// A bot's id (`bot_…`, as group chats name their members) and how it looks, so a chat on
+        /// another computer can have it and show it.
+        var id: String? = nil
+        var look: BotLook? = nil
     }
 
     weak var app: AppModel?
@@ -151,7 +155,7 @@ final class AgentMail {
         guard let app else { return [] }
         let workspace = app.workspace
         var agents = app.bots.list.map { bot in
-            Agent(session: bot.sessionID, name: bot.name, kind: "bot", machine: bot.machine, project: nil, about: bot.job)
+            Agent(session: bot.sessionID, name: bot.name, kind: "bot", machine: bot.machine, project: nil, about: bot.job, id: bot.id, look: bot.look)
         }
         let bots = Set(agents.map(\.session))
         let recent = workspace.sessions
@@ -169,7 +173,7 @@ final class AgentMail {
         for (machine, told) in announced.sorted(by: { $0.key < $1.key }) where app.machines.engine(machine)?.isReady != true {
             for agent in told.list where !listed.contains(agent.session) && !listedElsewhere(agent.session, than: machine) {
                 listed.insert(agent.session)
-                agents.append(Agent(session: agent.session, name: agent.name, kind: agent.kind, machine: machine, project: agent.project, about: agent.about))
+                agents.append(Agent(session: agent.session, name: agent.name, kind: agent.kind, machine: machine, project: agent.project, about: agent.about, id: agent.id, look: agent.look))
             }
         }
         return agents
@@ -603,6 +607,31 @@ final class AgentMail {
     /// What each machine was last given.
     private var shared: [String: Data] = [:]
 
+    /// Where this Mac's box finds the list of everyone, as a machine's finds `run/agents.json`
+    /// there: what its group chats name with & (`KUVO_AGENTS_FILE`).
+    static var boxDirectoryFile: URL { BoxProcess.run.appending(path: "agents.json") }
+
+    /// Puts the list of everyone where this Mac's box reads it, when it's changed: this Mac's
+    /// agents (`machine` null) and its machines', as `directory` has them.
+    func writeBoxDirectory() {
+        struct Box: Encodable { var machine: String?; var agents: [Agent] }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(Box(machine: nil, agents: directory())), boxDirectory != data else { return }
+        let file = Self.boxDirectoryFile
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let staged = file.deletingLastPathComponent().appending(path: "agents.json.new")
+            FileManager.default.createFile(atPath: staged.path, contents: data, attributes: [.posixPermissions: 0o600])
+            _ = try FileManager.default.replaceItemAt(file, withItemAt: staged)
+            boxDirectory = data
+        } catch {
+            log.error("This Mac's box didn't get the list of agents: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private var boxDirectory: Data?
+
     /// Delivers what `engine`'s machine's agents left for agents elsewhere. Each letter's file
     /// there goes once it's delivered, or can't ever be; one that can't go now (the engine it's
     /// for is starting over, or the machine sent many lately), or whose reading was cut off, goes
@@ -691,6 +720,31 @@ extension AgentMail {
         /// For the agents this Mac speaks for (on machines whose link doesn't talk to other
         /// computers yet): where each is.
         var machine: String?
+        /// A bot's id and look (PROTOCOL.md, "Peers": agents).
+        var id: String? = nil
+        var look: BotLook? = nil
+
+        init(session: String, name: String, kind: String, project: String?, about: String?, machine: String?, id: String? = nil, look: BotLook? = nil) {
+            self.session = session
+            self.name = name
+            self.kind = kind
+            self.project = project
+            self.about = about
+            self.machine = machine
+            self.id = id
+            self.look = look
+        }
+
+        private enum Key: String, CodingKey { case session, name, kind, project, about, machine, id, look }
+
+        /// A look this app doesn't draw (a newer computer's) is none, rather than the whole list unread.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Key.self)
+            self.init(session: try c.decode(String.self, forKey: .session), name: try c.decode(String.self, forKey: .name), kind: try c.decode(String.self, forKey: .kind),
+                      project: try c.decodeIfPresent(String.self, forKey: .project), about: try c.decodeIfPresent(String.self, forKey: .about),
+                      machine: try c.decodeIfPresent(String.self, forKey: .machine), id: try? c.decodeIfPresent(String.self, forKey: .id),
+                      look: try? c.decodeIfPresent(BotLook.self, forKey: .look))
+        }
     }
 
     /// A letter this Mac sent by mail, until its machine says it has it: one of its agents', or an
@@ -714,6 +768,8 @@ extension AgentMail {
     struct Announced: Codable {
         var at: Double
         var list: [Told]
+        /// What its box answers (`kuvo/info`'s features), as it said with its agents.
+        var features: [String]? = nil
     }
 
     private static let letterLife: Double = 86_400_000
@@ -729,6 +785,9 @@ extension AgentMail {
     /// this Mac's, perhaps), or how one this Mac sent went.
     func mailed(_ payload: [String: Any], from machine: String) async {
         if let agents = payload["agents"] as? [String: Any] { takeAgents(agents, from: machine) }
+        // Group chats' mail, for this Mac's bridge, and how its own went.
+        if payload["seat"] is [String: Any] || payload["seatPart"] is [String: Any] { await app?.seatRelay.take(payload, from: machine) }
+        if let delivered = payload["delivered"] as? [String: Any], await app?.seatRelay.went(delivered, from: machine) == true { return }
         // It's just connected, and may have missed what this Mac told it: told again next minute.
         if payload["ask"] as? String == "agents" { announcedTo[machine] = nil }
         // How a letter went: only from the machine it went to.
@@ -743,8 +802,37 @@ extension AgentMail {
         guard let at = given["at"] as? Double, at > (announced[machine]?.at ?? 0), let list = given["list"] as? [[String: Any]],
               let data = try? JSONSerialization.data(withJSONObject: list), let told = try? JSONDecoder().decode([Told].self, from: data) else { return }
         let fits = told.filter { $0.session.hasPrefix("ses_") && ($0.kind == "bot" || $0.kind == "session") }.prefix(120)
-        announced[machine] = Announced(at: at, list: fits.map { Told(session: $0.session, name: String($0.name.prefix(200)), kind: $0.kind, project: $0.project, about: $0.about, machine: nil) })
+        let features = (given["features"] as? [Any])?.compactMap { $0 as? String }.prefix(200).map { String($0.prefix(60)) }
+        announced[machine] = Announced(at: at, list: fits.map { told in
+            let id = told.id.flatMap { $0.range(of: #"\Abot_[A-Za-z0-9]{1,60}\z"#, options: .regularExpression) != nil ? $0 : nil }
+            return Told(session: told.session, name: String(told.name.prefix(200)), kind: told.kind, project: told.project, about: told.about, machine: nil,
+                        id: told.kind == "bot" ? id : nil, look: told.kind == "bot" ? told.look : nil)
+        }, features: features)
         JSONFile.write(announced, to: Self.announcedFile)
+        // Who can be in this Mac's group chats from there, as it told: to this Mac's bridge.
+        Task { await app?.seatRelay.tellPeers() }
+    }
+
+    /// Who can be in this Mac's group chats from your machines (PROTOCOL.md, "Peers"): each machine
+    /// whose link talks to other computers (taking a chat's turns when its `features` say
+    /// `groups.seats`), and the bots it told of, by their id, as a machine's link tells its bridge.
+    func seatPeers(app: AppModel) -> [String: Any] {
+        let machines = app.machines.list.map(\.id).filter { app.phoneLink.talksToPeers($0) }
+        let boxes: [[String: Any]] = machines.compactMap { machine in
+            guard let key = app.phoneLink.key(of: machine) else { return nil }
+            let name = app.machines.list.first { $0.id == machine }?.name ?? machine
+            return ["key": key, "name": name, "seats": announced[machine]?.features?.contains("groups.seats") == true]
+        }
+        let bots: [[String: Any]] = machines.flatMap { machine -> [[String: Any]] in
+            guard let key = app.phoneLink.key(of: machine) else { return [] }
+            return (announced[machine]?.list ?? []).compactMap { agent in
+                guard agent.kind == "bot", let id = agent.id else { return nil }
+                var bot: [String: Any] = ["id": id, "name": agent.name, "job": agent.about ?? "", "box": key, "session": agent.session]
+                if let look = agent.look { bot["look"] = ["color": look.color.rawValue, "shape": look.shape.rawValue, "face": look.face.rawValue] }
+                return bot
+            }
+        }
+        return ["boxes": boxes, "bots": bots]
     }
 
     /// A machine removed (or found to be another one here): what it said goes.
@@ -794,7 +882,7 @@ extension AgentMail {
         return directory().filter { agent in agent.machine.map { !app.phoneLink.talksToPeers($0) && announced[$0] == nil } ?? true }
             .prefix(120)
             .map { Told(session: $0.session, name: String($0.name.prefix(200)), kind: $0.kind, project: $0.project.map { String($0.prefix(200)) },
-                        about: $0.about.map { String($0.prefix(500)) }, machine: $0.machine) }
+                        about: $0.about.map { String($0.prefix(500)) }, machine: $0.machine, id: $0.id, look: $0.look) }
     }
 
     /// A letter from a machine, for an agent here: delivered once, said to be there (or why not,
@@ -1002,6 +1090,8 @@ extension AgentMail {
     /// your machines whose link talks to other computers, as they change (and every ten minutes).
     func tick() async {
         guard let app else { return }
+        writeBoxDirectory()
+        await app.seatRelay.tick()
         let now = Self.now
         tried = tried.filter { entry in mailing.contains { $0.id == entry.key } }
         for letter in mailing {
@@ -1033,7 +1123,8 @@ extension AgentMail {
             for count in [list.count, list.count / 2, list.count / 4] where count > 0 || list.isEmpty {
                 guard let encoded = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(Array(list.prefix(count)))) else { break }
                 // With this Mac's digest of documents, so a machine that missed one gets it now.
-                var payload: [String: Any] = ["agents": ["at": Self.now, "list": encoded], "at": Self.now]
+                // With what this Mac's box answers: its bots take a chat's turns there (`groups.seats`).
+                var payload: [String: Any] = ["agents": ["at": Self.now, "list": encoded, "features": PhoneLink.features], "at": Self.now]
                 if let have = app.phoneLink.documentsDigest() { payload["docs"] = ["have": have] }
                 let mailed = await app.phoneLink.mail(payload, to: machine)
                 if mailed == .sent { announcedTo[machine] = (data, now, Set(list.prefix(count).map(\.session))) }
