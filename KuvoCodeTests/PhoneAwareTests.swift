@@ -47,6 +47,15 @@ import Testing
         #expect(toAgent.hasPrefix("Run the tests\n\n<from-phone>\n") && FromPhone.isFromPhone(toAgent))
     }
 
+    /// However the phone wrote the path ("%70rompt"), its message says so: it's told by the path
+    /// the engine gets.
+    @Test func aPathWrittenAnotherWaySaysSoToo() async throws {
+        defer { engine.stop(); bridge.stop() }
+        _ = try await send("Hi", to: "api/%73ession/ses_1/%70rompt")
+        let sent = try #require(engine.requests("POST", "/api/session/ses_1/prompt").last?.body["text"] as? String)
+        #expect(FromPhone.isFromPhone(sent))
+    }
+
     /// A machine's bridge, with the Mac closed, says it in the same words.
     @Test func aMachineSaysItTheSameWay() throws {
         defer { engine.stop(); bridge.stop() }

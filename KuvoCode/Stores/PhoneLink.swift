@@ -863,9 +863,10 @@ final class PhoneLink {
 
     /// A message the phone sends (`POST api/session/<id>/prompt`) says who the agents it names
     /// with "&" are, as one written here does (`AgentReferences`), before `forward` takes it on.
+    /// Told by the path as it's sent (`EngineRoutes.canonical`), however the phone wrote it.
     nonisolated private static func namingAgents(in request: LinkRequest, by link: PhoneLink?,
                                                  forward: @escaping @Sendable (LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error>) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        let parts = request.path.split(separator: "?").first?.split(separator: "/") ?? []
+        let parts = (EngineRoutes.canonical(request.path) ?? "").split(separator: "?").first?.split(separator: "/") ?? []
         guard request.method.uppercased() == "POST", parts.count == 4, parts[0] == "api", parts[1] == "session", parts[3] == "prompt",
               let session = String(parts[2]).removingPercentEncoding else { return forward(request) }
         return AsyncThrowingStream { continuation in
