@@ -382,6 +382,10 @@ import Testing
         #expect(!held.has(chat.id))
         #expect(app.groups.group(chat.id) != nil)
         #expect(UserDefaults.standard.data(forKey: "movesUnderWay") == nil)
+        // It carries on here as it was: its messages once each, nothing talking until you write.
+        #expect(app.groups.messages(in: chat.id).isEmpty)
+        #expect(!app.groups.discussing.contains(chat.id))
+        #expect(app.groups.list.filter { $0.id == chat.id }.count == 1)
     }
 
     /// A move taken back that couldn't let go of its copy there: this Mac's is the chat (listed
