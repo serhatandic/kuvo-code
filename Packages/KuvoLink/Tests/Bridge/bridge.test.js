@@ -1,6 +1,7 @@
 // The bridge, checked against the shared vectors and against a phone and an engine in this
 // process. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -74,6 +75,8 @@ test("addresses, relay messages, frames and messages match the vectors", () => {
   for (const r of v.routes) assert.equal(link.allowed(r.path, r.method ?? "GET"), r.allowed, `${r.path} ${r.method ?? "GET"}`);
   for (const r of v.sockets) assert.equal(link.socketAllowed(r.path), r.allowed, r.path);
   for (const r of v.agentRoutes) assert.equal(link.agentsAllowed(r.path, r.method ?? "GET"), r.allowed, `agents: ${r.path} ${r.method ?? "GET"}`);
+  // What's sent for each: the path written one way only.
+  for (const r of [...v.routes, ...v.sockets, ...v.agentRoutes].filter(r => r.forwarded)) assert.equal(link.canonicalPath(r.path), r.forwarded, r.path);
   for (const r of v.signInReturns) assert.equal(link.signInReturn(r.url), r.loads ?? null, r.url);
   for (const m of v.messages) {
     assert.equal(link.encodeMessage(m.head, hex(m.body)).toString("hex"), m.bytes);
@@ -292,6 +295,31 @@ test("requests go to the engine with its password, all of its API; paths that ar
   phone.send({ t: "cancel", id: 9 });
   for (let i = 0; i < 50 && !engine.asked.some(a => a.closed === "/api/event"); i++) await new Promise(r => setTimeout(r, 20));
   assert.ok(engine.asked.some(a => a.closed === "/api/event"));
+});
+
+test("what reaches the engine and the agents' bridge is the path as it was checked, however the phone wrote it (Vectors/link.json)", async t => {
+  const asked = [];
+  const server = http.createServer((request, response) => {
+    asked.push(request.url);
+    request.resume();
+    request.on("end", () => { response.writeHead(200, { "content-type": "application/json" }); response.end("{}"); });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = server.address().port;
+  // The agents' bridge is this same server, under a process the bridge takes for it.
+  const named = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
+  t.after(() => named.kill());
+  const handle = link.engineHandler(() => ({ pid: process.pid, port, password: "s", version: "2.0.30" }), {}, () => ({ pid: named.pid, port, password: "a" }));
+  const v = vectors("link.json");
+  for (const [list, prefix] of [[v.routes, ""], [v.agentRoutes, "kuvo/agents/"]]) {
+    for (const r of list.filter(r => r.forwarded)) {
+      asked.length = 0;
+      const { status } = await answer(handle, r.method ?? "GET", prefix + r.path);
+      assert.equal(status, 200, r.path);
+      assert.deepEqual(asked, [`/${r.forwarded}`], r.path);
+    }
+  }
 });
 
 // What a phone's request gets from the handler, read whole.

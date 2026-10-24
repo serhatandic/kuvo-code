@@ -380,9 +380,15 @@ itself. A host serves:
 
 - `api/…`: passed to its engine, all of its API. A paired phone is yours, with the reach the app
   has on that computer: sessions, files, terminals and commands, accounts and their keys, the
-  engine's settings, MCP servers. Only a path that isn't what it seems is refused (403): one with
-  `..` (plain or percent-encoded), a backslash, a fragment, control characters, a space at
-  either end, or a sign joined into one character with a mark after it. The commands the engine
+  engine's settings, MCP servers. The host writes the path one way only, and sends exactly that:
+  each part between slashes, and each name and value in the query (where `+` is a space), is
+  percent-decoded once and encoded again the same way (RFC 3986's characters as they are, any
+  other as `%XX`), and empty parts are left out, so `api//session/%73es_1/` is sent as
+  `api/session/ses_1` and `%252e` stays `%252e`. Only a path that isn't what it seems is refused
+  (403): a fragment, an escape that doesn't decode, a part that decodes to `.` or holds `..`, a
+  backslash or a control character, or a part between slashes that holds a slash (`%2F`) or
+  starts or ends with a space (a machine's bridge from 0.9.25; before, it refused by what the path
+  held, as written and decoded, and sent it as written). The commands the engine
   runs for agents: `GET api/shell` (those running in the folder `x-opencode-directory` names),
   `GET api/shell/<id>` and `GET api/shell/<id>/output?cursor=&limit=`; their `shell.created`,
   `shell.exited` and `shell.deleted` come with `api/event`.

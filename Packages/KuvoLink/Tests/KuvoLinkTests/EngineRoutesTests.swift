@@ -59,7 +59,7 @@ final class FakeEngine: URLProtocol, @unchecked Sendable {
         for path in ["api/kuvo/engine", "api/kuvo/%65ngine", "api/kuvo//engine", "api/kuvo/./engine", "api/kuvo/engine?x=1", "api/kuvo/groups/grp_x/release"] {
             #expect(!EngineRoutes.allowsAgents(path, method: "PUT"), "\(path)")
         }
-        #expect(EngineRoutes.routed("api//integration/x/./%75pdate?y=1") == "api/integration/x/update?y=1")
+        #expect(EngineRoutes.canonical("api//integration/x/%75pdate?y=1") == "api/integration/x/update?y=1")
         // Nothing but the API, and no path that isn't what it seems.
         for path in ["kuvo/info", "", "api/fs/read/../../etc/passwd", "api/session/%2e%2e/credential", "api/kuvo/engine#", "api/session/x\u{7f}"] {
             #expect(!EngineRoutes.allows(path) && !EngineRoutes.allowsAgents(path), "\(path)")
@@ -78,6 +78,26 @@ final class FakeEngine: URLProtocol, @unchecked Sendable {
         #expect(asked.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("opencode:s3cret".utf8).base64EncodedString())
         #expect(asked.value(forHTTPHeaderField: "x-opencode-directory") == "/p")
         #expect(asked.value(forHTTPHeaderField: "Cookie") == nil)
+    }
+
+    /// What reaches the engine, or the agents' bridge, is the path as it was checked: each path the
+    /// vectors allow arrives as their `forwarded`, however the phone wrote it ("%75pdate",
+    /// "a+b", "Re\u{301}sume\u{301}.txt", twice-encoded dots, empty parts).
+    @Test func whatIsCheckedIsWhatIsSent() async throws {
+        let vectors = try Vectors.load("link.json")
+        let lists: [(String, @Sendable (String, String) -> Bool)] = [
+            ("routes", { EngineRoutes.allows($0, method: $1) }), ("agentRoutes", { EngineRoutes.allowsAgents($0, method: $1) }),
+        ]
+        for (key, allowing) in lists {
+            for item in vectors[key] as! [[String: Any]] {
+                guard let forwarded = item["forwarded"] as? String else { continue }
+                FakeEngine.asked = []
+                let request = LinkRequest(method: item["method"] as? String ?? "GET", path: item["path"] as! String)
+                let (status, _, _) = try await collect(EngineRoutes.forward(request, to: base, password: nil, session: session, allowing: allowing))
+                #expect(status == 200, "\(request.path)")
+                #expect(FakeEngine.asked.map { $0.url?.absoluteString } == [base.absoluteString + forwarded], "\(request.path)")
+            }
+        }
     }
 
     @Test func refusesWhatIsNotOnTheList() async throws {

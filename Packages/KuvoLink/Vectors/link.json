@@ -135,115 +135,143 @@
   "routes": [
     {
       "path": "api/session",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/session"
     },
     {
       "path": "api/session?limit=50&order=desc",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/session?limit=50&order=desc"
     },
     {
       "path": "api/session/ses_1/prompt",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/session/ses_1/prompt"
     },
     {
       "path": "api/session/active",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/session/active"
     },
     {
       "path": "api/event",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/event"
     },
     {
       "path": "api/event?x=1",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/event?x=1"
     },
     {
       "path": "api/info",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/info"
     },
     {
       "path": "api/provider",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/provider"
     },
     {
       "path": "api/model/default",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/model/default"
     },
     {
       "path": "api/permission/saved",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/permission/saved"
     },
     {
       "path": "api/form",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/form"
     },
     {
       "path": "api/experimental/session/ses_1/wait",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/experimental/session/ses_1/wait"
     },
     {
       "path": "api/experimental/session/ses_1/instructions/entries/k",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/experimental/session/ses_1/instructions/entries/k"
     },
     {
       "path": "api/credential",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/credential"
     },
     {
       "path": "api/credential/anthropic",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/credential/anthropic"
     },
     {
       "path": "api/integration/github/connect/key",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/integration/github/connect/key"
     },
     {
       "path": "api/integration",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/integration"
     },
     {
       "path": "api/integration/github-copilot",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/integration/github-copilot"
     },
     {
       "path": "api/config",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/config"
     },
     {
       "path": "api/config/shell",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/config/shell"
     },
     {
       "path": "api/mcp",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/mcp"
     },
     {
       "path": "api/plugin",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/plugin"
     },
     {
       "path": "api/fs/list",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/list"
     },
     {
       "path": "api/fs/list?path=Sources",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/list?path=Sources"
     },
     {
       "path": "api/fs/find?query=main",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/find?query=main"
     },
     {
       "path": "api/fs/read/Sources/main.swift",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/read/Sources/main.swift"
     },
     {
       "path": "api/fs/read",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/read"
     },
     {
       "path": "api/fs/write/x",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/write/x"
     },
     {
       "path": "api/fs/read/../../etc/hosts",
@@ -299,7 +327,8 @@
     },
     {
       "path": "api/fs/read/Re\u0301sume\u0301.txt",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/read/Re%CC%81sume%CC%81.txt"
     },
     {
       "path": "api/session/%2e%2e\u200d/credential",
@@ -319,7 +348,8 @@
     },
     {
       "path": "api/fs/read/a%20b.txt",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/fs/read/a%20b.txt"
     },
     {
       "path": "api/fs/read/..%5c..%5csecret",
@@ -335,11 +365,13 @@
     },
     {
       "path": "api/sessions",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/sessions"
     },
     {
       "path": "api/eventual",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/eventual"
     },
     {
       "path": "api/session/../credential",
@@ -355,23 +387,28 @@
     },
     {
       "path": "api/pty",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty"
     },
     {
       "path": "api/pty?location[directory]=x",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty?location%5Bdirectory%5D=x"
     },
     {
       "path": "api/pty/pty_1",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty/pty_1"
     },
     {
       "path": "api/pty/pty_1/connect-token",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty/pty_1/connect-token"
     },
     {
       "path": "api/ptys",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/ptys"
     },
     {
       "path": "api/pty/%2e%2e/x",
@@ -379,19 +416,23 @@
     },
     {
       "path": "api/experimental/persistent-pty/pty_1",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/experimental/persistent-pty/pty_1"
     },
     {
       "path": "api/shell",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/shell"
     },
     {
       "path": "api/shell/sh_1",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/shell/sh_1"
     },
     {
       "path": "api/shell/sh_1/output?cursor=0&limit=1",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/shell/sh_1/output?cursor=0&limit=1"
     },
     {
       "path": "api/shell/../config",
@@ -399,166 +440,198 @@
     },
     {
       "path": "api/shell/sh_1/x",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/shell/sh_1/x"
     },
     {
       "path": "api/shells",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/shells"
     },
     {
       "path": "api/shell",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/shell"
     },
     {
       "path": "api/shell/sh_1",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/shell/sh_1"
     },
     {
       "path": "api/shell/sh_1/output",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/shell/sh_1/output"
     },
     {
       "path": "api/integration",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration"
     },
     {
       "path": "api/integration?fresh=1",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration?fresh=1"
     },
     {
       "path": "api/integration/github-copilot",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration/github-copilot"
     },
     {
       "path": "api/integration/anthropic/connect/key",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/key"
     },
     {
       "path": "api/integration/github-copilot/connect/oauth",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/github-copilot/connect/oauth"
     },
     {
       "path": "api/integration/github-copilot/connect/oauth/att_1",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration/github-copilot/connect/oauth/att_1"
     },
     {
       "path": "api/integration/gitlab/connect/oauth/att_1/complete",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/gitlab/connect/oauth/att_1/complete"
     },
     {
       "path": "api/integration/gitlab/connect/oauth/att_1",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/integration/gitlab/connect/oauth/att_1"
     },
     {
       "path": "api/credential/cred_1/activate",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/credential/cred_1/activate"
     },
     {
       "path": "api/credential/cred_1",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/credential/cred_1"
     },
     {
       "path": "api/integration/openai@work/connect/key",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/openai@work/connect/key"
     },
     {
       "path": "api/credential",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/credential"
     },
     {
       "path": "api/credential/cred_1",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/credential/cred_1"
     },
     {
       "path": "api/credential",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/credential"
     },
     {
       "path": "api/credential?x=1",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/credential?x=1"
     },
     {
       "path": "api/credential/cred_1/activate",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/credential/cred_1/activate"
     },
     {
       "path": "api/credential/cred_1/x",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/credential/cred_1/x"
     },
     {
       "path": "api/integration/anthropic/update",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/update"
     },
     {
       "path": "api/integration/anthropic/connect/external",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/external"
     },
     {
       "path": "api/integration/anthropic/connect/%6bey",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/key"
     },
     {
       "path": "api/integration/anthropic//connect/key",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/key"
     },
     {
       "path": "api/integration/./connect/key",
-      "allowed": true,
+      "allowed": false,
       "method": "POST"
     },
     {
       "path": "api/integration/anthropic/connect/key/x",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/key/x"
     },
     {
       "path": "api/integration/anthropic/connect/key?x=1",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/anthropic/connect/key?x=1"
     },
     {
       "path": "api/integration/anthropic",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/integration/anthropic"
     },
     {
       "path": "api/integration/anthropic",
       "allowed": true,
-      "method": "PATCH"
+      "method": "PATCH",
+      "forwarded": "api/integration/anthropic"
     },
     {
       "path": "api/integration/anthropic/connect/key",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration/anthropic/connect/key"
     },
     {
       "path": "api/integration/anthropic/connect/key",
       "allowed": true,
-      "method": "PUT"
+      "method": "PUT",
+      "forwarded": "api/integration/anthropic/connect/key"
     },
     {
       "path": "api/integration/../credential",
@@ -583,17 +656,145 @@
     {
       "path": "api/credential/.hidden",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/credential/.hidden"
+    },
+    {
+      "path": "api/fs/read/%252e%252e/secret",
+      "allowed": true,
+      "forwarded": "api/fs/read/%252e%252e/secret"
+    },
+    {
+      "path": "api/fs/read/%252e%252e%252fsecret",
+      "allowed": true,
+      "forwarded": "api/fs/read/%252e%252e%252fsecret"
+    },
+    {
+      "path": "api/fs/list?path=%252e%252e",
+      "allowed": true,
+      "forwarded": "api/fs/list?path=%252e%252e"
+    },
+    {
+      "path": "api/session%2F..%2Fcredential",
+      "allowed": false
+    },
+    {
+      "path": "api/session/%2E%2E%2fcredential",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/a%2Fb",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/%2e",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/.%2E/secret",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/list?path=Sources%2F..%2F..",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/list?path=..",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/a%09b",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/a%20",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/100%.txt",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/100%25.txt",
+      "allowed": true,
+      "forwarded": "api/fs/read/100%25.txt"
+    },
+    {
+      "path": "api/fs/read/.hidden/x",
+      "allowed": true,
+      "forwarded": "api/fs/read/.hidden/x"
+    },
+    {
+      "path": "api/fs/read/it's (1).txt",
+      "allowed": true,
+      "forwarded": "api/fs/read/it's%20(1).txt"
+    },
+    {
+      "path": "api/integration/%6Fpenai%40work/connect/key",
+      "allowed": true,
+      "forwarded": "api/integration/openai@work/connect/key"
+    },
+    {
+      "path": "api/session/ses_1/",
+      "allowed": true,
+      "forwarded": "api/session/ses_1"
+    },
+    {
+      "path": "api//session",
+      "allowed": true,
+      "forwarded": "api/session"
+    },
+    {
+      "path": "api/session?",
+      "allowed": true,
+      "forwarded": "api/session"
+    },
+    {
+      "path": "api/session?limit=50&&order=desc",
+      "allowed": true,
+      "forwarded": "api/session?limit=50&order=desc"
+    },
+    {
+      "path": "api/fs/find?query=a+b&limit=5",
+      "allowed": true,
+      "forwarded": "api/fs/find?query=a%20b&limit=5"
+    },
+    {
+      "path": "api/fs/find?query=a%2Bb",
+      "allowed": true,
+      "forwarded": "api/fs/find?query=a%2Bb"
+    },
+    {
+      "path": "api/fs/list?path=Sources/App",
+      "allowed": true,
+      "forwarded": "api/fs/list?path=Sources/App"
+    },
+    {
+      "path": "api/fs/find?query=it's",
+      "allowed": true,
+      "forwarded": "api/fs/find?query=it%27s"
+    },
+    {
+      "path": "api/fs/find?query=x=y",
+      "allowed": true,
+      "forwarded": "api/fs/find?query=x%3Dy"
+    },
+    {
+      "path": "%61pi/session",
+      "allowed": true,
+      "forwarded": "api/session"
     }
   ],
   "sockets": [
     {
       "path": "api/pty/pty_1/connect",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty/pty_1/connect"
     },
     {
       "path": "api/pty/pty_1/connect?cursor=0",
-      "allowed": true
+      "allowed": true,
+      "forwarded": "api/pty/pty_1/connect?cursor=0"
     },
     {
       "path": "api/pty/pty_1",
@@ -634,58 +835,86 @@
     {
       "path": "api/pty/%2e%2e\u200d/connect",
       "allowed": false
+    },
+    {
+      "path": "api/pty/pty%5F1/connect",
+      "allowed": true,
+      "forwarded": "api/pty/pty_1/connect"
+    },
+    {
+      "path": "api/pty//pty_1/connect",
+      "allowed": true,
+      "forwarded": "api/pty/pty_1/connect"
+    },
+    {
+      "path": "api/pty/a%2Fb/connect",
+      "allowed": false
+    },
+    {
+      "path": "api/pty/%2e/connect",
+      "allowed": false
     }
   ],
   "agentRoutes": [
     {
       "path": "api/session/ses_1/prompt",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/session/ses_1/prompt"
     },
     {
       "path": "api/session",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/session"
     },
     {
       "path": "api/event",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/event"
     },
     {
       "path": "api/integration",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/integration"
     },
     {
       "path": "api/integration/claude-code@1f2e/connect/oauth",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code@1f2e/connect/oauth"
     },
     {
       "path": "api/kuvo/auto",
       "allowed": true,
-      "method": "PUT"
+      "method": "PUT",
+      "forwarded": "api/kuvo/auto"
     },
     {
       "path": "api/kuvo/auto/limits",
       "allowed": true,
-      "method": "DELETE"
+      "method": "DELETE",
+      "forwarded": "api/kuvo/auto/limits"
     },
     {
       "path": "api/kuvo/accounts",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/kuvo/accounts"
     },
     {
       "path": "api/kuvo/accounts/codex-cli@9a8b",
       "allowed": true,
-      "method": "PATCH"
+      "method": "PATCH",
+      "forwarded": "api/kuvo/accounts/codex-cli@9a8b"
     },
     {
       "path": "api/model",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/model"
     },
     {
       "path": "api/kuvo/engine",
@@ -705,37 +934,42 @@
     {
       "path": "api/integration/claude-code/update",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update"
     },
     {
       "path": "api/integration/claude-code/%75pdate",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update"
     },
     {
       "path": "api/integration/claude-code//update",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update"
     },
     {
       "path": "api/integration/claude-code/./update",
-      "allowed": true,
+      "allowed": false,
       "method": "POST"
     },
     {
       "path": "api/integration/claude-code/%2e/update",
-      "allowed": true,
+      "allowed": false,
       "method": "POST"
     },
     {
       "path": "api/integration//claude-code/update",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update"
     },
     {
       "path": "api/integration/claude-code/update/",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update"
     },
     {
       "path": "api/integration/claude-code/update#x",
@@ -755,22 +989,26 @@
     {
       "path": "api/credential",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/credential"
     },
     {
       "path": "api/config",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/config"
     },
     {
       "path": "api/kuvo/other",
       "allowed": true,
-      "method": "GET"
+      "method": "GET",
+      "forwarded": "api/kuvo/other"
     },
     {
       "path": "api/shell",
       "allowed": true,
-      "method": "POST"
+      "method": "POST",
+      "forwarded": "api/shell"
     },
     {
       "path": "api/integration/claude-code/update ",
@@ -794,13 +1032,15 @@
     },
     {
       "path": "api/integration/claude-code/update?\u0301",
-      "allowed": false,
-      "method": "POST"
+      "allowed": true,
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update?%CC%81"
     },
     {
       "path": "api/integration/claude-code/update/\u0301",
-      "allowed": false,
-      "method": "POST"
+      "allowed": true,
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update/%CC%81"
     },
     {
       "path": "api/kuvo/engine#\u200d",
@@ -809,8 +1049,9 @@
     },
     {
       "path": "api/integration/claude-code/update%3F\u0301",
-      "allowed": false,
-      "method": "POST"
+      "allowed": true,
+      "method": "POST",
+      "forwarded": "api/integration/claude-code/update%3F%CC%81"
     },
     {
       "path": "api/kuvo/groups",
@@ -826,6 +1067,48 @@
       "path": "api/kuvo/%67roups",
       "allowed": false,
       "method": "GET"
+    },
+    {
+      "path": "api/kuvo/%2565ngine",
+      "allowed": true,
+      "method": "PUT",
+      "forwarded": "api/kuvo/%2565ngine"
+    },
+    {
+      "path": "api/kuvo/engine%2F",
+      "allowed": false,
+      "method": "PUT"
+    },
+    {
+      "path": "api/kuvo%2Fengine",
+      "allowed": false,
+      "method": "PUT"
+    },
+    {
+      "path": "api/kuvo/%2e/engine",
+      "allowed": false,
+      "method": "PUT"
+    },
+    {
+      "path": "api/kuvo/engine/",
+      "allowed": false,
+      "method": "PUT"
+    },
+    {
+      "path": "api/kuvo/engine?x=1",
+      "allowed": false,
+      "method": "PUT"
+    },
+    {
+      "path": "api/kuvo/%2567roups",
+      "allowed": true,
+      "method": "GET",
+      "forwarded": "api/kuvo/%2567roups"
+    },
+    {
+      "path": "api//kuvo/engine",
+      "allowed": false,
+      "method": "PUT"
     }
   ],
   "signInReturns": [

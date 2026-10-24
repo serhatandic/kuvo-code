@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes link.json: addresses, relay messages, link frames and session messages, worked out
 here independently of the Swift and JavaScript implementations, which both check against it."""
-import base64, hashlib, json, re, struct, unicodedata, urllib.parse
+import base64, hashlib, json, re, struct, urllib.parse
 
 def address(secret):
     return hashlib.sha256(b"kuvo-link address v1" + secret).digest()[:16]
@@ -114,6 +114,8 @@ agent_routes = [{"path": p, "allowed": a, "method": m} for p, a, m in [
     ("api/config", False, "GET"), ("api/kuvo/other", False, "GET"), ("api/shell", False, "POST"),
     ("api/integration/claude-code/update ", False, "POST"), (" api/kuvo/engine", False, "PUT"),
     ("api/kuvo/engine  ", False, "PUT"),
+    # A sign with a mark after it: parts are split on bytes, so "?\u0301" is a query of "%CC%81",
+    # sent as that, and "/\u0301" a part of its own.
     ("api/integration/claude-code/update#\u0301", False, "POST"), ("api/integration/claude-code/update?\u0301", False, "POST"),
     ("api/integration/claude-code/update/\u0301", False, "POST"), ("api/kuvo/engine#\u200d", False, "PUT"),
     ("api/integration/claude-code/update%3F\u0301", False, "POST"),
@@ -122,7 +124,16 @@ agent_routes = [{"path": p, "allowed": a, "method": m} for p, a, m in [
 # A paired phone is yours: the engine's whole API, as the app has it (accounts and keys, settings,
 # MCP servers, commands included), with only a path that isn't what it seems refused; and the
 # same of the coding agents' bridge, but for where the engine is and its group chats' own steps.
-# The paths above are kept; what each should get is worked out here, by that rule.
+# The paths above are kept; what each should get, and what's sent for it (`forwarded`), is worked
+# out here, by that rule: the path is written one way only, and that's both what's checked and
+# what's sent. Each part between slashes, and each name and value in its query ("+" a space
+# there), is percent-decoded once and encoded again as below; empty parts are left out. Refused:
+# a fragment, an escape that doesn't decode, a part that decodes to "." or holds "..", a backslash
+# or a control character, and a part between slashes that holds a slash or starts or ends with a
+# space.
+PATH_PLAIN = "-._~!$&'()*+,;=:@"
+QUERY_PLAIN = "-._~!$()*,;:@/?"
+
 def percent_decoded(path):
     if re.search(r"%(?![0-9A-Fa-f]{2})", path):
         return None
@@ -131,42 +142,77 @@ def percent_decoded(path):
     except UnicodeDecodeError:
         return None
 
-def joins_a_sign(text):
-    # A sign other than a letter or digit, then a mark that joins it into one character.
-    extends = lambda c: unicodedata.category(c) in ("Mn", "Me", "Mc") or c == "\u200d" or 0xFE00 <= ord(c) <= 0xFE0F
-    return any(ord(x) < 0x80 and not x.isalnum() and extends(y) for x, y in zip(text, text[1:]))
+def decoded_part(raw):
+    text = percent_decoded(raw)
+    if text is None or ".." in text or "\\" in text or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+        return None
+    return text
 
-def is_what_it_seems(path):
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in path) or path.startswith(" ") or path.endswith(" ") or "#" in path:
-        return False
-    decoded = percent_decoded(path)
-    return decoded is not None and ".." not in path and ".." not in decoded and "\\" not in decoded \
-        and not joins_a_sign(path) and not joins_a_sign(decoded)
-
-def routed(path):
-    at = path.find("?")
-    head, query = (path, "") if at < 0 else (path[:at], path[at:])
-    parts = [part for part in head.split("/") if part not in ("", ".") and part.lower() != "%2e"]
-    return "/".join(percent_decoded(part) or part for part in parts) + query
+def canonical(path):
+    if "#" in path:
+        return None
+    head, _, query = path.partition("?")
+    parts = []
+    for raw in filter(None, head.split("/")):
+        part = decoded_part(raw)
+        if part is None or part == "." or "/" in part or part.startswith(" ") or part.endswith(" "):
+            return None
+        parts.append(urllib.parse.quote(part, safe=PATH_PLAIN))
+    fields = []
+    for raw in filter(None, query.split("&")):
+        halves = [decoded_part(half) for half in raw.replace("+", " ").split("=", 1)]
+        if None in halves:
+            return None
+        fields.append("=".join(urllib.parse.quote(half, safe=QUERY_PLAIN) for half in halves))
+    return "/".join(parts) + ("?" + "&".join(fields) if fields else "")
 
 def phone_may(path):
-    return is_what_it_seems(path) and re.match(r"api(/|\?|$)", path) is not None
+    sent = canonical(path)
+    return sent is not None and re.match(r"api(/|\?|$)", sent) is not None
 
 def agents_may(path):
-    return phone_may(path) and re.match(r"api/kuvo/(engine|groups)(/|\?|$)", routed(path)) is None
+    return phone_may(path) and re.match(r"api/kuvo/(engine|groups)(/|\?|$)", canonical(path)) is None
 
 agent_routes += [{"path": p, "allowed": False, "method": m} for p, m in [
     ("api/kuvo/groups", "GET"), ("api/kuvo/groups/grp_x/release", "POST"), ("api/kuvo/%67roups", "GET"),
+]]
+# Written another way, each is sent one way only. Twice-encoded is a name with an escape in it
+# (the engine and the agents' bridge decode once), and a slash encoded inside a part is refused.
+routes += [{"path": p, "allowed": None} for p in [
+    "api/fs/read/%252e%252e/secret", "api/fs/read/%252e%252e%252fsecret", "api/fs/list?path=%252e%252e",
+    "api/session%2F..%2Fcredential", "api/session/%2E%2E%2fcredential", "api/fs/read/a%2Fb", "api/fs/read/%2e",
+    "api/fs/read/.%2E/secret", "api/fs/list?path=Sources%2F..%2F..", "api/fs/list?path=..", "api/fs/read/a%09b",
+    "api/fs/read/a%20", "api/fs/read/100%.txt", "api/fs/read/100%25.txt", "api/fs/read/.hidden/x",
+    "api/fs/read/it's (1).txt", "api/integration/%6Fpenai%40work/connect/key", "api/session/ses_1/", "api//session",
+    "api/session?", "api/session?limit=50&&order=desc", "api/fs/find?query=a+b&limit=5", "api/fs/find?query=a%2Bb",
+    "api/fs/list?path=Sources/App", "api/fs/find?query=it's", "api/fs/find?query=x=y", "%61pi/session",
+]]
+agent_routes += [{"path": p, "allowed": None, "method": m} for p, m in [
+    ("api/kuvo/%2565ngine", "PUT"), ("api/kuvo/engine%2F", "PUT"), ("api/kuvo%2Fengine", "PUT"), ("api/kuvo/%2e/engine", "PUT"),
+    ("api/kuvo/engine/", "PUT"), ("api/kuvo/engine?x=1", "PUT"), ("api/kuvo/%2567roups", "GET"), ("api//kuvo/engine", "PUT"),
+]]
+sockets += [{"path": p, "allowed": a} for p, a in [
+    ("api/pty/pty%5F1/connect", True), ("api/pty//pty_1/connect", True), ("api/pty/a%2Fb/connect", False), ("api/pty/%2e/connect", False),
 ]]
 for item in routes:
     item["allowed"] = phone_may(item["path"])
 for item in agent_routes:
     item["allowed"] = agents_may(item["path"])
+for item in routes + agent_routes + sockets:
+    if item["allowed"]:
+        item["forwarded"] = canonical(item["path"])
+        # Written once, it stays as it is.
+        assert canonical(item["forwarded"]) == item["forwarded"]
 # What that rule says of a few, as meant.
 assert phone_may("api/credential") and phone_may("api/config") and phone_may("api/shell") and phone_may("api/integration/x/update")
 assert not phone_may("api/session/../credential") and not phone_may("kuvo/info") and not phone_may("api/session/%2e%2e\u200d/x")
 assert not agents_may("api/kuvo/engine") and not agents_may("api/kuvo/%65ngine") and not agents_may("api/kuvo/groups/x")
 assert agents_may("api/integration/claude-code/update") and agents_may("api/integration/claude-code/install") and agents_may("api/kuvo/auto")
+assert canonical("api/integration/claude-code/%75pdate") == "api/integration/claude-code/update"
+assert canonical("api/fs/read/%252e%252e/x") == "api/fs/read/%252e%252e/x" and canonical("api/fs/find?query=a+b") == "api/fs/find?query=a%20b"
+assert canonical("api/pty?location[directory]=x") == "api/pty?location%5Bdirectory%5D=x"
+for item in sockets:
+    assert (canonical(item["path"]) is not None and re.match(r"api/pty/[^/?]+/connect(\?|$)", canonical(item["path"])) is not None) == item["allowed"], item
 
 # Where a sign-in's page sends the browser back to the computer (`kuvo/sign-in/return`), which
 # the phone hands it to load there: only this computer's own address (127.0.0.1, localhost, [::1])

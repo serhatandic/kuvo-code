@@ -5,28 +5,65 @@ import Foundation
 public enum EngineRoutes {
     /// A paired phone is yours: the engine's whole API, as the app has it (sessions, files,
     /// terminals, commands, accounts and keys, settings, MCP servers). Only a path that isn't what
-    /// it seems (`staysInProject`) is refused.
+    /// it seems (`canonical` refuses it) is refused.
     public static func allows(_ path: String, method: String = "GET") -> Bool {
-        staysInProject(path) && path.prefixMatch(of: #/api(/|\?|$)/#) != nil
+        canonical(path)?.prefixMatch(of: #/api(/|\?|$)/#) != nil
     }
 
     /// The same of a coding agents' bridge, but for the two routes only the app wires things with:
     /// where the engine is, and its group chats' own steps (moves), which a phone does through
-    /// `kuvo/groups`.
+    /// `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part by part.
     public static func allowsAgents(_ path: String, method: String = "GET") -> Bool {
-        allows(path, method: method) && routed(path).prefixMatch(of: #/api/kuvo/(engine|groups)(/|\?|$)/#) == nil
+        guard let sent = canonical(path) else { return false }
+        return allows(sent) && sent.prefixMatch(of: #/api/kuvo/(engine|groups)(/|\?|$)/#) == nil
     }
 
-    /// `path` as the agents bridge routes it: split into parts, without empty ones or "." ones
-    /// (which its URL parser drops, "%2e" too), each decoded ("%75pdate" is "update"). So
-    /// "integration/x//update", ".../x/./update" and ".../x/%75pdate" are "integration/x/update".
-    static func routed(_ path: String) -> String {
-        let query = path.firstIndex(of: "?")
-        let parts = path[..<(query ?? path.endIndex)].split(separator: "/")
-            .filter { $0 != "." && $0.lowercased() != "%2e" }
-            .map { $0.removingPercentEncoding ?? String($0) }
-        return parts.joined(separator: "/") + (query.map { String(path[$0...]) } ?? "")
+    /// `path` written one way only, which is both what's checked and what's sent, or nil when it
+    /// isn't what it seems. Each part between slashes, and each name and value in its query, is
+    /// percent-decoded once (`decoded`) and encoded again the same way; empty parts are left out.
+    /// Also refused: a fragment (`#`, which isn't sent), and a part between slashes that's ".",
+    /// holds a slash, or starts or ends with a space. As `canonicalPath` in kuvo-link.js.
+    static func canonical(_ path: String) -> String? {
+        // In bytes, never characters, where a mark after a "/" or "?" hides it.
+        let bytes = Array(path.utf8)
+        guard !bytes.contains(UInt8(ascii: "#")) else { return nil }
+        let mark = bytes.firstIndex(of: UInt8(ascii: "?")) ?? bytes.endIndex
+        var parts: [String] = []
+        for raw in bytes[..<mark].split(separator: UInt8(ascii: "/")) {
+            guard let part = decoded(raw), part != ".", !part.unicodeScalars.contains("/"),
+                  part.unicodeScalars.first != " ", part.unicodeScalars.last != " ",
+                  let written = part.addingPercentEncoding(withAllowedCharacters: pathCharacters) else { return nil }
+            parts.append(written)
+        }
+        // A "+" in a query is a space.
+        let query = bytes[min(mark + 1, bytes.endIndex)...].map { $0 == UInt8(ascii: "+") ? UInt8(ascii: " ") : $0 }
+        var fields: [String] = []
+        for raw in query.split(separator: UInt8(ascii: "&")) {
+            let halves = raw.split(separator: UInt8(ascii: "="), maxSplits: 1, omittingEmptySubsequences: false)
+                .map { decoded($0)?.addingPercentEncoding(withAllowedCharacters: queryCharacters) }
+            guard !halves.contains(nil) else { return nil }
+            fields.append(halves.compactMap { $0 }.joined(separator: "="))
+        }
+        return parts.joined(separator: "/") + (fields.isEmpty ? "" : "?" + fields.joined(separator: "&"))
     }
+
+    /// Percent-decoded once, or nil when it doesn't decode or holds "..", a backslash or a control
+    /// character. So "%2e%2e", ".\t." and "x%5c.." never get through, and "%252e" is a name with
+    /// "%2e" in it, which is how the engine reads "%252e" too.
+    private static func decoded(_ raw: some Collection<UInt8>) -> String? {
+        guard let text = String(decoding: Array(raw), as: UTF8.self).removingPercentEncoding else { return nil }
+        let bytes = Array(text.utf8)
+        let refused = bytes.contains { $0 < 0x20 || $0 == 0x7f || $0 == UInt8(ascii: "\\") }
+            || zip(bytes, bytes.dropFirst()).contains { $0 == UInt8(ascii: ".") && $1 == UInt8(ascii: ".") }
+        return refused ? nil : text
+    }
+
+    /// What's written as it is (RFC 3986's): letters, digits and `-._~`; between slashes
+    /// `!$&'()*+,;=:@` too, and in a query `!$()*,;:@/?` (not `'`, which URL parsers encode there,
+    /// nor `&`, `=` or `+`, which a query splits on or reads as a space). Anything else is encoded.
+    private static let plain = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    private static let pathCharacters = CharacterSet(charactersIn: plain + "!$&'()*+,;=:@")
+    private static let queryCharacters = CharacterSet(charactersIn: plain + "!$()*,;:@/?")
 
     /// Where a sign-in's page sent the browser back to the computer, for the computer to load
     /// (`kuvo/sign-in/return`): only its own address (127.0.0.1, localhost, [::1]) over http, at a
@@ -42,34 +79,7 @@ public enum EngineRoutes {
 
     /// The sockets a phone may open: a terminal's.
     public static func allowsSocket(_ path: String) -> Bool {
-        staysInProject(path) && path.prefixMatch(of: #/api/pty/[^/?]+/connect(\?|$)/#) != nil
-    }
-
-    /// No way out of the project, written plainly or percent-encoded ("%2E%2E"): the engine
-    /// decodes it, and lists a folder above the project if asked. Nor a fragment ("#…"), which
-    /// isn't sent: ".../update#x" would be checked as itself and reach ".../update". Nor tabs,
-    /// line breaks or other control characters, which URL parsers drop (".\t." is ".." to them),
-    /// nor a space at either end, which they drop too (".../update " is ".../update" to them).
-    /// Nor a sign they split on (`/`, `?`, `#`, `.`, `\`, `%`) joined into one character with a
-    /// mark after it, which these checks, made on characters, wouldn't see as that sign
-    /// (".../update#\u{301}" is ".../update" to them).
-    static func staysInProject(_ path: String) -> Bool {
-        guard !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }),
-              path.unicodeScalars.first != " ", path.unicodeScalars.last != " ",
-              !joinsASign(path), let decoded = path.removingPercentEncoding, !joinsASign(decoded) else { return false }
-        // As bytes, as parsers read them, not characters ("..\u{200D}" is ".." to them).
-        return !has("..", in: decoded) && !has("\\", in: decoded) && !has("..", in: path) && !has("#", in: path)
-    }
-
-    /// A sign other than a letter or digit, joined into one character with what follows it.
-    private static func joinsASign(_ text: String) -> Bool {
-        text.contains { $0.unicodeScalars.count > 1 && $0.unicodeScalars.contains { $0.isASCII && !$0.properties.isAlphabetic && !("0"..."9").contains($0) } }
-    }
-
-    private static func has(_ part: String, in text: String) -> Bool {
-        let bytes = Array(text.utf8), wanted = Array(part.utf8)
-        guard bytes.count >= wanted.count else { return false }
-        return (0...(bytes.count - wanted.count)).contains { Array(bytes[$0..<($0 + wanted.count)]) == wanted }
+        canonical(path)?.prefixMatch(of: #/api/pty/[^/?]+/connect(\?|$)/#) != nil
     }
 
     static let requestHeaders = ["content-type", "accept", "x-opencode-directory", "last-event-id"]
@@ -79,7 +89,7 @@ public enum EngineRoutes {
     /// from `input` goes to it, and what it sends comes back, `.open` first.
     public static func connect(_ request: LinkRequest, to base: URL, password: String?, input: AsyncStream<Data>) -> AsyncThrowingStream<LinkSocketEvent, Error> {
         AsyncThrowingStream { continuation in
-            guard allowsSocket(request.path), let url = URL(string: request.path, relativeTo: base),
+            guard allowsSocket(request.path), let path = canonical(request.path), let url = URL(string: path, relativeTo: base),
                   var components = URLComponents(url: url.absoluteURL, resolvingAgainstBaseURL: false)
             else { return continuation.finish(throwing: URLError(.badURL)) }
             components.scheme = components.scheme == "https" ? "wss" : "ws"
@@ -124,11 +134,12 @@ public enum EngineRoutes {
     }
 
     /// Passes `request` to the engine at `base` (its password added here), and its response back
-    /// in pieces as they come: an event stream's events one by one.
+    /// in pieces as they come: an event stream's events one by one. What's sent is the path as
+    /// `canonical` writes it, which is what `allowing` checks.
     public static func forward(_ request: LinkRequest, to base: URL, password: String?, session: URLSession = .shared,
                                allowing: @Sendable (String, String) -> Bool = { allows($0, method: $1) }) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
-            guard allowing(request.path, request.method) else {
+            guard let path = canonical(request.path), allowing(path, request.method) else {
                 continuation.yield(.head(status: 403, headers: ["content-type": "text/plain"]))
                 continuation.yield(.body(Data("That isn’t available over the link.".utf8)))
                 continuation.finish()
@@ -136,7 +147,7 @@ public enum EngineRoutes {
             }
             let task = Task {
                 do {
-                    guard let url = URL(string: request.path, relativeTo: base) else { throw URLError(.badURL) }
+                    guard let url = URL(string: path, relativeTo: base) else { throw URLError(.badURL) }
                     var outgoing = URLRequest(url: url)
                     let method = request.method.uppercased()
                     outgoing.httpMethod = method

@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.24";
+export const BRIDGE_VERSION = "0.9.25";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -516,56 +516,65 @@ const SOCKETS = [/^api\/pty\/[^/?]+\/connect(\?|$)/];
 const REQUEST_HEADERS = ["content-type", "accept", "x-opencode-directory", "last-event-id"];
 const RESPONSE_HEADERS = ["content-type", "cache-control"];
 
-// No way out of the project, written plainly or percent-encoded ("%2E%2E"): the engine decodes
-// it, and lists a folder above the project if asked. Nor tabs, line breaks or other control
-// characters, which the URL parser drops (".\t." is ".." to it), nor a fragment ("#…"), which
-// isn't sent, nor a space at either end, which it drops too (".../update " is ".../update").
-const leavesProject = path => {
+// `path` written one way only, which is what's checked and what's sent, or null when it isn't
+// what it seems, as the Mac's EngineRoutes.canonical: each part between slashes, and each name
+// and value in its query, percent-decoded once and encoded again the same way every time; empty
+// parts left out. Refused: a fragment (`#`, which isn't sent), an escape that doesn't decode, and
+// a part that decodes to "." or holds "..", a backslash or a control character; and a part
+// between slashes that holds a slash or starts or ends with a space.
+export const canonicalPath = path => {
   try {
-    if (/[\u0000-\u001f\u007f#]/.test(path) || path.startsWith(" ") || path.endsWith(" ")) return true;
-    const decoded = decodeURIComponent(path);
-    return path.includes("..") || decoded.includes("..") || decoded.includes("\\") || joinsASign(path) || joinsASign(decoded);
+    if (path.includes("#")) return null;
+    const at = path.indexOf("?");
+    const parts = [];
+    for (const raw of (at < 0 ? path : path.slice(0, at)).split("/").filter(Boolean)) {
+      const part = decodedPart(raw);
+      if (part === null || part === "." || /^ |\/| $/.test(part)) return null;
+      parts.push(encodeURIComponent(part).replace(/%(24|26|2B|2C|3B|3D|3A|40)/g, plainly));
+    }
+    const fields = [];
+    for (const raw of at < 0 ? [] : path.slice(at + 1).split("&").filter(Boolean)) {
+      // Its name and value, a "+" in them a space, as a query is read.
+      const spaced = raw.replaceAll("+", " "), equals = spaced.indexOf("=");
+      const halves = (equals < 0 ? [spaced] : [spaced.slice(0, equals), spaced.slice(equals + 1)]).map(decodedPart);
+      if (halves.includes(null)) return null;
+      fields.push(halves.map(half => encodeURIComponent(half).replace(/%(24|2C|3B|3A|40|2F|3F)/g, plainly).replaceAll("'", "%27")).join("="));
+    }
+    return parts.join("/") + (fields.length ? `?${fields.join("&")}` : "");
   } catch {
-    return true;
+    // A lone surrogate, which can't be encoded.
+    return null;
   }
 };
-// A sign other than a letter or digit joined into one character with a mark after it, as the Mac
-// refuses it (its checks are made on characters, where "?\u0301" isn't "?").
-const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const joinsASign = text => {
-  for (const { segment } of characters.segment(text)) {
-    if ([...segment].length > 1 && /[\u0000-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u007f]/.test(segment)) return true;
+// Percent-decoded once, or null when it doesn't decode or holds "..", a backslash or a control
+// character.
+const decodedPart = raw => {
+  let text;
+  try {
+    text = decodeURIComponent(raw);
+  } catch {
+    return null;
   }
-  return false;
+  return /[\u0000-\u001f\u007f\\]|\.\./.test(text) ? null : text;
 };
+// What's written as it is beyond what encodeURIComponent leaves (letters, digits, `-_.!~*'()`):
+// between slashes `$&+,;=:@`, and in a query `$,;:@/?`, but not `'`, which URL parsers encode
+// there. As the Mac writes them.
+const plainly = (_, hex) => String.fromCharCode(parseInt(hex, 16));
+
 // A paired phone is yours: the engine's whole API, as the app has it (sessions, files, terminals,
 // commands, accounts and keys, settings, MCP servers). Only a path that isn't what it seems
-// (`leavesProject`) is refused. As the Mac allows them (KuvoLink's EngineRoutes.allows).
-export const allowed = (path, method = "GET") => !leavesProject(path) && /^api(\/|\?|$)/.test(path);
-export const socketAllowed = path => !leavesProject(path) && SOCKETS.some(pattern => pattern.test(path));
-
-// `path` as the coding agents' bridge routes it: split into parts, without empty ones or "."
-// ones (which its URL parser drops, "%2e" too), each decoded ("%75pdate" is "update").
-export const routedPath = path => {
-  const at = path.indexOf("?");
-  const parts = (at < 0 ? path : path.slice(0, at)).split("/")
-    .filter(part => part !== "" && part !== "." && part.toLowerCase() !== "%2e")
-    .map(part => {
-      try {
-        return decodeURIComponent(part);
-      } catch {
-        return part;
-      }
-    });
-  return parts.join("/") + (at < 0 ? "" : path.slice(at));
-};
+// (`canonicalPath` refuses it) is refused. As the Mac allows them (KuvoLink's EngineRoutes.allows).
+export const allowed = (path, method = "GET") => /^api(\/|\?|$)/.test(canonicalPath(path) ?? "");
+export const socketAllowed = path => SOCKETS.some(pattern => pattern.test(canonicalPath(path) ?? ""));
 
 // The same of the coding agents' bridge (`kuvo/agents/api/…`), but for the two routes only the
 // app wires things with: where the engine is, and its group chats' own steps (moves), which a
-// phone does through `kuvo/groups`. As the Mac allows them (EngineRoutes.allowsAgents; both are
-// checked against Vectors/link.json).
+// phone does through `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part
+// by part. As the Mac allows them (EngineRoutes.allowsAgents; both are checked against
+// Vectors/link.json).
 export const agentsAllowed = (path, method = "GET") =>
-  allowed(path, method) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(routedPath(path));
+  allowed(path, method) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(canonicalPath(path));
 
 // Where a sign-in's page sent the browser back to this machine, for it to load
 // (`kuvo/sign-in/return`), as the Mac's EngineRoutes.signInReturn: only its own address
@@ -601,21 +610,17 @@ export function fromPhone(body) {
 }
 
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
-// streams back what it answers. What's sent is checked with `allows` as the URL parser leaves it
-// too, so nothing it tidies up reaches what the path as written wouldn't.
+// streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
+// what `allows` checks.
 async function* forward(target, path, request, signal, allows) {
   const method = request.method.toUpperCase();
-  let url;
-  try {
-    url = new URL(`http://127.0.0.1:${target.port}/${path}`);
-  } catch {
-    url = null;
-  }
-  if (!url || !allows(url.pathname.slice(1) + url.search, method)) {
+  const sent = canonicalPath(path);
+  if (sent === null || !allows(sent, method)) {
     yield { head: { status: 403, headers: { "content-type": "text/plain" } } };
     yield { body: Buffer.from("That isn't available over the link.") };
     return;
   }
+  const url = new URL(`http://127.0.0.1:${target.port}/${sent}`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
@@ -1943,7 +1948,7 @@ export function engineConnect(readEngine = readEngineFile) {
     const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
     const directory = Object.entries(request.headers ?? {}).find(([name]) => name.toLowerCase() === "x-opencode-directory")?.[1];
     if (directory) headers["x-opencode-directory"] = directory;
-    const socket = new WebSocket(`ws://127.0.0.1:${engine.port}/${request.path}`, { headers });
+    const socket = new WebSocket(`ws://127.0.0.1:${engine.port}/${canonicalPath(request.path)}`, { headers });
     socket.binaryType = "arraybuffer";
     socket.onopen = () => events.open();
     socket.onmessage = event => typeof event.data === "string" ? events.text(Buffer.from(event.data)) : events.binary(Buffer.from(event.data));
@@ -2549,7 +2554,7 @@ export function jobInMemory(text) {
   if (line.toLowerCase().startsWith("job:")) line = line.slice(4);
   line = spaces(line);
   // Long: its first sentence. (In characters as Swift counts them, what you'd see.)
-  if ([...characters.segment(line)].length > 48 && line.includes(". ")) line = line.slice(0, line.indexOf(". "));
+  if ([...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(line)].length > 48 && line.includes(". ")) line = line.slice(0, line.indexOf(". "));
   if (line.endsWith(".") && !line.endsWith("..")) line = line.slice(0, -1);
   return { line, section };
 }

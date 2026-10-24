@@ -46,15 +46,20 @@ import Testing
         }
     }
 
+    /// What may be sent, and what's sent for it (`forwarded`): the path written one way only.
     @Test func routes() {
         for item in list("routes") {
-            #expect(EngineRoutes.allows(item["path"] as! String, method: item["method"] as? String ?? "GET") == item["allowed"] as! Bool, "\(item["path"]!) \(item["method"] ?? "GET")")
+            let path = item["path"] as! String
+            #expect(EngineRoutes.allows(path, method: item["method"] as? String ?? "GET") == item["allowed"] as! Bool, "\(path) \(item["method"] ?? "GET")")
+            if let forwarded = item["forwarded"] as? String { #expect(EngineRoutes.canonical(path) == forwarded, "\(path)") }
         }
     }
 
     @Test func agentRoutes() {
         for item in list("agentRoutes") {
-            #expect(EngineRoutes.allowsAgents(item["path"] as! String, method: item["method"] as? String ?? "GET") == item["allowed"] as! Bool, "\(item["path"]!) \(item["method"] ?? "GET")")
+            let path = item["path"] as! String
+            #expect(EngineRoutes.allowsAgents(path, method: item["method"] as? String ?? "GET") == item["allowed"] as! Bool, "\(path) \(item["method"] ?? "GET")")
+            if let forwarded = item["forwarded"] as? String { #expect(EngineRoutes.canonical(path) == forwarded, "\(path)") }
         }
     }
 
@@ -96,6 +101,7 @@ import Testing
     @Test func sockets() {
         for item in list("sockets") {
             #expect(EngineRoutes.allowsSocket(item["path"] as! String) == item["allowed"] as! Bool, "\(item["path"]!)")
+            if let forwarded = item["forwarded"] as? String { #expect(EngineRoutes.canonical(item["path"] as! String) == forwarded, "\(item["path"]!)") }
         }
     }
 
