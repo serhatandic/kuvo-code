@@ -485,6 +485,8 @@ itself. A host serves:
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
   settings, so this Mac's (`kuvo/config`) don't reach it (as it was when it last connected).
+  `removed`: this Mac removed it (it runs on there), and `DELETE kuvo/hosts/<id>` forgets it for
+  your phones (`200 {}`; `404` for none; `409 {"message"}` for one this Mac still has).
 - `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
   conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
   agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the

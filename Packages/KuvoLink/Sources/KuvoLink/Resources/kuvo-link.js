@@ -1057,7 +1057,8 @@ export async function nameWorktreeBranch(engine, sessionID) {
   const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
   const slug = branchSlug(session?.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug) return;
-  renameWorktree(tree, tree.made, (tree.prefix ?? "") + slug);
+  // Told its branch's new name, as it was told the one before.
+  if (renameWorktree(tree, tree.made, (tree.prefix ?? "") + slug).status === 200) await tellWorktree(engine, sessionID);
 }
 
 /** A session just made in one of this box's worktrees (by a phone, in one it asked for here):
@@ -3315,14 +3316,16 @@ async function watchEvents(read, tell) {
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
       for await (const event of serverEvents(response.body)) {
-        // A worktree's branch named after its session, and a bot's job read from its memory as
-        // its run ends, as a Mac does while it's here (which may tell its bots otherwise meanwhile).
+        // A session made in one of this box's worktrees told so; a worktree's branch named after
+        // its session; and with no Mac here, a bot's job read from its memory as its run ends,
+        // as a Mac does while it's here (which may tell its bots otherwise meanwhile).
         if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
-        if (macConnected()) {
-          toldBots.clear();
-        } else {
-          if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-          if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        // Named here whether a Mac is here or not (one a phone made here, which a connected Mac
+        // doesn't know of yet): a Mac naming it too finds it named (`from`).
+        if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
+          if (macConnected()) toldBots.clear();
+          else refreshBotJob(source, event.data?.sessionID).catch(() => {});
         }
         if ((!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) || macPresent()) continue;
         if (GROUP_NEWS.has(event.type)) {

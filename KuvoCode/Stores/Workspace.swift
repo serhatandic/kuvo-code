@@ -766,16 +766,21 @@ final class Workspace {
     /// POST), as the composer's Worktree makes one: the folder the phone makes it in, and the
     /// worktree.
     func makeWorktree(forNewSessionIn directory: String) async throws -> (folder: String, tree: Worktree) {
+        // Not one that isn't a repository's here, which would become a project in the sidebar.
+        guard await Task.detached(operation: { Git.run(["rev-parse", "--show-toplevel"], in: directory) }).value != nil else {
+            throw GitFailure(message: "That folder isn't in a git repository on this Mac.")
+        }
         let directory = addFolder(directory)
         let folder = try await makeWorktree(of: directory)
         guard let tree = worktrees[folder] else { throw CancellationError() }
         return (folder, tree)
     }
 
+    /// (As a machine's bridge says it to a session there: with the checkout's path on it.)
     private static func instructions(for tree: Worktree) -> String {
         """
         You work in a git worktree of this project, on the branch \(tree.branch), so your changes stay apart from \
-        the user's own checkout at \(tree.project) until they merge them. Make your changes here, not there.
+        the user's own checkout at \(RemoteFolder.parse(tree.project)?.path ?? tree.project) until they merge them. Make your changes here, not there.
         """
     }
 
@@ -838,9 +843,11 @@ final class Workspace {
             let prefix = GitPreferences.branchPrefix
             let renamed: String?
             if let remote = RemoteFolder.parse(tree.root) {
-                // Only if it's still called that: the machine may have named it already.
+                // Only if it's still called that: the machine may have named it already, and told
+                // its session (it tells it each name), so it's read from there.
                 let answer: BoxWorktree.Renamed? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/rename", ["path": remote.path, "from": tree.branch, "branch": prefix + slug])
-                renamed = answer?.branch
+                if answer == nil { await takeWorktrees(from: remote.machine) }
+                renamed = answer?.branch ?? worktrees[folder].map(\.branch).flatMap { $0 == tree.branch ? nil : $0 }
             } else {
                 renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value
             }
