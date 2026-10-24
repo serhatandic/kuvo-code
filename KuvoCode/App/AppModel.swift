@@ -49,6 +49,14 @@ final class AppModel {
     let moves = Moves()
     /// Kuvo Code for iPhone's way in (off until it's switched on; see PhoneLink).
     let phoneLink = PhoneLink()
+    /// You using Kuvo Code here, told to this Mac's box and your machines, so notices for your
+    /// phones wait a little while you are; started with the app.
+    @ObservationIgnored private(set) lazy var attention = Attention { [weak self] in
+        guard let self, !showsSettings else { return [] }
+        return utilities.conversationsOnScreen
+    } tell: { [weak self] sessions in
+        self?.phoneLink.attend(sessions)
+    }
     /// The coding agents you already have (Claude Code, Codex, Cursor, Grok, Antigravity), run by
     /// the agents bridge beside the engine.
     let agents = OutsideAgents()

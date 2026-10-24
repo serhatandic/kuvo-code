@@ -98,6 +98,9 @@ public actor LinkServer {
     /// Whether a phone has a session open: the app on its screen.
     public var hasSessions: Bool { !sessions.isEmpty }
 
+    /// Whether what was queued for the relay (a push, a mail) is still on its way out.
+    public var isSending: Bool { relay?.isSending ?? false }
+
     /// Ends every session, telling each phone, as this host stops (its engine starting over, the
     /// app quitting): a phone opens a new one for what it asks next at once, rather than finding
     /// out the old one's gone when that goes unanswered.

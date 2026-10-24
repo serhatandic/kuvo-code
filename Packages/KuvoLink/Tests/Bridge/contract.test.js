@@ -324,7 +324,10 @@ const isOurs = only => only === undefined || only === "machine";
 async function run(scenario) {
   freshBox();
   const vars = { ...places() };
-  const handle = link.engineHandler(readEngine, { name: MACHINE }, () => (engine.bridgeUp ? { ...readEngine(), pid: agentsProcess.pid } : null));
+  // The running bridge's notices held while you're at a computer: none to send here, on a clock
+  // that never wakes it.
+  const hold = new link.NoticeHold({ send: () => true, setTimer: () => 0, clearTimer: () => {} });
+  const handle = link.engineHandler(readEngine, { name: MACHINE }, () => (engine.bridgeUp ? { ...readEngine(), pid: agentsProcess.pid } : null), undefined, hold);
   for (const [index, step] of scenario.steps.entries()) {
     if (!isOurs(step.only)) continue;
     const where = `step ${index + 1}${step.send ? ` (${step.send})` : ""}`;

@@ -1,0 +1,34 @@
+{
+  "about": "kuvo/attention: a client in use says so for a short lease it renews, and notices for your phones wait a little while one is (PROTOCOL.md, \"kuvo/attention\").",
+  "scenarios": [
+    {
+      "name": "a client in use, then not",
+      "steps": [
+        { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false, "held": 0 } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": ["ses_main"] }, "expect": { "status": 200, "json": { "for": 45 } } },
+        { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": true, "held": 0 } } },
+        { "send": "POST kuvo/attention", "body": { "for": 0 }, "expect": { "status": 200, "json": { "for": 0 } } },
+        { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false, "held": 0 } } }
+      ]
+    },
+    {
+      "name": "no lease lasts longer than a minute",
+      "steps": [
+        { "send": "POST kuvo/attention", "body": { "for": 3600 }, "expect": { "status": 200, "json": { "for": 60 } } }
+      ]
+    },
+    {
+      "name": "what isn't a lease is refused",
+      "steps": [
+        { "send": "POST kuvo/attention", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": -1 }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": "45" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": true }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": "ses_main" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": [1] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PUT kuvo/attention", "body": { "for": 45 }, "expect": { "status": 405 } },
+        { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false } } }
+      ]
+    }
+  ]
+}

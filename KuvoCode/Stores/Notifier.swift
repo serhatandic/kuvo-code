@@ -39,6 +39,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var answerQuestion: ((String, String, String, String) -> Void)?
     /// Sends a notification to your paired phones (set by AppModel).
     var toPhones: ((Notice) -> Void)?
+    /// A request, a question or an ask answered (or gone), whose notice for your phones, if it's
+    /// still waiting, never goes (set with `toPhones`, by `PhoneLink.listen`).
+    var answeredForPhones: ((String) -> Void)?
 
     /// What goes to your phones too, as their notification (KuvoLink's PROTOCOL.md,
     /// "Notifications"): nil for what's only about this Mac.
@@ -361,6 +364,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Takes a request's or a question's notification away once it's answered (in the app, say).
     func clear(request: String) {
+        answeredForPhones?(request)
         if questionCategories.removeValue(forKey: request) != nil {
             UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values))
         }

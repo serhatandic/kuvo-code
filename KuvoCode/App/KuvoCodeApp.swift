@@ -104,7 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else { Task { await model.workspace.send(text, to: session) } }
         }
         Notifier.shared.answerQuestion = { [model] session, form, field, answer in model.workspace.answerQuestion(form, in: session, field: field, with: answer) }
-        Notifier.shared.toPhones = { [model] notice in model.phoneLink.push(notice) }
+        model.phoneLink.listen(to: Notifier.shared)
+        model.attention.start()
         Analytics.shared.start()
         UsageMenuBar.shared.onPanelShown = { Analytics.shared.track("usage_panel_opened") }
         #if DEBUG
@@ -139,6 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // You've gone: what your phones' notices waited for goes now, here and on your machines.
+        model.attention.stop()
+        model.phoneLink.flushBeforeQuit()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
         model.stopMachines()

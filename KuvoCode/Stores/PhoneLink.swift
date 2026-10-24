@@ -128,6 +128,11 @@ final class PhoneLink {
     @ObservationIgnored private var keepingMachinesTold: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
     private let log = Logger(subsystem: "run.kuvo.code", category: "phone")
+    /// Notices for your phones, held while you're at a computer (PROTOCOL.md, "kuvo/attention"); a
+    /// test gives it its own clock, and takes what it sends.
+    @ObservationIgnored lazy var hold = NoticeHold { [weak self] notice in self?.deliver(notice) ?? true }
+    /// Pushes not yet handed to the relay, which quitting waits for (see `flushBeforeQuit`).
+    @ObservationIgnored let delivering = OSAllocatedUnfairLock(initialState: 0)
 
     /// Where the phones and machines are kept: phone-link.json (a test's own, for a test).
     private let savedFile: URL
@@ -623,6 +628,17 @@ final class PhoneLink {
                 }
             }
         }
+        // A client in use here: notices for your phones wait a little while one is.
+        if route == "kuvo/attention" {
+            return AsyncThrowingStream { [routed] continuation in
+                Task { @MainActor in
+                    let (status, body) = link?.answerAttention(routed, asking: asking) ?? (503, Data())
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         // A new bot or group chat, as New Bot and New Group Chat make them.
         if request.method.uppercased() == "POST", route == "kuvo/bots" || route == "kuvo/groups" {
             return AsyncThrowingStream { continuation in
@@ -839,29 +855,96 @@ final class PhoneLink {
     // MARK: Notifications
 
     /// Sends `notice`, about this Mac's own sessions, chats or browser (a machine tells your phones
-    /// its own), to your phones' notifications, while you're away from this Mac or have the app
-    /// open on a phone (which leaves out what's on its screen): at the Mac, its own notifications
-    /// are enough.
+    /// its own), to your phones' notifications: at once, or, while you're at a computer, once it's
+    /// waited a little and wasn't answered or seen meanwhile (`hold`, PROTOCOL.md "kuvo/attention").
     func push(_ notice: Notice) {
-        guard Self.isEnabled, let server, let data = try? notice.encoded() else { return }
+        guard Self.isEnabled else { return }
+        hold.tell(notice)
+    }
+
+    /// Hears from `notifier` what goes to your phones, and what's been answered (which, held, then
+    /// never goes).
+    func listen(to notifier: Notifier) {
+        notifier.toPhones = { [weak self] in self?.push($0) }
+        notifier.answeredForPhones = { [weak self] in self?.hold.resolve($0) }
+    }
+
+    /// You're using Kuvo Code on this Mac, with `sessions` on its screen, or not any more (nil)
+    /// (`Attention`): this Mac's box hears it, and each of your machines by mail, so notices for your
+    /// phones wait a little there too (PROTOCOL.md, "kuvo/attention").
+    func attend(_ sessions: [String]?) {
+        guard Self.isEnabled else { return }
+        let seconds = sessions == nil ? 0 : Attention.lease
+        hold.attend("mac", for: seconds, sessions: sessions ?? [])
+        guard let server, status == .connected,
+              let data = try? JSONSerialization.data(withJSONObject: ["attention": ["for": seconds, "sessions": sessions ?? []], "at": Int64(Date.now.timeIntervalSince1970 * 1000)])
+        else { return }
+        let delivering = delivering
+        for host in machineHosts.values where host.peers == true && host.anotherMac != true {
+            guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes) else { continue }
+            delivering.withLock { $0 += 1 }
+            Task.detached {
+                await server.mail(data, to: key, at: address)
+                delivering.withLock { $0 -= 1 }
+            }
+        }
+    }
+
+    /// As the app quits: not in use any more, so what's held goes now and your machines send theirs,
+    /// waited for a moment so it's out before the relay connection goes.
+    func flushBeforeQuit() {
+        attend(nil)
+        let server = server, delivering = delivering
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            for _ in 0..<30 {
+                if delivering.withLock({ $0 == 0 }), await server?.isSending != true { break }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 2)
+    }
+
+    /// `kuvo/attention`: GET says whether a client is in use here, and how many notices wait; POST
+    /// `{for, sessions?}`, a phone in use for `for` seconds (0: not any more) with those on its
+    /// screen, answers the lease it got.
+    func answerAttention(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
+        switch request.method.uppercased() {
+        case "GET", "HEAD":
+            return (200, Self.json(["inUse": hold.inUse, "held": hold.count]))
+        case "POST":
+            let given = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
+            let sessions = given?["sessions"]
+            guard let seconds = (given?["for"] as? NSNumber).flatMap({ CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.doubleValue }), seconds.isFinite, seconds >= 0,
+                  sessions == nil || sessions is [String] else {
+                return (400, Self.message("Say for how many seconds you're in use (for: 0 for not), and which conversations are on your screen (sessions)."))
+            }
+            let granted = min(seconds, NoticeHold.longestLease)
+            hold.attend("phone:\(asking?.base64URL ?? "")", for: granted, sessions: Array(((sessions as? [String]) ?? []).prefix(50)))
+            return (200, Self.json(["for": granted]))
+        default:
+            return (405, Data("{}".utf8))
+        }
+    }
+
+    /// `notice` to each paired phone, through the relay: false when it can't go now (no relay
+    /// connection), for `hold` to try again.
+    func deliver(_ notice: Notice) -> Bool {
+        guard Self.isEnabled, let data = try? notice.encoded() else { return true }
         let phones = phones.compactMap { phone -> (key: Data, address: LinkAddress)? in
             guard let key = Data(base64URL: phone.key), let address = phone.address.flatMap(LinkAddress.init(text:)) else { return nil }
             return (key, address)
         }
-        guard !phones.isEmpty else { return }
-        let away = Self.isAwayFromMac
-        Task {
-            let isOpen = await server.hasSessions
-            guard away || isOpen else { return }
+        guard !phones.isEmpty else { return true }
+        guard let server, status == .connected else { return false }
+        let delivering = delivering
+        delivering.withLock { $0 += 1 }
+        Task.detached {
             await server.push(data, to: phones)
+            delivering.withLock { $0 -= 1 }
         }
-    }
-
-    /// No one has used this Mac for two minutes, or its screen is locked.
-    private static var isAwayFromMac: Bool {
-        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
-        let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
-        return idle >= 120 || locked
+        return true
     }
 
     /// Where the outside agents' bridge is reached over the link.
