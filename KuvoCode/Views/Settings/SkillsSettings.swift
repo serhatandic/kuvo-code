@@ -16,6 +16,8 @@ struct SkillsSettings: View {
     /// GitHub's well-known collections; nil until they're listed.
     @State private var collections: [SkillCollection]?
     @State private var collectionsFailure: String?
+    /// Why a skill couldn't be removed: the list stays.
+    @State private var removeFailure: String?
     @State private var browsing: Browsing?
     @State private var repositoryName = ""
     /// While a repository typed by name is being looked up on GitHub.
@@ -56,8 +58,9 @@ struct SkillsSettings: View {
                     SettingsSearchRow(text: $search, prompt: "Search skills")
                 }
                 if let boxFailure {
-                    FailureLabel(title: "Couldn’t read the skills you added", detail: boxFailure) {
+                    FailureLabel(title: "Couldn’t read the skills you added", detail: boxFailure, retrying: "the skills you added") {
                         Task {
+                            // This Mac's box, started again if it stopped for good.
                             if box.machine == nil { await app.box.startAgain() }
                             await refresh()
                         }
@@ -96,6 +99,12 @@ struct SkillsSettings: View {
                     // Where it is, for one found in a folder of its own.
                     .help(here.place(of: skill) ?? "")
                 }
+                if let removeFailure {
+                    Text(removeFailure)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("New Skill…") { writing = SkillDraft(name: nil) }
             } header: {
                 Text("Skills the Agent Can Use")
@@ -108,8 +117,12 @@ struct SkillsSettings: View {
 
             Section {
                 if let collectionsFailure {
-                    FailureLabel(title: "Couldn’t list the collections", detail: collectionsFailure) {
-                        Task { await listCollections() }
+                    FailureLabel(title: "Couldn’t list the collections", detail: collectionsFailure, retrying: "the collections") {
+                        Task {
+                            // They're read through this Mac's box: started again if it stopped for good.
+                            await app.box.startAgain()
+                            await listCollections()
+                        }
                     }
                 } else if collections == nil {
                     Spinner(size: 16)
@@ -172,7 +185,7 @@ struct SkillsSettings: View {
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await refresh() } }
         .settingsDetail(item: $writing, title: { $0.name ?? "New Skill" }) { draft in
-            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: Set((skills ?? []).map(\.id))) {
+            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? [])) {
                 writing = nil
                 Task { await refresh() }
             }
@@ -227,8 +240,13 @@ struct SkillsSettings: View {
 
     private func remove(_ id: String) {
         let routes = routes
+        removeFailure = nil
         Task {
-            try? await routes.remove(id)
+            do {
+                try await routes.remove(id)
+            } catch {
+                removeFailure = "Couldn’t remove \(id): \(error.localizedDescription)"
+            }
             await refresh()
         }
     }
@@ -266,6 +284,8 @@ private struct Browsing: Identifiable {
 private struct FailureLabel: View {
     let title: String
     let detail: String
+    /// What Try Again reads again, for VoiceOver ("the collections").
+    let retrying: String
     let retry: () -> Void
 
     var body: some View {
@@ -283,6 +303,7 @@ private struct FailureLabel: View {
             }
             Spacer()
             Button("Try Again", action: retry)
+                .accessibilityLabel("Try reading \(retrying) again")
         }
     }
 }
@@ -501,6 +522,7 @@ nonisolated enum SkillFile {
 
 /// A repository's skills, each with what it says it does, to add or remove.
 private struct RepositorySkills: View {
+    @Environment(AppModel.self) private var app
     let repository: SkillCollection
     /// Its skills, when they were listed as it was opened.
     let listed: CollectionListing?
@@ -511,12 +533,15 @@ private struct RepositorySkills: View {
     let done: () -> Void
     @State private var skills: [CollectionSkill]?
     @State private var isPartial = false
-    @State private var installed: [String: SkillSource] = [:]
+    /// Those added to the box, by name; nil while it couldn't say.
+    @State private var installed: [String: SkillSource]?
+    /// Why the box couldn't say which are added.
+    @State private var installedFailure: String?
     @State private var query = ""
     /// Why the list couldn't be loaded.
     @State private var failure: String?
-    /// Why a skill couldn't be added: the list stays.
-    @State private var installFailure: String?
+    /// Why a skill couldn't be added or removed: the list stays.
+    @State private var actionFailure: ActionFailure?
     @State private var confirming: CollectionSkill?
     @State private var working: String?
 
@@ -537,16 +562,12 @@ private struct RepositorySkills: View {
             }
             Section {
                 if let failure {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Couldn’t load the skills")
-                            Text(failure)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                    FailureLabel(title: "Couldn’t load the skills", detail: failure, retrying: "this collection’s skills") {
+                        Task {
+                            // Read through this Mac's box: started again if it stopped for good.
+                            await app.box.startAgain()
+                            await list()
                         }
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle")
                     }
                 } else if skills == nil {
                     HStack {
@@ -557,19 +578,20 @@ private struct RepositorySkills: View {
                     .padding(.vertical, 16)
                 } else {
                     SettingsSearchRow(text: $query, prompt: "Filter skills")
+                    if let installedFailure {
+                        FailureLabel(title: "Couldn’t read which skills are added", detail: installedFailure, retrying: "which skills are added") {
+                            Task { await reload() }
+                        }
+                    }
                     if shown.isEmpty {
                         Text(search.isEmpty ? "This repository doesn’t have any skills." : "No skills match “\(search)”.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(shown) { skill in
-                        RemoteSkillRow(skill: skill, collection: repository, routes: routes, installed: installed[skill.name], isWorking: working == skill.id) {
+                        RemoteSkillRow(skill: skill, collection: repository, state: state(of: skill)) {
                             confirming = skill
                         } remove: {
-                            let routes = routes
-                            Task {
-                                try? await routes.remove(skill.name)
-                                await reload()
-                            }
+                            remove(skill)
                         }
                     }
                 }
@@ -586,18 +608,17 @@ private struct RepositorySkills: View {
         }
         .task {
             await reload()
-            do {
-                let listing = if let listed { listed } else { try await routes.listing(repository.id) }
-                skills = listing.skills
-                isPartial = listing.partial
-            } catch {
-                failure = error.localizedDescription
+            if let listed {
+                skills = listed.skills
+                isPartial = listed.partial
+            } else {
+                await list()
             }
         }
-        .alert("Couldn't Add the Skill", isPresented: Binding(get: { installFailure != nil }, set: { if !$0 { installFailure = nil } })) {
+        .alert(actionFailure?.title ?? "", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
             Button("OK") {}
         } message: {
-            Text(installFailure ?? "")
+            Text(actionFailure?.message ?? "")
         }
         .confirmationDialog("Add \(confirming?.name ?? "")?", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), presenting: confirming) { skill in
             Button("Add Skill") { install(skill) }
@@ -617,9 +638,49 @@ private struct RepositorySkills: View {
         return "From \(repository.id):\n\n" + lines.joined(separator: "\n") + note
     }
 
+    private func list() async {
+        failure = nil
+        do {
+            let listing = try await routes.listing(repository.id)
+            skills = listing.skills
+            isPartial = listing.partial
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    /// Which are added, as the box says now; unknown (no Add or Remove) while it can't say.
     private func reload() async {
-        installed = (try? await routes.folder().github) ?? installed
+        do {
+            installed = try await routes.folder().github
+            installedFailure = nil
+        } catch {
+            installed = nil
+            installedFailure = error.localizedDescription
+        }
         changed()
+    }
+
+    /// What a skill's row offers.
+    private func state(of skill: CollectionSkill) -> RemoteSkillRow.State {
+        if working == skill.id { return .working }
+        guard let installed else { return .unknown }
+        guard let added = installed[skill.name] else { return .addable }
+        return added.repository == repository.id && added.path == skill.path ? .added : .another(added.repository)
+    }
+
+    private func remove(_ skill: CollectionSkill) {
+        working = skill.id
+        let routes = routes
+        Task {
+            defer { working = nil }
+            do {
+                try await routes.remove(skill.name)
+            } catch {
+                actionFailure = ActionFailure(title: "Couldn't Remove the Skill", message: error.localizedDescription)
+            }
+            await reload()
+        }
     }
 
     private func install(_ skill: CollectionSkill) {
@@ -633,51 +694,63 @@ private struct RepositorySkills: View {
                 Analytics.shared.track("skill_added", ["collection": isWellKnown ? repository.id : "other"])
                 await reload()
             } catch {
-                installFailure = error.localizedDescription
+                actionFailure = ActionFailure(title: "Couldn't Add the Skill", message: error.localizedDescription)
             }
         }
     }
 }
 
+/// What couldn't be done, for its alert.
+private struct ActionFailure {
+    var title: String
+    var message: String
+}
+
+/// A skill in a collection, with what its SKILL.md says it is (listed with the collection).
 private struct RemoteSkillRow: View {
+    enum State {
+        case working
+        /// The box couldn't say whether it's added.
+        case unknown
+        case addable
+        case added
+        /// Another skill by this name is added, from this repository (they'd share a folder).
+        case another(String)
+    }
+
     let skill: CollectionSkill
     let collection: SkillCollection
-    let routes: BoxSkills
-    /// The skill installed under this one's name, from wherever it came.
-    let installed: SkillSource?
-    let isWorking: Bool
+    let state: State
     let add: () -> Void
     let remove: () -> Void
-    @State private var about: SkillAbout?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(about?.name ?? skill.name)
-                Text(about?.description ?? " ")
+                Text(skill.about?.name ?? skill.name)
+                Text(skill.about?.description ?? " ")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
             Spacer()
-            if isWorking {
+            switch state {
+            case .working:
                 Spinner(size: 16)
-            } else if let installed {
-                if installed.repository == collection.id, installed.path == skill.path {
-                    Button("Remove", action: remove)
-                        .accessibilityLabel("Remove \(skill.name)")
-                } else {
-                    // Another skill by this name is installed (they'd share a folder).
-                    Text("Another \(skill.name) is added, from \(installed.repository)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                }
-            } else {
+            case .unknown:
+                EmptyView()
+            case .added:
+                Button("Remove", action: remove)
+                    .accessibilityLabel("Remove \(skill.name)")
+            case .another(let repository):
+                Text("Another \(skill.name) is added, from \(repository)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+            case .addable:
                 Button("Add", action: add)
                     .accessibilityLabel("Add \(skill.name)")
             }
         }
-        .task { about = await routes.about(skill, in: collection) }
     }
 }

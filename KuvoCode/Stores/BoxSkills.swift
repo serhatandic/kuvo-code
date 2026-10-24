@@ -7,17 +7,18 @@ import OpenCodeKit
 /// (`BoxClient`), this Mac's as a machine's.
 ///
 /// GitHub's collections are browsed through this Mac's own box (`library`), whichever box the page
-/// is for: what a collection has is the same from anywhere, and a machine's would be asked over
-/// SSH once for each skill shown.
+/// is for: what a collection has is the same from anywhere, and a machine's is reached over SSH.
 struct BoxSkills {
     /// The box the page is for.
     let box: BoxClient
     /// This Mac's box, which reaches GitHub for the page.
     let library: BoxClient
 
-    /// The box's skills folder, as its engine names skills in it, and the skills in it from GitHub.
+    /// The box's skills folder, as its engine names skills in it, the folders in it (a new skill
+    /// can't take their names), and the skills in it from GitHub.
     struct Folder: Decodable {
         var folder: String
+        var folders: [String]
         var github: [String: SkillSource]
     }
 
@@ -57,7 +58,7 @@ struct BoxSkills {
         return try await library.value(Listed.self, "GET", "kuvo/skill-library").repositories
     }
 
-    /// A collection's skills: one of the well-known ones, or any repository on GitHub, by its
+    /// A collection's skills, each with what it says it is: one of the well-known ones, or any repository on GitHub, by its
     /// name ("owner/name") or its address there.
     func listing(_ typed: String) async throws -> CollectionListing {
         var name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -65,12 +66,6 @@ struct BoxSkills {
         let parts = name.split(separator: "/").prefix(2).map(String.init)
         guard parts.count == 2 else { throw BoxRefusal(status: 404, message: "\(typed) wasn't found on GitHub.") }
         return try await library.value(CollectionListing.self, "GET", "kuvo/skill-library/\(Self.part(parts[0]))/\(Self.part(parts[1]))")
-    }
-
-    /// What a skill's SKILL.md says it is, asked for as it's shown; nothing, when GitHub doesn't say.
-    func about(_ skill: CollectionSkill, in collection: SkillCollection) async -> SkillAbout {
-        let path = "kuvo/skill-library/\(Self.part(collection.owner))/\(Self.part(collection.name))/about?path=" + Workspace.queryValue(skill.path)
-        return (try? await library.value(SkillAbout.self, "GET", path)) ?? SkillAbout()
     }
 
     private struct Empty: Decodable {}
@@ -88,12 +83,20 @@ struct SkillsShown {
     var folder: String?
     /// Those added from GitHub, by their folder's name.
     var github: [String: SkillSource] = [:]
+    /// The folders in it, listed by its engine or not.
+    var folders: [String] = []
 
     init() {}
 
     init(_ read: BoxSkills.Folder) {
         folder = read.folder
+        folders = read.folders
         github = read.github
+    }
+
+    /// The names a new skill can't take: those the engine lists, and the folders there.
+    func taken(listed skills: [Skill]) -> Set<String> {
+        Set(skills.map(\.id)).union(folders)
     }
 
     /// In the skills folder there.
@@ -145,6 +148,8 @@ struct CollectionSkill: Codable, Hashable, Identifiable {
     var path: String
     /// Every file in it, relative to the repository.
     var files: [String]
+    /// What its SKILL.md says it is.
+    var about: SkillAbout?
 
     /// Unique in its repository; two folders can share a name.
     var id: String { path }
@@ -167,7 +172,7 @@ struct SkillSource: Codable, Hashable {
 }
 
 /// What a SKILL.md says about itself.
-struct SkillAbout: Decodable {
+struct SkillAbout: Codable, Hashable {
     var name: String?
     var description: String?
 }

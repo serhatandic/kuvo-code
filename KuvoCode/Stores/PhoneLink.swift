@@ -764,7 +764,7 @@ final class PhoneLink {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
-            return EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
+            return EngineRoutes.forward(request, to: base, password: box.password, session: Self.boxSession, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                         allowing: { path, _ in path.hasPrefix("kuvo/") })
         }
         var routed = request
@@ -1163,6 +1163,14 @@ final class PhoneLink {
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/skills", "kuvo/skill-library"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
+    /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
+    /// (projects, worktrees) hold theirs open, and many requests at once (a phone reading a big
+    /// collection) never hold up another (adding a skill). Kept in memory only.
+    nonisolated static let boxSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpMaximumConnectionsPerHost = 64
+        return URLSession(configuration: configuration)
+    }()
 
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
