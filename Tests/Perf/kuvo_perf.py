@@ -259,7 +259,9 @@ def groups_bench(app, label):
         for mode in ["setup", "run"]:
             if os.path.exists(result):
                 os.remove(result)
-            launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, KUVO_OPENCODE_BINARY=ENGINE)
+            # KUVO_PERF_PROFILE / KUVO_PERF_STALLS given here go to the measured run (README).
+            extra = {k: v for k, v in os.environ.items() if mode == "run" and k in ("KUVO_PERF_PROFILE", "KUVO_PERF_STALLS")}
+            launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, KUVO_OPENCODE_BINARY=ENGINE, **extra)
             deadline = time.time() + 900
             while not (os.path.exists(result) and os.path.getsize(result) > 0):
                 if time.time() > deadline:

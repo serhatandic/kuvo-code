@@ -65,6 +65,7 @@ enum PerfGroups {
         }
         try? await Task.sleep(for: .seconds(1))
         let seconds = (ContinuousClock.now - began).components.seconds
+        if let file = ProcessInfo.processInfo.environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
         let measured = meter.stop()
         let used = cpu.used()
         write(["firstFrameChats": firstFrame, "readyAfter": ready, "seconds": seconds, "meter": measured,
@@ -125,10 +126,10 @@ enum PerfGroups {
         }
     }
 
-    /// After the next frame is drawn.
+    /// Once the run loop has gone round (what changed laid out and drawn in that pass).
     private static func nextFrame() async {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.main.async { CATransaction.setCompletionBlock { done.resume() }; CATransaction.begin(); CATransaction.commit() }
+            DispatchQueue.main.async { done.resume() }
         }
     }
 
