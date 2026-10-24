@@ -127,6 +127,121 @@ test("a permission seen but left unanswered waits on you, and goes once you leav
   assert.deepEqual(phones, [permission]);
 });
 
+// ---- What a Mac you're at showed in its own notifications ----
+
+const shownNews = { seconds: 45, sessions: [], shown: [{ session: "ses_main", ask: false }] };
+const shownAsk = { seconds: 45, sessions: [], shown: [{ session: "ses_main", ask: true }] };
+
+test("a run finished that the Mac showed in its own notification never reaches your phones", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", atTheMac);
+  hold.tell(finished);
+  hold.attend("mac:a", shownNews);
+  time.pass(link.NEWS_HOLD);
+  hold.attend("mac:a", { seconds: 0 });
+  assert.deepEqual(phones, []);
+});
+
+test("the Mac's notification may come a little before the machine's notice: it still counts, for a little while", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", shownNews);
+  time.pass(link.SHOWN_WITHIN - 1);
+  hold.tell(finished);
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones, []);
+  // One shown longer ago was of something else.
+  hold.attend("mac:a", shownNews);
+  time.pass(link.SHOWN_WITHIN);
+  hold.attend("mac:a", atTheMac);
+  hold.tell(finished);
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones, [finished]);
+});
+
+test("a permission the Mac showed waits until it's answered, or goes once you leave", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", atTheMac);
+  hold.tell(permission);
+  hold.attend("mac:a", shownAsk);
+  time.pass(link.ASK_HOLD);
+  assert.deepEqual(phones, []);
+  hold.attend("mac:a", { seconds: 0 });
+  assert.deepEqual(phones, [permission]);
+  // Answered while it waits, it never goes.
+  hold.attend("mac:a", atTheMac);
+  hold.tell({ ...permission, data: { session: "ses_main", request: "per_2" } });
+  hold.attend("mac:a", shownAsk);
+  time.pass(link.ASK_HOLD);
+  hold.resolve("per_2");
+  hold.attend("mac:a", { seconds: 0 });
+  assert.equal(phones.length, 1);
+});
+
+test("a notification of news doesn't stand for a permission of the same conversation, nor of another one", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", atTheMac);
+  hold.tell(permission);
+  hold.tell({ ...finished, thread: "ses_other", data: { session: "ses_other" } });
+  hold.attend("mac:a", shownNews);
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones.map(notice => notice.category), ["permission", "finished"]);
+});
+
+test("a notification stands for one notice: two runs finished in one conversation, one shown, one goes", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", atTheMac);
+  const second = { ...finished, body: "And the docs." };
+  hold.tell(finished);
+  hold.tell(second);
+  hold.attend("mac:a", shownNews);
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones, [second]);
+  // Shown before either came: it stands for the first to come only.
+  hold.attend("mac:a", shownNews);
+  hold.tell(finished);
+  hold.tell(second);
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones, [second, second]);
+});
+
+test("a notification of one permission doesn't stand for another question in its conversation", () => {
+  const { time, phones, hold } = box();
+  const question = { ...permission, category: "question", data: { session: "ses_main", request: "frm_2" } };
+  hold.attend("mac:a", atTheMac);
+  hold.tell(question);
+  hold.tell(permission);
+  hold.attend("mac:a", { seconds: 45, sessions: [], shown: [{ session: "ses_main", ask: true, request: "per_1" }] });
+  time.pass(link.ASK_HOLD);
+  assert.deepEqual(phones, [question]);
+  hold.attend("mac:a", { seconds: 0 });
+  assert.deepEqual(phones, [question, permission]);
+});
+
+test("a change of the date or time doesn't move a hold", () => {
+  let date = 1_800_000_000_000;
+  const { time, phones, hold } = box({ wall: () => date });
+  hold.attend("mac:a", atTheMac);
+  hold.tell(finished);
+  // The clock set back a day.
+  date -= 86_400_000;
+  time.pass(link.NEWS_HOLD);
+  assert.deepEqual(phones, [finished]);
+});
+
+test("what a bridge before kept is tried for as long as it's been since it was made, by the date", () => {
+  const today = 1_800_000_000_000;
+  const old = box({ up: false, wall: () => today, held: [{ notice: finished, at: today - 11 * 60_000, seen: false }] });
+  // Older than a notice is tried for: one try, then let go.
+  assert.equal(old.hold.count, 0);
+  // Nine minutes old: tried for its last minute, then let go.
+  const recent = box({ up: false, wall: () => today, held: [{ notice: finished, at: today - 9 * 60_000, seen: false }] });
+  recent.time.pass(55_000);
+  assert.equal(recent.hold.count, 1);
+  recent.time.pass(10_000);
+  assert.equal(recent.hold.count, 0);
+  assert.deepEqual(recent.phones, []);
+});
+
 test("a Mac's older word, come late by mail, is let go", () => {
   const { phones, hold } = box();
   // It said it's not in use; its renewal from just before comes after.
@@ -207,12 +322,12 @@ test("one that can't go (no relay just now) goes once it can, once", () => {
 
 test("what's held when the bridge stops goes from the next one, once", () => {
   let kept = [];
-  const first = box({ save: entries => { kept = entries; } });
+  const first = box({ wall: () => 1_800_000_000_000, save: entries => { kept = entries; } });
   first.hold.attend("mac:a", atTheMac);
   first.hold.tell(finished);
   assert.equal(kept.length, 1);
   // The next bridge, before the relay welcomes it, then after.
-  const next = box({ up: false, held: JSON.parse(JSON.stringify(kept)), save: entries => { kept = entries; } });
+  const next = box({ up: false, wall: () => 1_800_000_060_000, held: JSON.parse(JSON.stringify(kept)), save: entries => { kept = entries; } });
   assert.deepEqual(next.phones, []);
   next.relay.up = true;
   next.time.pass(5_000);
@@ -222,9 +337,9 @@ test("what's held when the bridge stops goes from the next one, once", () => {
 });
 
 test("what a client says is read strictly: a lease in seconds, the conversations on its screen", () => {
-  assert.deepEqual(link.attentionGiven({ for: 45, sessions: ["ses_1"] }), { seconds: 45, sessions: ["ses_1"] });
-  assert.deepEqual(link.attentionGiven({ for: 0 }), { seconds: 0, sessions: [] });
-  for (const wrong of [null, {}, { for: -1 }, { for: "45" }, { for: 45, sessions: "ses_1" }, { for: 45, sessions: [1] }, { for: Infinity }]) {
+  assert.deepEqual(link.attentionGiven({ for: 45, sessions: ["ses_1"], shown: [{ session: "ses_2", ask: true }, { session: "ses_3" }] }), { seconds: 45, sessions: ["ses_1"], shown: [{ session: "ses_2", ask: true }, { session: "ses_3", ask: false }] });
+  assert.deepEqual(link.attentionGiven({ for: 0 }), { seconds: 0, sessions: [], shown: [] });
+  for (const wrong of [null, {}, { for: -1 }, { for: "45" }, { for: 45, sessions: "ses_1" }, { for: 45, sessions: [1] }, { for: Infinity }, { for: 45, shown: "ses_1" }, { for: 45, shown: [{ session: 1 }] }, { for: 45, shown: [{ session: "ses_1", ask: "yes" }] }]) {
     assert.equal(link.attentionGiven(wrong), null, JSON.stringify(wrong));
   }
 });
@@ -243,7 +358,7 @@ test("a Mac you're at says so by mail, and only a Mac that set this machine up i
   link.receiveMail(mailFrom(macKey, { at: 2, attention: { for: 45, sessions: ["ses_main"] } }), undefined, () => {}, heard);
   link.receiveMail(mailFrom(macKey, { at: 3, attention: { for: "soon" } }), undefined, () => {}, heard);
   link.receiveMail(mailFrom(macKey, { attention: { for: 45 } }), undefined, () => {}, heard);
-  assert.deepEqual(attended, [{ mac: k(link.publicOf(macKey)), given: { seconds: 45, sessions: ["ses_main"] }, at: 2 }]);
+  assert.deepEqual(attended, [{ mac: k(link.publicOf(macKey)), given: { seconds: 45, sessions: ["ses_main"], shown: [] }, at: 2 }]);
 });
 
 // An engine whose events a test sends to whoever follows them.

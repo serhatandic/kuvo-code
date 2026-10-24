@@ -57,8 +57,8 @@ final class AppModel {
     @ObservationIgnored private(set) lazy var attention = Attention { [weak self] in
         guard let self, !showsSettings else { return [] }
         return utilities.conversationsOnScreen
-    } tell: { [weak self] sessions in
-        self?.phoneLink.attend(sessions)
+    } tell: { [weak self] sessions, shown in
+        self?.phoneLink.attend(sessions, shown: shown)
     }
     /// The coding agents you already have (Claude Code, Codex, Cursor, Grok, Antigravity), run by
     /// the agents bridge beside the engine.

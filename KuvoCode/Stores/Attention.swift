@@ -62,8 +62,9 @@ final class Attention {
     /// The conversations on screen (sessions, and group chats by their id), read while the
     /// window's in front.
     private let onScreen: () -> [String]
-    /// Tells each box: in use with these on screen, or not any more (nil).
-    private let tell: ([String]?) -> Void
+    /// Tells each box: in use with these on screen and these just shown in a notification here, or
+    /// not any more (nil).
+    private let tell: ([String]?, [NoticeHold.Shown]) -> Void
 
     private var systemAsleep = false
     private var screenAsleep = false
@@ -75,7 +76,7 @@ final class Attention {
     private var stopTimer: (() -> Void)?
     private var isRunning = false
 
-    init(mac: Mac = .live, onScreen: @escaping () -> [String], tell: @escaping ([String]?) -> Void) {
+    init(mac: Mac = .live, onScreen: @escaping () -> [String], tell: @escaping ([String]?, [NoticeHold.Shown]) -> Void) {
         self.mac = mac
         self.onScreen = onScreen
         self.tell = tell
@@ -138,7 +139,16 @@ final class Attention {
         let changed = told.map { $0 != now } ?? true
         guard changed || (renewing && now != nil) else { return }
         told = .some(now)
-        tell(now)
+        tell(now, [])
+    }
+
+    /// This Mac showed `shown` in a notification of its own (`Notifier.shownHere`): while you're
+    /// here, the boxes count it as seen, so your phones don't tell you again.
+    func shown(_ shown: NoticeHold.Shown) {
+        guard isRunning else { return }
+        check()
+        guard case .some(.some(let sessions)) = told else { return }
+        tell(sessions, [shown])
     }
 
     /// Tells the boxes as soon as what's on screen changes.
@@ -157,6 +167,6 @@ extension Utilities {
     /// The conversations on screen: the tab's session, the one beside it, and the group chat in
     /// view (by its id), as `Attention` tells the boxes.
     var conversationsOnScreen: [String] {
-        [sessionInView, besideInView, groupInView.flatMap(BotGroups.groupID(fromTab:))].compactMap(\.self)
+        [inView.session, inView.beside, inView.group.flatMap(BotGroups.groupID(fromTab:))].compactMap(\.self)
     }
 }

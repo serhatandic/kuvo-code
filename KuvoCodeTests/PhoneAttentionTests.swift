@@ -65,7 +65,7 @@ import Testing
     /// You at this Mac: what the app tells, from a Mac of the test's own.
     private func atTheMac(onScreen: @escaping () -> [String] = { [] }) -> (attention: Attention, mac: TestMac) {
         let mac = TestMac()
-        let attention = Attention(mac: mac.mac, onScreen: onScreen) { [link] in link.attend($0) }
+        let attention = Attention(mac: mac.mac, onScreen: onScreen) { [link] sessions, shown in link.attend(sessions, shown: shown) }
         attention.start()
         return (attention, mac)
     }
@@ -131,6 +131,96 @@ import Testing
         #expect(phones.notices.map(\.category) == [.permission])
     }
 
+    /// The Mac showed it in a notification while you're here: your phone needn't tell you again.
+    /// (With the Mac's notifications off, or the window in front, none is shown, and it goes after
+    /// its hold, as in the first test.)
+    @Test func aRunFinishedTheMacShowedNeverGoes() async throws {
+        defer { done() }
+        await start(["ses_a"])
+        let (attention, mac) = atTheMac()
+        defer { attention.stop() }
+        try await finish("ses_a")
+        attention.shown(Notifier.shown(.init(.finished), session: "ses_a"))
+        clock.pass(NoticeHold.newsHold)
+        mac.distributed.post(name: Attention.screenLocked, object: nil)
+        #expect(phones.notices.isEmpty)
+    }
+
+    /// A permission the Mac showed still waits on you: it goes once you've left it unanswered, and
+    /// never once answered.
+    @Test func aPermissionTheMacShowedWaitsUntilAnsweredOrYouLeave() async throws {
+        defer { done() }
+        await start(["ses_a"])
+        let (attention, mac) = atTheMac()
+        defer { attention.stop() }
+        try await ask("per_1", in: "ses_a")
+        attention.shown(Notifier.shown(.init(.permission, request: (session: "ses_a", id: "per_1")), session: "ses_a"))
+        clock.pass(NoticeHold.askHold)
+        #expect(phones.notices.isEmpty)
+        mac.distributed.post(name: Attention.screenLocked, object: nil)
+        #expect(phones.notices.map(\.category) == [.permission])
+
+        mac.distributed.post(name: Attention.screenUnlocked, object: nil)
+        try await ask("per_2", in: "ses_a")
+        attention.shown(Notifier.shown(.init(.permission, request: (session: "ses_a", id: "per_2")), session: "ses_a"))
+        clock.pass(NoticeHold.askHold)
+        workspace.handle(try engine.event("permission.replied", ["sessionID": "ses_a", "requestID": "per_2"]))
+        mac.distributed.post(name: Attention.screenLocked, object: nil)
+        #expect(phones.notices.count == 1)
+    }
+
+    /// The Mac's notification and the notice for phones name the same conversation and kind, so a
+    /// box (this Mac's, or a machine's of the same news) can tell one is the other.
+    @Test func aNotificationShownMatchesItsNoticeForPhones() async throws {
+        defer { done() }
+        await start(["ses_a"])
+        try await finish("ses_a")
+        try await ask("per_1", in: "ses_a")
+        try await eventually { phones.notices.count == 2 }
+        let pushes: [(Notifier.Push, String)] = [(.init(.finished), "ses_a"), (.init(.permission, request: (session: "ses_a", id: "per_1")), "ses_a")]
+        #expect(phones.notices.map(NoticeHold.Shown.init(of:)) == pushes.map { Notifier.shown($0.0, session: $0.1) })
+        // A group chat's, and a browser's ask of no conversation.
+        #expect(Notifier.shown(.init(.message, group: "grp_1"), session: BotGroups.tabKey("grp_1")) == NoticeHold.Shown(session: "grp_1", ask: false))
+        #expect(Notifier.shown(.init(.ask, ask: "ask_1"), session: "") == NoticeHold.Shown(session: "ask_1", ask: true, request: "ask_1"))
+        // A machine's: for that machine's box alone.
+        #expect(Notifier.shown(.init(.finished, machine: "box.invalid"), session: "ses_m").machine == "box.invalid")
+    }
+
+    /// A machine's news the Mac showed is the machine's to let go: this Mac's box holds its own
+    /// news of the same conversation as before.
+    @Test func aMachinesNotificationIsntThisMacsToCount() async throws {
+        defer { done() }
+        await start(["ses_a"])
+        let (attention, _) = atTheMac()
+        defer { attention.stop() }
+        try await finish("ses_a")
+        attention.shown(NoticeHold.Shown(session: "ses_a", ask: false, machine: "box.invalid"))
+        for _ in 0..<4 {
+            clock.pass(Attention.renewEvery)
+            attention.check(renewing: true)
+        }
+        #expect(phones.notices.map(\.category) == [.finished])
+    }
+
+    /// One notification stands for one notice: of two runs finished in a conversation, the one not
+    /// shown still goes.
+    @Test func aNotificationStandsForOneNotice() {
+        defer { done() }
+        let (attention, _) = atTheMac()
+        defer { attention.stop() }
+        let first = Notice(title: "Fix the tests", body: "All green.", category: .finished, thread: "ses_a", data: ["session": "ses_a"])
+        var second = first
+        second.body = "And the docs."
+        link.push(first)
+        link.push(second)
+        attention.shown(NoticeHold.Shown(of: first))
+        for _ in 0..<4 {
+            clock.pass(Attention.renewEvery)
+            attention.check(renewing: true)
+        }
+        #expect(phones.notices == [second])
+    }
+
     @Test func aLeaseThatRunsOutSendsWhatsHeldAtOnce() async throws {
         defer { done() }
         await start(["ses_a"])
@@ -180,7 +270,7 @@ import Testing
     @Test func theAppSaysYoureNotHereOnSleepAndScreenLock() {
         let mac = TestMac()
         var told: [[String]?] = []
-        let attention = Attention(mac: mac.mac, onScreen: { ["ses_a"] }) { told.append($0) }
+        let attention = Attention(mac: mac.mac, onScreen: { ["ses_a"] }) { sessions, _ in told.append(sessions) }
         attention.start()
         defer { attention.stop() }
         #expect(told == [["ses_a"]])
@@ -226,28 +316,33 @@ import Testing
         mac.idle = Attention.idleAfter
         mac.renew()
         #expect(told.last == .some(nil))
+        // A notification shown with no one here says nothing: the boxes tell your phones at once.
+        let count = told.count
+        attention.shown(NoticeHold.Shown(session: "ses_a", ask: false))
+        #expect(told.count == count)
     }
 }
 
 /// A clock that moves only when the test moves it, and the timers it runs.
 @MainActor
 final class TestClock {
-    var now = Date(timeIntervalSince1970: 1_800_000_000)
-    private var timers: [(id: Int, at: Date, fire: () -> Void)] = []
+    /// Only differences count: where it starts makes no difference.
+    var now = ContinuousClock.now
+    private var timers: [(id: Int, at: ContinuousClock.Instant, fire: () -> Void)] = []
     private var next = 0
 
     var clock: NoticeHold.Clock {
-        NoticeHold.Clock(now: { self.now }) { seconds, fire in
+        NoticeHold.Clock(now: { self.now }) { delay, fire in
             self.next += 1
             let id = self.next
-            self.timers.append((id, self.now.addingTimeInterval(seconds), fire))
+            self.timers.append((id, self.now + delay, fire))
             return { [weak self] in self?.timers.removeAll { $0.id == id } }
         }
     }
 
     /// Moves on by `seconds`, running each timer as its time comes.
     func pass(_ seconds: TimeInterval) {
-        let end = now.addingTimeInterval(seconds)
+        let end = now + .seconds(seconds)
         while let due = timers.filter({ $0.at <= end }).min(by: { $0.at < $1.at }) {
             timers.removeAll { $0.id == due.id }
             now = due.at

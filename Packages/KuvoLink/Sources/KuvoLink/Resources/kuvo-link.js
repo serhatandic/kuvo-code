@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.28";
+export const BRIDGE_VERSION = "0.9.29";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -3193,16 +3193,20 @@ export function pushTo(phone, json, hostKey) {
 // ---- Notices held while you're at a computer (PROTOCOL.md, "kuvo/attention") ----
 // A client in use (the Mac app, while you're at the Mac) tells the box so, for a short lease it
 // renews. While one is, each notice waits a little before it goes to your phones, and doesn't go
-// if it was answered meanwhile (a permission, a question, an ask) or its conversation came on that
-// client's screen. When the last lease ends (it ran out, or the client said it's not in use), what
-// waits goes at once; with none, notices go at once. So a client that vanishes (a Mac's lid closed)
-// holds nothing back for longer than a hold.
+// if it was answered meanwhile (a permission, a question, an ask) or seen: its conversation came
+// on that client's screen, or the client showed it in a notification of its own. When the last
+// lease ends (it ran out, or the client said it's not in use), what waits goes at once; with none,
+// notices go at once. So a client that vanishes (a Mac's lid closed) holds nothing back for longer
+// than a hold.
 
 // How long a notice waits while you're at a computer: what's asked of you less than news.
 export const ASK_HOLD = 30_000;
 export const NEWS_HOLD = 60_000;
 // The longest lease a client gets: one it doesn't renew is over by then.
 export const LONGEST_LEASE = 60_000;
+// A client's notification of a notice's news and the notice itself come apart (each box hears the
+// engine on its own): one shown this long before the notice still counts.
+export const SHOWN_WITHIN = 10_000;
 // Where a running bridge keeps what's held.
 const HELD_FILE = path.join(RUN, "held-notices.json");
 // A notice that couldn't go (no relay just now) is tried again this often, for this long.
@@ -3217,35 +3221,54 @@ export const holdFor = category => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
 // What a notice is about (its conversation, or group chat), and what answering takes it back.
 const shownIn = notice => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
 const answeredBy = notice => notice?.data?.request ?? notice?.data?.ask;
+// Whether a client's notification (`{session, ask, request?}`) is of this notice: the request or
+// ask it's about, when it names one; else its conversation, and asked of you or news alike.
+const showsNotice = (shown, notice) => shown.request !== undefined
+  ? shown.request === answeredBy(notice)
+  : shown.session === shownIn(notice) && shown.ask === ASKED.has(notice.category);
 
-// What a client said (`POST kuvo/attention`'s body, or a Mac's mail): `{seconds, sessions}`, its
-// lease cut to the longest; null for what isn't that.
+// What a client said (`POST kuvo/attention`'s body, or a Mac's mail): `{seconds, sessions,
+// shown}`, its lease cut to the longest; null for what isn't that.
 export function attentionGiven(given) {
   if (!isObject(given) || typeof given.for !== "number" || !Number.isFinite(given.for) || given.for < 0) return null;
   if (given.sessions !== undefined && (!Array.isArray(given.sessions) || !given.sessions.every(each => typeof each === "string"))) return null;
-  return { seconds: Math.min(given.for, LONGEST_LEASE / 1000), sessions: (given.sessions ?? []).slice(0, 50) };
+  if (given.shown !== undefined && (!Array.isArray(given.shown)
+    || !given.shown.every(each => isObject(each) && typeof each.session === "string" && (each.ask === undefined || typeof each.ask === "boolean")
+      && (each.request === undefined || typeof each.request === "string")))) return null;
+  return {
+    seconds: Math.min(given.for, LONGEST_LEASE / 1000),
+    sessions: (given.sessions ?? []).slice(0, 50),
+    shown: (given.shown ?? []).slice(0, 50).map(each => ({ session: each.session, ask: each.ask === true, ...(each.request !== undefined ? { request: each.request } : {}) })),
+  };
 }
+
+// A clock for time gone by that a change of the date or time can't move.
+const monotonic = () => performance.now();
 
 export class NoticeHold {
   // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
-  // the clock (a test's own). `save(entries)`: what's held, kept for a bridge that starts again,
-  // which gives them back as `held` (no client is in use with it yet, so they go).
-  constructor({ send, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
-    Object.assign(this, { send, now, setTimer, clearTimer, save });
+  // the clock (a test's own), `now` for time gone by; `wall`, the date, for what's kept. `save(entries)`:
+  // what's held, kept for a bridge that starts again, which gives them back as `held` (no client is
+  // in use with it yet, so they go).
+  constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
+    Object.assign(this, { send, now, wall, setTimer, clearTimer, save });
     this.leases = new Map();
     // When each client last spoke (its word's `at`): an older word, come late, is let go.
     this.heard = new Map();
+    // Notifications clients showed lately, for notices that come after them.
+    this.shown = [];
     this.answered = [];
     this.timer = null;
+    const start = this.now(), today = this.wall();
     this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number")
-      .map(entry => ({ notice: entry.notice, at: entry.at, due: 0, seen: entry.seen === true }));
+      .map(entry => ({ notice: entry.notice, wall: entry.at, at: start - Math.min(Math.max(today - entry.at, 0), TRY_FOR), due: 0, seen: entry.seen === true }));
     this.saved = NoticeHold.kept(this.held);
     this.settle();
   }
 
-  // What's kept of what's held, as JSON.
+  // What's kept of what's held, as JSON: when each was made, by the date.
   static kept(entries) {
-    return JSON.stringify(entries.map(({ notice, at, seen }) => ({ notice, at, seen })));
+    return JSON.stringify(entries.map(({ notice, wall, seen }) => ({ notice, at: wall, seen })));
   }
 
   // Whether a client is in use now, and how many notices wait.
@@ -3255,17 +3278,27 @@ export class NoticeHold {
   }
   get count() { return this.held.length; }
 
-  // `client` is in use for `seconds` more, with `sessions` on its screen; 0: it isn't any more.
-  // `at`: when it said so, by its own clock, for words that can come out of order (mail).
-  attend(client, { seconds, sessions = [] }, at) {
+  // `client` is in use for `seconds` more, with `sessions` on its screen and `shown` in its own
+  // notifications just now; 0: it isn't any more. `at`: when it said so, by its own clock, for words
+  // that can come out of order (mail).
+  attend(client, { seconds, sessions = [], shown = [] }, at) {
     if (typeof at === "number") {
       if (at < (this.heard.get(client) ?? -Infinity)) return;
       this.heard.set(client, at);
     }
     if (seconds > 0) {
-      this.leases.set(client, this.now() + seconds * 1000);
-      const shown = new Set(sessions);
-      for (const entry of this.held) if (shown.has(shownIn(entry.notice))) entry.seen = true;
+      const now = this.now();
+      this.leases.set(client, now + seconds * 1000);
+      const onScreen = new Set(sessions);
+      for (const entry of this.held) if (onScreen.has(shownIn(entry.notice))) entry.seen = true;
+      // Each notification stands for one notice: the oldest held of it, or the next to come.
+      this.shown = this.shown.filter(each => now - each.at < SHOWN_WITHIN);
+      for (const each of shown) {
+        const entry = this.held.find(entry => !entry.seen && showsNotice(each, entry.notice));
+        if (entry) entry.seen = true;
+        else this.shown.push({ ...each, at: now });
+      }
+      this.shown = this.shown.slice(-200);
     } else {
       this.leases.delete(client);
     }
@@ -3277,7 +3310,12 @@ export class NoticeHold {
     const answer = answeredBy(notice);
     if (answer !== undefined && this.answered.includes(answer)) return true;
     const now = this.now();
-    this.held.push({ notice, at: now, due: this.inUse ? now + holdFor(notice.category) : now, seen: false });
+    const inUse = this.inUse;
+    // Shown by a client in use just before it came: that notification is spent.
+    const mark = inUse ? this.shown.findIndex(each => now - each.at < SHOWN_WITHIN && showsNotice(each, notice)) : -1;
+    const seen = mark >= 0;
+    if (seen) this.shown.splice(mark, 1);
+    this.held.push({ notice, at: now, wall: this.wall(), due: inUse ? now + holdFor(notice.category) : now, seen });
     this.settle();
     return true;
   }
@@ -3298,7 +3336,7 @@ export class NoticeHold {
     const waiting = this.leases.size > 0;
     // When an entry may go: its hold's end while a client's in use, else now; one that couldn't
     // go waits for its next try.
-    const when = entry => Math.max(waiting ? entry.due : 0, entry.retry ?? 0);
+    const when = entry => Math.max(waiting ? entry.due : -Infinity, entry.retry ?? -Infinity);
     const kept = [];
     for (const entry of this.held) {
       if (when(entry) > now) {

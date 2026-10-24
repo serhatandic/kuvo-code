@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.answerQuestion = { [model] session, form, field, answer in model.workspace.answerQuestion(form, in: session, field: field, with: answer) }
         model.phoneLink.listen(to: Notifier.shared)
         model.attention.start()
+        Notifier.shared.shownHere = { [model] shown in model.attention.shown(shown) }
         Analytics.shared.start()
         UsageMenuBar.shared.onPanelShown = { Analytics.shared.track("usage_panel_opened") }
         #if DEBUG

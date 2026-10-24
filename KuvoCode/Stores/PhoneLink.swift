@@ -880,19 +880,30 @@ final class PhoneLink {
         notifier.answeredForPhones = { [weak self] in self?.hold.resolve($0) }
     }
 
-    /// You're using Kuvo Code on this Mac, with `sessions` on its screen, or not any more (nil)
-    /// (`Attention`): this Mac's box hears it, and each of your machines by mail, so notices for your
-    /// phones wait a little there too (PROTOCOL.md, "kuvo/attention").
-    func attend(_ sessions: [String]?) {
+    /// You're using Kuvo Code on this Mac, with `sessions` on its screen and `shown` in its own
+    /// notifications just now, or not any more (nil) (`Attention`): this Mac's box hears it, and
+    /// each of your machines by mail, so notices for your phones wait a little there too, and one
+    /// you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each notification shown goes to the
+    /// box whose news it was alone.
+    func attend(_ sessions: [String]?, shown: [NoticeHold.Shown] = []) {
         guard Self.isEnabled else { return }
         let seconds = sessions == nil ? 0 : Attention.lease
-        hold.attend("mac", for: seconds, sessions: sessions ?? [])
-        guard let server, status == .connected,
-              let data = try? JSONSerialization.data(withJSONObject: ["attention": ["for": seconds, "sessions": sessions ?? []], "at": Int64(Date.now.timeIntervalSince1970 * 1000)])
-        else { return }
+        hold.attend("mac", for: seconds, sessions: sessions ?? [], shown: shown.filter { $0.machine == nil })
+        guard let server, status == .connected else { return }
+        let at = Int64(Date.now.timeIntervalSince1970 * 1000)
         let delivering = delivering
-        for host in machineHosts.values where host.peers == true && host.anotherMac != true {
-            guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes) else { continue }
+        for (machine, host) in machineHosts where host.peers == true && host.anotherMac != true {
+            var word: [String: Any] = ["for": seconds, "sessions": sessions ?? []]
+            let theirs = shown.filter { $0.machine == machine }
+            if !theirs.isEmpty {
+                word["shown"] = theirs.map { each -> [String: Any] in
+                    var entry: [String: Any] = ["session": each.session, "ask": each.ask]
+                    if let request = each.request { entry["request"] = request }
+                    return entry
+                }
+            }
+            guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
+                  let data = try? JSONSerialization.data(withJSONObject: ["attention": word, "at": at]) else { continue }
             delivering.withLock { $0 += 1 }
             Task.detached {
                 await server.mail(data, to: key, at: address)
@@ -918,8 +929,8 @@ final class PhoneLink {
     }
 
     /// `kuvo/attention`: GET says whether a client is in use here, and how many notices wait; POST
-    /// `{for, sessions?}`, a phone in use for `for` seconds (0: not any more) with those on its
-    /// screen, answers the lease it got.
+    /// `{for, sessions?, shown?}`, a phone in use for `for` seconds (0: not any more) with those on
+    /// its screen and those shown in its own notifications, answers the lease it got.
     func answerAttention(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
         switch request.method.uppercased() {
         case "GET", "HEAD":
@@ -927,16 +938,32 @@ final class PhoneLink {
         case "POST":
             let given = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
             let sessions = given?["sessions"]
-            guard let seconds = (given?["for"] as? NSNumber).flatMap({ CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.doubleValue }), seconds.isFinite, seconds >= 0,
-                  sessions == nil || sessions is [String] else {
-                return (400, Self.message("Say for how many seconds you're in use (for: 0 for not), and which conversations are on your screen (sessions)."))
+            guard let seconds = (given?["for"] as? NSNumber).flatMap({ Self.isBool($0) ? nil : $0.doubleValue }), seconds.isFinite, seconds >= 0,
+                  sessions == nil || sessions is [String], let shown = Self.shown(given?["shown"]) else {
+                return (400, Self.message("Say for how many seconds you're in use (for: 0 for not), which conversations are on your screen (sessions), and which your notifications showed (shown)."))
             }
             let granted = min(seconds, NoticeHold.longestLease)
-            hold.attend("phone:\(asking?.base64URL ?? "")", for: granted, sessions: Array(((sessions as? [String]) ?? []).prefix(50)))
+            hold.attend("phone:\(asking?.base64URL ?? "")", for: granted, sessions: Array(((sessions as? [String]) ?? []).prefix(50)), shown: shown)
             return (200, Self.json(["for": granted]))
         default:
             return (405, Data("{}".utf8))
         }
+    }
+
+    private static func isBool(_ number: NSNumber) -> Bool { CFGetTypeID(number) == CFBooleanGetTypeID() }
+
+    /// A client's `shown` (`[{session, ask?, request?}]`): none when it's left out, nil when it isn't that.
+    private static func shown(_ value: Any?) -> [NoticeHold.Shown]? {
+        guard let value else { return [] }
+        guard let list = value as? [Any] else { return nil }
+        var shown: [NoticeHold.Shown] = []
+        for item in list {
+            guard let entry = item as? [String: Any], let session = entry["session"] as? String else { return nil }
+            let ask = entry["ask"], request = entry["request"]
+            guard ask == nil || (ask as? NSNumber).map(isBool) == true, request == nil || request is String else { return nil }
+            shown.append(NoticeHold.Shown(session: session, ask: (ask as? Bool) ?? false, request: request as? String))
+        }
+        return Array(shown.prefix(50))
     }
 
     /// `notice` to each paired phone, through the relay: false when it can't go now (no relay

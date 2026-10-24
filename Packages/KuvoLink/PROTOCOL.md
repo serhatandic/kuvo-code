@@ -359,40 +359,51 @@ Who sends it: each box, for what happens on it, so each notice comes once.
 ### kuvo/attention
 
 While you're using a client, each box it's connected to holds your phones' notices a little, so
-your phone doesn't buzz for what you're already looking at or answer at once (from 0.9.28; before,
-a machine sent each at once, and a Mac's box sent its own only while you were away from it).
+your phone doesn't buzz for what you're already looking at, were shown, or answer at once (from
+0.9.29; before, a machine sent each at once, and a Mac's box sent its own only while you were away
+from it).
 
 - **A client in use says so**, for a lease it renews: `POST kuvo/attention` with `{"for":
-  <seconds>, "sessions": [<id>, …]}`. `for` is how long it's in use from now (the box's clock,
-  so the two clocks needn't agree), cut to 60; `0` says it isn't any more. `sessions`, optional,
-  are the conversations on its screen: sessions by id, group chats by theirs. The answer is
-  `{"for": <seconds granted>}`; 400 `{message}` for a `for` that isn't a number of seconds from 0
-  up, or `sessions` that aren't strings; 405 for another method. `GET kuvo/attention` answers
-  `{"inUse": bool, "held": <count>}`. Each client has one lease, a phone by its key; a newer word
-  replaces its last.
+  <seconds>, "sessions": [<id>, …], "shown": [{"session": <id>, "ask"?: bool, "request"?: <id>},
+  …]}`. `for` is how long it's in use from now (the box's clock, so the two clocks needn't agree),
+  cut to 60; `0` says it isn't any more. `sessions`, optional, are the conversations on its screen:
+  sessions by id, group chats by theirs. `shown`, optional, are notices it just showed you itself:
+  each one's conversation, whether it asked you something (`permission`, `question`, `ask`; false
+  if left out) or was news, and for what's asked, the request or ask it's about (`data.request`,
+  else `data.ask`). The answer is `{"for": <seconds granted>}`; 400 `{message}` for a `for` that
+  isn't a number of seconds from 0 up, `sessions` that aren't strings, or `shown` that isn't that;
+  405 for another method. `GET kuvo/attention` answers `{"inUse": bool, "held": <count>}`. Each
+  client has one lease, a phone by its key; a newer word replaces its last.
 - **A Mac** says it for you: in use while it's awake, its screen awake and unlocked, there's been
   input in the last two minutes, and Kuvo Code can show you things there (its window in front, or
   its notifications on), and not while another account is in front. It renews every 15 seconds
   for 45, with the conversations on screen while its window's in front and there's been input
   since its last word, and says it isn't at once as the Mac or its screen sleeps, the screen locks
   or another account comes in front, and at its next word once you've gone idle, or as it quits.
-  Its own box hears it in the app; each of its machines whose bridge talks to peers by mail,
-  `{"attention": {for, sessions}, "at"}`, taken only from a Mac that set the machine up, and only
-  when its `at` isn't older than that Mac's last (mail can come out of order). A Mac without the
-  phone link on says nothing.
+  With its notifications on, each notice it shows you while in use (a notification, unless its
+  style in System Settings is None; or, with its window in front, its sidebar and tabs) it says at
+  once in `shown`, to the box whose news it was alone: its own, or a machine's. With its
+  notifications off it says none. Its own box hears it in the app; each of its machines whose
+  bridge talks to peers by mail, `{"attention": {for, sessions, shown?}, "at"}`, taken only from a
+  Mac that set the machine up, and only when its `at` isn't older than that Mac's last (mail can
+  come out of order). A Mac without the phone link on says nothing.
 - **The box**, while any client's lease is current, holds each new notice: 30 seconds for what's
   asked of you (`permission`, `question`, `ask`), 60 for news (the rest). When its hold ends it
   goes, unless meanwhile it was answered (the permission or form replied to, or cancelled; the ask
-  no longer asked) or seen: a client in use said its conversation (`data.session`, else
-  `data.group`, else `thread`) is on its screen, in a word that came after the notice. Seen news
-  is let go; something seen that's asked of you waits until it's answered, or goes once no client
-  is in use. When the last lease ends (it ran out, or its client said `0`), what's held goes at
-  once. With no lease, a notice goes at once.
+  no longer asked) or seen. Seen is a client in use saying its conversation (`data.session`, else
+  `data.group`, else `thread`) is on its screen, in a word that came after the notice; or that it
+  showed it: one `shown` stands for one notice, the one its `request` names, else the oldest of
+  that conversation and kind, while it's held or up to 10 seconds before it comes (each box hears
+  the engine on its own, so either can come first). Seen news is let go; something seen that's
+  asked of you waits until it's answered, or goes once no client is in use. When the last lease
+  ends (it ran out, or its client said `0`), what's held goes at once. With no lease, a notice goes
+  at once. Holds and leases are timed on a clock a change of the date or time can't move.
 - So a client that vanishes (a Mac's lid closed before it could say so) holds nothing back longer
   than a hold or its lease, whichever ends first, and a conversation it last showed doesn't count
   as seen. One a box couldn't hand to the relay (no connection just now) is tried again every few
-  seconds, for ten minutes. A machine's bridge keeps what it holds in `run/held-notices.json`, so the next one sends
-  it if it stops first. The Mac's own notifications are the same either way.
+  seconds, for ten minutes. A machine's bridge keeps what it holds in `run/held-notices.json`
+  (with when each was made, by the date), so the next one sends it if it stops first. The Mac's own
+  notifications are the same either way.
 - A phone needn't say it's in use: it leaves out what's on its screen itself, and its own lease
   would hold its own notices.
 

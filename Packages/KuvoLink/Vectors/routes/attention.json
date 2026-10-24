@@ -6,6 +6,8 @@
       "steps": [
         { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false, "held": 0 } } },
         { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": ["ses_main"] }, "expect": { "status": 200, "json": { "for": 45 } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": [{ "session": "ses_main", "ask": true, "request": "per_1" }] }, "expect": { "status": 200, "json": { "for": 45 } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": [{ "session": "ses_main" }] }, "expect": { "status": 200, "json": { "for": 45 } } },
         { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": true, "held": 0 } } },
         { "send": "POST kuvo/attention", "body": { "for": 0 }, "expect": { "status": 200, "json": { "for": 0 } } },
         { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false, "held": 0 } } }
@@ -26,6 +28,10 @@
         { "send": "POST kuvo/attention", "body": { "for": true }, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": "ses_main" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": [1] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": ["ses_main"] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": null }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": [{ "session": "ses_main", "request": 7 }] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "shown": [{ "session": "ses_main", "ask": "yes" }] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "PUT kuvo/attention", "body": { "for": 45 }, "expect": { "status": 405 } },
         { "send": "GET kuvo/attention", "expect": { "status": 200, "json": { "inUse": false } } }
       ]

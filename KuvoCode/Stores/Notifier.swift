@@ -42,6 +42,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// A request, a question or an ask answered (or gone), whose notice for your phones, if it's
     /// still waiting, never goes (set with `toPhones`, by `PhoneLink.listen`).
     var answeredForPhones: ((String) -> Void)?
+    /// A notification this Mac showed of news that goes to phones (its own, or a machine's): its
+    /// conversation and kind, for the boxes to count as seen while you're here (set by the app,
+    /// `Attention`).
+    var shownHere: ((NoticeHold.Shown) -> Void)?
 
     /// What goes to your phones too, as their notification (KuvoLink's PROTOCOL.md,
     /// "Notifications"): nil for what's only about this Mac.
@@ -315,7 +319,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // in Notification Center, and a phone's lock screen.
         let body = Self.masked(body)
         if let push { send(push, session: session, title: Self.masked(title), subtitle: subtitle.map(Self.masked), body: body) }
-        guard Self.isEnabled, !NSApp.isActive else { return }
+        guard Self.isEnabled else { return }
+        // In the app, its sidebar and tabs show it: shown here as much as a notification would be.
+        guard !NSApp.isActive else {
+            if let push { shownHere?(Self.shown(push, session: session)) }
+            return
+        }
         Task {
             guard await authorize() else { return }
             let content = UNMutableNotificationContent()
@@ -336,7 +345,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
             // One with no buttons still goes once it's answered elsewhere.
             if content.userInfo["request"] == nil, let request = push?.request { content.userInfo["request"] = request.id }
-            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            let center = UNUserNotificationCenter.current()
+            guard (try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))) != nil else { return }
+            // Shown here (unless its style in System Settings is None): while you're at this Mac,
+            // your phones needn't tell you again. (A Focus that silences it can't be told.)
+            if let push, await center.notificationSettings().alertStyle != .none { shownHere?(Self.shown(push, session: session)) }
         }
     }
 
@@ -349,7 +362,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if !push.answerable { data["answerable"] = "0" }
         }
         if let ask = push.ask { data["ask"] = ask }
-        toPhones(Notice(title: title, subtitle: subtitle, body: body, category: push.category, thread: push.group ?? (session.isEmpty ? push.ask ?? "" : session), data: data))
+        toPhones(Notice(title: title, subtitle: subtitle, body: body, category: push.category, thread: Self.thread(push, session: session), data: data))
+    }
+
+    /// What a notice for phones is grouped under: the group chat, the session, or the browser ask.
+    private static func thread(_ push: Push, session: String) -> String {
+        push.group ?? (session.isEmpty ? push.ask ?? "" : session)
+    }
+
+    /// A notification shown here, as the boxes match it with their notices for phones (this Mac's,
+    /// or a machine's of the same news).
+    static func shown(_ push: Push, session: String) -> NoticeHold.Shown {
+        NoticeHold.Shown(session: thread(push, session: session), ask: NoticeHold.isAsked(push.category), request: push.request?.id ?? push.ask, machine: push.machine)
     }
 
     /// Takes a session's notifications away once you've looked at it.
