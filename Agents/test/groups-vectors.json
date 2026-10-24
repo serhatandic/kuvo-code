@@ -943,42 +943,6 @@
         }
       ],
       "guests" : [
-        "bot_scout",
-        "bot_cy"
-      ],
-      "members" : [
-        "bot_ada",
-        "bot_ben"
-      ],
-      "messages" : [
-        {
-          "id" : "gm_0",
-          "kind" : "message",
-          "text" : "> &Ada: who else?\n\nAsk &Scout\n\n---\n\n&Cy, join in",
-          "time" : "2026-09-21T14:13:20Z"
-        }
-      ]
-    },
-    {
-      "bots" : [
-        {
-          "id" : "bot_ada",
-          "name" : "Ada"
-        },
-        {
-          "id" : "bot_ben",
-          "name" : "Ben"
-        },
-        {
-          "id" : "bot_cy",
-          "name" : "Cy"
-        },
-        {
-          "id" : "bot_scout",
-          "name" : "Scout"
-        }
-      ],
-      "guests" : [
 
       ],
       "members" : [
@@ -19837,6 +19801,78 @@
           "resource" : "rm *"
         }
       ]
+    }
+  ],
+  "segments" : [
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "Ask Scout"
+        },
+        {
+          "quote" : null,
+          "text" : "Cy, join in"
+        }
+      ],
+      "text" : "> Who else?\n\nAsk Scout\n\n---\n\nCy, join in"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "One",
+          "text" : "First"
+        },
+        {
+          "quote" : "Two",
+          "text" : "Second"
+        },
+        {
+          "quote" : null,
+          "text" : "Mine"
+        }
+      ],
+      "text" : "> One\n\nFirst\n\n> Two\n\nSecond\n\n---\n\nMine"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "Ask Scout\n---\nnot a line of its own"
+        }
+      ],
+      "text" : "> Who else?\n\nAsk Scout\n---\nnot a line of its own"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "```\n---\n```\n\nstill the answer"
+        }
+      ],
+      "text" : "> Who else?\n\n```\n---\n```\n\nstill the answer"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : null,
+          "text" : "Words first\n\n---\n\nmore words"
+        }
+      ],
+      "text" : "Words first\n\n---\n\nmore words"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Just a quote",
+          "text" : ""
+        },
+        {
+          "quote" : null,
+          "text" : "words"
+        }
+      ],
+      "text" : "> Just a quote\n\n---\n\nwords"
     }
   ],
   "splitText" : [

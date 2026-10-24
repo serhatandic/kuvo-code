@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Bots can write to their memory in Plan mode and Ask First too: Settings › Permissions starts with a rule that allows it, which you can see and take out. In Ask First, what Settings › Permissions allows in particular, like a command such as "npm test *", now goes without asking, as its footer says.
+- Bots can write to their memory in Plan mode and Ask First too: Settings › Permissions starts with a rule that allows it, which you can see and take out. In Ask First, what Settings › Permissions allows in particular, like a command such as "npm test *" or a folder to work in, now goes without asking, as its footer says.
 - A bot's conversation no longer has New Session From Here, which made a session you couldn't find.
 - Answers to quotes and the words you write after them show in bubbles of their own, rather than the last answer and your words in one.
 - The usage panel reads Cursor's usage with the sign-in of Kuvo Code's Cursor agent when the Cursor app isn't signed in on this Mac, rather than saying it isn't.

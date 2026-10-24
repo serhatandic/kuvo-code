@@ -18,6 +18,7 @@ import {
   seatStartText,
   guestText,
   guests,
+  segments,
   outgrew,
   ampersands,
   type Group,
@@ -104,6 +105,13 @@ describe("a group chat on a machine goes by the Mac's rules", () => {
       const names = new Map<string, string>(Object.entries(vector.names))
       const found = nextSpeaker(vector.group, vector.messages, vector.members, new Set(vector.quiet), names)
       expect([vector.messages.at(-1)?.text, found ?? null]).toEqual([vector.messages.at(-1)?.text, vector.next])
+    }
+  })
+
+  test("what a message quotes, and its own words", () => {
+    for (const vector of vectors.segments) {
+      const shown = segments(vector.text).map((part) => ({ quote: part.quote ?? null, text: part.text }))
+      expect([vector.text, shown]).toEqual([vector.text, vector.segments])
     }
   })
 

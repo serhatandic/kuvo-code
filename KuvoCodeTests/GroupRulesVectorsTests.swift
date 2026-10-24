@@ -11,7 +11,7 @@ import Testing
 /// bridge's tests then say whether the machine's rules still match.
 @MainActor
 struct GroupRulesVectorsTests {
-    static let recorded = "af23556ea64fb0ee654a65bbf28fdcb93ff0f8ad4885b4b2670fc95cc0a7aeaa"
+    static let recorded = "2015c6dc14bf889a8dde0398b50448099cb051d4ed3e0b0ac10aeac9288875be"
 
     @Test func theMachinesChatsGoByTheseRules() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
@@ -48,6 +48,9 @@ struct GroupRulesVectorsTests {
                 ["text": text, "names": names, "ids": BotGroups.mentions(in: text, among: names.map { ("bot_" + $0, $0) })]
             },
             "said": try saidCases(),
+            "segments": segmentCases.map { text in
+                ["text": text, "segments": Quoting.segments(text).map { ["quote": $0.quote ?? NSNull(), "text": $0.text] as [String: Any] }]
+            },
             "seatInstructions": try seatCases(),
             "seatRules": try ruleCases(),
             "job": memories.map { text in
@@ -218,8 +221,6 @@ struct GroupRulesVectorsTests {
             (["&Scout and &Cy, join in", "A note"], nil),
             (["&Ben and &Ada, both of you"], nil),
             (["> &Scout said so\nI agree"], "bot_ada"),
-            // An answer to a quote, then your own words after the line that ends the answers.
-            (["> &Ada: who else?\n\nAsk &Scout\n\n---\n\n&Cy, join in"], nil),
             (["Ask &Cy please"], "bot_cy"),
             (["&scoutish isn't Scout"], nil),
             ([String](), nil),
@@ -291,6 +292,17 @@ struct GroupRulesVectorsTests {
             ] as [String: Any]
         }
     }
+
+    /// Messages as what they quote and say (Quoting.segments), which a seat's prompt and a chat's
+    /// title read your own words from.
+    static let segmentCases = [
+        "> Who else?\n\nAsk Scout\n\n---\n\nCy, join in",
+        "> One\n\nFirst\n\n> Two\n\nSecond\n\n---\n\nMine",
+        "> Who else?\n\nAsk Scout\n---\nnot a line of its own",
+        "> Who else?\n\n```\n---\n```\n\nstill the answer",
+        "Words first\n\n---\n\nmore words",
+        "> Just a quote\n\n---\n\nwords",
+    ]
 
     static let mentionCases: [(String, [String])] = [
         ("&Sam and &Samantha", ["Sam", "Samantha"]),

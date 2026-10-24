@@ -579,8 +579,17 @@ final class CursorAgentSignInTests: XCTestCase {
             HTTPResponse(statusCode: 503, headers: [:], body: Data())
         }
         let snapshot = await provider.refresh()
-        XCTAssertNotNil(snapshot.errorCategory)
-        XCTAssertNotEqual(snapshot.errorCategory, .authExpired)
-        XCTAssertNotEqual(snapshot.errorCategory, .notLoggedIn)
+        XCTAssertEqual(snapshot.errorCategory, .http5xx)
+    }
+
+    func testOfflineSaysToCheckTheConnection() async throws {
+        HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
+        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let snapshot = await provider.refresh()
+        XCTAssertEqual(snapshot.errorCategory, .network)
+        let said = snapshot.lines.map { "\($0)" }.joined()
+        XCTAssertTrue(said.contains(ProviderUsageErrorText.connectionFailed), said)
     }
 }
