@@ -317,9 +317,7 @@ doesn't fit is cut, ending in "…". Keys are sorted, as both sides write them.
 Who sends it: each box, for what happens on it, so each notice comes once.
 
 - **The Mac**, for its own sessions, its group chats and browser asks, never a machine's. Like a
-  machine, it holds each a little while a client is in use there ("kuvo/attention", below);
-  before, it sent nothing while you were at it (no input for two minutes, screen unlocked) unless
-  a phone had a session open.
+  machine, it holds each a little while a client is in use there ("kuvo/attention", below).
 - **A machine's bridge**, for that machine's sessions (permissions, questions, runs finished
   or failed, bots' news), what agents ask for as they browse there (category `ask`), and its
   coding agents' sessions and the group chats that live there (a meeting held, a bot done with
@@ -333,9 +331,7 @@ Who sends it: each box, for what happens on it, so each notice comes once.
 ### kuvo/attention
 
 While you're using a client, each box it's connected to holds your phones' notices a little, so
-your phone doesn't buzz for what you're already looking at, were shown, or answer at once (from
-0.9.29; before, a machine sent each at once, and a Mac's box sent its own only while you were away
-from it).
+your phone doesn't buzz for what you're already looking at, were shown, or answer at once.
 
 - **A client in use says so**, for a lease it renews: `POST kuvo/attention` with `{"for":
   <seconds>, "sessions": [<id>, …], "shown": [{"session": <id>, "ask"?: bool, "request"?: <id>},
@@ -951,6 +947,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `accounts.credentials` | `kuvo/accounts/credentials` |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
+| `attention` | `kuvo/attention` |
 | `bots` | `kuvo/bots` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
