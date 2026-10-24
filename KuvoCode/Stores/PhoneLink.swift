@@ -848,17 +848,6 @@ final class PhoneLink {
                 }
             }
         }
-        // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
-        if ["kuvo/skills", "kuvo/skill-library"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerSkills(request) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // Settings › Machines: this Mac's machines. Adding a machine checks it first: the phone
         // going stops that (and nothing else, which would leave a removal half done).
         if route == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
@@ -1171,7 +1160,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/skills", "kuvo/skill-library"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 

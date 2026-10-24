@@ -76,8 +76,6 @@ final class AppModel {
     /// else a machine's ID (see `renewEngines`).
     @ObservationIgnored var renewals: Set<String> = []
     @ObservationIgnored var renewing: Task<Void, Never>?
-    /// Skills added in Settings, beside the settings file: the engine reads them for every project.
-    var skillsFolder: URL { engineFolders.configFile.deletingLastPathComponent().appending(path: "skills") }
     /// Brings the main window back (set by the window itself; the usage menu's "Open Kuvo Code").
     var openMainWindow: (() -> Void)?
     /// Opened at login (Open at Login): this Mac's box runs in the background, its engine, bots and

@@ -21,14 +21,15 @@ final class TestBox {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(filePath: $0) }
     }
 
-    /// Started, finding the engine at `engine` (StubWeb's, started already).
-    init(engine: String, password: String = "test") async throws {
+    /// Started, finding the engine at `engine` (StubWeb's, started already). `environment`: what
+    /// else it runs with (GitHub's stand-in, `KUVO_TEST_GITHUB`).
+    init(engine: String, password: String = "test", environment: [String: String] = [:]) async throws {
         guard let node = Self.node else { throw TestFailure("Node runs this Mac's box in the tests, and there's none.") }
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
         try await StubWeb.listen(port: enginePort)
-        await process.start(node: node)
+        await process.start(node: node, environment: environment)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }
         StubWeb.letThrough(port: endpoint.url.port ?? 0)
         BoxProcess.engineChanged(ServerEndpoint(url: url, password: password), version: "2.0.32", pid: getpid())

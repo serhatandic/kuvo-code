@@ -1,5 +1,5 @@
 {
-  "about": "kuvo/skills and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: PhoneSkillsTests and skills.test.js cover those, each against its own stand-in.",
+  "about": "kuvo/skills and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: SkillsOnBoxTests (this Mac's box, as the app reaches it) and skills.test.js cover those, each against its own stand-in.",
   "scenarios": [
     {
       "name": "the skills folder, and which skills came from GitHub",
@@ -20,8 +20,16 @@
         { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nAnd kind.\n" } } },
         { "send": "PUT kuvo/skills/release-notes", "body": { "text": "  " }, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "PUT kuvo/skills/Release%20Notes", "body": { "text": "Hi", "new": true }, "expect": { "status": 400, "json": { "message": "Names use lowercase letters a to z, digits and hyphens." } } },
-        { "send": "PUT kuvo/skills/..%2Fescape", "body": { "text": "Hi" }, "expect": { "status": 400, "json": { "message": "That isn't a skill's name." } } },
-        { "send": "GET kuvo/skills/%E0%A4%A", "expect": { "status": 400, "json": { "message": "That isn't a path." } } },
+        {
+          "send": "PUT kuvo/skills/..%2Fescape", "body": { "text": "Hi" },
+          "why": "Refused on both: a Mac's link checks every path it hands its box as the relay checks the engine's (403), and a machine's skills route reads the name itself (400).",
+          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn't a skill's name." } } }
+        },
+        {
+          "send": "GET kuvo/skills/%E0%A4%A",
+          "why": "Refused on both, as above: a path that doesn't decode.",
+          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn't a path." } } }
+        },
         { "send": "PUT kuvo/skills/nowhere", "body": { "text": "Hi" }, "expect": { "status": 404, "json": {} } },
         { "send": "PUT kuvo/skills/pdf", "body": { "text": "Mine now" }, "expect": { "status": 409, "json": { "message": "pdf came from GitHub, so it isn't edited here." } } },
         { "send": "GET kuvo/skills/nowhere", "expect": { "status": 404, "json": {} } }

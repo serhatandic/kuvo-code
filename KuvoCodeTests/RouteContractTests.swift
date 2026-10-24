@@ -229,7 +229,7 @@ final class MacBox {
         // (AppModel's machines start sets it, for the agents' mail and `&` names.)
         AgentMail.shared.app = app
         self.app = app
-        #expect(app.skillsFolder == Self.skills && app.engineConfig.file == Self.folders.configFile, "the box's folders are the app's")
+        #expect(app.engineConfig.file == Self.folders.configFile, "the box's folders are the app's")
         await settle()
     }
 
@@ -311,7 +311,7 @@ final class MacBox {
             try write(string("text"), to: folder.appending(path: "SKILL.md"))
             if let github = given["github"] as? [String: String] {
                 try write(String(decoding: JSONSerialization.data(withJSONObject: ["branch": "main", "path": github["path"] ?? "", "repository": github["repository"] ?? ""]), as: UTF8.self),
-                          to: folder.appending(path: SkillLibrary.sourceFile))
+                          to: folder.appending(path: ".kuvo-source.json"))
             }
         case "settings":
             let value = try JSONSerialization.data(withJSONObject: given["value"] ?? [String: Any]())
