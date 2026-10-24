@@ -14,7 +14,7 @@ import Testing
 @Suite(.serialized) struct ProjectsOnBoxTests {
     static let port: UInt16 = 47_950
     let engine = StubEngine(port: Int(port))
-    let box = BoxProcess()
+    let box: TestBox
     let work: URL
     let shop: String
     let blog: String
@@ -28,19 +28,12 @@ import Testing
         for folder in [shop, blog] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
-        try StubWeb.listen(port: Self.port)
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
-        let node = try #require(MacBoxTests.node, "Node runs this Mac's box in the tests")
-        await box.start(node: node)
-        let endpoint = try #require(box.endpoint, "it started: \(box.failure ?? "")")
-        StubWeb.letThrough(port: endpoint.url.port ?? 0)
-        BoxProcess.engineChanged(engine.api.client.endpoint, version: "2.0.32", pid: getpid())
+        box = try await TestBox(engine: engine.url)
     }
 
     private func done() {
         box.stop()
-        BoxProcess.engineChanged(nil, version: nil, pid: nil)
-        StubWeb.stopListening(port: Self.port)
         engine.stop()
         for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
@@ -51,10 +44,8 @@ import Testing
     private func workspace() -> Workspace {
         let workspace = Workspace()
         workspace.api = engine.api
-        let base = URL(string: engine.url + "/")!
-        workspace.boxes = { id in
-            id == BoxClient.mac ? BoxClient(box: id, transport: LocalBox { PhoneLink.respond(to: $0, link: nil, engine: base, password: "test", agents: nil) }) : nil
-        }
+        let box = box, url = engine.url
+        workspace.boxes = { id in id == BoxClient.mac ? box.client(engine: url) : nil }
         return workspace
     }
 
@@ -101,14 +92,13 @@ import Testing
         workspace.saveProject(shop, settings: .init(name: "Shop"))
         await workspace.projectsWritten()
 
-        box.stop()
+        box.process.stop()
         workspace.saveProject(shop, settings: .init(name: "Storefront"))
         await workspace.projectsWritten()
         await workspace.loadProjects(on: BoxClient.mac)
         #expect(workspace.projectName(shop) == "Storefront")
 
         await box.startAgain()
-        StubWeb.letThrough(port: try #require(box.endpoint?.url.port))
         await workspace.loadProjects(on: BoxClient.mac)
         #expect(workspace.projectName(shop) == "Storefront")
         #expect(try await onBox(workspace).first { $0.directory == shop }?.name == "Storefront")
@@ -134,7 +124,7 @@ import Testing
         UserDefaults.standard.set([RemoteFolder.folder("/home/me/app", on: "old-address")], forKey: "projectFolders")
         UserDefaults.standard.set(true, forKey: "projectsOnBox.lab")
         let workspace = Workspace()
-        let endpoint = try #require(box.endpoint)
+        let endpoint = try #require(box.process.endpoint)
         let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
         // The machine's box, as SSH reaches it: here, this test's own box.
         workspace.boxes = { id in
@@ -145,6 +135,31 @@ import Testing
         let lab = try await #require(workspace.boxes?("lab")).value([String: [Workspace.BoxProject]].self, "GET", "kuvo/projects")
         #expect(lab["projects"]?.map(\.directory) == ["/home/me/app"])
         #expect(workspace.folders == [RemoteFolder.folder("/home/me/app", on: "lab")])
+    }
+
+    /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there
+    /// archives their sessions too.
+    @Test func removeProjectReachesWorktreesKeptHereBefore() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/brave-otter").path
+        try FileManager.default.createDirectory(atPath: tree, withIntermediateDirectories: true)
+        UserDefaults.standard.set(try JSONEncoder().encode([tree: Workspace.Worktree(project: shop, root: tree, branch: "kuvo/brave-otter", base: "main")]), forKey: "worktrees")
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+
+        #expect(try await workspace.removeProject(shop) == 0)
+        let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in
+            ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
+        })
+        #expect(patched == ["ses_shop", "ses_tree"])
+        #expect(!workspace.projects.contains { $0.directory == shop })
+        // Its box keeps the worktree now.
+        struct Listed: Decodable { var worktrees: [Workspace.BoxWorktree] }
+        let kept = try await #require(workspace.boxes?(BoxClient.mac)).value(Listed.self, "GET", "kuvo/worktrees?records=1")
+        #expect(kept.worktrees.map(\.root) == [tree])
     }
 
     @Test func removeProjectArchivesItsSessionsThereAndKeepsItsSettings() async throws {

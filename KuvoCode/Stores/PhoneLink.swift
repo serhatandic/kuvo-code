@@ -859,14 +859,13 @@ final class PhoneLink {
                 }
             }
         }
-        // Settings › Machines and Settings › Worktrees: this Mac's machines, and the worktrees its
-        // sessions run in. Adding a machine checks it first: the phone going stops that (and
-        // nothing else, which would leave a removal half done).
+        // Settings › Machines: this Mac's machines. Adding a machine checks it first: the phone
+        // going stops that (and nothing else, which would leave a removal half done).
         if route == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
-        if ["kuvo/machines", "kuvo/worktrees"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
+        if route == "kuvo/machines" || route.hasPrefix("kuvo/machines/") {
             return AsyncThrowingStream { continuation in
                 let task = Task { @MainActor in
-                    let (status, body) = await (route.hasPrefix("kuvo/machines") ? link?.answerMachines(request) : link?.answerWorktrees(request)) ?? (503, Data())
+                    let (status, body) = await link?.answerMachines(request) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1172,7 +1171,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 
@@ -1199,7 +1198,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "wakes", "wakes.edit", "worktrees",
+        "wakes", "wakes.edit", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]

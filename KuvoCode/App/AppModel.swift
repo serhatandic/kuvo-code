@@ -65,8 +65,8 @@ final class AppModel {
     let agents = OutsideAgents()
     /// This Mac's box (`kuvo-link.js serve`), which answers the areas that have moved onto it.
     let box = BoxProcess()
-    /// This Mac's projects followed from its box, once started.
-    @ObservationIgnored private var projectsFollowed: Task<Void, Never>?
+    /// This Mac's worktrees and projects followed from its box, once started.
+    @ObservationIgnored private var boxFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
     /// The engine's settings file, for Settings.
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(file: engineFolders.configFile)
@@ -397,8 +397,15 @@ final class AppModel {
             let boxEnvironment = shell
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
-                // Its projects, as this Mac's box keeps them, from now on.
-                if projectsFollowed == nil { projectsFollowed = Task { await workspace.followProjects() } }
+                // Its worktrees and projects, as this Mac's box keeps them, from now on (what was
+                // kept here before goes there).
+                if boxFollowed == nil {
+                    boxFollowed = Task {
+                        async let worktrees: Void = workspace.followWorktrees()
+                        await workspace.followProjects()
+                        await worktrees
+                    }
+                }
             }
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)

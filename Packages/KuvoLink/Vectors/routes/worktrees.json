@@ -82,9 +82,7 @@
       ]
     },
     {
-      "name": "a machine hands over the records a Mac kept of its worktrees",
-      "only": "machine",
-      "why": "Only a machine takes a Mac's old records (?records=1 and /record), from before machines kept their own worktrees.",
+      "name": "a box takes over the records a Mac kept of its worktrees",
       "steps": [
         { "given": { "repository": { "as": "shop" } } },
         { "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" }, "expect": { "status": 200, "json": { "made": "<string>", "prefix": "kuvo/" } }, "save": { "root": "root" } },
