@@ -727,8 +727,9 @@ final class Bots {
 
     /// `machine`'s bots' jobs, as their memories there have them now, taken from the machine's
     /// list of its bots (`kuvo/bots?memory=1`): the machine keeps them current itself, in their
-    /// descriptions and what they're told, so this Mac only takes them in, and its group chats
-    /// hear of a changed one.
+    /// descriptions and what they're told, so this Mac only takes them in (as told already), and
+    /// its group chats hear of a changed one. A bot from before jobs were kept in memories whose
+    /// memory has none keeps the job Edit Bot gave it.
     func takeJobs(on machine: String) async {
         guard let connection = app?.machines.engine(machine)?.machine.connection,
               let (status, data) = try? await MachineBox.route("GET", "kuvo/bots?memory=1", on: connection), status == 200 else { return }
@@ -742,6 +743,7 @@ final class Bots {
             guard let job = entry.memoryJob, let index = list.firstIndex(where: { $0.id == entry.id }), list[index].machine == machine,
                   !Moves.isFrozen(entry.id) else { continue }
             let old = list[index]
+            if old.jobInMemory != true, job.line.isEmpty, job.section.isEmpty, !(old.job.isEmpty && old.instructions.isEmpty) { continue }
             var bot = old
             bot.job = job.line
             bot.instructions = job.section
@@ -749,7 +751,9 @@ final class Bots {
             guard bot != old else { continue }
             list[index] = bot
             save()
-            if bot.job != old.job || bot.instructions != old.instructions { await app?.groups.botChanged(bot) }
+            guard bot.job != old.job || bot.instructions != old.instructions else { continue }
+            noteSent(Self.instructions(for: bot), to: bot)
+            await app?.groups.botChanged(bot)
         }
     }
 
@@ -878,6 +882,11 @@ final class Bots {
     private func sendInstructions(of bot: Bot, api: OpenCodeAPI) async throws {
         let text = Self.instructions(for: bot)
         try await api.setInstruction(session: bot.sessionID, key: Self.instructionKey, text: text)
+        noteSent(text, to: bot)
+    }
+
+    /// Notes what `bot`'s conversation was given, so it isn't given the same again.
+    private func noteSent(_ text: String, to bot: Bot) {
         var sent = UserDefaults.standard.dictionary(forKey: Self.sentKey) as? [String: String] ?? [:]
         sent[bot.sessionID] = Self.digest(text)
         // Only conversations that are still bots'.

@@ -970,7 +970,6 @@ final class Workspace {
         var base: String?
         var size: Int64?
 
-
         init(project: String, root: String, folder: String?, branch: String, base: String?) {
             (self.project, self.root, self.folder, self.branch, self.base) = (project, root, folder, branch, base)
         }
