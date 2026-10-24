@@ -62,7 +62,7 @@
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
         { "given": { "bot": { "id": "bot_bo", "name": "Bo", "session": "ses_bo" } } },
-        { "given": { "agentsBridge": {} } },
+        { "given": { "agentsBridge": { "groups": true } } },
         { "send": "POST kuvo/groups", "body": { "members": [ "bot_ada", "bot_bo" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs a name." } } },
         { "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_ada" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs at least two bots." } } },
         { "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_nobody" ] }, "expect": { "status": 404, "json": { "message": "There’s no bot “bot_nobody”." } } },
@@ -71,11 +71,10 @@
     },
     {
       "name": "a group chat made of two bots, listed and changed",
-      "only": "mac",
-      "why": "A machine's group chats live and run in its coding agents' bridge (Agents/src/groups), which this suite doesn't run; Agents' own tests hold it to the Mac's rules (groups-vectors.json), and groups.test.js its routes.",
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
         { "given": { "bot": { "id": "bot_bo", "name": "Bo", "session": "ses_bo" } } },
+        { "given": { "agentsBridge": { "groups": true } } },
         {
           "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_bo" ], "purpose": "  Ship it  " },
           "expect": { "status": 201, "json": { "group": { "id": "<string>", "name": "Standup", "purpose": "Ship it", "discussing": false, "paused": false,
@@ -89,6 +88,17 @@
         { "send": "DELETE kuvo/groups/{{group}}", "expect": { "status": 200, "json": {} } },
         { "send": "GET kuvo/groups", "expect": { "status": 200, "json": { "groups": [] } } },
         { "send": "DELETE kuvo/groups/{{group}}", "why": "Gone already is as good as deleted: a phone reads a 404 as a computer from before this route.", "expect": { "status": 200, "json": {} } }
+      ]
+    },
+    {
+      "name": "who can be in a group chat made here: the bots that live here",
+      "only": "machine",
+      "why": "The Mac answers it once its own group chats run in its coding agents' bridge (D1b step 4); until then New Group Chat offers every bot.",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "bot": { "id": "bot_bo", "name": "Bo", "session": "ses_bo" } } },
+        { "given": { "agentsBridge": { "groups": true } } },
+        { "send": "GET kuvo/groups/joinable", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "name": "Ada", "session": "ses_ada", "agents": false, "look": { "color": "mint" } }, { "id": "bot_bo", "name": "Bo" } ] } } }
       ]
     },
     {

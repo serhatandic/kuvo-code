@@ -298,8 +298,8 @@ const kit = {
   timeZone: "Europe/Istanbul",
 };
 
-// An engine and the agents' bridge as a new bot and a new chat need them: conversations made,
-// what each was told, its greeting; the providers ready; group chats put and listed.
+// An engine and the agents' bridge as a new bot needs them: conversations made, what each was told,
+// its greeting; the providers ready; group chats there (`chats`), listed and changed.
 async function makingEngine(ready = ["opencode"]) {
   const asked = [];
   const chats = new Map();
@@ -313,22 +313,11 @@ async function makingEngine(ready = ["opencode"]) {
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
-      if (request.method === "PUT" && request.url.startsWith("/api/kuvo/groups/")) {
-        chats.set(given.group.id, given);
-        return reply({ data: given });
-      }
       if (request.method === "GET" && request.url === "/api/kuvo/groups") return reply({ data: [...chats.values()].map(chat => ({ group: chat.group, status: chat.status, state: {} })) });
-      // As the agents bridge plans a meeting: here, one at a time to come, kept as given.
       if (request.method === "PATCH" && request.url.startsWith("/api/kuvo/groups/")) {
         const chat = chats.get(request.url.split("/").pop());
         if (!chat) return reply({ message: "No such chat." }, 404);
-        const { meetingPlan, ...edits } = given;
-        if (meetingPlan !== undefined) {
-          if (meetingPlan !== null && meetingPlan.next * 1000 <= Date.now()) return reply({ message: "That time has passed. Pick one to come." }, 400);
-          edits.meeting = meetingPlan === null ? undefined : { next: new Date(meetingPlan.next * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"), topic: meetingPlan.topic || "Our regular meeting", ...(meetingPlan.every ? { every: meetingPlan.every } : {}) };
-        }
-        Object.assign(chat.group, edits);
-        if (edits.purpose === null) delete chat.group.purpose;
+        Object.assign(chat.group, given);
         return reply({ data: chat });
       }
       if (request.method === "DELETE" && request.url.startsWith("/api/kuvo/groups/")) {
@@ -339,7 +328,7 @@ async function makingEngine(ready = ["opencode"]) {
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { asked, port: server.address().port, password: "p", close: () => { server.closeAllConnections(); server.close(); } };
+  return { asked, chats, port: server.address().port, password: "p", close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 test("with the Mac closed, a bot is made here as New Bot makes it: its folder, conversation and instructions, and it writes first", async () => {
@@ -412,60 +401,6 @@ test("what's missing or unknown is said, and nothing is made", async () => {
     assert.equal(engine.asked.some(each => each.url === "/api/session"), false);
   } finally {
     engine.close();
-  }
-});
-
-test("with the Mac closed, a group chat of this machine's bots is made here and listed", async () => {
-  bot("bot_ada0000001", { name: "Ada" });
-  bot("bot_ben0000001", { name: "Ben" });
-  const agents = await makingEngine();
-  try {
-    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" }, () => ({ port: agents.port, password: "p", pid: process.pid }));
-    const made = await ask(handle, "POST", "kuvo/groups", { name: "Release", members: ["bot_ada0000001", "bot_ben0000001", "bot_ada0000001"], purpose: "  Ship it  " });
-    assert.equal(made.status, 201, JSON.stringify(made.json));
-    assert.match(made.json.group.id, /^grp_[a-z0-9]{10}$/);
-    assert.equal(made.json.group.name, "Release");
-    assert.equal(made.json.group.purpose, "Ship it");
-    assert.deepEqual(made.json.group.members.map(member => member.id), ["bot_ada0000001", "bot_ben0000001"]);
-    const put = agents.asked.find(each => each.method === "PUT");
-    assert.equal(put.body.status, "active");
-    assert.deepEqual(put.body.messages, []);
-    assert.equal((await ask(handle, "POST", "kuvo/groups", { name: "Solo", members: ["bot_ada0000001"] })).status, 400);
-    const unknown = await ask(handle, "POST", "kuvo/groups", { name: "Who", members: ["bot_ada0000001", "bot_gone000001"] });
-    assert.equal(unknown.status, 404);
-    assert.equal(unknown.json.message, "There’s no bot “bot_gone000001”.");
-  } finally {
-    agents.close();
-  }
-});
-
-test("with the Mac closed, a group chat's meeting is set up here, by the bridge that runs it, and the chat changed from a phone", async () => {
-  bot("bot_ada0000001", { name: "Ada" });
-  bot("bot_ben0000001", { name: "Ben" });
-  const agents = await makingEngine();
-  try {
-    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" }, () => ({ port: agents.port, password: "p", pid: process.pid }));
-    const nextWeek = Math.round(Date.now() / 1000) + 86_400 * 7;
-    const made = await ask(handle, "POST", "kuvo/groups", { name: "Standup", members: ["bot_ada0000001", "bot_ben0000001"], meeting: { next: nextWeek, every: "1w", topic: "Weekly" } });
-    assert.equal(made.status, 201, JSON.stringify(made.json));
-    const id = made.json.group.id;
-    assert.deepEqual(agents.asked.find(each => each.method === "PATCH").body, { meetingPlan: { next: nextWeek, every: "1w", topic: "Weekly" } });
-    // One the bridge says can't be: the chat doesn't stay either.
-    const late = await ask(handle, "POST", "kuvo/groups", { name: "Late", members: ["bot_ada0000001", "bot_ben0000001"], meeting: { next: 1000 } });
-    assert.equal(late.status, 400);
-    assert.equal(late.json.message, "That time has passed. Pick one to come.");
-    assert.ok(agents.asked.some(each => each.method === "DELETE"));
-
-    const changed = await ask(handle, "PATCH", `kuvo/groups/${id}`, { name: " Daily ", purpose: "", meeting: null });
-    assert.equal(changed.status, 200, JSON.stringify(changed.json));
-    assert.equal(changed.json.group.name, "Daily");
-    assert.deepEqual(agents.asked.filter(each => each.method === "PATCH").at(-1).body, { name: "Daily", purpose: null, meetingPlan: null });
-    assert.equal((await ask(handle, "PATCH", `kuvo/groups/${id}`, { members: ["bot_ada0000001"] })).status, 400);
-    assert.equal((await ask(handle, "PATCH", `kuvo/groups/${id}`, { members: ["bot_ada0000001", "bot_gone000001"] })).status, 404);
-    assert.equal((await ask(handle, "PATCH", `kuvo/groups/${id}`, { name: "  " })).status, 400);
-    assert.equal((await ask(handle, "PATCH", "kuvo/groups/grp_none000001", { name: "X" })).status, 404);
-  } finally {
-    agents.close();
   }
 });
 
@@ -587,8 +522,9 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
   const engine = await makingEngine();
   try {
     const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => ({ port: engine.port, password: "p", pid: process.pid }));
-    const chat = await ask(handle, "POST", "kuvo/groups", { name: "Release", members: ["bot_scout00001", "bot_ada0000001", "bot_ben0000001"] });
-    assert.equal(chat.status, 201);
+    // A group chat of theirs here, as the coding agents' bridge runs it.
+    const chat = { json: { group: { id: "grp_release001" } } };
+    engine.chats.set("grp_release001", { group: { id: "grp_release001", name: "Release", members: ["bot_scout00001", "bot_ada0000001", "bot_ben0000001"] }, status: "active" });
 
     const deleted = await ask(handle, "DELETE", "kuvo/bots/bot_scout00001");
     assert.equal(deleted.status, 200, JSON.stringify(deleted.json));

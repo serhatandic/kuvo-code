@@ -952,9 +952,14 @@ host serves:
   (one chat's events say it too): what you'd write waits until it's there, and `POST
   kuvo/groups/<id>` and `…/undo` answer 409 meanwhile, as they do while its machine is away.
   A machine's bridge answers the same routes, in the same shapes, for the chats that
-  live on it, with the Mac closed too: the coding agents' bridge there runs them (503 while it
-  isn't up or isn't answering: ask again; 404 only when none run there). One moving between computers isn't listed
+  live on it, with the Mac closed too: the coding agents' bridge there runs them, and answers
+  them itself (at `api/kuvo/link/groups…`, which the link passes on as it answers, a followed one
+  line by line), with every rule of what can be made or changed (503 while it isn't up or isn't
+  answering: ask again; 404 only when none run there). One moving between computers isn't listed
   where it's going until it's there. Moving one is on the Mac (Move to Computer), not the phone.
+  `kuvo/groups/joinable` says who can be in a group chat made there: `{"bots": [<as a chat's
+  members list them>]}`, every bot that lives there, the first made first. Offer exactly those
+  in New Group Chat and Edit Group Chat for that computer (`features`: `groups.joinable`).
 - `kuvo/file?uri=<file:// URI>`: a file on that computer that an agent's reply or tool names
   (a picture it made, a file it shows you), by its `file://` address, percent-encoded as a query
   value: `200` with its bytes and `content-type` (from its extension; `application/octet-stream`
@@ -1009,6 +1014,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `worktrees` | `kuvo/worktrees…` |
 | `engine.start` | a machine only: `POST kuvo/engine/start` |
+| `groups.joinable` | a machine only, for now: `kuvo/groups/joinable` |
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | a Mac only: `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` |
 | `claude-code` | a Mac only: `kuvo/claude-code` |

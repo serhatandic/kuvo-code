@@ -14,7 +14,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // The box's folder (KUVO_HOME, read once as the bridge loads), and a folder for what a scenario
 // makes outside it (repositories, files an agent made), both the test's own.
@@ -109,7 +109,43 @@ after(() => { server.closeAllConnections(); server.close(); });
 const readEngine = () => ({ port: server.address().port, password: "engine", version: "0.0.0" });
 
 let agentsProcess, browserProcess;
-after(() => { agentsProcess?.kill(); browserProcess?.kill(); });
+after(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process.kill(); });
+
+// The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (KUVO_TEST_BUN, or
+// `bun`), with its group chats in this box's folders: for what it alone decides (a group chat's
+// shapes and rules). One a scenario, as the box's folders are.
+let realBridge;
+const bundled = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+async function startRealBridge() {
+  const password = crypto.randomBytes(12).toString("hex");
+  const child = spawn(process.env.KUVO_TEST_BUN || "bun", ["run", bundled], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      PATH: process.env.PATH, HOME: root, TMPDIR: path.join(root, "tmp") + "/", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      KUVO_AGENTS_HOME: path.join(root, "agents"), OPENCODE_PASSWORD: password,
+      KUVO_GROUPS: path.join(home, "groups"), KUVO_BOTS: path.join(home, "bots"), KUVO_TRASH: path.join(home, "trash"),
+    },
+  });
+  fs.mkdirSync(path.join(root, "tmp"), { recursive: true });
+  const port = await new Promise((resolve, reject) => {
+    let out = "";
+    child.stdout.on("data", chunk => {
+      out += chunk;
+      const line = out.split("\n").find(each => each.startsWith("{"));
+      if (line) resolve(Number(new URL(JSON.parse(line).url).port));
+    });
+    child.on("exit", status => reject(new Error(`the agents bridge stopped (${status})`)));
+  });
+  realBridge = { process: child, port, password, pid: child.pid };
+}
+async function stopRealBridge() {
+  if (!realBridge) return;
+  const { process: child } = realBridge;
+  realBridge = undefined;
+  const gone = new Promise(resolve => child.once("exit", resolve));
+  child.stdin.end();
+  await gone;
+}
 
 // A session as the engine lists it.
 function sessionOf({ id, title = "", directory = "", parent, archived, updated = 1 }) {
@@ -222,7 +258,9 @@ const fixtures = {
   },
   // The coding agents' bridge running beside the engine: a process named as it is stands in for
   // its process (the bridge checks it's still that), and the engine's stand-in for what it answers.
-  agentsBridge() {
+  // `groups`: the real one instead, for its group chats.
+  async agentsBridge(given) {
+    if (given?.groups) return await startRealBridge();
     agentsProcess ??= spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
     engine.bridgeUp = true;
   },
@@ -322,12 +360,13 @@ const forBox = expect => (expect && ("mac" in expect || "machine" in expect) ? e
 const isOurs = only => only === undefined || only === "machine";
 
 async function run(scenario) {
+  await stopRealBridge();
   freshBox();
   const vars = { ...places() };
   // The running bridge's notices held while you're at a computer: none to send here, on a clock
   // that never wakes it.
   const hold = new link.NoticeHold({ send: () => true, setTimer: () => 0, clearTimer: () => {} });
-  const handle = link.engineHandler(readEngine, { name: MACHINE }, () => (engine.bridgeUp ? { ...readEngine(), pid: agentsProcess.pid } : null), undefined, hold);
+  const handle = link.engineHandler(readEngine, { name: MACHINE }, () => realBridge ?? (engine.bridgeUp ? { ...readEngine(), pid: agentsProcess.pid } : null), undefined, hold);
   for (const [index, step] of scenario.steps.entries()) {
     if (!isOurs(step.only)) continue;
     const where = `step ${index + 1}${step.send ? ` (${step.send})` : ""}`;
