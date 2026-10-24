@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.26";
+export const BRIDGE_VERSION = "0.9.27";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -1475,7 +1475,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     const text = (status, words) => [{ head: { status, headers: { "content-type": "text/plain" } } }, { body: Buffer.from(words) }];
     // A phone using this machine, whatever it asks.
     phoneHere();
-    if (request.path === "kuvo/info") {
+    // Which route answers, by its path alone: a query string never changes it (as on a Mac).
+    const route = request.path.split("?")[0];
+    if (route === "kuvo/info") {
       let engine = {};
       try { engine = readEngine(); } catch {}
       // When the engine running now came up, in seconds since 1970 (each start writes its record):
@@ -1494,10 +1496,10 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return;
     }
     const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
-    if (request.path.split("?")[0] === "kuvo/file") return yield* fileAt(request.path, json);
+    if (route === "kuvo/file") return yield* fileAt(request.path, json);
     // This box's updates (PROTOCOL.md, "Updates"): how it stands, Update Now. It always updates
     // by itself: there's no switch.
-    if (request.path.split("?")[0] === "kuvo/update") {
+    if (route === "kuvo/update") {
       const method = request.method.toUpperCase();
       if (method === "GET") return yield* json(200, updateStatus());
       if (method === "PATCH") return yield* json(400, { message: ALWAYS_UPDATES });
@@ -1531,7 +1533,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (/^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path)) {
       // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
       if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
-      const route = request.path.split("?")[0];
       const method = request.method.toUpperCase();
       const answered = ({ status, settings, message }) => json(status, message ? { message } : settings ?? {});
       if (route === "kuvo/config") {
@@ -1570,14 +1571,14 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The phones paired with this machine, and removing some (a lost one, say), from any phone
     // paired with it: what a removal takes off stays off (see `removePhones`).
-    if (request.path === "kuvo/phones") {
+    if (route === "kuvo/phones") {
       const link = readLink();
       const asking = phone?.key?.toString("base64url");
       return yield* json(200, {
         phones: (link?.phones ?? []).map(each => ({ key: each.key, name: each.name, added: each.added ?? null, pairing: each.pairing ?? "", you: each.key === asking })),
       });
     }
-    if (request.path === "kuvo/phones/remove") {
+    if (route === "kuvo/phones/remove") {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const given = parsed(request.body);
       const changed = updateLink(link => link && removePhones(link, phone?.key?.toString("base64url"), given?.phones) ? link : null);
@@ -1588,7 +1589,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // A link for another phone to pair with this machine, as `kuvo-link.js pair` shows one: good
     // once, for a while; a new one takes the place of the last. DELETE ends it.
-    if (request.path === "kuvo/phones/pair") {
+    if (route === "kuvo/phones/pair") {
       const method = request.method.toUpperCase();
       if (method === "DELETE") {
         updateLink(link => {
@@ -1605,7 +1606,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
     // latest sessions (`machine` null), then those its other computers told it of.
-    if (request.path === "kuvo/named") {
+    if (route === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const link = readLink();
       const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
@@ -1613,7 +1614,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
     // as a Mac's), and answered.
-    if (request.path === "kuvo/asks" || request.path === "kuvo/asks/events") {
+    if (route === "kuvo/asks" || route === "kuvo/asks/events") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const read = async () => ({
         asks: await Promise.all(readAsks().map(async ask => {
@@ -1621,7 +1622,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
           return listedAsk(shown, info.name ?? os.hostname(), asker);
         })),
       });
-      if (request.path === "kuvo/asks") return yield* json(200, await read());
+      if (route === "kuvo/asks") return yield* json(200, await read());
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
       let last = "";
       while (!signal?.aborted) {
@@ -1634,7 +1635,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return;
     }
-    const answering = request.path.match(/^kuvo\/asks\/([^/?]+)$/);
+    const answering = route.match(/^kuvo\/asks\/([^/]+)$/);
     if (answering) {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const ask = readAsks().find(each => each.id === decodeURIComponent(answering[1]));
@@ -1645,13 +1646,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});
     }
     // (No Stop: a machine's engine keeps running, and up to date. Start is for one an older Mac stopped.)
-    const control = request.path.match(/^kuvo\/engine\/(start|restart)$/);
+    const control = route.match(/^kuvo\/engine\/(start|restart)$/);
     if (control) {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const { status, message } = await engineControl(control[1]);
       return yield* json(status, message ? { message } : {});
     }
-    if (request.path === "kuvo/sign-in/return") {
+    if (route === "kuvo/sign-in/return") {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       return yield* loadSignInReturn(request.body, signal);
     }
@@ -1669,7 +1670,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* forward(target, path, request, signal, agentsAllowed);
     }
     // This machine's sign-ins, listed (`api/credential` has what each is signed in with too).
-    if (request.path.split("?")[0] === "kuvo/accounts/credentials") {
+    if (route === "kuvo/accounts/credentials") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       let engine;
       try {
@@ -1696,7 +1697,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // New bots and group chats, made here as New Bot and New Group Chat make them on the Mac,
     // which takes them in when it next connects.
-    const route = request.path.split("?")[0];
     // The personalities you make, this machine's copy of the library.
     const personality = route.match(/^kuvo\/personalities(?:\/([^/]+))?$/);
     if (personality) {
@@ -1762,7 +1762,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The group chats that live here, as the Mac answers its own (`kuvo/groups`), from the
     // coding agents' bridge, which runs them.
-    const group = request.path.split("?")[0].match(GROUP_ROUTE);
+    const group = route.match(GROUP_ROUTE);
     if (group) {
       const target = bridge();
       if (!target) {
@@ -1773,7 +1773,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* answerGroups(target, group[1], group[2], request, signal);
     }
     // This machine's bots and wake-ups, from their folders.
-    if (request.path.split("?")[0] === "kuvo/bots") {
+    if (route === "kuvo/bots") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
       // A Mac's read (`?memory=1`): with each one's job as its memory has it now.
@@ -1781,13 +1781,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
       return;
     }
-    if (request.path.split("?")[0] === "kuvo/wakes") {
+    if (route === "kuvo/wakes") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
       yield { body: Buffer.from(JSON.stringify({ sessions: listWakes() })) };
       return;
     }
-    const wakes = request.path.split("?")[0].match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
+    const wakes = route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
     if (wakes) {
       let session;
       try {
@@ -1797,7 +1797,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return yield* answerWakes(session, wakes[2], request, readEngine, bridge, signal);
     }
-    const stop = request.path.match(/^kuvo\/shell\/([^/?]+)\/stop$/);
+    const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
     if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
     let engine;
     try {
