@@ -655,16 +655,10 @@ final class Workspace {
         return String(cString: resolved)
     }
 
-    func removeFolder(_ directory: String) {
-        folders.removeAll { $0 == directory }
-        UserDefaults.standard.set(folders, forKey: "projectFolders")
-        settings[directory] = nil
-        saveSettings()
-    }
-
     /// Remove Project…: every session of the project, its worktrees' too, archived (Archived
     /// Sessions brings them back), and the project off the sidebar. Its files, worktrees included,
-    /// stay. How many the engine didn't take: those stay listed, and the project with them.
+    /// stay, and so do its name and folders, for when a session brings it back. How many the
+    /// engine didn't take: those stay listed, and the project with them, as it was.
     @discardableResult
     func removeProject(_ directory: String) async -> Int {
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
@@ -677,7 +671,10 @@ final class Workspace {
             for await archived in group where !archived { kept += 1 }
             return kept
         }
-        removeFolder(directory)
+        if kept == 0 {
+            folders.removeAll { $0 == directory }
+            UserDefaults.standard.set(folders, forKey: "projectFolders")
+        }
         return kept
     }
 
