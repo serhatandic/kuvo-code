@@ -84,7 +84,8 @@ extension PhoneLink {
             if !keys.isEmpty { entry["keysSaved"] = keys.allSatisfy { saved.contains(IntegrationKeys.variable(service.id, $0.name)) } }
             if added {
                 let server = servers.first { $0.name == service.id }
-                entry["health"] = Integrations.health(service, server: server, signedIn: signedIn, waitsForCode: Integrations.waitsForCode(service)).rawValue
+                entry["health"] = Integrations.health(service, server: server, off: Integrations.isOff(service, in: config), signedIn: signedIn,
+                                                      waitsForCode: Integrations.waitsForCode(service)).rawValue
                 if let integration = server?.integrationID { entry["signIn"] = integration }
             }
             if case .browser = service.way, let signed = SiteSignIns.shared.isSignedIn(service.id, on: nil) { entry["siteSignedIn"] = signed }

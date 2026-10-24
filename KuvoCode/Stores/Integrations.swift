@@ -205,18 +205,22 @@ nonisolated enum Integrations {
     static func service(_ id: String) -> Service? { all.first { $0.id == id } }
 
     /// How an added integration is doing on a computer, as Settings › Integrations
-    /// says it: its server's status, then whether it waits for you.
+    /// says it: its server's status, then whether it waits for you. `disabled`: turned off in MCP
+    /// Servers, so it won't start until it's turned on.
     enum Health: String, Sendable {
-        case connected, starting, waitsForCode, needsSignIn, failed
+        case connected, starting, waitsForCode, needsSignIn, failed, disabled
     }
 
-    /// `server`, its server as the engine lists it; `signedIn`, the integrations the engine keeps
-    /// a sign-in for; `waitsForCode`, Outlook's sign-in not made yet (`waitsForCode(_:)`).
-    static func health(_ service: Service, server: MCPServer?, signedIn: Set<String>, waitsForCode: Bool) -> Health {
+    /// `server`, its server as the engine lists it; `off`, turned off in the computer's settings
+    /// (`isOff`); `signedIn`, the integrations the engine keeps a sign-in for; `waitsForCode`,
+    /// Outlook's sign-in not made yet (`waitsForCode(_:)`).
+    static func health(_ service: Service, server: MCPServer?, off: Bool, signedIn: Set<String>, waitsForCode: Bool) -> Health {
         var health: Health = switch server?.status.status {
+        case _ where off: .disabled
         case "connected": .connected
         case "needs_auth": .needsSignIn
         case "failed": .failed
+        case "disabled": .disabled
         default: .starting
         }
         // A server can answer without a sign-in (Google's do), then turn every call down.
@@ -228,6 +232,11 @@ nonisolated enum Integrations {
         }
         if health == .connected, waitsForCode { health = .waitsForCode }
         return health
+    }
+
+    /// Turned off in MCP Servers, in `config` (its settings say `disabled`).
+    @MainActor static func isOff(_ service: Service, in config: EngineConfig) -> Bool {
+        config.value(at: MCPSettings.path + [service.id, "disabled"])?.bool == true
     }
 
     /// Microsoft 365, without its sign-in yet, on this Mac (a machine's isn't looked at): its

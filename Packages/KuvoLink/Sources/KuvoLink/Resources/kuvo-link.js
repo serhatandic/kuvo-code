@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.25";
+export const BRIDGE_VERSION = "0.9.26";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -683,9 +683,10 @@ function integrationCatalog(file = INTEGRATIONS_FILE) {
   try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && !each.macOnly); } catch { return []; }
 }
 
-/** How it's doing here, as the Mac's Integrations.health says it. */
-function integrationHealth(entry, server, signedIn) {
-  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
+/** How it's doing here, as the Mac's Integrations.health says it: `off`, turned off in MCP Servers. */
+function integrationHealth(entry, server, off, signedIn) {
+  if (off) return "disabled";
+  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed", disabled: "disabled" }[server?.status?.status] ?? "starting";
   if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
   return health;
 }
@@ -706,7 +707,7 @@ async function integrationEntries(catalog, engine, signal) {
     if (variables) shown.keysSaved = Object.values(variables).every(name => fs.existsSync(path.join(BOX_KEYS, name)));
     if (added) {
       const server = (Array.isArray(servers) ? servers : []).find(each => each?.name === entry.id);
-      shown.health = integrationHealth(entry, server, signedIn);
+      shown.health = integrationHealth(entry, server, valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true, signedIn);
       if (server?.integrationID) shown.signIn = server.integrationID;
     }
     return shown;

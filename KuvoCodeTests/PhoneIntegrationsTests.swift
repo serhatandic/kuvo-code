@@ -73,6 +73,25 @@ import Testing
         #expect(IntegrationKeys.value(IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) == nil, "its key goes with it")
     }
 
+    /// One turned off in MCP Servers says so (`disabled`, "Off" in Settings), not that it's
+    /// starting, so a phone doesn't wait for a server that won't start; turned on, it starts.
+    @Test func oneTurnedOffSaysSo() async throws {
+        let config = app.config(for: .mac)
+        let service = try #require(Integrations.all.first { if case .official = $0.way { true } else { false } })
+        defer { config.set(nil, at: MCPSettings.path + [service.id]) }
+        config.set(.object(["type": .string("remote"), "url": .string("https://example.invalid/mcp"), "disabled": .bool(true)]), at: MCPSettings.path + [service.id])
+        func health() async throws -> String? {
+            let listed = try #require(try await ask("kuvo/integrations").json["integrations"] as? [[String: Any]])
+            return listed.first { $0["id"] as? String == service.id }?["health"] as? String
+        }
+        #expect(try await health() == "disabled")
+        config.set(nil, at: MCPSettings.path + [service.id, "disabled"])
+        #expect(try await health() == "starting", "on, with no engine here to say more")
+        // As the engine says it too.
+        let server = try JSONDecoder().decode(MCPServer.self, from: Data(#"{"name":"\#(service.id)","status":{"status":"disabled"}}"#.utf8))
+        #expect(Integrations.health(service, server: server, off: false, signedIn: [], waitsForCode: false) == .disabled)
+    }
+
     /// What a machine gets: those it can run (not this Mac's own apps'), each with its settings
     /// there, its keys named in the machine's keys folder.
     @Test func aMachinesCatalog() throws {

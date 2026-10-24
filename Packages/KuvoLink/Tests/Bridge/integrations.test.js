@@ -48,6 +48,29 @@ test("listed from the Mac's catalog, added with its keys or the ones it has, nev
   assert.equal((await ask("POST", "kuvo/integrations/nothing", {})).status, 404);
 });
 
+test("one turned off in MCP Servers says so (disabled), not that it's starting, so a phone doesn't wait for it", async t => {
+  const health = async engine => (await link.answerIntegrations("GET", "kuvo/integrations", undefined, engine, undefined)).value.integrations.find(each => each.id === "todoist").health;
+  const turn = off => {
+    const written = settings();
+    if (off) written.mcp.servers.todoist.disabled = true; else delete written.mcp.servers.todoist.disabled;
+    fs.writeFileSync(path.join(home, "box", "opencode.json"), JSON.stringify(written));
+  };
+  t.after(() => turn(false));
+  assert.equal(await health(null), "starting", "on, with no engine to say more");
+  turn(true);
+  assert.equal(await health(null), "disabled");
+  // As the engine says it too, whatever its settings say.
+  turn(false);
+  const http = await import("node:http");
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: request.url === "/api/mcp" ? [{ name: "todoist", status: { status: "disabled" } }] : [] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  assert.equal(await health({ port: server.address().port, password: "pw" }), "disabled");
+});
+
 test("removed with its keys, what its server kept, and its bots' own keys and folder settings", async () => {
   fs.mkdirSync(path.join(home, "integrations", "todoist"), { recursive: true });
   fs.mkdirSync(path.join(home, "box", "bot-keys"), { recursive: true });

@@ -582,8 +582,11 @@ itself. A host serves:
     (the agent uses its site in the computer's browser: not added here; `siteSignedIn` says
     whether it's signed in there, on a Mac). `keys`: `[{name, label, prompt}]`, `keysSaved`
     whether the computer has them. `how` is the tag the page shows. Added: `health` is
-    `connected`, `starting`, `waitsForCode` (on a Mac: Outlook, until its first use's code), `needsSignIn`
-    or `failed`, and `signIn` is the engine's integration to sign in with, through
+    `connected`, `starting`, `waitsForCode` (on a Mac: Outlook, until its first use's code), `needsSignIn`,
+    `failed` or `disabled` (turned off in MCP Servers, its settings' `disabled`: it won't start
+    until it's turned on, so there's nothing to wait for; a Mac's Settings says "Off", with Turn
+    On; a machine's bridge from 0.9.26, before which it said `starting`), and `signIn` is the
+    engine's integration to sign in with, through
     `api/integration/<signIn>/connect/oauth` as any (its page returns to `127.0.0.1:19876`:
     `kuvo/sign-in/return`). `problem`: the settings file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect

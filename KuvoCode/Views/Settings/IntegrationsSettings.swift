@@ -154,6 +154,10 @@ struct IntegrationsSettings: View {
                             Button("Sign In…") { signingIn = IntegrationRef(id: integrationID, service: service) }
                         } else if places.contains(where: { $0.state == .failed }) {
                             Button("Try Again") { reconnect(service, where: places.filter { $0.state == .failed }) }
+                        } else if places.first?.state == .off {
+                            // Turned off in MCP Servers: on again, as its switch there does.
+                            Button("Turn On") { config.set(nil, at: MCPSettings.path + [service.id, "disabled"]) }
+                                .help("The agent and your bots can use \(service.title) again")
                         } else {
                             // Nothing needs you: say it's set up, beside its menu.
                             Label("Added", systemImage: "checkmark")
@@ -185,7 +189,8 @@ struct IntegrationsSettings: View {
     /// How it's doing on this computer.
     private func places(_ service: Integrations.Service) -> [Place] {
         let server = live.first { $0.name == service.id }
-        let health = Integrations.health(service, server: server, signedIn: signedIn, waitsForCode: box.machine == nil && Integrations.waitsForCode(service))
+        let health = Integrations.health(service, server: server, off: Integrations.isOff(service, in: config), signedIn: signedIn,
+                                         waitsForCode: box.machine == nil && Integrations.waitsForCode(service))
         return [Place(name: app.name(of: box), machine: box.machine, state: Place.state(health))]
     }
 
@@ -259,7 +264,7 @@ private struct Place: Identifiable {
 
     /// Worst last.
     enum State: Int, Comparable {
-        case connected, signedIn, starting, signedOut, waitsForCode, needsSignIn, failed
+        case connected, signedIn, off, starting, signedOut, waitsForCode, needsSignIn, failed
 
         static func < (a: State, b: State) -> Bool { a.rawValue < b.rawValue }
 
@@ -268,6 +273,7 @@ private struct Place: Identifiable {
             case .connected: "Connected"
             case .signedIn: "Signed in"
             case .signedOut: "Not signed in"
+            case .off: "Off"
             case .starting: "Starting"
             case .waitsForCode: "Not signed in yet"
             case .needsSignIn: "Needs sign-in"
@@ -278,7 +284,7 @@ private struct Place: Identifiable {
         var color: Color {
             switch self {
             case .connected, .signedIn: .green
-            case .starting, .signedOut: .secondary
+            case .off, .starting, .signedOut: .secondary
             case .waitsForCode, .needsSignIn: .orange
             case .failed: .red
             }
@@ -293,6 +299,7 @@ private struct Place: Identifiable {
         case .waitsForCode: .waitsForCode
         case .needsSignIn: .needsSignIn
         case .failed: .failed
+        case .disabled: .off
         }
     }
 }
