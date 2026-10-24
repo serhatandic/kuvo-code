@@ -376,7 +376,10 @@ like HTTP:
 | `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings before sending on a session that's been quiet (a host started again since closes the session, and the phone opens a new one before anything's lost), and while a request waits with nothing from the host (no answer ends the session). Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
-itself. A host serves:
+itself. Which route answers is told by its path before any `?`: a query string never changes it,
+and a method is read in any case (a Mac from this version, a machine's bridge from 0.9.27; before,
+a Mac answered 404 to a `kuvo/…` route with a query, and a machine's bridge 403 to some). Both are
+held to the same route scenarios (`Vectors/routes`). A host serves:
 
 - `api/…`: passed to its engine, all of its API. A paired phone is yours, with the reach the app
   has on that computer: sessions, files, terminals and commands, accounts and their keys, the
