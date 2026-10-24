@@ -32,6 +32,12 @@ or start with free models that need no account.
 
 ## Features
 
+- **Bots.** AI teammates with a name, a look and one job each, like keeping
+  the build green or sending a morning standup. They remember what they
+  learn, wake themselves up on a schedule, and talk things through in group
+  chats. Put one on your own Linux server and it keeps working while your Mac
+  is off: a free, self-hosted
+  [alternative to Grok Bot](https://kuvo.run/code/grok-bot-alternative/).
 - **Any model.** Claude, GPT, Gemini, open models through OpenRouter,
   and the rest of opencode's providers. Pick the model and effort for
   each message.
