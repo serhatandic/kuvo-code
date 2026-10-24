@@ -221,3 +221,4 @@ Betas are manual: an annotated `vX.Y.Z-beta.N` tag on `main` (the version it lea
 - Commit in small, logical chunks with plain messages.
 - Never add `Co-Authored-By` or any other AI attribution to commits or pull requests.
 - This repo will be open source. Before committing, check for personal paths, secrets and machine-specific data. The signing team stays in the git-ignored `Config/Signing.local.xcconfig`.
+- **Delete a branch once it's merged into main**, both locally and on origin (`git branch -d`, `git push origin --delete`), and remove its worktree. `git fetch --prune` and `git branch --merged origin/main` (with `-r` for origin's) show what's left. A branch someone is still working on stays until they're done, and a branch that isn't merged is never deleted this way.
