@@ -116,6 +116,21 @@ export interface PeerWork {
   finished?: string
 }
 
+/** A turn a chat on another computer gave a bot here, as far as it got: its seat, its message there and when it went, and how it ended. */
+export interface PeerTurn {
+  /** The chat's computer, by key. */
+  host: string
+  at: number
+  seat?: string
+  agents?: boolean
+  prompt?: string
+  sent?: number
+  result?: SeatAnswerKept
+}
+
+/** How a turn ended, with the seat it ended in (`SeatAnswer` in peer.ts). */
+export type SeatAnswerKept = SeatResult & { seat?: string; agents?: boolean; replaced?: string }
+
 /** One of the machine's bots, as its folder has it. */
 export interface MachineBot extends SeatBot {
   sessionID: string
@@ -319,6 +334,16 @@ export class GroupStore {
     if (work) all[task] = work
     else delete all[task]
     write(join(this.root, "peer-work.json"), all)
+  }
+
+  /** Turns that chats on other computers gave bots here, by the turn's id: so one asked again after the bridge restarted goes on where it was. */
+  peerTurns(): Record<string, PeerTurn> {
+    const all = read(join(this.root, "peer-turns.json"))
+    return all && typeof all === "object" ? all : {}
+  }
+
+  keepPeerTurns(turns: Record<string, PeerTurn>) {
+    write(join(this.root, "peer-turns.json"), turns)
   }
 
   /** A chat's transcript in a bot's folder, for it to read (written whole, only this user can read it). */

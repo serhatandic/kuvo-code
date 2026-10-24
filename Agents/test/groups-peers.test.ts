@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
-import { SeatServer, activityEvery, askAgainAfter, awayAfter, type Clock, type PeerBot, type SeatMail } from "../src/groups/peer"
+import { SeatServer, activityEvery, aliveEvery, askAgainAfter, awayAfter, reportBytes, type Clock, type PeerBot, type SeatMail } from "../src/groups/peer"
+import { joinable } from "../src/groups/link"
 import { LinkDirectory, PeerPost, gaveUp, receive, type PeerParts } from "../src/groups/post"
 import { GroupRunner, transcriptMailBytes } from "../src/groups/runner"
 import { stamp, type Group, type GroupMessage } from "../src/groups/rules"
@@ -195,7 +196,11 @@ class Box {
     }
   }
 
+  /** What came to it, as it came. */
+  readonly got: SeatMail[] = []
+
   receive(from: string, mail: SeatMail) {
+    this.got.push(mail)
     receive(this.parts, from, mail)
     beat()
   }
@@ -395,6 +400,25 @@ describe("a group chat with a bot on another of your computers", () => {
     const first = (turns()[0].mail as any).turn.id
     expect(turns().filter((each) => (each.mail as any).turn.id === first).length).toBe(2)
     expect(said(host).some((message) => message.kind === "note")).toBe(false)
+  })
+
+  test("its computer's bridge restarted while it talked: asked again, its turn goes on where it was, never given twice", async () => {
+    const clock = hostOnClock()
+    home.engine.held.add("Ben")
+    home.engine.lines = { Ben: ["Once, after all."] }
+    host.engine.lines = { Ada: ["PASS"] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Anyone?")
+    await until(() => home.engine.prompts().length === 1)
+    const seat = home.engine.prompts()[0].path.split("/")[3]
+    home.restartSeats()
+    clock.advance(askAgainAfter)
+    await until(() => turns().length === 2)
+    home.engine.release("Ben")
+    await over(host, () => said(host).some((message) => message.author === "bot_ben"))
+    expect(said(host).filter((message) => message.author === "bot_ben").map((message) => message.text)).toEqual(["Once, after all."])
+    expect(home.engine.seatsMade().filter((title) => title.startsWith("Ben in"))).toEqual(["Ben in Team"])
+    expect(home.engine.prompts(seat).length).toBe(1)
   })
 
   test("its seat said made, but lost on the way: the chat keeps it from how the turn ended, and its next turn is there", async () => {
@@ -634,6 +658,120 @@ describe("a group chat with a bot on another of your computers", () => {
     host.gaveUp("key_lokum", relay.sent.find((each) => each.mail.kind === "work")!.mail)
     await until(() => said(host).find((message) => message.id === "gm_wrap")!.tasks![0].state === "failed")
     expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t do its part: lokum couldn’t be reached for two days, so it was given up."])
+  })
+
+  test("a bot at work on a long, quiet step: its computer says it's still at it, so it's neither asked again nor taken for away", async () => {
+    const clock = hostOnClock()
+    const homeClock = homeOnClock()
+    home.engine.held.add("Ben")
+    home.engine.lines = { Ben: ["Done, at last."] }
+    host.engine.lines = { Ada: ["PASS"] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Take your time.")
+    await until(() => host.got.some((mail) => mail.kind === "state" && mail.state.phase === "started"))
+    const stillAt = () => host.got.filter((mail) => mail.kind === "state" && mail.state.phase === "working").length
+    // A minute of nothing but that.
+    for (let beats = 1; beats <= 6; beats++) {
+      homeClock.advance(aliveEvery)
+      await until(() => stillAt() === beats)
+      clock.advance(aliveEvery)
+    }
+    expect(turns().length).toBe(1)
+    home.engine.release("Ben")
+    await over(host, () => said(host).some((message) => message.author === "bot_ben"))
+    expect(said(host).filter((message) => message.kind === "note")).toEqual([])
+    expect(said(host).find((message) => message.author === "bot_ben")?.text).toBe("Done, at last.")
+  })
+
+  test("asked again once its words are with its seat, the whole chat isn't sent again", async () => {
+    const clock = hostOnClock()
+    host.engine.lines = { Ada: ["PASS", "PASS"] }
+    // Ben leads: after its first word it lists who does what (nobody), in a conversation of its own for it.
+    home.engine.lines = { Ben: ["First.", "PASS", "Second."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "One?")
+    await over(host, () => said(host).some((message) => message.text === "First."))
+    home.engine.held.add("Ben")
+    host.runner.send(id, "Two?")
+    const second = () => turns().filter((each) => (each.mail as any).turn.text.includes("Two?"))
+    await until(() => second().length === 1 && host.got.some((mail) => mail.kind === "state" && mail.id === (second()[0].mail as any).turn.id && mail.state.phase === "started"))
+    // Nothing more comes from it for a while: asked again.
+    relay.away.add("key_lokum")
+    clock.advance(askAgainAfter)
+    await until(() => second().length === 2)
+    const [first, again] = second().map((each) => (each.mail as any).turn)
+    expect(first.fresh).toStartWith(`Everything said in "Team" so far, from the start:`)
+    expect(again.fresh).toBeUndefined()
+    expect({ ...again, fresh: first.fresh }).toEqual(first)
+    relay.back("key_lokum")
+    home.engine.release("Ben")
+    await over(host, () => said(host).some((message) => message.text === "Second."))
+  })
+
+  test("a chat too big to send to the bot's computer: said, rather than sent and never answered", async () => {
+    host.engine.lines = { Ada: ["PASS"] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Read this: " + "long words ".repeat(60_000))
+    await over(host, () => said(host).some((message) => message.kind === "note"))
+    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t answer: the chat is too big to send to lokum."])
+    expect(turns()).toEqual([])
+  })
+
+  test("a part too big to send to the bot's computer fails, and the chat says why", async () => {
+    const wrapUp: GroupMessage = {
+      id: "gm_wrap", author: "bot_ada", text: "Ben fixes the build. " + "Details. ".repeat(70_000), time: stamp(), kind: "wrapUp",
+      tasks: [{ id: "gt_build", bot: "bot_ben", task: "Fix the build", state: "proposed" }],
+    }
+    host.runner.put(team(), [{ id: "gm_ask", text: "Ship it?", time: stamp(), kind: "message" }, wrapUp], "active", false)
+    host.runner.startWork("gm_wrap", id)
+    await until(() => said(host).find((message) => message.id === "gm_wrap")!.tasks![0].state === "failed")
+    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t do its part: its part is too big to send to lokum."])
+    expect(relay.sent.filter((each) => each.mail.kind === "work")).toEqual([])
+  })
+
+  test("a long answer or report comes back cut to what mail carries, said to be cut", async () => {
+    home.engine.lines = { Ben: ["Answer. ".repeat(80_000)] }
+    home.engine.reports = { Ben: "Report. ".repeat(80_000) }
+    const turn = { id: "trn_long", chat: { id, name: "Team", members: [{ id: "bot_ben", name: "Ben", job: "" }] }, bot: "bot_ben", kind: "turn" as const, text: "Your turn." }
+    relay.forge("key_mac", "key_lokum", { kind: "turn", turn })
+    relay.forge("key_mac", "key_lokum", { kind: "work", work: { task: "gt_build", wrapUp: "gm_wrap", chat: id, bot: "bot_ben", text: "Fix the build.", started: stamp() } })
+    await until(() => relay.sent.some((each) => each.mail.kind === "result") && reports().length === 1)
+    const answer = (relay.sent.find((each) => each.mail.kind === "result")!.mail as any).result
+    for (const text of [answer.text as string, reports()[0].text as string]) {
+      expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(reportBytes)
+      expect(text).toEndWith("[Cut here: the rest is in its own conversation on its computer.]")
+    }
+  })
+
+  test("your message before its computer checked the seat it was asked to use isn't steered into that conversation", async () => {
+    home.engine.held.add("Ben")
+    home.engine.lines = { Ben: ["In a seat of my own."] }
+    // Ben's own conversation, at work on something of its own.
+    await fetch(`${home.engine.url}/api/session/ses_own_Ben/prompt`, { method: "POST", body: JSON.stringify({ id: "msg_own", text: "Your own work.", delivery: "queue" }) })
+    const turn = { id: "trn_steer", chat: { id, name: "Team", members: [{ id: "bot_ben", name: "Ben", job: "" }] }, bot: "bot_ben", seat: "ses_own_Ben", agentsSeat: false, kind: "turn" as const, text: "Your turn." }
+    relay.forge("key_mac", "key_lokum", { kind: "turn", turn })
+    relay.forge("key_mac", "key_lokum", { kind: "steer", id: "trn_steer", text: "The user, just now: hurry.", message: "gm_hurry" })
+    const steers = () => home.engine.prompts().filter((request) => request.body.delivery === "steer")
+    await until(() => steers().length === 1)
+    expect(steers()[0].path).not.toBe("/api/session/ses_own_Ben/prompt")
+    const seat = (relay.sent.find((each) => each.mail.kind === "state" && each.mail.state.phase === "seated")!.mail as any).state.seat
+    expect(steers().map((request) => request.path)).toEqual([`/api/session/${seat}/prompt`])
+    await until(() => relay.sent.some((each) => each.mail.kind === "state" && each.mail.state.phase === "steered"))
+    home.engine.release("Ben")
+    await until(() => relay.sent.some((each) => each.mail.kind === "result"))
+    expect(home.engine.prompts("ses_own_Ben").map((request) => request.body.id)).toEqual(["msg_own"])
+  })
+
+  test("a bot whose computer says it looks a way this one doesn't know is shown plain in what it doesn't know", async () => {
+    host.knows([{ key: "key_lokum", name: "lokum", bots: [
+      { id: "bot_ben", name: "Ben", job: "", box: "key_lokum", look: { color: "ultraviolet", shape: "gem", face: "smirk" } },
+      { id: "bot_cy", name: "Cy", job: "", box: "key_lokum", look: { color: "sky", shape: "bloom", face: "wink" } },
+      { id: "bot_dee", name: "Dee", job: "", box: "key_lokum", look: "sparkly" },
+    ] }])
+    const looks = Object.fromEntries(joinable(host.runner, host.store).map((member) => [member.id, member.look]))
+    expect(looks.bot_ben).toEqual({ color: "graphite", shape: "gem", face: "calm" })
+    expect(looks.bot_cy).toEqual({ color: "sky", shape: "bloom", face: "wink" })
+    expect(looks.bot_dee).toEqual({ color: "graphite", shape: "round", face: "calm" })
   })
 
   test("what another computer says of a turn it wasn't asked is taken from nobody", async () => {
