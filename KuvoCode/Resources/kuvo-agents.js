@@ -11349,6 +11349,7 @@ var states = new Set(["proposed", "waiting", "working", "done", "failed"]);
 function isMessages(value) {
   return Array.isArray(value) && value.every((message) => message && typeof message.id === "string" && typeof message.text === "string" && isDate(message.time) && kinds2.has(message.kind) && (message.author === undefined || message.author === null || typeof message.author === "string") && (message.tasks === undefined || Array.isArray(message.tasks) && message.tasks.every((task) => task && typeof task.id === "string" && typeof task.bot === "string" && typeof task.task === "string" && states.has(task.state))));
 }
+var forgottenFor = 3 * 86400000;
 var read = (file) => {
   try {
     return JSON.parse(readFileSync16(file, "utf8"));
@@ -11476,22 +11477,40 @@ class GroupStore {
     };
   }
   peerMemory(bot) {
+    const entries = this.peerEntries(bot);
+    return Object.fromEntries(Object.entries(entries).filter(([, entry]) => !entry.forgotten));
+  }
+  peerMemoryAt(bot, key) {
+    const at = this.peerEntries(bot)[key]?.at;
+    return typeof at === "number" ? at : 0;
+  }
+  peerEntries(bot) {
     const all = read(join17(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
   keepPeerMemory(bot, key, memory) {
-    const all = read(join17(this.root, "peer-memory.json")) ?? {};
-    all[bot] = { ...all[bot] ?? {}, [key]: memory };
-    write(join17(this.root, "peer-memory.json"), all);
+    this.changePeerMemory(bot, (entries) => entries[key] = memory);
   }
-  forgetPeerMemory(bot, key) {
+  forgetPeerMemory(bot, key, at) {
+    this.changePeerMemory(bot, (entries) => {
+      if (typeof at === "number" && at > 0)
+        entries[key] = { forgotten: true, at, time: new Date().toISOString() };
+      else
+        delete entries[key];
+    });
+  }
+  changePeerMemory(bot, change) {
     const all = read(join17(this.root, "peer-memory.json")) ?? {};
-    if (!all[bot]?.[key])
-      return;
-    delete all[bot][key];
-    if (Object.keys(all[bot]).length === 0)
+    const entries = { ...all[bot] ?? {} };
+    change(entries);
+    for (const [key, entry] of Object.entries(entries))
+      if (entry?.forgotten && !(Date.now() - Date.parse(entry.time) < forgottenFor))
+        delete entries[key];
+    if (Object.keys(entries).length === 0)
       delete all[bot];
+    else
+      all[bot] = entries;
     write(join17(this.root, "peer-memory.json"), all);
   }
   peerWork() {
@@ -11796,8 +11815,9 @@ function clientMessage(message2, withSteps = true) {
 function member(bot) {
   return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents };
 }
+var plainLook = { color: "graphite", shape: "round", face: "calm" };
 function memberThere(bot, runner) {
-  return { id: bot.id, name: bot.name, ...bot.session ? { session: bot.session } : {}, agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" };
+  return { id: bot.id, name: bot.name, look: bot.look ?? plainLook, session: bot.session ?? "", directory: "", agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" };
 }
 function bots(runner, store) {
   const here = store.allBots().sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name));
@@ -12174,6 +12194,7 @@ class SeatAPI {
 
 // Agents/src/groups/seat.ts
 var seatKey = "kuvo.seat";
+var turnLimit = 600000;
 
 class Cancelled extends Error {
 }
@@ -12258,8 +12279,8 @@ class Seats {
     const agent = onAgents && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
     const text2 = this.seatText(bot, chat2);
     const session = await api.create(bot.directory, title, agent, model2, this.rules(bot));
-    await api.setMetadata(session.id, { kuvo: { seat: { group: chat2.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } }).catch(() => {});
     try {
+      await api.setMetadata(session.id, { kuvo: { seat: { group: chat2.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } });
       await api.setInstruction(session.id, seatKey, text2);
     } catch (error2) {
       await api.delete(session.id).catch(() => {});
@@ -12303,11 +12324,22 @@ class Seats {
     await this.drop(seat, agents);
     return;
   }
+  async owns(seat, agents, bot, chat2) {
+    const api = this.apiFor(agents);
+    if (!api)
+      return "unknown";
+    try {
+      const marked = (await api.session(seat))?.metadata?.kuvo?.seat;
+      return marked?.bot === bot && marked?.group === chat2 ? "yes" : "no";
+    } catch (error2) {
+      return error2?.status === 404 ? "gone" : "unknown";
+    }
+  }
   async drop(seat, agents) {
     this.seatBase.delete(seat);
     await this.apiFor(agents)?.delete(seat).catch(() => {});
   }
-  async turn(turn, report, signal) {
+  async turn(turn, report, signal, checkSeat = false) {
     const bot = this.bot(turn.bot);
     if (!bot)
       return { ok: false, why: "it doesn\u2019t live on this computer any more." };
@@ -12344,7 +12376,15 @@ class Seats {
         ({ seat, agents, api } = await this.make(bot, turn.chat, title, true));
         scratch = { seat, agents };
       } else {
-        const kept2 = turn.seat ? await this.keep(turn, bot) : undefined;
+        let ours = Boolean(turn.seat);
+        if (turn.seat && checkSeat) {
+          const owned = await this.owns(turn.seat, turn.agentsSeat ?? false, bot.id, turn.chat.id);
+          if (owned === "unknown")
+            throw new Error("its seat couldn\u2019t be read");
+          ours = owned === "yes";
+          going();
+        }
+        const kept2 = ours ? await this.keep(turn, bot) : undefined;
         going();
         if (kept2) {
           ({ seat, agents, api } = kept2);
@@ -12597,7 +12637,7 @@ class Seats {
       } else {
         idleSince = undefined;
       }
-      if (Date.now() - sent > 600000) {
+      if (Date.now() - sent > turnLimit) {
         await api.interrupt(seat).catch(() => {});
         throw new Error("It took too long, so it was stopped.");
       }
@@ -12642,6 +12682,7 @@ class Seats {
 // Agents/src/groups/peer.ts
 var askAgainAfter = 15000;
 var awayAfter = 45000;
+var longestTurn = turnLimit + 60000;
 var realClock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer) };
 
 class RemoteHome {
@@ -12660,10 +12701,11 @@ class RemoteHome {
     return new Promise((resolve5, reject) => {
       if (signal.aborted)
         return reject(new Cancelled);
-      const pending = { turn, report, done: resolve5, fail: reject, heard: false, timers: [], seat: turn.seat };
+      const pending = { turn, report, done: resolve5, seat: turn.seat, started: false, told: new Set };
       const end = () => {
-        for (const timer of pending.timers)
-          this.clock.clearTimeout(timer);
+        for (const timer of [pending.asking, pending.silent, pending.limit])
+          if (timer !== undefined)
+            this.clock.clearTimeout(timer);
         this.pending.delete(turn.id);
         signal.removeEventListener("abort", stop);
       };
@@ -12671,26 +12713,35 @@ class RemoteHome {
         end();
         resolve5(result);
       };
-      pending.fail = (error2) => {
-        end();
-        reject(error2);
-      };
       const stop = () => {
         this.transport.send(this.box, { kind: "stop", id: turn.id }, false);
-        pending.fail(new Cancelled);
+        end();
+        reject(new Cancelled);
       };
       signal.addEventListener("abort", stop, { once: true });
       this.pending.set(turn.id, pending);
-      const send = () => this.transport.send(this.box, { kind: "turn", turn }, false);
-      pending.timers.push(this.clock.setTimeout(() => {
-        if (!pending.heard)
-          send();
-      }, askAgainAfter), this.clock.setTimeout(() => {
-        if (!pending.heard)
-          pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
-      }, awayAfter));
-      send();
+      this.transport.send(this.box, { kind: "turn", turn }, false);
+      this.listen(pending);
+      pending.limit = this.clock.setTimeout(() => this.away(pending), longestTurn);
     });
+  }
+  listen(pending) {
+    if (pending.asking !== undefined)
+      this.clock.clearTimeout(pending.asking);
+    if (pending.silent !== undefined)
+      this.clock.clearTimeout(pending.silent);
+    const askAgain = () => {
+      pending.asking = this.clock.setTimeout(() => {
+        this.transport.send(this.box, { kind: "turn", turn: pending.turn }, false);
+        askAgain();
+      }, askAgainAfter);
+    };
+    askAgain();
+    pending.silent = this.clock.setTimeout(() => this.away(pending), awayAfter);
+  }
+  away(pending) {
+    this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false);
+    pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
   }
   take(from, mail) {
     if (from !== this.box || mail.kind !== "state" && mail.kind !== "result")
@@ -12698,23 +12749,38 @@ class RemoteHome {
     const pending = this.pending.get(mail.id);
     if (!pending)
       return;
-    pending.heard = true;
-    if (mail.kind === "state") {
-      if (mail.state.phase === "seated")
-        pending.seat = mail.state.seat;
-      pending.report(mail.state);
-    } else {
-      pending.done(mail.result);
+    this.listen(pending);
+    if (mail.kind === "state")
+      return this.heard(pending, mail.state);
+    const { seat, agents, replaced, ...result } = mail.result;
+    if (typeof seat === "string" && seat && seat !== pending.seat) {
+      this.heard(pending, { phase: "seated", seat, agents: agents === true, ...typeof replaced === "string" && replaced ? { replaced } : {} });
     }
+    if (result.ok && !pending.started)
+      this.heard(pending, { phase: "started" });
+    pending.done(result);
+  }
+  heard(pending, state) {
+    const said3 = JSON.stringify(state);
+    if (state.phase !== "activity") {
+      if (pending.told.has(said3))
+        return;
+      pending.told.add(said3);
+    }
+    if (state.phase === "seated")
+      pending.seat = state.seat;
+    if (state.phase === "started")
+      pending.started = true;
+    pending.report(state);
   }
   async steer(seat, _agents, text2, message2) {
-    const running = [...this.pending.values()].find((each) => each.seat === seat && each.heard);
+    const running = [...this.pending.values()].find((each) => each.seat === seat && each.told.size > 0);
     if (running)
       this.transport.send(this.box, { kind: "steer", id: running.turn.id, text: text2, message: message2 }, false);
     return false;
   }
-  async drop(seat, agents) {
-    this.transport.send(this.box, { kind: "drop", seat, agents }, true);
+  async drop(seat, agents, owner) {
+    this.transport.send(this.box, { kind: "drop", seat, agents, ...owner ? { bot: owner.bot, chat: owner.chat } : {} }, true);
   }
   work(work) {
     this.transport.send(this.box, { kind: "work", work }, true);
@@ -12809,7 +12875,7 @@ class SeatServer {
         return;
       }
       case "drop":
-        this.seats.drop(mail.seat, mail.agents);
+        this.drop(mail);
         return;
       case "work":
         this.work(from, mail.work);
@@ -12819,9 +12885,20 @@ class SeatServer {
         return;
     }
   }
+  async drop(mail) {
+    if (typeof mail.bot !== "string" || typeof mail.chat !== "string")
+      return;
+    if (await this.seats.owns(mail.seat, mail.agents, mail.bot, mail.chat) === "yes")
+      await this.seats.drop(mail.seat, mail.agents);
+  }
   asked = new Map;
   send(to, id, state) {
-    this.turns.get(id)?.states.push(state);
+    const running = this.turns.get(id);
+    if (running && !running.result) {
+      if (state.phase === "activity")
+        running.states = running.states.filter((each) => each.phase !== "activity");
+      running.states.push(state);
+    }
     this.transport.send(to, { kind: "state", id, state }, false);
   }
   turn(host, turn) {
@@ -12868,14 +12945,16 @@ class SeatServer {
         timer = this.clock.setTimeout(flush, wait);
     };
     this.send(host, turn.id, { phase: "taken" });
-    this.seats.turn(turn, report, running.controller.signal).catch((error2) => error2 instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error2?.message ?? error2) }).then((result) => {
+    this.seats.turn(turn, report, running.controller.signal, true).catch((error2) => error2 instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error2?.message ?? error2) }).then((result) => {
       if (timer !== undefined)
         this.clock.clearTimeout(timer);
-      running.result = result;
+      const seated = [...running.states].reverse().find((state) => state.phase === "seated");
+      running.result = seated?.phase === "seated" ? { ...result, seat: seated.seat, agents: seated.agents, ...seated.replaced ? { replaced: seated.replaced } : {} } : result;
+      running.states = [];
       running.at = Date.now();
       this.asked.delete(turn.id);
       if (!running.controller.signal.aborted)
-        this.transport.send(host, { kind: "result", id: turn.id, result }, false);
+        this.transport.send(host, { kind: "result", id: turn.id, result: running.result }, false);
     });
   }
 }
@@ -12883,6 +12962,7 @@ class SeatServer {
 // Agents/src/groups/post.ts
 var kinds3 = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"]);
 var isSeatMail = (value) => value !== null && typeof value === "object" && kinds3.has(value.kind);
+var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
 
 class PeerPost {
   file;
@@ -12900,6 +12980,8 @@ class PeerPost {
   send(to, mail, durable) {
     const line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable };
     if (durable) {
+      if (mail.kind === "memory")
+        this.kept = this.kept.filter((each) => !(each.to === to && sameMemory(each.mail, mail)));
       this.kept.push(line);
       this.save();
     }
@@ -13009,7 +13091,14 @@ class LinkDirectory {
         boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
     }
     this.boxes = boxes;
-    this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({ id: bot.id, name: bot.name, job: typeof bot.job === "string" ? bot.job : "", box: bot.box, ...typeof bot.session === "string" ? { session: bot.session } : {} }));
+    this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
+      id: bot.id,
+      name: bot.name,
+      job: typeof bot.job === "string" ? bot.job : "",
+      box: bot.box,
+      ...typeof bot.session === "string" ? { session: bot.session } : {},
+      ...bot.look && typeof bot.look === "object" && !Array.isArray(bot.look) ? { look: bot.look } : {}
+    }));
     return true;
   }
   bots() {
@@ -13593,6 +13682,14 @@ class Store {
 
 // Agents/src/groups/runner.ts
 var memoryKey = "kuvo.groups.machine";
+var recapMailBytes = 24000;
+var transcriptMailBytes = 200000;
+function prefixBytes(text2, most) {
+  const bytes = new TextEncoder().encode(text2);
+  if (bytes.length <= most)
+    return text2;
+  return new TextDecoder().decode(bytes.subarray(0, Math.max(0, most))).replace(/\uFFFD+$/, "");
+}
 var groupMessageID = () => "gm_" + crypto.randomUUID().toLowerCase();
 var turnID = () => "trn_" + crypto.randomUUID().toLowerCase();
 var reason3 = (error3) => String(error3?.message ?? error3 ?? "it failed").trim();
@@ -14096,7 +14193,7 @@ class GroupRunner {
       }
       let seat = guest ? undefined : kept2.group.seats[botID];
       if (seat && (kept2.group.seatBoxes?.[botID] ?? undefined) !== bot.box) {
-        this.home(kept2.group.seatBoxes?.[botID]).drop(seat, kept2.group.agentSeats?.includes(seat) ?? false);
+        this.home(kept2.group.seatBoxes?.[botID]).drop(seat, kept2.group.agentSeats?.includes(seat) ?? false, { bot: botID, chat: id });
         delete kept2.group.seats[botID];
         delete kept2.group.heard[botID];
         if (kept2.group.seatBoxes)
@@ -14196,7 +14293,7 @@ class GroupRunner {
     if (state.phase === "seated") {
       const now = this.chat(id);
       if (!now || !now.group.members.includes(botID)) {
-        this.home(turn.box).drop(state.seat, state.agents);
+        this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
         turn.own.abort();
         return;
       }
@@ -14363,20 +14460,13 @@ class GroupRunner {
     return this.seats.ownAPI(bot);
   }
   async hand(taskID, wrapUpID, id) {
-    const kept2 = this.chat(id);
-    const wrapUp = kept2?.messages.find((message2) => message2.id === wrapUpID);
-    const task = wrapUp?.tasks?.find((part) => part.id === taskID);
-    if (!kept2 || !wrapUp || !task)
+    const task = this.taskState(taskID, wrapUpID, id);
+    const text2 = this.partText(taskID, wrapUpID, id);
+    if (!task || text2 === undefined)
       return;
     const bot = this.member(task.bot);
     if (!bot)
       return this.fail(taskID, wrapUpID, id, "the bot is gone");
-    const before = (wrapUp.tasks ?? []).filter((part) => (task.after ?? []).includes(part.bot)).flatMap((part) => {
-      const report = [...kept2.messages].reverse().find((message2) => message2.report === part.id);
-      return report ? [{ name: this.name(part.bot), report: report.text }] : [];
-    });
-    const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message");
-    const text2 = compose(task, kept2.group, wrapUp, from, before);
     const peers = this.context.peers;
     if (bot.box && peers) {
       if (!peers.takesSeats(bot.box))
@@ -14395,6 +14485,19 @@ class GroupRunner {
     } catch (error3) {
       this.fail(taskID, wrapUpID, id, reason3(error3));
     }
+  }
+  partText(taskID, wrapUpID, id) {
+    const kept2 = this.chat(id);
+    const wrapUp = kept2?.messages.find((message2) => message2.id === wrapUpID);
+    const task = wrapUp?.tasks?.find((part) => part.id === taskID);
+    if (!kept2 || !wrapUp || !task)
+      return;
+    const before = (wrapUp.tasks ?? []).filter((part) => (task.after ?? []).includes(part.bot)).flatMap((part) => {
+      const report = [...kept2.messages].reverse().find((message2) => message2.report === part.id);
+      return report ? [{ name: this.name(part.bot), report: report.text }] : [];
+    });
+    const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message");
+    return compose(task, kept2.group, wrapUp, from, before);
   }
   taskState(taskID, wrapUpID, id) {
     return this.chat(id)?.messages.find((message2) => message2.id === wrapUpID)?.tasks?.find((task) => task.id === taskID);
@@ -14426,7 +14529,7 @@ class GroupRunner {
   }
   reported(from, report) {
     const task = this.taskState(report.task, report.wrapUp, report.chat);
-    if (!task || this.member(task.bot)?.box !== from)
+    if (!task || task.prompt !== `peer:${from}`)
       return;
     this.finish(report.task, report.wrapUp, report.chat, task.bot, report.result);
   }
@@ -14447,9 +14550,14 @@ class GroupRunner {
         continue;
       for (const message2 of kept2.messages) {
         for (const task of message2.tasks ?? []) {
-          if (task.state !== "working" || this.following.has(task.id) || task.prompt?.startsWith("peer:"))
+          if (task.state !== "working" || this.following.has(task.id))
             continue;
-          if (!task.prompt) {
+          if (task.prompt?.startsWith("peer:")) {
+            const text2 = this.partText(task.id, message2.id, id);
+            const box = task.prompt.slice("peer:".length);
+            if (text2 && this.context.peers)
+              this.context.peers.home(box).work({ task: task.id, wrapUp: message2.id, chat: id, bot: task.bot, text: text2, started: task.started ?? stamp2() });
+          } else if (!task.prompt) {
             this.fail(task.id, message2.id, id, "Kuvo Code stopped before it reached the bot");
           } else {
             this.following.add(task.id);
@@ -14513,7 +14621,7 @@ class GroupRunner {
     }
   }
   async deleteSeat(seat, group, botID) {
-    await this.home(group.seatBoxes?.[botID]).drop(seat, group.agentSeats?.includes(seat) ?? false);
+    await this.home(group.seatBoxes?.[botID]).drop(seat, group.agentSeats?.includes(seat) ?? false, { bot: botID, chat: group.id });
     const kept2 = this.chats.get(group.id);
     if (!kept2)
       return;
@@ -14569,9 +14677,11 @@ class GroupRunner {
     await api.setInstruction(bot.sessionID, this.memoryKey, text2).catch(() => {});
   }
   rememberThere(botID, box, options) {
+    if (!this.context.peers.takesSeats(box))
+      return;
     const home2 = this.context.peers.home(box);
     if (options.forgetting)
-      home2.remember({ chat: options.forgetting, bot: botID, forget: true });
+      home2.remember({ chat: options.forgetting, bot: botID, at: this.memoryTime(), forget: true });
     for (const kept2 of this.chats.values()) {
       if (kept2.status !== "active" || !kept2.group.members.includes(botID) || kept2.messages.length === 0)
         continue;
@@ -14580,27 +14690,43 @@ class GroupRunner {
       home2.remember({
         chat: kept2.group.id,
         bot: botID,
+        at: this.memoryTime(),
         name: kept2.group.name,
         with: kept2.group.members.filter((member2) => member2 !== botID).flatMap((member2) => this.member(member2)?.name ?? []),
-        recap: this.recap(kept2),
-        transcript: this.transcript(kept2),
+        recap: prefixBytes(this.recap(kept2), recapMailBytes),
+        transcript: this.transcript(kept2, transcriptMailBytes),
         time: kept2.messages.at(-1)?.time ?? kept2.group.created
       });
     }
+  }
+  lastMemory = 0;
+  memoryTime() {
+    this.lastMemory = Math.max(Date.now(), this.lastMemory + 1);
+    return this.lastMemory;
   }
   async remembered(from, memory) {
     const bot = this.bot(memory.bot);
     if (!bot || !/^grp_[a-z0-9]+$/.test(memory.chat))
       return;
+    const key = `${from}/${memory.chat}`;
+    if (typeof memory.at === "number" && memory.at <= this.context.store.peerMemoryAt(bot.id, key))
+      return;
     const file = `${bot.folder}/groups/${peerPrefix(from)}-${memory.chat}.md`;
     if (memory.forget) {
       this.context.store.removeFile(file);
-      this.context.store.forgetPeerMemory(bot.id, `${from}/${memory.chat}`);
+      this.context.store.forgetPeerMemory(bot.id, key, memory.at);
     } else {
       try {
         this.context.store.writeFile(file, memory.transcript ?? "");
       } catch {}
-      this.context.store.keepPeerMemory(bot.id, `${from}/${memory.chat}`, { name: memory.name ?? "", with: memory.with ?? [], recap: memory.recap ?? "", file, time: memory.time ?? stamp2() });
+      this.context.store.keepPeerMemory(bot.id, key, {
+        name: memory.name ?? "",
+        with: memory.with ?? [],
+        recap: memory.recap ?? "",
+        file,
+        time: memory.time ?? stamp2(),
+        ...typeof memory.at === "number" ? { at: memory.at } : {}
+      });
     }
     await this.remember(bot.id);
   }
@@ -14638,25 +14764,37 @@ class GroupRunner {
     }).join(`
 `);
   }
-  transcript(kept2) {
+  transcript(kept2, most = Infinity) {
     const names = kept2.group.members.flatMap((member2) => this.member(member2)?.name ?? []);
-    let text2 = `# ${kept2.group.name}
+    const head = `# ${kept2.group.name}
 
 A group chat in Kuvo Code between the user and ${names.join(", ")}.
 `;
-    for (const message2 of kept2.messages) {
-      if (message2.kind === "note")
-        text2 += `
+    const entries = kept2.messages.map((message2) => message2.kind === "note" ? `
 _${message2.text}_
-`;
-      else
-        text2 += `
+` : `
 **${label(message2, (author) => this.name(author))}** \xB7 ${this.when(message2.time)}
 
 ${message2.text}
+`);
+    if (most === Infinity)
+      return head + entries.join("");
+    const encoder = new TextEncoder;
+    const left = `
+_Earlier messages aren\u2019t here: this is the latest of the chat._
 `;
+    let size = encoder.encode(head + left).length;
+    let from = entries.length;
+    while (from > 0) {
+      const next2 = encoder.encode(entries[from - 1]).length;
+      if (size + next2 > most)
+        break;
+      size += next2;
+      from--;
     }
-    return text2;
+    if (from === entries.length && entries.length > 0)
+      return head + left + prefixBytes(entries.at(-1), most - size);
+    return head + (from > 0 ? left : "") + entries.slice(from).join("");
   }
   rememberSoon(id) {
     const pending = this.syncs.get(id);
@@ -14902,4 +15040,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 378245e89448838b06b6b8f24e9ad5b9db745bcbdf544bb9e017d50aecdfb920
+// Built from Agents/src fd10a2adff71d699f4af5db0786bda85a594853f15c5c63a1c8dec9c81eb7a95
