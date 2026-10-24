@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.34";
+export const BRIDGE_VERSION = "0.9.36";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -4801,9 +4801,13 @@ const RELAY_GONE_AFTER = 5 * 60_000;
 
 const fitsAgent = agent => isObject(agent) && typeof agent.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(agent.session)
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
-// A bot's `id` too (`bot_…`, as group chats name their members), so a chat on another computer can have it.
-const keptAgent = ({ session, name, kind, project, about, machine, id }) => ({ session, name: plainName(name).slice(0, 200), kind,
+// A bot's `id` too (`bot_…`, as group chats name their members), and how it looks (`look`: color,
+// shape, face), so a chat on another computer can have it and show it.
+const keptLook = look => (isObject(look) && ["color", "shape", "face"].every(key => typeof look[key] === "string" && look[key].length > 0 && look[key].length <= 40)
+  ? { color: look.color, shape: look.shape, face: look.face } : undefined);
+const keptAgent = ({ session, name, kind, project, about, machine, id, look }) => ({ session, name: plainName(name).slice(0, 200), kind,
   ...(kind === "bot" && typeof id === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(id) ? { id } : {}),
+  ...(kind === "bot" && keptLook(look) ? { look: keptLook(look) } : {}),
   ...(typeof project === "string" && project ? { project: project.slice(0, 200) } : {}), ...(typeof about === "string" && about ? { about: about.slice(0, 500) } : {}),
   ...(typeof machine === "string" && machine ? { machine: machine.slice(0, 200) } : {}) });
 // What a peer says it answers (`features`, as kuvo/info's), kept with its agents.
@@ -4892,7 +4896,7 @@ const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Bo
 // own: one without a title is "New session", and a chat's project is "Chats". Null when its engine
 // can't say (then what it last said stands).
 export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile) {
-  const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", id: bot.id, ...(bot.job ? { about: bot.job } : {}) }));
+  const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", id: bot.id, ...(bot.job ? { about: bot.job } : {}), ...(bot.look ? { look: bot.look } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
   const sessionsOf = async target => {
     const response = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=100&order=desc`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
@@ -5113,21 +5117,31 @@ const bridgeAsk = async (method, route, body, signal) => {
   return response;
 };
 
-// What goes for one seat mail: whole, or in parts that are put together where it goes. `id`: one
-// that mustn't be lost, as its letter is named (said back, `delivered`, once it's whole there).
+// What goes for one seat mail: whole, or in parts that are put together where it goes (its JSON's
+// UTF-8 bytes, base64url, so each part fits a mail whatever the words are); null for one too big to
+// be put together there (more than MOST_PARTS). `id`: one that mustn't be lost, as its letter is
+// named (said back, `delivered`, once it's whole there).
 export function seatPayloads(mail, id) {
   const json = JSON.stringify(mail);
-  if (json.length <= SEAT_WHOLE) return [{ seat: mail, ...(id ? { seatID: id } : {}) }];
-  const whole = crypto.createHash("sha256").update(json).digest("base64url");
-  const of = Math.ceil(json.length / DOC_PART);
-  return Array.from({ length: of }, (_, i) => ({ seatPart: { whole, i, of, d: json.slice(i * DOC_PART, (i + 1) * DOC_PART), s: id ?? "" } }));
+  if (Buffer.byteLength(json) <= SEAT_WHOLE) return [{ seat: mail, ...(id ? { seatID: id } : {}) }];
+  const d = Buffer.from(json).toString("base64url");
+  const of = Math.ceil(d.length / DOC_PART);
+  if (of > MOST_PARTS) return null;
+  const whole = crypto.createHash("sha256").update(d).digest("base64url");
+  return Array.from({ length: of }, (_, i) => ({ seatPart: { whole, i, of, d: d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: id ?? "" } }));
 }
 
-// The bridge's mail for `to`, sent now, each part as a mail of its own; whether it all went.
+// The bridge's mail for `to`, sent now, each part as a mail of its own: whether it all went, or
+// "too big" for one that can't go at all (said in the log).
 function sendSeat(host, to, mail, id, link = readLink()) {
   const peer = peersOf(link).find(each => each.key === to);
   if (!peer || !host) return false;
-  for (const payload of seatPayloads(mail, id)) {
+  const payloads = seatPayloads(mail, id);
+  if (!payloads) {
+    console.error(`kuvo-link: a group chat's ${String(mail?.kind ?? "mail")} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
+    return "too big";
+  }
+  for (const payload of payloads) {
     const bytes = mailFor(peer, { ...payload, at: Date.now() }, link);
     if (!bytes) return false;
     try { host.send(bytes); } catch { return false; }
@@ -5145,7 +5159,7 @@ export async function takeSeat(sender, payload, send, ask = bridgeAsk) {
   } else if (isObject(payload.seatPart)) {
     const whole = assemble(seatParts, sender.key, payload.seatPart);
     if (!whole) return;
-    try { mail = JSON.parse(whole.d); } catch { return; }
+    try { mail = JSON.parse(Buffer.from(whole.d, "base64url").toString("utf8")); } catch { return; }
     id = whole.s || null;
   }
   if (!isObject(mail) || (id !== null && !LETTER_ID.test(id))) return;
@@ -5164,7 +5178,8 @@ export function seatPeers(link = readLink(), told = readPeerAgents(undefined, un
   const peers = peersOf(link);
   return {
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
-    bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id).map(agent => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session }))),
+    bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
+      .map(agent => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
   };
 }
 
@@ -5177,9 +5192,54 @@ export async function tellSeatPeers(link = readLink(), force = false, ask = brid
   toldSeatPeers = text;
 }
 
-// Follows what the bridge sends, while it runs: what goes now, sent; what mustn't be lost, left as
-// a letter (`run/outbox/sending`, which `sendOutbox` sends each minute until it's there), then
-// said to be taken. Each time it follows anew, it tells the bridge who your computers are.
+// One line of what the bridge sends (`{id, to, mail, durable}`): what goes now, sent; what mustn't
+// be lost, left as a letter (`run/outbox/sending`, which `sendOutbox` sends again each minute until
+// it's there) and sent at once. What a bot remembers of a chat goes for any of the same bot and chat
+// still waiting to go: only the newest matters. True once it's this link's to deliver.
+export function carrySeat(host, given, link = readLink(), now = Date.now()) {
+  if (!isObject(given) || typeof given.to !== "string" || !isObject(given.mail) || typeof given.id !== "string") return false;
+  if (given.durable !== true) {
+    sendSeat(host, given.to, given.mail, undefined, link);
+    return true;
+  }
+  const id = given.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
+  if (!LETTER_ID.test(id)) return false;
+  const letter = { peer: given.to, seat: given.mail, at: now };
+  try {
+    fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+    if (given.mail.kind === "memory") {
+      for (const name of listOf(SENDING)) {
+        if (!name.endsWith(".json")) continue;
+        let other;
+        try { other = JSON.parse(fs.readFileSync(path.join(SENDING, name), "utf8")); } catch { continue; }
+        if (other?.peer !== given.to || other?.seat?.kind !== "memory" || other.seat.memory?.bot !== given.mail.memory?.bot || other.seat.memory?.chat !== given.mail.memory?.chat) continue;
+        fs.rmSync(path.join(SENDING, name), { force: true });
+        letterTries.delete(name.slice(0, -5));
+      }
+    }
+    writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify(letter));
+  } catch { return false; }
+  const to = peersOf(link).find(each => each.key === given.to);
+  if (to && host) sendSeatLetter(host, to, id, letter, link, now);
+  return true;
+}
+
+// A letter of a group chat's mail that mustn't be lost, sent to its computer now: noted as tried
+// (sent again in a minute), or, too big ever to go, given up (the log says so).
+function sendSeatLetter(host, to, id, letter, link, now) {
+  const file = path.join(SENDING, `${id}.json`);
+  if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
+  const went = sendSeat(host, to.key, letter.seat, id, link);
+  if (went === "too big") {
+    fs.rmSync(file, { force: true });
+    letterTries.delete(id);
+  } else if (went) {
+    letterTries.set(id, now);
+  }
+}
+
+// Follows what the bridge sends, while it runs (`carrySeat`), saying what mustn't be lost is taken
+// once it's left as a letter. Each time it follows anew, it tells the bridge who your computers are.
 export async function watchSeats(host, signal) {
   let attempt = 0;
   while (!signal?.aborted) {
@@ -5197,18 +5257,7 @@ export async function watchSeats(host, signal) {
           buffer = buffer.slice(end + 1);
           let given;
           try { given = JSON.parse(line); } catch { continue; }
-          if (!isObject(given) || typeof given.to !== "string" || !isObject(given.mail) || typeof given.id !== "string") continue;
-          if (given.durable === true) {
-            const id = given.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
-            if (!LETTER_ID.test(id)) continue;
-            try {
-              fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
-              writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ peer: given.to, seat: given.mail, at: Date.now() }));
-            } catch { continue; }
-            bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
-          } else {
-            sendSeat(host(), given.to, given.mail);
-          }
+          if (carrySeat(host(), given) && given.durable === true) bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
         }
       }
     } catch {}
@@ -5477,8 +5526,7 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
       const to = peers.find(each => each.key === letter.peer);
       if (!to || offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
       letterTries.set(id, now);
-      if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
-      sendSeat(host, to.key, letter.seat, id, link);
+      sendSeatLetter(host, to, id, letter, link, now);
       continue;
     }
     const peer = typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);

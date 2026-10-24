@@ -115,11 +115,13 @@ bridge's real handler. Only the engine is a stand-in, the same small one on both
 
 - Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
   each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `settings`, `key`, `credential`,
-  `file`, `repository`, `write`, `ask`, `agentsBridge`; bots before anything else), a request
+  `file`, `repository`, `write`, `ask`, `agentsBridge`, `peers`; bots before anything else), a request
   `{"send": "PATCH kuvo/bots/bot_ada", "body": {…}, "expect": {"status", "json"?, "type"?,
   "text"?}, "save": {"name": "bot.id"}}`, or `{"engineGot": {"method", "path", "json"}}`.
   `{"agentsBridge": {"groups": true}}` runs the coding agents' bridge the app ships for real on
-  the machine's side (with Bun: `KUVO_TEST_BUN`, or `bun` on your PATH), for its group chats.
+  the machine's side (with Bun: `KUVO_TEST_BUN`, or `bun` on your PATH), for its group chats;
+  `{"peers": {"boxes", "bots"}}` then tells it who your other computers and their bots are, as the
+  box's link does.
 - `json` names only what matters. `"<string>"`, `"<number>"`, `"<bool>"`, `"<object>"`,
   `"<array>"`, `"<any>"`, `"<absent>"` stand for volatile values; lists match in order, or with
   `{"<includes>": […]}`, `{"<excludes>": […]}`, `{"<length>": n}`; `{"<contains>": "…"}` in a

@@ -264,6 +264,16 @@ const fixtures = {
     agentsProcess ??= spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
     engine.bridgeUp = true;
   },
+  // Your other computers and their bots, as this box's link tells its coding agents' bridge
+  // (`tellSeatPeers`: `{boxes, bots}`), once that runs for real (`agentsBridge.groups`).
+  async peers(given) {
+    assert.ok(realBridge, "peers are told to the real coding agents' bridge: give agentsBridge.groups first");
+    const response = await fetch(`http://127.0.0.1:${realBridge.port}/api/kuvo/peers`, {
+      method: "PUT", body: JSON.stringify(given),
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${realBridge.password}`).toString("base64")}`, "content-type": "application/json" },
+    });
+    assert.ok(response.ok, `the agents bridge answered ${response.status}`);
+  },
 };
 
 // Where a session's wake-ups are kept: its bot's folder, or its own (made as kuvo-wake makes one).

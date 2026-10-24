@@ -102,6 +102,24 @@
       ]
     },
     {
+      "name": "a bot of another of your computers in a group chat made here: listed with every field a bot here has",
+      "only": "machine",
+      "why": "This Mac's box takes your other computers' bots into its chats once its group chats run in its coding agents' bridge (D1b step 4). A phone reads a member's look, session and directory however far away it lives.",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "agentsBridge": { "groups": true } } },
+        { "given": { "peers": { "boxes": [ { "key": "key_spare", "name": "spare", "seats": true } ],
+          "bots": [ { "id": "bot_far", "name": "Far", "job": "Watches CI", "box": "key_spare", "look": { "color": "sky", "shape": "gem", "face": "happy" } } ] } } },
+        { "send": "GET kuvo/groups/joinable", "expect": { "status": 200, "json": { "bots": [
+          { "id": "bot_ada", "name": "Ada", "session": "ses_ada", "directory": "<string>", "agents": false, "look": { "color": "mint", "shape": "round", "face": "calm" }, "computer": "<absent>" },
+          { "id": "bot_far", "name": "Far", "session": "", "directory": "", "agents": false, "look": { "color": "sky", "shape": "gem", "face": "happy" }, "computer": "spare" } ] } } },
+        { "send": "POST kuvo/groups", "body": { "name": "Across", "members": [ "bot_ada", "bot_far" ] },
+          "expect": { "status": 201, "json": { "group": { "name": "Across", "members": [
+            { "id": "bot_ada", "computer": "<absent>" },
+            { "id": "bot_far", "name": "Far", "session": "", "directory": "", "look": { "color": "sky", "shape": "gem", "face": "happy" }, "computer": "spare" } ] } } } }
+      ]
+    },
+    {
       "name": "group chats while the coding agents' bridge isn't running",
       "steps": [
         {
