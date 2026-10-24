@@ -69,6 +69,7 @@ import Textual
         Snippet("Commands drawn as ones SwiftUIMath has", "Boxed $\\boxed{42}$ and $a \\dots b$", ["Boxed ⟨\\boxed{42}⟩ and ⟨a \\dots b⟩"]),
         Snippet("Private-use characters in the text", "PUA \u{E000}0\u{E001} and \u{E000}12345678901234567890\u{E001}, \u{F0000}\u{F0001} and $x$ and $$y$$", ["PUA \u{E000}0\u{E001} and \u{E000}12345678901234567890\u{E001}, \u{F0000}\u{F0001} and ⟨x⟩ and", "```kuvo-math y"]),
         Snippet("Windows line ends", "Windows\r\n$$\r\nx^2\r\n$$\r\nline", ["Windows", "```kuvo-math x^2", "line"]),
+        Snippet("A web address without its scheme", "See www.example.com/$a$ and $y$.", ["See [www.example.com/$a$](http://www.example.com/$a$) and ⟨y⟩."]),
     ]
 
     @Test(arguments: snippets)

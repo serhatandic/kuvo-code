@@ -188,11 +188,12 @@ nonisolated enum FindText {
     static func shown(markdown: String, folders: [String]) -> String {
         let key = folders.joined(separator: "\n") + "\u{0}" + markdown as NSString
         if let known = cache.object(forKey: key) { return known as String }
-        // As Textual reads it (Foundation's Markdown), with its math set aside first and put back
-        // as it's drawn, here away from the main thread.
-        let (protected, formulas) = MathText.protect(markdown)
-        var text = (try? AttributedString(markdown: protected)) ?? AttributedString(markdown)
-        MathText.restore(&text, formulas) { _, attributes in AttributedString("\u{FFFC}", attributes: attributes) }
+        // As a reply reads it, with its math drawn, here away from the main thread: a formula as
+        // one character, as it's drawn, or as written when it can't be.
+        let math = MathSyntax(blockLanguage: MathText.blockLanguage) { formula, attributes in
+            MathText.drawable(formula.latex) == nil ? nil : AttributedString("\u{FFFC}", attributes: attributes)
+        }
+        var text = (try? math.attributedString(markdown: markdown)) ?? AttributedString(markdown)
         for (range, _) in FileLinks.spans(in: text, folders: folders) {
             text.replaceSubrange(range, with: AttributedString(FileLinks.icon + " " + FileLinks.label(String(text[range].characters))))
         }
