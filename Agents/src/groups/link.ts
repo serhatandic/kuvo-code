@@ -42,7 +42,8 @@ export function clientMessage(message: GroupMessage | undefined, withSteps = tru
     ...(withSteps && steps ? { steps } : {}),
     ...(tasks
       ? {
-          tasks: tasks.map(({ started, finished, ...task }) => ({ ...task, ...(started ? { started: seconds(started) } : {}), ...(finished ? { finished: seconds(finished) } : {}) })),
+          // `lost` is the box's own note (a report still taken), not a client's.
+          tasks: tasks.map(({ started, finished, lost: _lost, ...task }) => ({ ...task, ...(started ? { started: seconds(started) } : {}), ...(finished ? { finished: seconds(finished) } : {}) })),
         }
       : {}),
   }
