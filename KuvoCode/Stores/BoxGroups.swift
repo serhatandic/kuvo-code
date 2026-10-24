@@ -72,7 +72,22 @@ final class BoxGroups {
     }
 
     /// What's kept of each computer's chats, one entry per chat on each (a chat moving is on two).
-    private(set) var chats: [Chat] = []
+    private(set) var chats: [Chat] = [] {
+        didSet { reindex() }
+    }
+    /// Each chat once, as the window shows it (of two copies, the one started, else the one it's
+    /// leaving), and who's talking where: worked out once each time what's kept changes, as the
+    /// window reads them for every row of every frame.
+    @ObservationIgnored private(set) var shown: [Chat] = []
+    @ObservationIgnored private var byID: [String: Chat] = [:]
+    /// The chats as the window lists them, and where each lives (a machine; none for this Mac):
+    /// changed only when one of them does, not with who's talking.
+    private(set) var groups: [BotGroup] = []
+    private var groupsByID: [String: BotGroup] = [:]
+    private var machines: [String: String] = [:]
+    private(set) var speaking: [String: String] = [:]
+    private(set) var discussing: Set<String> = []
+    private(set) var paused: Set<String> = []
     private var logs: [String: [GroupMessage]] = [:]
     /// Machines whose bridge runs group chats (an older one doesn't yet).
     private(set) var running: Set<String> = []
@@ -98,13 +113,16 @@ final class BoxGroups {
 
     init() {
         Self.takeOldCache()
-        chats = JSONFile.read([Chat].self, from: Self.file, isoDates: true) ?? []
         // As last seen: nothing's talking until its computer says so.
-        for index in chats.indices {
-            chats[index].discussing = false
-            chats[index].speaking = nil
+        chats = (JSONFile.read([Chat].self, from: Self.file, isoDates: true) ?? []).map { chat in
+            var chat = chat
+            chat.discussing = false
+            chat.speaking = nil
+            return chat
         }
         for id in Set(chats.map(\.group.id)) { logs[id] = JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(id).json"), isoDates: true) ?? [] }
+        // (An observer doesn't run for what's set in `init`.)
+        reindex()
     }
 
     /// What 0.8.0-beta.1 kept of machines' chats (`machine-groups.json`, and their messages), taken
@@ -131,33 +149,45 @@ final class BoxGroups {
 
     // MARK: Reading
 
-    func has(_ id: String?) -> Bool { id.map { id in chats.contains { $0.group.id == id } } ?? false }
+    func has(_ id: String?) -> Bool { id.map { byID[$0] != nil } ?? false }
     /// The chat by its ID, as the window shows it: of two copies (it's moving), the one started,
     /// else the one it's leaving.
-    func chat(_ id: String?) -> Chat? {
-        guard let id else { return nil }
-        let all = chats.filter { $0.group.id == id }
-        return all.first { !$0.held } ?? all.first
-    }
-    /// Each chat once, as the window shows it.
-    var shown: [Chat] {
-        var seen = Set<String>()
-        return chats.compactMap { listed in
-            guard seen.insert(listed.group.id).inserted else { return nil }
-            return chat(listed.group.id)
+    func chat(_ id: String?) -> Chat? { id.flatMap { byID[$0] } }
+
+    private func reindex() {
+        var byID: [String: Chat] = [:]
+        var order: [String] = []
+        for chat in chats {
+            if let kept = byID[chat.group.id] {
+                if kept.held, !chat.held { byID[chat.group.id] = chat }
+            } else {
+                byID[chat.group.id] = chat
+                order.append(chat.group.id)
+            }
         }
+        self.byID = byID
+        let shown = order.compactMap { byID[$0] }
+        self.shown = shown
+        let groups = shown.map(\.group)
+        if groups != self.groups {
+            self.groups = groups
+            groupsByID = Dictionary(groups.map { ($0.id, $0) }) { first, _ in first }
+        }
+        let machines = Dictionary(shown.compactMap { chat in chat.machine.map { (chat.group.id, $0) } }) { first, _ in first }
+        if machines != self.machines { self.machines = machines }
+        let speaking = Dictionary(shown.compactMap { chat in chat.speaking.map { (chat.group.id, $0) } }) { first, _ in first }
+        if speaking != self.speaking { self.speaking = speaking }
+        let discussing = Set(shown.filter(\.discussing).map(\.group.id))
+        if discussing != self.discussing { self.discussing = discussing }
+        let paused = Set(shown.filter(\.paused).map(\.group.id))
+        if paused != self.paused { self.paused = paused }
     }
-    func group(_ id: String?) -> BotGroup? { chat(id)?.group }
+    func group(_ id: String?) -> BotGroup? { id.flatMap { groupsByID[$0] } }
     /// The machine a chat lives on; nil for this Mac's (and for none).
-    func machine(of id: String?) -> String? { chat(id)?.machine }
+    func machine(of id: String?) -> String? { id.flatMap { machines[$0] } }
     func messages(in id: String) -> [GroupMessage] { logs[id] ?? [] }
     func group(seat: String) -> BotGroup? { chats.first { $0.group.seats.values.contains(seat) }?.group }
 
-    var speaking: [String: String] {
-        Dictionary(shown.compactMap { chat in chat.speaking.map { (chat.group.id, $0) } }) { first, _ in first }
-    }
-    var discussing: Set<String> { Set(shown.filter(\.discussing).map(\.group.id)) }
-    var paused: Set<String> { Set(shown.filter(\.paused).map(\.group.id)) }
     var seatIDs: Set<String> { Set(chats.flatMap(\.group.seats.values)) }
     var agentSeatIDs: Set<String> { Set(chats.flatMap { $0.group.agentSeats ?? [] }) }
 
@@ -176,9 +206,10 @@ final class BoxGroups {
     }
 
     func reach(_ id: String) -> Reach {
-        guard let chat = chat(id) else { return .ready }
-        if api(chat.machine) != nil { return .ready }
-        guard let machine = chat.machine else { return macReach }
+        guard groupsByID[id] != nil else { return .ready }
+        let machine = machines[id]
+        if api(machine) != nil { return .ready }
+        guard let machine else { return macReach }
         return .away(machine)
     }
 
@@ -243,8 +274,7 @@ final class BoxGroups {
             // Its messages, unless the last one is the one here already.
             if logs[chat.group.id]?.last?.id != chat.last?.id || chat.last == nil { await reload(chat.group.id, on: machine) }
         }
-        app?.workspace.seats.formUnion(seatIDs)
-        app?.workspace.runsOnAgents(agentSeatIDs)
+        noteSeats(seatIDs, agents: agentSeatIDs)
     }
 
     /// A machine you removed: its chats go from here (they stay there, for when you add it again).
@@ -290,8 +320,7 @@ final class BoxGroups {
                 apply(updated.group, held: updated.status == "held", state: updated.state, on: machine)
                 let now = updated.state.speaking == nil ? [] : updated.state.activity ?? []
                 if activity[updated.id] ?? [] != now { activity[updated.id] = now.isEmpty ? nil : now }
-                app?.workspace.seats.formUnion(updated.group.seats.values)
-                if let agentSeats = updated.group.agentSeats { app?.workspace.runsOnAgents(agentSeats) }
+                noteSeats(Set(updated.group.seats.values), agents: Set(updated.group.agentSeats ?? []))
             case "kuvo.group.message":
                 let changed = try decoded(event, as: Message.self)
                 guard chats.contains(where: { $0.group.id == changed.id && $0.machine == machine }) else { return }
@@ -335,6 +364,14 @@ final class BoxGroups {
         } catch {
             log.error("A group chat's event couldn't be read: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Seats stay out of the lists, and those on the coding agents' models go to their bridge: told
+    /// only when it's news (a chat's talk says its seats again and again).
+    private func noteSeats(_ seats: Set<String>, agents: Set<String>) {
+        guard let workspace = app?.workspace else { return }
+        if !seats.isSubset(of: workspace.seats) { workspace.seats.formUnion(seats) }
+        if !agents.isEmpty { workspace.runsOnAgents(agents) }
     }
 
     /// Where this Mac's bridge puts what it deletes and lets go of (`KUVO_TRASH`).
@@ -432,6 +469,7 @@ final class BoxGroups {
         save()
         guard !has(id) else { return }
         logs[id] = nil
+        savingLogs.removeValue(forKey: id)?.cancel()
         activity[id] = nil
         try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).json"))
     }
@@ -720,13 +758,58 @@ final class BoxGroups {
     /// Whether a computer's bridge can be reached now.
     func reachable(_ machine: String?) -> Bool { api(machine) != nil }
 
+    /// What's kept, written a moment after the last change (a chat's talk changes it often), off
+    /// the main thread: it's only what shows until each computer says how its chats are now.
     private func save() {
-        JSONFile.write(chats, to: Self.file, isoDates: true, readable: true)
+        guard saving == nil else { return }
+        saving = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled else { return }
+            self.saving = nil
+            guard let data = self.encoded(self.chats) else { return }
+            let file = Self.file
+            await Task.detached { Self.write(data, to: file) }.value
+        }
     }
 
     private func saveLog(_ id: String) {
-        guard let messages = logs[id] else { return }
-        JSONFile.write(messages, to: Self.folder.appending(path: "\(id).json"), isoDates: true, readable: true)
+        guard savingLogs[id] == nil else { return }
+        savingLogs[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled else { return }
+            self.savingLogs[id] = nil
+            guard let messages = self.logs[id], let data = self.encoded(messages) else { return }
+            let file = Self.folder.appending(path: "\(id).json")
+            await Task.detached { Self.write(data, to: file) }.value
+        }
+    }
+
+    /// What's waiting to be written, written now (the app quitting, or a test reading it back).
+    func flush() {
+        if saving != nil {
+            saving?.cancel()
+            saving = nil
+            if let data = encoded(chats) { Self.write(data, to: Self.file) }
+        }
+        for (id, task) in savingLogs {
+            task.cancel()
+            if let messages = logs[id], let data = encoded(messages) { Self.write(data, to: Self.folder.appending(path: "\(id).json")) }
+        }
+        savingLogs = [:]
+    }
+
+    private func encoded(_ value: some Encodable) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(value)
+    }
+
+    @ObservationIgnored private var saving: Task<Void, Never>?
+    @ObservationIgnored private var savingLogs: [String: Task<Void, Never>] = [:]
+
+    nonisolated private static func write(_ data: Data, to file: URL) {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
     }
 
     private static func json(_ value: some Encodable) -> JSONValue? {

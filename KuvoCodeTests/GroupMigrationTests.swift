@@ -123,6 +123,7 @@ import Testing
         // The window shows it from its first frame, as last seen.
         let shown = BoxGroups()
         #expect(shown.chats.map(\.group.id) == [Self.chatID] && shown.chats.first?.machine == nil)
+        #expect(GroupChats(boxes: shown).list.map(\.id) == [Self.chatID] && shown.group(Self.chatID)?.name == "Release", "listed from the first frame")
         #expect(shown.messages(in: Self.chatID).count == said.count)
     }
 

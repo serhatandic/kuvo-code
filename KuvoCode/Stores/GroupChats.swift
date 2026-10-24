@@ -12,7 +12,7 @@ final class GroupChats {
         self.boxes = boxes
     }
 
-    var list: [BotGroup] { boxes.shown.map(\.group) }
+    var list: [BotGroup] { boxes.groups }
     var speaking: [String: String] { boxes.speaking }
     /// What the bot talking is doing, by chat (see `GroupActivity`).
     var activity: [String: [GroupActivity]] { boxes.activity }

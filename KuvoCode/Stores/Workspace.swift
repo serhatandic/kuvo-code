@@ -1262,6 +1262,9 @@ final class Workspace {
     /// Sessions known to be the agents bridge's before it has told of them (a bot's conversation,
     /// a seat in a group chat): asked there from the start.
     func runsOnAgents(_ ids: some Sequence<String>) {
+        // Only when it's news: what's drawn from it is drawn again on each change.
+        let ids = Set(ids)
+        guard !ids.isSubset(of: bridgeSessions) else { return }
         bridgeSessions.formUnion(ids)
     }
 

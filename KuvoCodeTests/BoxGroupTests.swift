@@ -168,6 +168,7 @@ import Testing
             ["id": "gm_3", "author": "bot_pal", "text": "Not here.", "time": "2026-10-22T08:02:00Z", "kind": "message"]]), machine: "box")
         #expect(app.chats.messages(in: "grp_mac0000001").count == 1)
         // Seen last, for while a computer is away or this Mac's bridge starts.
+        app.boxGroups.flush()
         let lastSeen = BoxGroups()
         #expect(Set(lastSeen.chats.map(\.group.id)) == ["grp_mac0000001", "grp_box0000001"] && lastSeen.messages(in: "grp_box0000001").count == 1)
         #expect(lastSeen.discussing.isEmpty, "nothing talks until its computer says so")
@@ -305,6 +306,7 @@ import Testing
         await #expect(throws: (any Error).self) { try await move.value }
         // Taken back: it carries on here.
         #expect(here.status(id) == "active" && app.chats.send("Now", to: id))
+        try await until { here.actions.contains("POST \(id)/send") }
     }
 
     /// What a box keeps of a chat goes to the other whole, what the window doesn't read too: which
@@ -412,6 +414,7 @@ import Testing
         #expect(app.chats.group("grp_box0000003") != nil)
         app.boxGroups.forget(machine: "box")
         #expect(app.chats.group("grp_box0000003") == nil)
+        app.boxGroups.flush()
         #expect(BoxGroups().chats.isEmpty, "nor kept for later")
     }
 

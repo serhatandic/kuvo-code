@@ -148,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // You've gone: what your phones' notices waited for goes now, here and on your machines.
         model.attention.stop()
         model.phoneLink.flushBeforeQuit()
+        // What the window shows of your group chats next time, as it is now.
+        model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
         // This Mac's box, and its record of the agents bridge, which goes with the app too.
