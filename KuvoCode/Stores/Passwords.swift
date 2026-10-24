@@ -150,6 +150,7 @@ nonisolated enum Passwords {
 
     /// Asks for Touch ID or your Mac's password before showing or copying a password.
     static func authenticate(reason: String) async -> Bool {
+        AppInfo.neverInTests("Touch ID")
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return true }
         return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false

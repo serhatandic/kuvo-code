@@ -21,6 +21,7 @@ final class OpenAtLogin {
     }
 
     func set(_ on: Bool) {
+        AppInfo.neverInTests("Open at Login (macOS adds a login item and tells you)")
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             failure = nil
