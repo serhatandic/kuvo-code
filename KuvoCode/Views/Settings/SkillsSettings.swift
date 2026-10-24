@@ -181,9 +181,22 @@ struct SkillsSettings: View {
             }
         }
         .task(id: config.settings) { await refresh() }
-        .task { await listCollections() }
+        // Again as this Mac's box stops or comes back (its collections are read there, and this
+        // Mac's skills): the page says so, and fills again.
+        .task(id: app.box.endpoint?.url) {
+            await listCollections()
+            if box.machine == nil { await refresh() }
+        }
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await refresh() } }
+        #if DEBUG
+        // KUVO_DEMO_SKILLS_COLLECTION=<owner/name>: that collection opened, as if typed and opened.
+        .task {
+            guard let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_SKILLS_COLLECTION"], let name = demo.split(separator: "|").first else { return }
+            repositoryName = String(name)
+            openRepository()
+        }
+        #endif
         .settingsDetail(item: $writing, title: { $0.name ?? "New Skill" }) { draft in
             SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? [])) {
                 writing = nil
@@ -219,6 +232,8 @@ struct SkillsSettings: View {
         do {
             collections = try await routes.collections()
         } catch {
+            // None to open while they can't be read: each would fail as it opened.
+            collections = nil
             collectionsFailure = error.localizedDescription
         }
     }
@@ -614,6 +629,13 @@ private struct RepositorySkills: View {
             } else {
                 await list()
             }
+            #if DEBUG
+            // KUVO_DEMO_SKILLS_COLLECTION=<owner/name>|<skill>: that skill added, as Add Skill does.
+            if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_SKILLS_COLLECTION"]?.split(separator: "|").dropFirst().first,
+               let skill = skills?.first(where: { $0.name == demo }) {
+                install(skill)
+            }
+            #endif
         }
         .alert(actionFailure?.title ?? "", isPresented: Binding(get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } })) {
             Button("OK") {}
