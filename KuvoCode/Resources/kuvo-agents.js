@@ -10741,6 +10741,8 @@ function segments(message) {
         close();
       quoting = true;
       quote = [...quote ?? [], line === ">" ? "" : line.slice(2)];
+    } else if (!inCode && line === "---" && previousBlank && quote !== undefined && !quoting) {
+      close();
     } else {
       quoting = false;
       words.push(line);
@@ -15238,4 +15240,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src f8e0e76ac704d386a8d7e7081090c544d1d280c2a81fd1e2969f213b6a094421
+// Built from Agents/src fcd0100971a5d5a7883cbb0c338ff06a12bd21bdc1a30ef67e6fca634ae74a61

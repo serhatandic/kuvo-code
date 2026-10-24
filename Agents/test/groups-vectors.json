@@ -19803,6 +19803,78 @@
       ]
     }
   ],
+  "segments" : [
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "Ask Scout"
+        },
+        {
+          "quote" : null,
+          "text" : "Cy, join in"
+        }
+      ],
+      "text" : "> Who else?\n\nAsk Scout\n\n---\n\nCy, join in"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "One",
+          "text" : "First"
+        },
+        {
+          "quote" : "Two",
+          "text" : "Second"
+        },
+        {
+          "quote" : null,
+          "text" : "Mine"
+        }
+      ],
+      "text" : "> One\n\nFirst\n\n> Two\n\nSecond\n\n---\n\nMine"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "Ask Scout\n---\nnot a line of its own"
+        }
+      ],
+      "text" : "> Who else?\n\nAsk Scout\n---\nnot a line of its own"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Who else?",
+          "text" : "```\n---\n```\n\nstill the answer"
+        }
+      ],
+      "text" : "> Who else?\n\n```\n---\n```\n\nstill the answer"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : null,
+          "text" : "Words first\n\n---\n\nmore words"
+        }
+      ],
+      "text" : "Words first\n\n---\n\nmore words"
+    },
+    {
+      "segments" : [
+        {
+          "quote" : "Just a quote",
+          "text" : ""
+        },
+        {
+          "quote" : null,
+          "text" : "words"
+        }
+      ],
+      "text" : "> Just a quote\n\n---\n\nwords"
+    }
+  ],
   "splitText" : [
     {
       "names" : [

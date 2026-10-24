@@ -98,7 +98,7 @@ extension CursorAuthError: CategorizedError {
     var errorCategory: ErrorCategory {
         switch self {
         case .notLoggedIn: .notLoggedIn
-        case .sessionExpired, .tokenExpired: .authExpired
+        case .sessionExpired, .tokenExpired, .agentSignInEnded: .authExpired
         }
     }
 }

@@ -301,6 +301,16 @@ final class CursorProvider: ProviderRuntime {
     }
 
     private func refreshAccessToken(authState: CursorAuthState) async throws -> String? {
+        // A coding agent's sign-in: its API key exchanged for an access token, kept for this read.
+        if let apiKey = authState.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+            // Cursor not answering, or answering otherwise, isn't the sign-in ending.
+            let response: HTTPResponse
+            do { response = try await usageClient.exchangeAPIKey(apiKey) } catch { throw CursorUsageError.connectionFailed }
+            if response.statusCode == 400 || response.statusCode == 401 { throw CursorAuthError.agentSignInEnded }
+            guard (200..<300).contains(response.statusCode) else { throw CursorUsageError.requestFailed(response.statusCode) }
+            guard let token = (ProviderParse.jsonObject(response.body)?["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else { throw CursorUsageError.invalidResponse }
+            return token
+        }
         guard let refreshToken = authState.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
             return nil
         }
