@@ -390,6 +390,15 @@ final class BoxGroups {
         await reload(edited.id)
     }
 
+    /// A change a client asks of a chat there (`PATCH kuvo/groups/<id>`, its fields as they came):
+    /// the machine answers it, with every rule of what it can be (who can join, a meeting on its
+    /// clock). What it refuses throws its `ServerError`.
+    func edit(_ id: String, _ fields: JSONValue) async throws {
+        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
+        _ = try await api.client.send(try api.client.request("PATCH", "api/kuvo/link/groups/\(id.groupPathEscaped)", body: fields), as: JSONValue.self, patience: .zero)
+        await reload(id)
+    }
+
     /// Who can be in a chat there, as the machine says (its own bots, and those of your other
     /// computers that take a chat's turns), by id; nil when it can't say now (away, or older).
     func joinable(_ machine: String) async -> [String]? {

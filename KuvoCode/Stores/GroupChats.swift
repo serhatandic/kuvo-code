@@ -93,6 +93,13 @@ final class GroupChats {
         return onMachine(id) ? await machines.undo(from: messageID, in: id) : mac.undo(from: messageID, in: id)
     }
 
+    /// A change from elsewhere (a phone) to a chat on a machine, as it was asked: that machine
+    /// decides what it can be. What stops it is said there, not here.
+    func changeThere(_ id: String, _ fields: JSONValue) async throws {
+        guard !Moves.isFrozen(id) else { throw Moves.Failure.moving }
+        try await machines.edit(id, fields)
+    }
+
     /// Who can be in a chat, as the computer it lives on says; nil for this Mac's (any bot), or
     /// when its machine can't say now.
     func joinable(for id: String) async -> [String]? {
