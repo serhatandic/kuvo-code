@@ -1140,8 +1140,9 @@ final class PhoneLink {
             if changes.contains(where: { change in change.was.map { (config.value(at: change.path) ?? .null) != $0 } ?? false }) {
                 return (409, Self.message("It changed since you read it."))
             }
-            // A phone's, not one to offer other computers here: the phone offers its own.
-            config.set(changes.map { (path: $0.path, value: $0.value == .null ? nil : $0.value) }, noted: false)
+            // A phone's, not one to offer other computers here: the phone offers its own. A key
+            // named where another computer keeps its keys is named where this Mac keeps them.
+            config.set(changes.map { (path: $0.path, value: $0.value == .null ? nil : AlsoApply.keysNamed($0.value, on: nil)) }, noted: false)
             if let problem = config.problem { return (500, Self.message(problem)) }
         default:
             return (405, Data())

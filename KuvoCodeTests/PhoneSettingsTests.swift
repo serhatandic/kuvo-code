@@ -65,6 +65,13 @@ import Testing
         #expect(rulesChanged == 1)
         #expect(config.permissionRules.count == 1)
 
+        // A server applied from another computer (a phone's Also Apply), its key named where that
+        // one keeps its keys: named where this Mac keeps them.
+        let server = #"{"changes": [{"path": ["mcp", "servers", "todoist"], "value": {"type": "local", "environment": {"API_KEY": "{file:~/.kuvo-code/box/keys/KUVO_KEY_TODOIST_API_KEY}"}}}]}"#
+        #expect(try await ask("kuvo/config", method: "PATCH", body: server).status == 200)
+        #expect(config.value(at: ["mcp", "servers", "todoist", "environment", "API_KEY"])?.string == IntegrationKeys.reference("KUVO_KEY_TODOIST_API_KEY"))
+        #expect(try await ask("kuvo/config", method: "PATCH", body: #"{"changes": [{"path": ["mcp", "servers", "todoist"], "value": null}]}"#).status == 200)
+
         // Read, then changed elsewhere: not made, and said.
         let stale = #"{"changes": [{"path": ["model"], "value": "x/y", "was": "anthropic/sonnet"}]}"#
         #expect(try await ask("kuvo/config", method: "PATCH", body: stale).status == 409)

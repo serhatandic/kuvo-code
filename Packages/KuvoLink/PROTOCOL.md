@@ -509,7 +509,9 @@ itself. A host serves:
   Settings does (a `null` value removes the key, and a level that isn't there is made; a path
   goes through objects only, so a list is sent whole, at its own path: 400 otherwise), and
   answers with the whole document; the computer's engine takes it at once, and on a Mac a change
-  to the rules reaches open sessions. A change can say what it read at its path (`"was"`, `null` for
+  to the rules reaches open sessions. A key a value names where another computer keeps its keys
+  (`{file:<its folder>/KUVO_KEY_…}`, from Also Apply) is written as this computer names its own
+  (a Mac, and a machine's bridge from 0.9.23), so send it as the other computer has it. A change can say what it read at its path (`"was"`, `null` for
   nothing): changed since, nothing is changed and it answers `409 {"message"}`, so read again.
   `409 {"message"}` too while the file can't be read (it has comments, say): it's changed by
   hand then. Settings › Permissions keeps its choices and rules under `permissions` (a list of

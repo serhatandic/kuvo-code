@@ -3668,7 +3668,7 @@ export function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) 
       return { status: 409, message: "It changed since you read it." };
     }
     let next = settings;
-    for (const change of changes) next = settingAt(next, change.path, change.value);
+    for (const change of changes) next = settingAt(next, change.path, keysNamedHere(change.value));
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
       const temporary = `${file}.${process.pid}.tmp`;
@@ -3705,6 +3705,15 @@ function boxKeyPaths(value) {
 }
 
 const KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
+
+// A key named where another computer keeps its keys (`{file:<its folder>/KUVO_KEY_…}`, from Also
+// Apply on a phone), named where this box keeps them, as a Mac's AlsoApply.keysNamed does.
+export function keysNamedHere(value) {
+  if (typeof value === "string") return value.replace(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g, (_, name) => `{file:${shownRoot}/box/keys/${name}}`);
+  if (Array.isArray(value)) return value.map(keysNamedHere);
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, keysNamedHere(inner)]));
+  return value;
+}
 
 function writePrivate(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

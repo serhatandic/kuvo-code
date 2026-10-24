@@ -39,7 +39,8 @@ test("listed from the Mac's catalog, added with its keys or the ones it has, nev
   assert.equal(added.status, 200);
   assert.equal(added.value.integration.added, true);
   assert.equal(fs.readFileSync(path.join(home, "box", "keys", "KUVO_KEY_TODOIST_API_KEY"), "utf8"), "tok_123");
-  assert.deepEqual(settings().mcp.servers.todoist.environment, { API_KEY: keyFile });
+  // Where this box keeps its keys (here, the test's own folder), whatever folder the catalog names.
+  assert.deepEqual(settings().mcp.servers.todoist.environment, { API_KEY: `{file:${home}/box/keys/KUVO_KEY_TODOIST_API_KEY}` });
   // Again, without keys: the ones it has do.
   assert.equal((await ask("POST", "kuvo/integrations/todoist", {})).status, 200);
 

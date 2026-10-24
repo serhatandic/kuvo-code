@@ -1032,6 +1032,12 @@ test("a machine that owns its settings has them read and changed from a phone, a
     // Through a list: sent whole instead.
     assert.equal((await answer(handle, "PATCH", "kuvo/config", JSON.stringify({ changes: [{ path: ["permissions", "0", "effect"], value: "deny" }] }))).status, 400);
     assert.equal((await answer(handle, "PATCH", "kuvo/config", JSON.stringify({ changes: [] }))).status, 400);
+    // A server applied from another computer (a phone's Also Apply), its key named where that one
+    // keeps its keys: named where this one keeps them.
+    await answer(handle, "PATCH", "kuvo/config", JSON.stringify({ changes: [{ path: ["mcp", "servers", "todoist"], value: {
+      type: "local", command: ["kuvo-npx", "@doist/todoist-mcp"], environment: { API_KEY: "{file:/var/folders/x/T/run.kuvo.code/keys/KUVO_KEY_TODOIST_API_KEY}" } } }] }));
+    assert.match(JSON.parse(fs.readFileSync(file, "utf8")).mcp.servers.todoist.environment.API_KEY, /\/box\/keys\/KUVO_KEY_TODOIST_API_KEY\}$/);
+    await answer(handle, "PATCH", "kuvo/config", JSON.stringify({ changes: [{ path: ["mcp", "servers", "todoist"], value: null }] }));
     // Removing a key, and the object it leaves empty.
     await answer(handle, "PATCH", "kuvo/config", JSON.stringify({ changes: [{ path: ["mcp", "servers", "linear"], value: null }] }));
     assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).mcp, undefined);
