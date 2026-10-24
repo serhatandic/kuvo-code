@@ -146,6 +146,11 @@ export class GroupRunner {
   private syncs = new Map<string, ReturnType<typeof setTimeout>>()
   private meetings?: ReturnType<typeof setTimeout>
 
+  /** Your other computers and their bots, which chats here can have. */
+  get peers(): PeerDirectory | undefined {
+    return this.context.peers
+  }
+
   private get memoryKey(): string {
     return this.context.memoryKey ?? memoryKey
   }

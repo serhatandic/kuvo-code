@@ -63,6 +63,8 @@ export interface PeerBot {
   job: string
   /** Its computer, by key. */
   box: string
+  /** Its own conversation there. */
+  session?: string
 }
 
 /** Your other computers, as this one knows them. */

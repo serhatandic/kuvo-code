@@ -7,6 +7,7 @@ import { subscribe } from "../events"
 import { trim, type GroupMessage } from "./rules"
 import { groupRoutes } from "./routes"
 import type { GroupRunner } from "./runner"
+import type { PeerBot } from "./peer"
 import type { GroupStore, MachineBot } from "./store"
 import { planMeeting } from "./time"
 
@@ -52,6 +53,27 @@ function member(bot: MachineBot) {
   return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents }
 }
 
+/** A bot on another of your computers, as a chat here lists it: who it is, its own conversation, and the computer it's on (`computer`, as its notes name it). */
+function memberThere(bot: PeerBot, runner: GroupRunner) {
+  return { id: bot.id, name: bot.name, ...(bot.session ? { session: bot.session } : {}), agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" }
+}
+
+/** Who can be in a chat here: this computer's bots, and those of your others that take a chat's turns (`groups.seats`). */
+function bots(runner: GroupRunner, store: GroupStore) {
+  const here = store.allBots().sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name))
+  const ids = new Set(here.map((bot) => bot.id))
+  const there = (runner.peers?.bots() ?? []).filter((bot) => !ids.has(bot.id) && runner.peers?.takesSeats(bot.box))
+  return { here, there }
+}
+
+/** A chat's bot as a client lists it, wherever it lives; undefined for one nobody knows now. */
+function anyMember(id: string, runner: GroupRunner, store: GroupStore) {
+  const bot = store.bot(id)
+  if (bot) return member(bot)
+  const there = runner.peers?.bots().find((each) => each.id === id)
+  return there ? memberThere(there, runner) : undefined
+}
+
 /** The chats here, as a client lists them: only those that live here now (one moving here isn't, yet). */
 function list(runner: GroupRunner, store: GroupStore) {
   const groups = runner
@@ -61,10 +83,7 @@ function list(runner: GroupRunner, store: GroupStore) {
       id: group.id,
       name: group.name,
       purpose: group.purpose,
-      members: group.members.flatMap((id) => {
-        const bot = store.bot(id)
-        return bot ? [member(bot)] : []
-      }),
+      members: group.members.flatMap((id) => anyMember(id, runner, store) ?? []),
       speaking: state.speaking,
       discussing: Boolean(state.discussing),
       paused: Boolean(state.paused),
@@ -146,12 +165,10 @@ async function ask(runner: GroupRunner, store: GroupStore, method: string, parts
   return { status: response.status, value }
 }
 
-/** Every bot here, the first made first, as the Mac lists them: who can be in a chat that lives here. */
-export function joinable(store: GroupStore) {
-  return store
-    .allBots()
-    .sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name))
-    .map(member)
+/** Who can be in a chat that lives here: every bot here, the first made first, then those of your other computers that take a chat's turns. */
+export function joinable(runner: GroupRunner, store: GroupStore) {
+  const { here, there } = bots(runner, store)
+  return [...here.map(member), ...there.map((bot) => memberThere(bot, runner))]
 }
 
 /**
@@ -161,14 +178,18 @@ export function joinable(store: GroupStore) {
 export async function linkRoutes(runner: GroupRunner | undefined, store: GroupStore | undefined, method: string, parts: string[], body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
   if (!runner || !store) return json({}, 404)
   const [id, action] = parts
-  const here = () => new Set(store.allBots().map((bot) => bot.id))
+  // Who can be in a chat here: its own bots, and your other computers' that take a chat's turns.
+  const here = () => {
+    const { here, there } = bots(runner, store)
+    return new Set([...here, ...there].map((bot) => bot.id))
+  }
 
   if (!id || id === "events") {
     if (method === "GET") return id ? following(() => list(runner, store), false, signal) : json(list(runner, store))
     if (method === "POST" && !id) return await make(runner, store, await body().catch(() => undefined), here())
     return json({}, 405)
   }
-  if (id === "joinable") return method === "GET" ? json({ bots: joinable(store) }) : json({}, 405)
+  if (id === "joinable") return method === "GET" ? json({ bots: joinable(runner, store) }) : json({}, 405)
   if (!/^grp_[a-z0-9]+$/.test(id)) return json({}, 404)
 
   if (method === "GET" && (!action || action === "events")) {

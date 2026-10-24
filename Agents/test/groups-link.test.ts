@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { server } from "../src/groups/api"
 import { linkRoutes } from "../src/groups/link"
+import { SeatServer } from "../src/groups/peer"
+import { LinkDirectory, PeerPost, peerRoutes } from "../src/groups/post"
 import { GroupRunner } from "../src/groups/runner"
 import type { Group, GroupMessage } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
@@ -186,5 +188,55 @@ describe("a computer's group chats, as a client changes them", () => {
     expect((await ask("POST", "grp_moving0001", { text: "Go" })).status).toBe(409)
     expect((await ask("POST", "grp_moving0001/undo", { message: "gm_1" })).status).toBe(409)
     expect((await ask("POST", "grp_nothing0001", { text: "Go" })).status).toBe(404)
+  })
+})
+
+describe("a computer's group chats with bots on your other computers", () => {
+  test("who can be in one: this computer's bots, then those of your others that take a chat's turns; none of one that doesn't yet", async () => {
+    const post = new PeerPost()
+    const directory = new LinkDirectory(post)
+    runner = new GroupRunner({ store, engine: server("http://127.0.0.1:9", "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05, peers: directory })
+    directory.set({
+      boxes: [{ key: "key_spare", name: "spare", seats: true }, { key: "key_old", name: "old", seats: false }],
+      bots: [{ id: "bot_far", name: "Far", job: "Far's job", box: "key_spare", session: "ses_far" }, { id: "bot_older", name: "Older", job: "", box: "key_old" }],
+    })
+    const bots = (await ask("GET", "joinable")).json.bots
+    expect(bots.map((each: any) => each.id)).toEqual(["bot_lb", "bot_pal", "bot_far"])
+    expect(bots[2]).toEqual({ id: "bot_far", name: "Far", session: "ses_far", agents: false, computer: "spare" })
+    const made = await ask("POST", "", { name: "Across", members: ["bot_pal", "bot_far"] })
+    expect(made.status).toBe(201)
+    expect(made.json.group.members.map((each: any) => [each.id, each.computer])).toEqual([["bot_pal", undefined], ["bot_far", "spare"]])
+    expect((await ask("POST", "", { name: "Older", members: ["bot_pal", "bot_older"] })).status).toBe(404)
+  })
+})
+
+describe("the box's link and this bridge", () => {
+  test("what goes follows as it goes, what mustn't be lost first and until the link has it; what came is handed on; who your computers are is taken only whole", async () => {
+    const file = join(root, "peer-outbox.json")
+    let post = new PeerPost(file)
+    post.send("key_spare", { kind: "drop", seat: "ses_seat1", agents: false }, true)
+    post.send("key_spare", { kind: "stop", id: "trn_gone" }, false)
+    // A bridge started again still has what mustn't be lost.
+    post = new PeerPost(file)
+    const directory = new LinkDirectory(post)
+    runner = new GroupRunner({ store, engine: server("http://127.0.0.1:9", "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05, peers: directory })
+    const parts = { post, directory, runner, server: new SeatServer(runner.seats, post, { store, remembered: async () => {} }) }
+    const abort = new AbortController()
+    const reader = (await peerRoutes(parts, "GET", ["mail"], async () => ({}), abort.signal)).body!.getReader()
+    const next = async () => JSON.parse(new TextDecoder().decode((await reader.read()).value).trim())
+    const kept = await next()
+    expect([kept.to, kept.mail.kind, kept.durable]).toEqual(["key_spare", "drop", true])
+    post.send("key_spare", { kind: "stop", id: "trn_now" }, false)
+    expect((await next()).mail).toEqual({ kind: "stop", id: "trn_now" })
+    expect((await peerRoutes(parts, "POST", ["sent"], async () => ({ ids: [kept.id] }))).status).toBe(200)
+    expect(new PeerPost(file).follow).toBeDefined()
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([])
+    abort.abort()
+    await reader.cancel().catch(() => {})
+    expect((await peerRoutes(parts, "POST", ["mail"], async () => ({ from: "key_spare", mail: { kind: "nonsense" } }))).status).toBe(400)
+    expect((await peerRoutes(parts, "PUT", [], async () => ({ boxes: "no" }))).status).toBe(400)
+    expect((await peerRoutes(parts, "PUT", [], async () => ({ boxes: [{ key: "key_spare", name: "spare", seats: true }], bots: [] }))).status).toBe(200)
+    expect(directory.takesSeats("key_spare")).toBe(true)
+    expect((await peerRoutes(undefined, "GET", ["mail"], async () => ({}))).status).toBe(404)
   })
 })
