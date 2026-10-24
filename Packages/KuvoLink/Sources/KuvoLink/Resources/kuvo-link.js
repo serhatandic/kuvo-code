@@ -3311,16 +3311,27 @@ export function groupNotice(event) {
   return null;
 }
 
+// Waits `ms`, or until `signal` stops it.
+const pause = (ms, signal) => new Promise(resolve => {
+  if (signal?.aborted) return resolve();
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer);
+    resolve();
+  }, { once: true });
+});
+
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
-// and password) for as long as the bridge runs, handing each one's notification to `tell`, while
-// no Mac is present.
-async function watchEvents(read, tell) {
+// and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
+// each one's notification to `tell`, while no Mac is present.
+export async function watchEvents(read, tell, signal) {
   let attempt = 0;
-  while (true) {
+  while (!signal?.aborted) {
     try {
       const source = read();
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
+        signal,
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
@@ -3346,7 +3357,7 @@ async function watchEvents(read, tell) {
       }
     } catch {}
     attempt += 1;
-    await sleep(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)));
+    await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }
 }
 
@@ -3468,9 +3479,10 @@ async function inConversation(ask, readEngine) {
 
 // What's asked, as each comes, to your phones' notifications, while no Mac is here to tell them;
 // one that comes while a Mac is, once it's gone, if it's still asked. `tell` says whether it went.
-async function watchAsks(tell) {
+// Until `signal` stops it (a test's).
+export async function watchAsks(tell, signal) {
   const told = new Set();
-  while (true) {
+  while (!signal?.aborted) {
     try {
       const asks = readAsks();
       const open = new Set(asks.map(ask => ask.id));
@@ -3481,7 +3493,7 @@ async function watchAsks(tell) {
         if (tell(askNotice(shown, asker))) told.add(ask.id);
       }
     } catch {}
-    await sleep(2000);
+    await pause(2000, signal);
   }
 }
 
