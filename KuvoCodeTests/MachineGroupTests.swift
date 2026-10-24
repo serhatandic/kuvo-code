@@ -71,6 +71,8 @@ import Testing
                     chats[id] = chat
                     return StubWeb.json(["data": read(id)])
                 case ("DELETE", let id?, nil):
+                    guard let chat = chats[id] else { return StubWeb.json(["message": "No such chat."], status: 404) }
+                    if chat.status == "held" { return StubWeb.json(["message": "That chat is moving."], status: 409) }
                     chats[id] = nil
                     return StubWeb.json([:])
                 case ("POST", let id?, "activate"):
@@ -173,6 +175,51 @@ import Testing
         // Gone there: gone here.
         app.machineGroups.handle(try bridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
         #expect(!app.chats.list.contains { $0.id == "grp_box0000001" })
+    }
+
+    /// A phone deletes a group chat as Delete Group Chat… does, wherever it lives: this Mac's here,
+    /// a machine's there, each leaving the list; one gone already is as good as deleted; one the
+    /// machine is moving (another Mac's move) stays, and says why; with its
+    /// machine away, it waits.
+    @Test func aPhoneDeletesAGroupChatWhereItLives() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box"), ("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
+        held.add(Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"]))
+        held.add(Self.group("grp_box0000002", members: ["bot_pal", "bot_lb"]))
+        let app = app()
+        let mine = app.groups.create(name: "Here", members: ["bot_ada", "bot_ben"])
+        await app.machineGroups.connected("box")
+        let link = PhoneLink()
+        link.groups = app.chats
+        func delete(_ id: String) async throws -> (status: Int, message: String?) {
+            var status = 0
+            var body = Data()
+            for try await part in PhoneLink.respond(to: LinkRequest(method: "DELETE", path: "kuvo/groups/\(id)"), link: link, engine: URL(string: mac.url + "/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let data): body += data
+                }
+            }
+            return (status, (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["message"] as? String)
+        }
+
+        #expect(try await delete(mine.id).status == 200)
+        #expect(app.chats.group(mine.id) == nil)
+        #expect(try await delete("grp_box0000001").status == 200)
+        #expect(!held.has("grp_box0000001") && app.chats.group("grp_box0000001") == nil)
+        // Gone already: as good as deleted.
+        #expect(try await delete("grp_box0000001").status == 200)
+        #expect(try await delete("grp_none000001").status == 200)
+
+        held.add(Self.group("grp_box0000002", members: ["bot_pal", "bot_lb"]), status: "held")
+        let moving = try await delete("grp_box0000002")
+        #expect(moving.status == 409 && moving.message == "That chat is moving. Try again once it’s there.")
+        #expect(held.status("grp_box0000002") == "held" && app.chats.group("grp_box0000002") != nil)
+
+        app.machineGroups.bridge = { _ in nil }
+        let away = try await delete("grp_box0000002")
+        #expect(away.status == 503 && away.message == "box isn’t connected. Connect to it, then try again.")
+        #expect(app.chats.group("grp_box0000002") != nil)
     }
 
     /// What a bot on a machine does on its turn, as the machine says it: shown under who's

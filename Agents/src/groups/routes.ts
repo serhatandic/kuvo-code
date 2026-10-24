@@ -63,7 +63,11 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
       if (edits?.members !== undefined && !(Array.isArray(edits.members) && edits.members.every((member: unknown) => typeof member === "string"))) return error(400, "Those aren't bots.")
       return (await runner.update(id, edits ?? {})) ? json({ data: runner.get(id) }) : error(404, "No such chat.")
     }
-    if (method === "DELETE") return (await runner.delete(id)) ? json({}) : error(404, "No such chat.")
+    if (method === "DELETE") {
+      // One moving is let go of where it was once it's there (`release`), never deleted.
+      if (runner.get(id)?.status === "held") return error(409, "That chat is moving.")
+      return (await runner.delete(id)) ? json({}) : error(404, "No such chat.")
+    }
     return error(405, "Not allowed")
   }
   if (method !== "POST") return error(405, "Not allowed")

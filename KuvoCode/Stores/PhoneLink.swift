@@ -745,6 +745,17 @@ final class PhoneLink {
                 }
             }
         }
+        // A chat deleted, as Delete Group Chat… deletes it.
+        if request.path.hasPrefix("kuvo/groups/"), request.method.uppercased() == "DELETE" {
+            return AsyncThrowingStream { continuation in
+                Task { @MainActor in
+                    let (status, body) = await link?.deleteGroup(String(request.path.dropFirst("kuvo/groups/".count))) ?? (503, Self.message("Group chats aren’t ready yet. Try again in a moment."))
+                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(body))
+                    continuation.finish()
+                }
+            }
+        }
         // What a phone does in a group chat: one on a machine answers once the machine has.
         if route.hasPrefix("kuvo/groups/"), request.method.uppercased() == "POST" {
             return AsyncThrowingStream { continuation in
@@ -1834,6 +1845,23 @@ final class PhoneLink {
         }
         guard let changed = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
         return (200, (try? Self.groupEncoder.encode(["group": entry(changed, in: groups)])) ?? Data())
+    }
+
+    /// `DELETE kuvo/groups/<id>`: deleted as Delete Group Chat… deletes it, wherever it lives: its
+    /// messages and seats go, and its bots forget it. Answers 200 `{}`, for one gone already too;
+    /// 409 while it moves, 503 when its machine can't be reached, each with a message.
+    func deleteGroup(_ id: String) async -> (Int, Data) {
+        guard let groups else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
+        guard !id.isEmpty, !id.contains("/") else { return (400, Self.message("That isn’t a group chat.")) }
+        guard let group = groups.group(id) else { return (200, Data("{}".utf8)) }
+        do {
+            try await groups.deleteNow(group)
+        } catch Moves.Failure.moving {
+            return (409, Self.message("That chat is moving. Try again once it’s there."))
+        } catch {
+            return (503, Self.message(error.localizedDescription))
+        }
+        return (200, Data("{}".utf8))
     }
 
     /// What a phone does in a chat, as in the window: writes to it (`{"text"}`), stops it, lets it

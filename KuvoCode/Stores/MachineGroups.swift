@@ -350,7 +350,14 @@ final class MachineGroups {
     /// Deleted there: its seats, its messages; its bots forget it.
     func delete(_ group: BotGroup) async throws {
         guard let machine = machine(of: group.id), let api = api(machine) else { throw Failure.away(machine(of: group.id) ?? "Its machine") }
-        try await api.deleteMachineGroup(group.id)
+        do {
+            try await api.deleteMachineGroup(group.id)
+        } catch let refused as ServerError where refused.status == 404 && refused.message == "No such chat." {
+            // Gone there already: as good as deleted.
+        } catch let refused as ServerError where refused.status == 409 {
+            // Moving, from another Mac.
+            throw Moves.Failure.moving
+        }
         forget(group.id)
     }
 

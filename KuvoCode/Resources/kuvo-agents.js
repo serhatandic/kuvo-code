@@ -11659,8 +11659,11 @@ async function groupRoutes(runner, store, method, parts2, body) {
         return error(400, "Those aren't bots.");
       return await runner.update(id, edits2 ?? {}) ? json({ data: runner.get(id) }) : error(404, "No such chat.");
     }
-    if (method === "DELETE")
+    if (method === "DELETE") {
+      if (runner.get(id)?.status === "held")
+        return error(409, "That chat is moving.");
       return await runner.delete(id) ? json({}) : error(404, "No such chat.");
+    }
     return error(405, "Not allowed");
   }
   if (method !== "POST")
@@ -13911,4 +13914,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 4ab791e82ebdc0a6d4ea5ef87f30f4472e7730d2682f77bcc19bbf6a1a79a77e
+// Built from Agents/src fb07243d0e8a84a9ef78b8124f116ef0991d89c5f6518a119fa86a6afe758034
