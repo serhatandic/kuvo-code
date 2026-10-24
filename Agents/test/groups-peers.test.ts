@@ -5,8 +5,8 @@ import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
 import { SeatServer, activityEvery, aliveEvery, askAgainAfter, awayAfter, reportBytes, type Clock, type PeerBot, type SeatMail } from "../src/groups/peer"
-import { joinable } from "../src/groups/link"
-import { LinkDirectory, PeerPost, gaveUp, receive, type PeerParts } from "../src/groups/post"
+import { clientMessage, joinable } from "../src/groups/link"
+import { LinkDirectory, PeerPost, gaveUp, peerRoutes, receive, type PeerParts } from "../src/groups/post"
 import { GroupRunner, transcriptMailBytes } from "../src/groups/runner"
 import { stamp, type Group, type GroupMessage } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
@@ -134,6 +134,14 @@ class Relay {
   }
 }
 
+/** A box's real store, which says when it kept how a turn for a chat elsewhere went, for a test to look again. */
+class Store extends GroupStore {
+  override keepPeerTurns(turns: Parameters<GroupStore["keepPeerTurns"]>[0]) {
+    super.keepPeerTurns(turns)
+    beat()
+  }
+}
+
 /** One of your computers: its engine, its bots, its group chats, and its bridge's part in chats across them. */
 class Box {
   readonly root = mkdtempSync(join(tmpdir(), "kuvo-peers-"))
@@ -152,7 +160,7 @@ class Box {
     readonly relay: Relay,
     readonly clock?: Clock,
   ) {
-    this.store = new GroupStore(join(this.root, "groups"), join(this.root, "bots"))
+    this.store = new Store(join(this.root, "groups"), join(this.root, "bots"))
     this.post = new PeerPost(join(this.root, "peer-outbox.json"))
     this.directory = new LinkDirectory(this.post, clock)
     this.runner = new GroupRunner({
@@ -344,6 +352,9 @@ describe("a group chat with a bot on another of your computers", () => {
     await until(() => home.engine.requests.some((request) => request.path.endsWith("/interrupt")))
     expect(said(host).map((message) => message.author ?? "you")).toEqual(["you"])
     expect(relay.sent.some((each) => each.mail.kind === "stop")).toBe(true)
+    // Its turn there settled (kept as stopped) before its computer's folders go.
+    await until(() => Object.values(home.store.peerTurns()).some((turn) => turn.ended !== undefined))
+    expect(Object.values(home.store.peerTurns()).map((turn) => turn.result && !turn.result.ok && turn.result.why)).toEqual(["it was stopped."])
   })
 
   test("a bot that moved to a third computer: its seat on the one it left goes, and its next turn there hears the whole chat", async () => {
@@ -646,8 +657,10 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(reports()[1]).toEqual(reports()[0])
   })
 
-  test("a part whose letter is given up, its bot's computer away for days: the part fails, and the chat says why", async () => {
+  /** Ben's part of a wrap-up, given to lokum while lokum is away. */
+  async function partWhileAway() {
     relay.away.add("key_lokum")
+    home.engine.reports = { Ben: "Build fixed." }
     const wrapUp: GroupMessage = {
       id: "gm_wrap", author: "bot_ada", text: "Ben fixes the build.", time: stamp(), kind: "wrapUp",
       tasks: [{ id: "gt_build", bot: "bot_ben", task: "Fix the build", state: "proposed" }],
@@ -655,9 +668,80 @@ describe("a group chat with a bot on another of your computers", () => {
     host.runner.put(team(), [{ id: "gm_ask", text: "Ship it?", time: stamp(), kind: "message" }, wrapUp], "active", false)
     host.runner.startWork("gm_wrap", id)
     await until(() => relay.sent.some((each) => each.mail.kind === "work"))
+  }
+  const part = () => said(host).find((message) => message.id === "gm_wrap")!.tasks![0]
+
+  test("a part whose letter is given up while its bot's computer is still one of yours: given again, and its report taken when it comes", async () => {
+    await partWhileAway()
     host.gaveUp("key_lokum", relay.sent.find((each) => each.mail.kind === "work")!.mail)
-    await until(() => said(host).find((message) => message.id === "gm_wrap")!.tasks![0].state === "failed")
-    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t do its part: lokum couldn’t be reached for two days, so it was given up."])
+    await until(() => relay.sent.filter((each) => each.mail.kind === "work").length === 2)
+    expect(relay.sent.filter((each) => each.mail.kind === "work").every((each) => each.durable && each.to === "key_lokum")).toBe(true)
+    expect(part().state).toBe("working")
+    // Lokum back: the part, given twice, is done there once, and its report reaches the chat.
+    relay.back("key_lokum")
+    await until(() => said(host).some((message) => message.report === "gt_build"))
+    expect(part().state).toBe("done")
+    expect(said(host).filter((message) => message.kind === "note")).toEqual([])
+    expect(home.engine.prompts("ses_own_Ben").length).toBe(1)
+  })
+
+  test("a part whose letter is given up, its bot's computer no longer one of yours: the part fails, and a report that comes after all is still taken", async () => {
+    await partWhileAway()
+    host.knows([])
+    host.gaveUp("key_lokum", relay.sent.find((each) => each.mail.kind === "work")!.mail)
+    await until(() => part().state === "failed")
+    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["A bot couldn’t do its part: another computer couldn’t be reached for two days, so it was given up."])
+    // Lokum is yours again, and did the part after all.
+    host.knows([{ key: "key_lokum", name: "lokum", bots: [{ id: "bot_ben", name: "Ben", job: "", box: "key_lokum" }] }])
+    relay.back("key_lokum")
+    await until(() => said(host).some((message) => message.report === "gt_build"))
+    expect(said(host).find((message) => message.report === "gt_build")).toMatchObject({ author: "bot_ben", text: "Build fixed." })
+    expect(part().state).toBe("done")
+    expect(clientMessage(said(host).find((message) => message.id === "gm_wrap"))!.tasks![0]).not.toHaveProperty("lost")
+  })
+
+  test("a seat gone or what a bot remembers, its letter given up: sent again while that computer is one of yours, as it is now", async () => {
+    host.runner.put(team(), [{ id: "gm_ask", text: "Ship it?", time: stamp(), kind: "message" }], "active", false)
+    host.gaveUp("key_lokum", { kind: "drop", seat: "ses_seat9", agents: false, bot: "bot_ben", chat: id })
+    host.gaveUp("key_lokum", { kind: "memory", memory: { chat: id, bot: "bot_ben", at: 1, name: "Old name" } })
+    await until(() => relay.sent.some((each) => each.mail.kind === "drop") && relay.sent.some((each) => each.mail.kind === "memory"))
+    expect(relay.sent.map((each) => [each.mail.kind, each.to, each.durable])).toEqual([["drop", "key_lokum", true], ["memory", "key_lokum", true]])
+    expect((relay.sent[1].mail as any).memory).toMatchObject({ chat: id, bot: "bot_ben", name: "Team" })
+    // Not one of yours any more: let go.
+    host.knows([])
+    host.gaveUp("key_lokum", { kind: "drop", seat: "ses_seat9", agents: false, bot: "bot_ben", chat: id })
+    host.gaveUp("key_lokum", relay.sent[1].mail)
+    expect(relay.sent.length).toBe(2)
+  })
+
+  test("a report's letter given up to a computer that's no longer one of yours, or for a part done over 30 days ago, isn't sent again", async () => {
+    const clock = homeOnClock()
+    home.engine.reports = { Ben: "Build fixed." }
+    const work = { task: "gt_build", wrapUp: "gm_wrap", chat: id, bot: "bot_ben", text: "Fix the build.", started: stamp() }
+    relay.forge("key_mac", "key_lokum", { kind: "work", work })
+    await until(() => reports().length === 1)
+    const report = relay.sent.find((each) => each.mail.kind === "report")!.mail
+    home.knows([])
+    home.gaveUp("key_mac", report)
+    home.knows([{ key: "key_mac", name: "mac" }])
+    clock.advance(31 * day)
+    home.gaveUp("key_mac", report)
+    expect(reports().length).toBe(1)
+    expect(home.store.peerWork()).toEqual({})
+  })
+
+  test("its link told a letter was given up before it said who your computers are: not heard yet, so it's told again", async () => {
+    home.engine.reports = { Ben: "Build fixed." }
+    relay.forge("key_mac", "key_lokum", { kind: "work", work: { task: "gt_build", wrapUp: "gm_wrap", chat: id, bot: "bot_ben", text: "Fix the build.", started: stamp() } })
+    await until(() => reports().length === 1)
+    const report = relay.sent.find((each) => each.mail.kind === "report")!.mail
+    const started = { ...home.parts, directory: new LinkDirectory(home.post) }
+    const told = await peerRoutes(started, "POST", ["gaveup"], async () => ({ to: "key_mac", mail: report, at: Date.now() }))
+    expect(told.status).toBe(503)
+    expect(reports().length).toBe(1)
+    started.directory.set({ boxes: [{ key: "key_mac", name: "mac", seats: true }], bots: [] })
+    expect((await peerRoutes(started, "POST", ["gaveup"], async () => ({ to: "key_mac", mail: report, at: Date.now() }))).status).toBe(200)
+    await until(() => reports().length === 2)
   })
 
   test("a bot at work on a long, quiet step: its computer says it's still at it, so it's neither asked again nor taken for away", async () => {
@@ -715,6 +799,83 @@ describe("a group chat with a bot on another of your computers", () => {
     await over(host, () => said(host).some((message) => message.kind === "note"))
     expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t answer: the chat is too big to send to lokum."])
     expect(turns()).toEqual([])
+  })
+
+  test("many long replies while it was quiet: its turn still goes, the whole chat left out and what it hasn't heard cut to its latest", async () => {
+    host.engine.lines = { Ada: ["PASS"] }
+    home.engine.lines = { Ben: ["Caught up."] }
+    // Forty long code replies from Ada since Ben last spoke, in a seat it has there.
+    const long: GroupMessage[] = Array.from({ length: 40 }, (_, index) => ({ id: `gm_${index}`, author: "bot_ada", text: `Reply ${index}:\n` + "const x = 1;\n".repeat(1_600), time: stamp(), kind: "message" }))
+    const group = { ...team(["bot_ben", "bot_ada"]), seats: { bot_ben: "ses_seat_old" }, seatBoxes: { bot_ben: "key_lokum" }, heard: { bot_ben: "gm_0" } }
+    host.runner.put(group, long, "active", false)
+    host.runner.send(id, "Ben, what do you think?")
+    await over(host, () => said(host).some((message) => message.author === "bot_ben"))
+    expect(said(host).filter((message) => message.kind === "note")).toEqual([])
+    expect(said(host).find((message) => message.author === "bot_ben")?.text).toBe("Caught up.")
+    const sent = (turns()[0].mail as any).turn
+    expect(new TextEncoder().encode(JSON.stringify(turns()[0].mail)).length).toBeLessThanOrEqual(512 * 1024)
+    expect(sent.fresh).toBeUndefined()
+    expect(sent.text).toContain("Ben, what do you think?")
+    expect(sent.text).toContain("Reply 39:")
+    expect(sent.text).not.toContain("Reply 1:\n")
+    expect(sent.text).toContain("(Earlier messages left out.)")
+  })
+
+  test("its seat there deleted while its computer's bridge restarted: its turn goes on in a seat made anew that hears the whole chat", async () => {
+    const clock = hostOnClock()
+    host.engine.lines = { Ada: ["PASS", "PASS"] }
+    // Ben leads: after its first word it lists who does what (nobody), in a conversation of its own for it.
+    home.engine.lines = { Ben: ["First.", "PASS", "Gone with its seat.", "Second."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "One?")
+    await over(host, () => said(host).some((message) => message.text === "First."))
+    const seat = host.runner.get(id)!.group.seats.bot_ben
+    home.engine.held.add("Ben")
+    host.runner.send(id, "Two?")
+    await until(() => home.engine.prompts(seat).length === 2 && host.got.some((mail) => mail.kind === "state" && mail.state.phase === "started" && mail.id === (turns().at(-1)!.mail as any).turn.id))
+    // Its computer's bridge restarts, and its seat is deleted meanwhile.
+    home.restartSeats()
+    await fetch(`${home.engine.url}/api/session/${seat}`, { method: "DELETE" })
+    clock.advance(askAgainAfter)
+    await until(() => home.engine.seatsMade().filter((title) => title.startsWith("Ben in")).length === 2)
+    home.engine.release("Ben")
+    await over(host, () => said(host).some((message) => message.text === "Second."))
+    expect(said(host).filter((message) => message.kind === "note")).toEqual([])
+    const now = host.runner.get(id)!.group.seats.bot_ben
+    expect(now).not.toBe(seat)
+    expect(home.engine.prompts(now).map((request) => request.body.text.split("\n")[0])).toEqual([`Everything said in "Team" so far, from the start:`])
+    expect(home.engine.prompts(now)[0].body.text).toContain("Two?")
+  })
+
+  test("what's kept on disk of a turn it took is light: its steps left out, and how it ended only for a while, though it's never taken twice", async () => {
+    const clock = new HandClock()
+    const root = mkdtempSync(join(tmpdir(), "kuvo-turns-"))
+    try {
+      const store = new GroupStore(join(root, "groups"), join(root, "bots"))
+      let ran = 0
+      const steps = Array.from({ length: 50 }, (_, index) => ({ id: `call_${index}`, name: "read", input: { path: "big.txt" }, output: "x".repeat(4_000) }))
+      const seats = { turn: async () => ({ ok: true, text: `Answer ${++ran}.`, steps }) } as any
+      const sent: SeatMail[] = []
+      const server = new SeatServer(seats, { send: (_to, mail) => { sent.push(mail); beat() } }, { store, remembered: async () => {} }, clock)
+      const turn = (turnID: string) => ({ id: turnID, chat: { id, name: "Team", members: [] }, bot: "bot_ben", kind: "turn" as const, text: "Go." })
+      const kept = () => JSON.parse(readFileSync(join(root, "groups", "peer-turns.json"), "utf8"))
+      server.take("key_mac", { kind: "turn", turn: turn("trn_one") })
+      await until(() => sent.some((mail) => mail.kind === "result") && kept().trn_one?.result !== undefined)
+      expect((sent.find((mail) => mail.kind === "result") as any).result.steps.length).toBe(50)
+      expect(kept().trn_one.result).toEqual({ ok: true, text: "Answer 1.", steps: [] })
+      // A quarter of an hour on, another turn: how the first ended isn't kept any more, and asked again, it isn't taken twice.
+      clock.advance(16 * 60_000)
+      server.take("key_mac", { kind: "turn", turn: turn("trn_two") })
+      await until(() => kept().trn_two?.result !== undefined)
+      expect(kept().trn_one).not.toHaveProperty("result")
+      sent.length = 0
+      server.take("key_mac", { kind: "turn", turn: turn("trn_one") })
+      new SeatServer(seats, { send: (_to, mail) => void sent.push(mail) }, { store, remembered: async () => {} }, clock).take("key_mac", { kind: "turn", turn: turn("trn_one") })
+      expect(sent).toEqual([])
+      expect(ran).toBe(2)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   test("a part too big to send to the bot's computer fails, and the chat says why", async () => {

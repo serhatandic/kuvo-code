@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.39";
+export const BRIDGE_VERSION = "0.9.41";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -5212,9 +5212,19 @@ const bridgeAsk = async (method, route, body, signal) => {
     body: body ? JSON.stringify(body) : undefined,
     signal: signal ?? AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`The coding agents' bridge answered ${response.status}.`);
+  if (!response.ok) throw Object.assign(new Error(`The coding agents' bridge answered ${response.status}.`), { status: response.status });
   return response;
 };
+
+// A group chat's letter is given up after two days of this link online without a word from its
+// computer. Only time online counts: while this computer sleeps, or has no relay, nobody could have
+// answered, so a laptop closed over the weekend doesn't give up what it sent on Friday. From one
+// round of the outbox to the next counts ONLINE_STEP at most: a longer gap is this computer asleep.
+const SEAT_LETTER_LIFE = LETTER_MEMORY;
+const ONLINE_STEP = 5 * 60_000;
+// Each letter's last round, as counted (none yet since the link started: its first round doesn't count).
+const seatRounds = new Map();
+const seatAge = letter => (typeof letter?.aged === "number" && Number.isFinite(letter.aged) ? letter.aged : 0);
 
 // What goes for one seat mail: whole, or in parts that are put together where it goes (its JSON's
 // UTF-8 bytes, base64url, so each part fits a mail whatever the words are); null for one too big to
@@ -5334,10 +5344,12 @@ function sendSeatLetter(host, to, id, letter, link, now, ask = bridgeAsk) {
   return null;
 }
 
-// A letter of a group chat's mail given up (two days without its computer saying it has it, or too
-// big ever to go): the bridge is told (`POST /gaveup`), so a part it carried fails where you see it
-// or a part's report goes again, and the letter goes once the bridge has heard. Until then it's
-// kept, marked, and not sent. The telling, or null while one is under way.
+// A letter of a group chat's mail given up (two days online without its computer saying it has it,
+// too big ever to go, or turned down): the bridge is told (`POST /gaveup`), which decides what comes
+// of it (sent again as a new letter while that computer is one of yours and it still matters), and
+// the letter goes once the bridge has answered at all: a 4xx (an older bridge, group chats off here)
+// is an answer too, so it isn't told again forever. Until then it's kept, marked, and not sent. The
+// telling, or null while one is under way.
 const tellingGaveUp = new Set();
 function giveUpSeat(id, letter, ask = bridgeAsk) {
   const file = path.join(SENDING, `${id}.json`);
@@ -5345,8 +5357,9 @@ function giveUpSeat(id, letter, ask = bridgeAsk) {
   if (letter.gaveUp !== true) try { writePrivate(file, JSON.stringify({ ...letter, gaveUp: true })); } catch {}
   if (tellingGaveUp.has(id)) return null;
   tellingGaveUp.add(id);
+  const heard = () => fs.rmSync(file, { force: true });
   return ask("POST", "/gaveup", { to: letter.peer, mail: letter.seat, at: letter.at })
-    .then(() => fs.rmSync(file, { force: true }), () => {})
+    .then(heard, error => { if (error?.status >= 400 && error.status < 500) heard(); })
     .finally(() => tellingGaveUp.delete(id));
 }
 
@@ -5543,7 +5556,8 @@ export function letterWent(sender, { id, ok, why, retry, answer }) {
   let letter = null;
   try { letter = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
   if (letter?.sentTo !== sender.key) return;
-  if (!ok && retry === true && Date.now() - (letter.at ?? 0) < LETTER_MEMORY) return;
+  // Not now: sent again. A group chat's waits as long as it takes (the outbox counts its time online).
+  if (!ok && retry === true && (isObject(letter.seat) || Date.now() - (letter.at ?? 0) < LETTER_MEMORY)) return;
   // A group chat's that can't be delivered is given up, and the bridge told, never just dropped.
   if (!ok && isObject(letter.seat)) return void giveUpSeat(id, letter);
   letterTries.delete(id);
@@ -5633,9 +5647,17 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     listed.add(id);
     const made = typeof letter.at === "number" ? letter.at : now;
     // A group chat's mail that mustn't be lost: to its computer only (never through a Mac), each
-    // minute until it says it has it, for as long as a letter.
+    // minute until it says it has it, for two days of this link online (SEAT_LETTER_LIFE).
     if (isObject(letter.seat)) {
-      if (letter.gaveUp === true || now - made > LETTER_MEMORY) {
+      const last = seatRounds.get(id);
+      seatRounds.set(id, now);
+      if (!offline && last !== undefined && now > last) {
+        const before = seatAge(letter);
+        letter = { ...letter, aged: before + Math.min(now - last, ONLINE_STEP) };
+        // Kept a minute at a time: a restart loses no more.
+        if (Math.floor(letter.aged / 60_000) !== Math.floor(before / 60_000)) try { writePrivate(file, JSON.stringify(letter)); } catch {}
+      }
+      if (letter.gaveUp === true || seatAge(letter) > SEAT_LETTER_LIFE) {
         const told = giveUpSeat(id, letter, ask);
         if (told) telling.push(told);
         continue;
@@ -5685,6 +5707,7 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     try { host.send(bytes); } catch {}
   }
   for (const id of letterTries.keys()) if (!listed.has(id)) letterTries.delete(id);
+  for (const id of seatRounds.keys()) if (!listed.has(id)) seatRounds.delete(id);
   for (const id of introducing.keys()) if (!listed.has(id)) introducing.delete(id);
   // Answers no tool came for (it gave up waiting), and ones never answered, after a day.
   for (const name of listOf(REPLIES)) {

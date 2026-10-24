@@ -108,12 +108,26 @@ export function receive(parts: PeerParts, from: string, mail: SeatMail) {
 }
 
 /**
- * A letter to `to` that the link gave up (days without that computer saying it has it), as it went
- * at `at`: a part given there fails, said in the chat; a part's report from here goes again.
+ * A letter to `to` that the link gave up (two days online without that computer saying it has it,
+ * too big, or turned down), as it went at `at`. Nothing given up is final: what still matters goes
+ * again as a new letter while `to` is one of your computers (a part, its report, a seat gone, what a
+ * bot remembers as it is now), and what doesn't is let go; a part given to a computer that isn't
+ * one of yours any more fails, and still takes its report should it come after all.
  */
 export function gaveUp(parts: PeerParts, to: string, mail: SeatMail, at?: number) {
-  if (mail.kind === "work") parts.runner.workGaveUp(to, mail.work, at)
-  else if (mail.kind === "report") parts.server.gaveUp(to, mail)
+  switch (mail.kind) {
+    case "work":
+      return parts.runner.workGaveUp(to, mail.work, at)
+    case "report":
+      return parts.server.gaveUp(to, mail, parts.directory.isPeer(to))
+    case "memory":
+      return parts.runner.memoryGaveUp(to, mail.memory)
+    case "drop":
+      if (typeof mail.bot === "string" && typeof mail.chat === "string" && parts.directory.takesSeats(to)) {
+        void parts.directory.home(to).drop(mail.seat, mail.agents, { bot: mail.bot, chat: mail.chat })
+      }
+      return
+  }
 }
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })
@@ -137,6 +151,8 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
   if (what === "gaveup" && method === "POST") {
     const given = await body().catch(() => undefined)
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
+    // Not before the link has said who your computers are: what comes of it depends on that.
+    if (!parts.directory.told) return json({ message: "Not yet." }, 503)
     gaveUp(parts, given.to, given.mail, typeof given.at === "number" ? given.at : undefined)
     return json({})
   }
@@ -155,6 +171,8 @@ export class LinkDirectory implements PeerDirectory {
   private boxes = new Map<string, { name: string; seats: boolean }>()
   private listed: PeerBot[] = []
   private homes = new Map<string, RemoteHome>()
+  /** Whether the link has said who your computers are since this started. */
+  told = false
 
   constructor(
     private readonly transport: PeerTransport,
@@ -169,6 +187,7 @@ export class LinkDirectory implements PeerDirectory {
       if (box && typeof box.key === "string" && box.key) boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true })
     }
     this.boxes = boxes
+    this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))
       .map((bot: any) => ({
@@ -192,6 +211,11 @@ export class LinkDirectory implements PeerDirectory {
 
   takesSeats(box: string): boolean {
     return this.boxes.get(box)?.seats === true
+  }
+
+  /** Whether it's one of your computers now. */
+  isPeer(box: string): boolean {
+    return this.boxes.has(box)
   }
 
   home(box: string): RemoteHome {

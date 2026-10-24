@@ -125,7 +125,9 @@ export interface PeerTurn {
   agents?: boolean
   prompt?: string
   sent?: number
+  /** How it ended (without its steps), and when: after a while only that it was taken is kept. */
   result?: SeatAnswerKept
+  ended?: number
 }
 
 /** How a turn ended, with the seat it ended in (`SeatAnswer` in peer.ts). */
@@ -330,9 +332,16 @@ export class GroupStore {
   }
 
   keepPeerWork(task: string, work: PeerWork | undefined) {
+    this.changePeerWork((all) => {
+      if (work) all[task] = work
+      else delete all[task]
+    })
+  }
+
+  /** Parts changed together, in one write. */
+  changePeerWork(change: (all: Record<string, PeerWork>) => void) {
     const all = this.peerWork()
-    if (work) all[task] = work
-    else delete all[task]
+    change(all)
     write(join(this.root, "peer-work.json"), all)
   }
 

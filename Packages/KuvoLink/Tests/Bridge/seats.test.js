@@ -183,26 +183,80 @@ test("what mustn't be lost goes to its computer only, each minute until it says 
   assert.equal(fs.existsSync(path.join(sending, "sm_report001.json")), false);
 });
 
-test("one that's had no word from its computer for two days is given up: the bridge is told, so the part it carried fails where you see it, and it goes once the bridge has heard", async () => {
+const minute = 60_000, day = 86_400_000;
+const work = task => ({ kind: "work", work: { task, wrapUp: "gm_1", chat: "grp_1", bot: "bot_far", text: "Fix the build.", started: "2026-10-20T10:00:00Z" } });
+// The link's rounds of the outbox, every five minutes from `from` to `to` (online, or `offline` that long).
+async function rounds(host, from, to, { offline = 0, ask = bridge().ask } = {}) {
+  for (let at = from; at <= to; at += 5 * minute) await link.sendOutbox(host, link.readLink(), at, offline, ask);
+}
+
+test("one that's had no word from its computer for two days online is given up: the bridge is told, and it goes once the bridge has heard", async () => {
+  fresh();
+  const sending = path.join(run, "outbox", "sending");
+  const made = Date.now();
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  link.carrySeat(host, { id: "sm_work00001", to: second.pub, durable: true, mail: work("gt_1") }, link.readLink(), made);
+  await rounds(host, made, made + 2 * day);
+  assert.ok(fs.existsSync(path.join(sending, "sm_work00001.json")), "still sent each minute");
+  const tries = sent.length;
+  // The bridge not running now: kept, and not sent on.
+  const down = bridge(false);
+  await rounds(host, made + 2 * day + 5 * minute, made + 2 * day + 10 * minute, { ask: down.ask });
+  assert.deepEqual(down.asked[0], { method: "POST", route: "/gaveup", body: { to: second.pub, mail: work("gt_1"), at: made } });
+  assert.ok(fs.existsSync(path.join(sending, "sm_work00001.json")));
+  assert.equal(sent.length, tries);
+  // Then it is: told, and the letter goes.
+  const up = bridge();
+  await link.sendOutbox(host, link.readLink(), made + 2 * day + 11 * minute, 0, up.ask);
+  assert.deepEqual(up.asked, [{ method: "POST", route: "/gaveup", body: { to: second.pub, mail: work("gt_1"), at: made } }]);
+  assert.equal(fs.existsSync(path.join(sending, "sm_work00001.json")), false);
+  assert.equal(sent.length, tries, "never sent once given up");
+});
+
+test("its two days count only while this computer is online: asleep over a weekend, or without the relay, it isn't given up", async () => {
+  fresh();
+  const sending = path.join(run, "outbox", "sending");
+  const made = Date.now();
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  const told = bridge();
+  link.carrySeat(host, { id: "sm_work00002", to: second.pub, durable: true, mail: work("gt_2") }, link.readLink(), made);
+  await link.sendOutbox(host, link.readLink(), made + 3000, 0, told.ask);
+  // The laptop sleeps three days (no round runs), wakes, and is without the relay three more.
+  await rounds(host, made + 3 * day, made + 6 * day, { offline: 10 * minute, ask: told.ask });
+  // Online again: a day and 23 hours of it, and it's still sent.
+  await rounds(host, made + 6 * day, made + 6 * day + 47 * 60 * minute, { ask: told.ask });
+  assert.deepEqual(told.asked, []);
+  assert.ok(fs.existsSync(path.join(sending, "sm_work00002.json")));
+  const before = sent.length;
+  await link.sendOutbox(host, link.readLink(), made + 6 * day + 47 * 60 * minute + 64_000, 0, told.ask);
+  assert.equal(sent.length, before + 1, "still sent each minute");
+  // Past two days online: given up, and the bridge told.
+  await rounds(host, made + 6 * day + 47 * 60 * minute + 5 * minute, made + 6 * day + 49 * 60 * minute, { ask: told.ask });
+  assert.deepEqual(told.asked.map(each => [each.route, each.body.mail.work.task]), [["/gaveup", "gt_2"]]);
+  assert.equal(fs.existsSync(path.join(sending, "sm_work00002.json")), false);
+});
+
+test("a bridge that turns down hearing it was given up (an older one, or group chats off here) has heard: the letter goes, not told again every few seconds", async () => {
   fresh();
   const sending = path.join(run, "outbox", "sending");
   fs.mkdirSync(sending, { recursive: true });
-  const now = Date.now();
-  const made = now - 3 * 86_400_000;
-  const work = { kind: "work", work: { task: "gt_1", wrapUp: "gm_1", chat: "grp_1", bot: "bot_far", text: "Fix the build.", started: "2026-10-20T10:00:00Z" } };
-  fs.writeFileSync(path.join(sending, "sm_work00001.json"), JSON.stringify({ peer: second.pub, seat: work, at: made }));
-  const sent = [];
-  const host = { send: bytes => sent.push(bytes) };
-  // The bridge not running now: kept, and not sent on.
-  const down = bridge(false);
-  await link.sendOutbox(host, link.readLink(), now, 0, down.ask);
-  assert.deepEqual(down.asked, [{ method: "POST", route: "/gaveup", body: { to: second.pub, mail: work, at: made } }]);
-  assert.ok(fs.existsSync(path.join(sending, "sm_work00001.json")));
-  assert.equal(sent.length, 0);
-  // Then it is: told, and the letter goes.
-  const up = bridge();
-  await link.sendOutbox(host, link.readLink(), now + 64_000, 0, up.ask);
-  assert.deepEqual(up.asked, [{ method: "POST", route: "/gaveup", body: { to: second.pub, mail: work, at: made } }]);
-  assert.equal(fs.existsSync(path.join(sending, "sm_work00001.json")), false);
-  assert.equal(sent.length, 0, "never sent once given up");
+  const huge = { kind: "memory", memory: { chat: "grp_1", bot: "bot_far", transcript: "x".repeat(1_000_000) } };
+  fs.writeFileSync(path.join(sending, "sm_huge0002.json"), JSON.stringify({ peer: second.pub, seat: huge, at: Date.now() }));
+  const asked = [];
+  const ask = async (method, route) => {
+    asked.push(route);
+    throw Object.assign(new Error("The coding agents' bridge answered 404."), { status: 404 });
+  };
+  const error = console.error;
+  console.error = () => {};
+  try {
+    await link.sendOutbox({ send() {} }, link.readLink(), Date.now(), 0, ask);
+    await link.sendOutbox({ send() {} }, link.readLink(), Date.now() + 3000, 0, ask);
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(asked, ["/gaveup"]);
+  assert.equal(fs.existsSync(path.join(sending, "sm_huge0002.json")), false);
 });

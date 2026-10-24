@@ -10819,7 +10819,7 @@ function label(message, name) {
       return name(message.author);
   }
 }
-function turnText(bot, group, unheard, wrapUp, name, named2) {
+function turnText(bot, group, unheard, wrapUp, name, named2, budget2) {
   let text = "";
   const taken = group.retracted?.[bot];
   if (taken !== undefined) {
@@ -10833,15 +10833,16 @@ function turnText(bot, group, unheard, wrapUp, name, named2) {
   } else {
     text += `New in "${group.name}" since you last spoke:
 `;
-    if (unheard.length > 40)
+    const parts = unheard.slice(-40).map((message) => `
+${label(message, name)}:
+${indented(message.text)}
+`);
+    const first = budget2 === undefined ? 0 : latestWithin(parts, budget2);
+    if (unheard.length > 40 || first > 0)
       text += `
 (Earlier messages left out.)
 `;
-    for (const message of unheard.slice(-40))
-      text += `
-${label(message, name)}:
-${indented(message.text)}
-`;
+    text += parts.slice(first).join("");
     if (named2)
       text += `
 ` + named2 + `
@@ -10870,8 +10871,17 @@ ${who}:
 ${indented(message.text)}
 `;
   });
+  const first = latestWithin(parts, budget2);
+  const header2 = first === 0 ? `Everything said in "${group.name}" so far, from the start:
+` : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):
+`;
+  return header2 + parts.slice(first).join("");
+}
+function latestWithin(parts, budget2) {
   const encoder = new TextEncoder;
   let first = parts.length - 1;
+  if (first <= 0)
+    return 0;
   let size = encoder.encode(parts[first]).length;
   while (first > 0) {
     const more = encoder.encode(parts[first - 1]).length;
@@ -10880,10 +10890,7 @@ ${indented(message.text)}
     size += more;
     first--;
   }
-  const header2 = first === 0 ? `Everything said in "${group.name}" so far, from the start:
-` : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):
-`;
-  return header2 + parts.slice(first).join("");
+  return first;
 }
 var chatBudget = 160000;
 function seatStartText(bot, group, all, wrapUp, name, named2) {
@@ -11520,11 +11527,16 @@ class GroupStore {
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
+    this.changePeerWork((all) => {
+      if (work)
+        all[task] = work;
+      else
+        delete all[task];
+    });
+  }
+  changePeerWork(change) {
     const all = this.peerWork();
-    if (work)
-      all[task] = work;
-    else
-      delete all[task];
+    change(all);
     write(join17(this.root, "peer-work.json"), all);
   }
   peerTurns() {
@@ -11817,7 +11829,7 @@ function clientMessage(message2, withSteps = true) {
     time: seconds(time),
     ...withSteps && steps ? { steps } : {},
     ...tasks2 ? {
-      tasks: tasks2.map(({ started, finished, ...task }) => ({ ...task, ...started ? { started: seconds(started) } : {}, ...finished ? { finished: seconds(finished) } : {} }))
+      tasks: tasks2.map(({ started, finished, lost: _lost, ...task }) => ({ ...task, ...started ? { started: seconds(started) } : {}, ...finished ? { finished: seconds(finished) } : {} }))
     } : {}
   };
 }
@@ -12217,6 +12229,8 @@ var turnLimit = 600000;
 
 class Cancelled extends Error {
 }
+class SeatGone extends Error {
+}
 var sleep = (ms, signal) => new Promise((done, fail) => {
   if (signal?.aborted)
     return fail(new Cancelled);
@@ -12359,7 +12373,8 @@ class Seats {
     await this.apiFor(agents)?.delete(seat).catch(() => {});
   }
   async turn(turn, report, signal, options = {}) {
-    const { checkSeat = false, resume, progress } = options;
+    const { checkSeat = false, progress } = options;
+    let resume = options.resume;
     const bot = this.bot(turn.bot);
     if (!bot)
       return { ok: false, why: "it doesn\u2019t live on this computer any more." };
@@ -12392,11 +12407,19 @@ class Seats {
       let api;
       let text2 = turn.text;
       if (resume) {
-        ({ seat, agents } = resume);
-        const resumed = this.apiFor(agents);
+        const resumed = this.apiFor(resume.agents);
         if (!resumed)
           throw new Error("the coding agents aren\u2019t running");
-        api = resumed;
+        if (!await this.seatThere(resume.seat, resumed)) {
+          if (!ownConversation && turn.seat && turn.fresh === undefined)
+            throw new SeatGone;
+          resume = undefined;
+        }
+        going();
+      }
+      if (resume) {
+        ({ seat, agents } = resume);
+        api = this.apiFor(agents);
         if (ownConversation)
           scratch = { seat, agents };
         else if (seat !== turn.seat) {
@@ -12422,7 +12445,6 @@ class Seats {
         going();
         if (kept2) {
           ({ seat, agents, api } = kept2);
-          progress?.({ seat, agents });
         } else {
           ({ seat, agents, api } = await this.make(bot, turn.chat, `${bot.name} in ${turn.chat.name}`, false));
           progress?.({ seat, agents });
@@ -12500,6 +12522,8 @@ class Seats {
     } catch (error2) {
       if (signal.aborted || error2 instanceof Cancelled)
         throw new Cancelled;
+      if (error2 instanceof SeatGone)
+        throw error2;
       return { ok: false, why: plainError(reason2(error2), provider, this.context.place) };
     } finally {
       if (scratch)
@@ -12580,6 +12604,16 @@ class Seats {
       if (!found.text)
         return { ok: false, why: error2 ?? "it stopped without saying what it did" };
       return { ok: true, text: found.text, steps: [] };
+    }
+  }
+  async seatThere(seat, api) {
+    try {
+      await api.inbox(seat);
+      return true;
+    } catch (error2) {
+      if (error2?.status === 404)
+        return false;
+      throw new Error("its seat couldn\u2019t be read");
     }
   }
   async sentAlready(seat, promptID, sent, api) {
@@ -13266,7 +13300,7 @@ class GroupRunner {
         kind: guest ? "guest" : wrapUp ? "wrapUp" : "turn",
         text: text2,
         ...guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept2.group, all, name)).length }
-      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run: run2, last: last2?.id, retracted, own }), stopped.signal);
+      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run: run2, last: last2?.id, retracted, own }), stopped.signal, { shorter: seat ? () => turnText(botID, kept2.group, unheard, wrapUp, name, named2(unheard), chatBudget) : undefined });
       if (left())
         return "absent";
       if (!result.ok) {
@@ -13324,7 +13358,7 @@ class GroupRunner {
     };
   }
   heardOf(state, turn) {
-    if (state.phase === "taken" || state.phase === "working")
+    if (state.phase === "taken" || state.phase === "working" || state.phase === "anew")
       return;
     const { id, botID } = turn;
     const live = this.state(id);
@@ -13566,13 +13600,19 @@ class GroupRunner {
       this.finish(taskID, wrapUpID, id, task.bot, result);
   }
   finish(taskID, wrapUpID, id, botID, result) {
-    if (this.taskState(taskID, wrapUpID, id)?.state !== "working")
+    const task = this.taskState(taskID, wrapUpID, id);
+    const late = task?.state === "failed" && task.lost === true;
+    if (task?.state !== "working" && !late)
       return;
-    if (!result.ok)
+    if (!result.ok) {
+      if (late)
+        return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost);
       return this.fail(taskID, wrapUpID, id, result.why);
+    }
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done";
       part.finished = stamp2();
+      delete part.lost;
     });
     this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp2(), kind: "message", report: taskID }, id);
     this.startReady(wrapUpID, id);
@@ -13593,12 +13633,27 @@ class GroupRunner {
     const task = this.taskState(work.task, work.wrapUp, work.chat);
     if (!task || task.state !== "working" || task.prompt !== `peer:${to}`)
       return;
-    this.fail(work.task, work.wrapUp, work.chat, `${this.context.peers?.name(to) ?? "its computer"} couldn\u2019t be reached for two days, so it was given up`);
+    const peers = this.context.peers;
+    if (peers?.takesSeats(to) && peers.home(to).work(work))
+      return;
+    this.fail(work.task, work.wrapUp, work.chat, `${peers?.name(to) ?? "its computer"} couldn\u2019t be reached for two days, so it was given up`, true, true);
   }
-  fail(taskID, wrapUpID, id, why, thenOthers = true) {
+  memoryGaveUp(to, memory) {
+    const peers = this.context.peers;
+    if (this.member(memory.bot)?.box !== to || !peers?.takesSeats(to))
+      return;
+    const kept2 = this.chats.get(memory.chat);
+    if (kept2?.status === "active" && kept2.group.members.includes(memory.bot) && kept2.messages.length > 0)
+      this.rememberThere(memory.bot, to, { changed: memory.chat });
+    else
+      peers.home(to).remember({ chat: memory.chat, bot: memory.bot, at: this.memoryTime(), forget: true });
+  }
+  fail(taskID, wrapUpID, id, why, thenOthers = true, lost = false) {
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed";
       part.finished = stamp2();
+      if (lost)
+        part.lost = true;
     });
     const who = this.member(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot";
     const reasonText = trim(why).replace(/^\.+|\.+$/g, "");
@@ -13966,6 +14021,17 @@ function fitResult(id, result) {
     return words;
   return { ...words, text: cut(result.text, reportBytes) };
 }
+function fitTurn(turn, shorter) {
+  if (mailSize({ kind: "turn", turn }) <= seatMailBytes)
+    return turn;
+  const { fresh: _fresh, ...slim } = turn;
+  if (mailSize({ kind: "turn", turn: slim }) <= seatMailBytes)
+    return slim;
+  if (!shorter)
+    return;
+  const short = { ...slim, text: shorter() };
+  return mailSize({ kind: "turn", turn: short }) <= seatMailBytes ? short : undefined;
+}
 var fitReport = (result) => result.ok ? { ...result, text: cut(result.text, reportBytes), steps: [] } : { ...result, why: cut(result.why, 2000) };
 var askAgainAfter = 15000;
 var awayAfter = 45000;
@@ -13984,11 +14050,12 @@ class RemoteHome {
     this.place = place;
     this.clock = clock;
   }
-  turn(turn, report, signal) {
+  turn(asked, report, signal, options = {}) {
     return new Promise((resolve5, reject) => {
       if (signal.aborted)
         return reject(new Cancelled);
-      if (mailSize({ kind: "turn", turn }) > seatMailBytes)
+      const turn = fitTurn(asked, options.shorter);
+      if (!turn)
         return resolve5({ ok: false, why: `the chat is too big to send to ${this.place()}.` });
       const pending = { turn, report, done: resolve5, seat: turn.seat, started: false, told: new Set };
       const end = () => {
@@ -14040,6 +14107,12 @@ class RemoteHome {
     if (!pending)
       return;
     this.listen(pending);
+    if (mail.kind === "state" && mail.state.phase === "anew") {
+      pending.started = false;
+      pending.told.delete(JSON.stringify({ phase: "started" }));
+      this.transport.send(this.box, { kind: "turn", turn: pending.turn }, false);
+      return;
+    }
     if (mail.kind === "state")
       return this.heard(pending, mail.state);
     const { seat, agents, replaced, ...result } = mail.result;
@@ -14086,6 +14159,7 @@ class RemoteHome {
   }
 }
 var rememberTurns = 86400000;
+var keepResults = 15 * 60000;
 var rememberWork = 30 * 86400000;
 var activityEvery = 1500;
 var aliveEvery = 1e4;
@@ -14097,6 +14171,7 @@ class SeatServer {
   clock;
   turns = new Map;
   following = new Set;
+  anew = new Map;
   constructor(seats, transport, context, clock = realClock) {
     this.seats = seats;
     this.transport = transport;
@@ -14118,11 +14193,16 @@ class SeatServer {
     }
   }
   forgetOldWork() {
+    const now = this.now();
+    const old = ([, work]) => Boolean(work.done) && now - Date.parse(work.finished ?? work.started) > rememberWork;
     const store = this.context?.store;
-    for (const [task, work] of Object.entries(store?.peerWork() ?? {})) {
-      if (work.done && this.now() - Date.parse(work.finished ?? work.started) > rememberWork)
-        store?.keepPeerWork(task, undefined);
-    }
+    if (!store || !Object.entries(store.peerWork()).some(old))
+      return;
+    store.changePeerWork((all) => {
+      for (const entry of Object.entries(all))
+        if (old(entry))
+          delete all[entry[0]];
+    });
   }
   async work(host, given) {
     const store = this.context?.store;
@@ -14168,8 +14248,11 @@ class SeatServer {
   tell(task, work, result) {
     this.transport.send(work.host, { kind: "report", task, wrapUp: work.wrapUp, chat: work.chat, result }, true);
   }
-  gaveUp(to, mail) {
+  gaveUp(to, mail, stillPeer) {
     if (mail.kind !== "report")
+      return;
+    this.forgetOldWork();
+    if (!stillPeer)
       return;
     const known = this.context?.store.peerWork()[mail.task];
     if (known?.done && known.result && known.host === to)
@@ -14187,7 +14270,7 @@ class SeatServer {
           return;
         }
         const before = this.keptTurns()[mail.id];
-        if (before?.host === from && before.seat && before.prompt && !before.result) {
+        if (before?.host === from && before.seat && before.prompt && !before.result && !before.ended) {
           this.seats.interrupt(before.seat, before.agents ?? false);
           this.keepTurn(mail.id, (kept2) => ({ ...kept2, result: { ok: false, why: "it was stopped." } }), from);
         }
@@ -14195,7 +14278,7 @@ class SeatServer {
       }
       case "steer": {
         const running = this.turns.get(mail.id);
-        if (!running || running.host !== from || running.result)
+        if (!running || running.host !== from || running.result || running.ended)
           return;
         if (running.started)
           this.steerNow(from, mail.id, running, mail.text, mail.message);
@@ -14231,9 +14314,13 @@ class SeatServer {
   }
   keptTurns() {
     const all = this.context?.store.peerTurns() ?? {};
-    for (const [id, kept2] of Object.entries(all))
-      if (!(this.now() - kept2.at <= rememberTurns))
+    const now = this.now();
+    for (const [id, kept2] of Object.entries(all)) {
+      if (!(now - kept2.at <= rememberTurns))
         delete all[id];
+      else if (kept2.ended !== undefined && now - kept2.ended > keepResults && (kept2.result || kept2.seat))
+        all[id] = { host: kept2.host, at: kept2.at, ended: kept2.ended };
+    }
     return all;
   }
   keepTurn(id, change, host) {
@@ -14242,7 +14329,11 @@ class SeatServer {
       return;
     try {
       const all = this.keptTurns();
-      all[id] = change(all[id] ?? { host, at: this.now() });
+      const changed = change(all[id] ?? { host, at: this.now() });
+      if (changed)
+        all[id] = changed;
+      else
+        delete all[id];
       store.keepPeerTurns(all);
     } catch (error2) {
       console.error("group chat turn not kept:", String(error2?.message ?? error2));
@@ -14250,12 +14341,28 @@ class SeatServer {
   }
   turn(host, turn) {
     const now = this.now();
-    for (const [id, running2] of this.turns)
-      if (running2.result && now - running2.at > rememberTurns)
+    for (const [id, running2] of this.turns) {
+      if (running2.result && now - running2.at > keepResults) {
+        running2.result = undefined;
+        running2.ended = true;
+      }
+      if (running2.ended && now - running2.at > rememberTurns)
         this.turns.delete(id);
+    }
+    for (const [id, asked] of this.anew)
+      if (now - asked.at > rememberTurns)
+        this.anew.delete(id);
+    const anew = this.anew.get(turn.id);
+    if (anew) {
+      if (anew.host !== host)
+        return;
+      if (turn.seat && turn.fresh === undefined && anew.without++ < 1)
+        return this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false);
+      this.anew.delete(turn.id);
+    }
     const known = this.turns.get(turn.id);
     if (known) {
-      if (known.host !== host)
+      if (known.host !== host || known.ended)
         return;
       if (known.result)
         this.transport.send(host, { kind: "result", id: turn.id, result: known.result }, false);
@@ -14265,14 +14372,13 @@ class SeatServer {
       return;
     }
     const before = this.keptTurns()[turn.id];
-    if (before && before.host !== host)
+    if (before && (before.host !== host || before.ended !== undefined && !before.result))
       return;
     if (before?.result) {
-      this.turns.set(turn.id, { host, controller: new AbortController, states: [], result: before.result, at: before.at, started: true, steers: [] });
+      this.turns.set(turn.id, { host, controller: new AbortController, states: [], result: before.result, at: before.ended ?? before.at, started: true, steers: [] });
       this.transport.send(host, { kind: "result", id: turn.id, result: before.result }, false);
       return;
     }
-    this.keepTurn(turn.id, (kept2) => kept2, host);
     const running = { host, controller: new AbortController, states: [], at: now, started: false, steers: [] };
     this.turns.set(turn.id, running);
     let alive;
@@ -14324,20 +14430,31 @@ class SeatServer {
       running.seat = { seat: now2.seat, agents: now2.agents };
       this.keepTurn(turn.id, (kept2) => ({ ...kept2, ...now2 }), host);
     };
-    this.seats.turn(turn, report, running.controller.signal, { checkSeat: true, resume, progress }).catch((error2) => error2 instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error2?.message ?? error2) }).then((result) => {
+    this.seats.turn(turn, report, running.controller.signal, { checkSeat: true, resume, progress }).catch((error2) => error2 instanceof SeatGone ? undefined : error2 instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error2?.message ?? error2) }).then((result) => {
       if (timer !== undefined)
         this.clock.clearTimeout(timer);
       if (alive !== undefined)
         this.clock.clearTimeout(alive);
+      if (!result) {
+        running.ended = true;
+        this.turns.delete(turn.id);
+        this.keepTurn(turn.id, () => {
+          return;
+        }, host);
+        this.anew.set(turn.id, { host, at: this.now(), without: 0 });
+        this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false);
+        return;
+      }
       const seated = [...running.states].reverse().find((state) => state.phase === "seated");
       const answer = seated?.phase === "seated" ? { ...result, seat: seated.seat, agents: seated.agents, ...seated.replaced ? { replaced: seated.replaced } : {} } : result;
-      running.result = fitResult(turn.id, answer);
+      const ended = fitResult(turn.id, answer);
+      running.result = ended;
       running.states = [];
       running.steers = [];
       running.at = this.now();
-      this.keepTurn(turn.id, (kept2) => ({ ...kept2, result: running.result }), host);
       if (!running.controller.signal.aborted)
-        this.transport.send(host, { kind: "result", id: turn.id, result: running.result }, false);
+        this.transport.send(host, { kind: "result", id: turn.id, result: ended }, false);
+      this.keepTurn(turn.id, (kept2) => ({ ...kept2, result: ended.ok ? { ...ended, steps: [] } : ended, ended: running.at }), host);
     });
   }
   steerNow(host, id, running, text2, message2) {
@@ -14433,10 +14550,19 @@ function receive(parts2, from, mail) {
     parts2.server.take(from, mail);
 }
 function gaveUp(parts2, to, mail, at2) {
-  if (mail.kind === "work")
-    parts2.runner.workGaveUp(to, mail.work, at2);
-  else if (mail.kind === "report")
-    parts2.server.gaveUp(to, mail);
+  switch (mail.kind) {
+    case "work":
+      return parts2.runner.workGaveUp(to, mail.work, at2);
+    case "report":
+      return parts2.server.gaveUp(to, mail, parts2.directory.isPeer(to));
+    case "memory":
+      return parts2.runner.memoryGaveUp(to, mail.memory);
+    case "drop":
+      if (typeof mail.bot === "string" && typeof mail.chat === "string" && parts2.directory.takesSeats(to)) {
+        parts2.directory.home(to).drop(mail.seat, mail.agents, { bot: mail.bot, chat: mail.chat });
+      }
+      return;
+  }
 }
 var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 async function peerRoutes(parts2, method, path, body, signal) {
@@ -14460,6 +14586,8 @@ async function peerRoutes(parts2, method, path, body, signal) {
     });
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail))
       return json3({ message: "That isn't group chat mail." }, 400);
+    if (!parts2.directory.told)
+      return json3({ message: "Not yet." }, 503);
     gaveUp(parts2, given.to, given.mail, typeof given.at === "number" ? given.at : undefined);
     return json3({});
   }
@@ -14485,6 +14613,7 @@ class LinkDirectory {
   boxes = new Map;
   listed = [];
   homes = new Map;
+  told = false;
   constructor(transport, clock = realClock) {
     this.transport = transport;
     this.clock = clock;
@@ -14498,6 +14627,7 @@ class LinkDirectory {
         boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
     }
     this.boxes = boxes;
+    this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
       name: bot.name,
@@ -14516,6 +14646,9 @@ class LinkDirectory {
   }
   takesSeats(box) {
     return this.boxes.get(box)?.seats === true;
+  }
+  isPeer(box) {
+    return this.boxes.has(box);
   }
   home(box) {
     let home2 = this.homes.get(box);
@@ -15240,4 +15373,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src fcd0100971a5d5a7883cbb0c338ff06a12bd21bdc1a30ef67e6fca634ae74a61
+// Built from Agents/src 9e8808b5fce304f78edf6bcf56026cef41618b4e2a6a6ab62c39ef64f3f9cac7
