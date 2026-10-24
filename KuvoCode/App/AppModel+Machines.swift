@@ -552,25 +552,26 @@ extension AppModel {
             if case .preparing = engine.state { return engine.isStopped }
             return true
         }
-        // Each told at once, side by side: quitting waits a few seconds at most, however many
-        // there are (one gone quiet after a sleep, say).
-        var told: [@Sendable () -> Void] = []
+        // Each told at once, side by side: quitting waits a few seconds at most (one gone quiet
+        // after a sleep, say), not a few seconds for each.
+        var telling: [@Sendable () -> Void] = []
         for engine in reached {
             let busy = workspace.isRunning(on: engine.machine.id)
             engine.disconnect()
             let connection = engine.machine.connection
             if !leavesMachinesRunning && !busy {
-                told.append { RemoteServer.stopNow(on: connection, first: leaving) }
+                telling.append { RemoteServer.stopNow(on: connection, first: leaving) }
             } else {
-                told.append { RemoteServer.runNow(leaving, on: connection) }
+                telling.append { RemoteServer.runNow(leaving, on: connection) }
             }
             left.insert(engine.machine.id)
         }
         // One reconnecting just now (after a sleep, say) that still takes this Mac to be there.
         for id in phoneLink.presentOn where !left.contains(id) {
             let connection = Machine(destination: id).connection
-            told.append { RemoteServer.runNow(leaving, on: connection, timeout: 2) }
+            telling.append { RemoteServer.runNow(leaving, on: connection, timeout: 2) }
         }
+        let told = telling
         DispatchQueue.concurrentPerform(iterations: told.count) { told[$0]() }
     }
 

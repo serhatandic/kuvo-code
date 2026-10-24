@@ -4141,12 +4141,9 @@ export function movedOf(link) {
 export function peersOf(link) {
   if (!link?.peersFrom || !Object.keys(link.peersFrom).length) return [];
   // Each of this box's Macs' lists as that Mac last gave it: its own copy, or a newer one a
-  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail. Twice: a
-  // machine the newer lists dropped passes nothing on.
-  const direct = peersFromMacs(link).filter(peer => peer.kind === "machine");
-  let peers = composedPeers(link, direct);
-  peers = composedPeers(link, direct.filter(voucher => peers.some(peer => peer.key === voucher.key)));
-  return peers;
+  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail. (A machine
+  // a newer list dropped has nothing newer to pass on: that Mac stopped telling it.)
+  return composedPeers(link, peersFromMacs(link).filter(peer => peer.kind === "machine"));
 }
 
 // This box's Macs' lists, each the newest of its own copy and those `vouchers` passed on; a copy
@@ -4156,7 +4153,8 @@ function composedPeers(link, vouchers) {
   const byKey = new Map();
   for (const mac of macsOf(link)) {
     let newest = link.peersFrom[mac], from = null;
-    for (const voucher of vouchers) {
+    // Only a machine that Mac itself named carries its word.
+    for (const voucher of vouchers.filter(each => (link.peersFrom[mac]?.peers ?? []).some(peer => peer.key === each.key))) {
       const passed = link.vouched?.[voucher.key]?.[mac];
       if (passed && passed.at > (newest?.at ?? 0)) {
         newest = passed;

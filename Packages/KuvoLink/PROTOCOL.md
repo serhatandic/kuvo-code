@@ -123,12 +123,14 @@ connection.
   and its other machines whose bridge said `"peers": true` in setup's answer. `id` is the
   machine's name on that Mac. A machine keeps each Mac's list (`peersFrom`), a newer one replacing
   that Mac's last, and takes lists only from its Macs. Its peers are every list's, itself left
-  out. From 0.9.23 a machine also passes its Macs' lists on, in its agents' mail to the machines
-  its Macs named: `"vouched": {"lists": [{mac, at, peers}]}`, each as that Mac gave it, with its
-  `at`. A box keeps a copy only for a Mac that's its own too, from a machine that Mac named, and
-  uses it in place of its own copy of that Mac's list when it's newer: one that missed the Mac's
-  mail (it was away) learns of a machine the Mac added, and of one it dropped, with the Mac
-  closed. Only a Mac says who a box's peers are; a machine only carries its word, one hop. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
+  out. From 0.9.23 a machine also passes its Macs' lists on, in its agents' mail to its peer
+  machines: `"vouched": {"lists": [{mac, at, peers}]}`, each as that Mac gave it, with its `at`.
+  A box keeps a copy only for a Mac that's its own too, not dated more than a day ahead of its
+  clock, and uses one from a machine that Mac's own list names in place of its own copy of that
+  list when it's newer; the machine that passed it counts too (a Mac's list to a machine leaves
+  that machine out). So one that missed the Mac's mail (it was away) learns of a machine the Mac
+  added, and of one it dropped, with the Mac closed. Only a Mac says who a box's peers are; a
+  machine only carries its word, one hop. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
   carry `moved: [{session, key}]`: conversations being moved, by the key of the computer each
   lives on now (the one it left may still list it until it's let go). With the
   phone link off, a Mac's setup and mail leave out `phones` and `removed`, and the machine keeps
