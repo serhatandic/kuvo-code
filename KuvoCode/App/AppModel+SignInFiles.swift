@@ -10,11 +10,11 @@ extension AppModel {
     /// going back and forth.
     func syncSignInFiles(with engine: MachineEngine) async {
         // In its turn with the other copying of sign-ins (and a machine being signed out of), and
-        // only to one still added.
+        // only while it's connected: one disconnected or removed meanwhile gets none.
         let previous = engine.signInTurn
         let turn = Task { [weak self, weak engine] in
             await previous?.value
-            guard let self, let engine, live(engine) else { return }
+            guard let self, let engine, engine.activeConnection != nil else { return }
             await copySignInFiles(with: engine)
         }
         engine.signInTurn = turn

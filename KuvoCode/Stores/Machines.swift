@@ -85,18 +85,10 @@ final class MachineEngine {
     @ObservationIgnored private var server: RemoteServer?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var isStopping = false
-    /// Keeps its sign-ins in step with this Mac's while it's connected (`AppModel.syncSignIns`).
-    @ObservationIgnored var signInSync: Task<Void, Never>?
-    @ObservationIgnored var signInNudge: Task<Void, Never>?
+    /// The connection while it's up, which what runs for it runs in (`MachineConnection`).
+    @ObservationIgnored private(set) var activeConnection: MachineConnection?
     /// Copying its sign-ins, now or last: the next waits for it.
     @ObservationIgnored var signInTurn: Task<Void, Never>?
-    /// Starts it over with this Mac's settings once they've changed (`AppModel.keepSettingsCurrent`).
-    @ObservationIgnored var settingsUpdate: Task<Void, Never>?
-    /// Your personalities met with its copy, a moment after one changes elsewhere.
-    @ObservationIgnored var personalitiesSync: Task<Void, Never>?
-    /// Keeps its agents' list of everyone current, and brings their messages for agents
-    /// elsewhere (`AgentMail`).
-    @ObservationIgnored var agentSync: Task<Void, Never>?
     /// Events for the stores that span every machine (sessions); the catalog takes its own.
     @ObservationIgnored var onEvent: (ServerEvent) -> Void = { _ in }
     /// The feed came back after a gap: whatever it missed has to be read again.
@@ -321,11 +313,13 @@ final class MachineEngine {
     /// version: two Macs with different settings would otherwise take turns starting it over, each
     /// dropping the other's connection, and an older app would put back an older engine. One
     /// stopped on purpose stays stopped (`isStopped`), unless Start was pressed (`startWanted`).
-    func start(_ launch: Launch, cache: URL) async {
+    /// The connection it made, which ends when it closes; nil when it made none.
+    @discardableResult
+    func start(_ launch: Launch, cache: URL) async -> MachineConnection? {
         // Once at a time.
         switch state {
         case .preparing, .failed: break
-        case .downloading, .starting, .ready: return
+        case .downloading, .starting, .ready: return nil
         }
         isStopping = false
         // Disconnecting (Connect Now) or a newer attempt ends this one at its next step.
@@ -335,16 +329,15 @@ final class MachineEngine {
         if let standIn = Self.standIn {
             state = .starting
             let api = await standIn(machine)
-            guard connections == attempt else { return }
+            guard connections == attempt else { return nil }
             guard let api else {
                 state = .failed("Couldn’t reach \(machine.name).")
-                return
+                return nil
             }
             self.api = api
             catalog.api = api
             startWanted = false
-            state = .ready
-            return
+            return connected()
         }
         #endif
         var attached: RemoteServer?
@@ -370,7 +363,7 @@ final class MachineEngine {
                 isStopped = true
                 state = .preparing
                 watchWhileStopped()
-                return
+                return nil
             }
             isStopped = false
             // A newer box's engine isn't running: its own keeper starts the one it has.
@@ -465,7 +458,7 @@ final class MachineEngine {
             // An engine started without its agents bridge (an older one): none to wait for.
             if server.agentsEndpoint == nil { catalog.forgetAgents() }
             startWanted = false
-            state = .ready
+            let opened = connected()
             learnIdentity()
             Analytics.shared.trackOnce("machine_connected")
             listen(to: current)
@@ -474,6 +467,7 @@ final class MachineEngine {
             Task { await browser.prepare() }
             browser.resume()
             await catalog.refresh()
+            return opened
         } catch is Superseded {
             // What it connected is its own to close; the newer attempt has the rest.
             if let attached, attached !== server { attached.disconnect() }
@@ -492,6 +486,23 @@ final class MachineEngine {
             server = nil
             state = .failed(error.localizedDescription)
         }
+        return nil
+    }
+
+    /// It's up: a connection begins.
+    private func connected() -> MachineConnection {
+        activeConnection?.end()
+        let connection = MachineConnection()
+        activeConnection = connection
+        state = .ready
+        return connection
+    }
+
+    /// Ends what runs for the connection (`MachineConnection`), leaving it open: a machine being
+    /// uninstalled is signed out through it first.
+    func endConnection() {
+        activeConnection?.end()
+        activeConnection = nil
     }
 
     private struct Superseded: Error {}
@@ -546,6 +557,7 @@ final class MachineEngine {
     /// Closes the connection. The engine keeps running on the machine.
     func disconnect() {
         isStopping = true
+        endConnection()
         downCheck?.cancel()
         downCheck = nil
         connections += 1
@@ -593,12 +605,11 @@ final class MachineEngine {
 
     /// Signs out of every account the machine's engine has (copied from this Mac) and of its coding
     /// agents, and deletes what integrations' servers kept there (a sign-in's tokens).
-    /// In its turn after a copying of sign-ins under way (which could store one after these went),
-    /// and with no more after it. Whether they all went.
+    /// In its turn after a copying of sign-ins under way (which could store one after these went);
+    /// none starts after it, its connection's syncs ended first (`Machines.remove`). Whether they
+    /// all went.
     @discardableResult
     func forgetAccounts() async -> Bool {
-        signInSync?.cancel()
-        signInSync = nil
         let previous = signInTurn
         let turn = Task { [weak self] () -> Bool in
             await previous?.value
@@ -1039,6 +1050,8 @@ final class Machines {
                 } else {
                     // A removal under way: added again meanwhile, it waits (see `waitForRemoval`).
                     removing.insert(id)
+                    // Nothing more goes there for its connection, which stays open to sign it out.
+                    engine.endConnection()
                     Task { [weak self] in
                         let forgotten = await engine.forgetAccounts()
                         await engine.shutDown()

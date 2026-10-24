@@ -278,11 +278,10 @@ extension AppModel {
     /// Soon, once: a sign-in comes with a few changes in a row (stored, made active, the old one
     /// removed), each of them an event, and copying one is one more.
     func nudgeSignIns(_ engine: MachineEngine) {
-        engine.signInNudge?.cancel()
-        engine.signInNudge = Task { [weak self, weak engine] in
+        engine.activeConnection?.run("sign-in nudge") { [weak self] in
             await MachineClock.wait(2)
-            guard !Task.isCancelled, let engine, engine.isReady else { return }
-            await self?.syncSignIns(with: engine)
+            guard let self else { return }
+            await MachineConnection.inTurn([{ await self.syncSignIns(with: engine) }])
         }
     }
 }
