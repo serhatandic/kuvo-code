@@ -4,7 +4,7 @@ The Markdown renderer for replies, in Kuvo Code and Kuvo Code for iPhone.
 
 **This is a copy of [Textual](https://github.com/gonzalezreal/textual) by Guille Gonzalez (MIT),
 at upstream 0.5.0 (`01b5187`), with changes of Kuvo Code's own.** Its tests, examples and scripts
-aren't copied.
+aren't copied; `Tests` has tests of this copy's own.
 
 ## What's different from upstream
 
@@ -39,6 +39,15 @@ frame after it appeared, and the conversation jumped while you scrolled up into 
 
 - **Task lists.** An unordered list item that starts with `[ ] ` or `[x] ` (GitHub's task list)
   shows a checkbox in the bullet's place, without the brackets (`UnorderedList.swift`).
+- **Math found as the Markdown is read.** Upstream's `.math` matched `$…$` and `$$…$$` in the
+  parsed text, after Markdown had garbled the LaTeX (`\\` read as an escape, `_` and `*` as
+  emphasis, `+ x` as a list item), and in prices. Foundation's parser can't be given syntax of its
+  own, so `MathSyntax` reads the Markdown once with each `$`, `\(`, `\)`, `\[` and `\]` swapped
+  for a private-use character: those that come out as text can open or close a formula, those in
+  code or a link's address can't (`MathScanner`), and prices and the shell's `$$` are told apart
+  there. Each formula is then swapped for one character while the Markdown is read for real, and
+  put back in the line as `MathSyntax.inline` makes it, or as a code block of its own
+  (`SyntaxExtension.math(_:)`; `.math` makes `MathAttachment`s and ` ```math ` blocks).
 
 ## Updating
 

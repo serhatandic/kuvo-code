@@ -39,6 +39,7 @@ for Linux's tools).
 | C4 Quote part of a reply and answer it | QuotingTests | |
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests | |
 | D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Agents/test |
+| Math in a reply: formulas drawn in a line or on their own; prices, the shell's `$$`, code and links kept as written; lists, quotes and tables keep their shape | ReplyMathTests | how a formula looks (a look before and after) |
 | D4 A chat moved into a project | SessionLifecycleTests | |
 | E, B15, L36 The agent's browser; a screenshot you ask to see, in the conversation | BrowserToolServerTests | |
 | E2, L31 It fills in a form | BrowserFormTests | |

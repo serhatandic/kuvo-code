@@ -37,6 +37,7 @@ let package = Package(
           "TEXTUAL_ENABLE_TEXT_SELECTION",
           .when(platforms: [.macOS, .macCatalyst, .iOS, .visionOS])),
       ]
-    )
+    ),
+    .testTarget(name: "TextualTests", dependencies: ["Textual"]),
   ]
 )
