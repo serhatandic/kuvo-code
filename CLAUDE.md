@@ -33,6 +33,10 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## Subagents: two at a time
+
+Each session runs at most 2 subagents at once: workers, reviewers, and any that your subagents start themselves all count. Start another only when one finishes. A review split by area runs two reviewers at a time, and the rest wait for a free slot.
+
 ## Tests: what users rely on (strict)
 
 - **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
