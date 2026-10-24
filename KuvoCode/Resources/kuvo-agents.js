@@ -10235,6 +10235,7 @@ ${text.slice(0, 4000)}
   }
   async interrupt(id, resume = false) {
     const live = this.live.get(id);
+    const turnedAway = this.turnAwayOwn(live);
     const run2 = live && runOf(live.doing);
     if (live && run2) {
       live.doing = { kind: "stopping", run: run2 };
@@ -10246,7 +10247,7 @@ ${text.slice(0, 4000)}
       this.wake(id);
       return false;
     }
-    return this.stopSubagents(id);
+    return await this.stopSubagents(id) || turnedAway;
   }
   async stop(id, live, run2) {
     run2.abort.abort();
@@ -13909,4 +13910,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 7ce9c2842a37e9cf9a85849fd445d29043994b30f68d23e5f21f537e154c2aff
+// Built from Agents/src 2ab3c05173fb876d111de70626dcba272bea957d317e370de52cd838dee11699

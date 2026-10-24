@@ -1957,10 +1957,12 @@ export class Sessions {
 
   /**
    * Stops the turn under way. With `resume`, the message you steered goes next (Send Now);
-   * without, nothing waiting starts until the app says. Idle, `resume` starts it at once.
+   * without, nothing waiting starts until the app says. Idle, `resume` starts it at once. A turn
+   * an agent began on its own that's waiting to be taken stops too.
    */
   async interrupt(id: string, resume = false) {
     const live = this.live.get(id)
+    const turnedAway = this.turnAwayOwn(live)
     const run = live && runOf(live.doing)
     if (live && run) {
       live.doing = { kind: "stopping", run }
@@ -1973,7 +1975,7 @@ export class Sessions {
       this.wake(id)
       return false
     }
-    return this.stopSubagents(id)
+    return (await this.stopSubagents(id)) || turnedAway
   }
 
   /** Stops a turn: what it asks goes, and an agent that doesn't stop has its conversation closed, the turn ending without it. */

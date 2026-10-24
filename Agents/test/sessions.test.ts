@@ -2377,6 +2377,26 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(sessions.inbox(id)).toHaveLength(0)
   })
 
+  test("Stop while the last turn's files are kept turns away a turn the agent began on its own meanwhile", async () => {
+    const snapshots = withSteps()
+    const ends = heldRuns()
+    const id = create()
+    send(id, "work")
+    await drain()
+    snapshots.hold.take = true
+    ends[0]({ outcome: "succeeded" })
+    await drain()
+    expect(snapshots.held.map((held) => held.kind)).toEqual(["take"])
+    expect(own()).toBe(true)
+    await sessions.interrupt(id)
+    snapshots.hold.take = false
+    snapshots.release("take")
+    await drain()
+    expect(a.threads[0].turnedAway).toBe(1)
+    expect(a.runs).toHaveLength(1)
+    expect(sessions.active()).not.toContain(id)
+  })
+
   test("a message the agent turns away just as its turn ends goes next, once", async () => {
     const ends = heldRuns()
     const id = create()
