@@ -1609,7 +1609,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const link = readLink();
-      const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
+      // Its sessions with a title, as a Mac's composer offers its own.
+      const own = (await ownAgents(readEngine, link?.id, readKit(), readBridgeFile, { titled: true }).catch(() => null)) ?? [];
       return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)) });
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
@@ -4364,10 +4365,14 @@ export function namedAgents(own, peers, told, moved = new Map()) {
   return agents;
 }
 
+// Put away: archived, as a Mac archives one (`kuvo.archived` in its metadata) or the engine does.
+const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Boolean(session?.metadata?.kuvo?.archived) || Boolean(session?.time?.archived);
+
 // This box's own agents: its bots, then its latest sessions, its engine's and its coding
 // agents' (not a bot's, a subagent's, a group chat's seat, nor one put away), as the Mac lists its
-// own. Null when its engine can't say (then what it last said stands).
-export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile) {
+// own: a chat's project is "Chats", and with `titled`, only those of its latest with a title (whom
+// `&` names). Null when its engine can't say (then what it last said stands).
+export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile, { titled = false } = {}) {
   const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", ...(bot.job ? { about: bot.job } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
   const sessionsOf = async target => {
@@ -4382,11 +4387,13 @@ export async function ownAgents(readEngine, machine, kit = readKit(), readBridge
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) sessions = sessions.concat(await sessionsOf(bridge));
   } catch {}
   const projects = kit?.projects ?? [];
-  const named = directory => projects.find(project => project.directory === directory)?.name ?? (directory ? path.basename(directory) : undefined);
+  const named = directory => projects.find(project => project.directory === directory)?.name
+    ?? (directory === path.join(K, "chats") ? "Chats" : directory ? path.basename(directory) : undefined);
   const recent = sessions
-    .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !session.metadata?.kuvo?.archived && !session.time?.archived)
+    .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
     .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     .slice(0, 40)
+    .filter(session => !titled || session.title)
     .map(session => ({ session: session.id, name: session.title || "New session", kind: "session", ...(named(session.location?.directory ?? session.directory) ? { project: named(session.location?.directory ?? session.directory) } : {}) }));
   return [...bots, ...recent].map(keptAgent);
 }
@@ -4505,7 +4512,7 @@ export async function takeLetter(sender, letter, { send, targets, answer = () =>
     place = await placeOfSession(letter.to, targets);
     if (!place) return no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || kuvo.archived || place.data?.time?.archived) return no("That conversation doesn't take messages.");
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
     const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
     if (listed && !(await placeOfSession(letter.from, targets).catch(() => ({})))) fromAgent = listed;

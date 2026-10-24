@@ -814,7 +814,8 @@ held to the same route scenarios (`Vectors/routes`). A host serves:
   project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else where it
   lives: a machine's id, or, asked of a machine, a Mac's name for that Mac's own. A machine's
   bridge answers it too (from 0.9.23), with the Mac closed: its own, then those its other
-  computers told it of (`Peers`). Insert
+  computers told it of (`Peers`); before 0.9.27 it also listed its sessions without a title (as
+  "New session") and archived ones, and named a chat's project "chats". Insert
   `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
   agent reads, so a machine's bridge, with the Mac closed, sends it without. Show a message

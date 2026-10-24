@@ -112,6 +112,8 @@ async function engine(t) {
       if (request.url.startsWith("/api/session?")) return json({ data: [] });
       if (request.url === "/api/session/ses_target") return json({ data: { id: "ses_target" } });
       if (request.url === "/api/session/ses_child") return json({ data: { id: "ses_child", parentID: "ses_target" } });
+      // Archived, as a Mac (or a phone) archives one.
+      if (request.url === "/api/session/ses_archived") return json({ data: { id: "ses_archived", metadata: { "kuvo.archived": true } } });
       if (request.url === "/api/session/ses_mine") return json({ data: { id: "ses_mine" } });
       if (request.url === "/api/session/ses_target/prompt" && request.method === "POST") {
         prompts.push(JSON.parse(body));
@@ -145,8 +147,10 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   await take(second.peer, letter({ at: Date.now() - 2 * 86_400_000 }));
   await take(second.peer, letter({ to: "ses_not_here" }));
   await take(second.peer, letter({ to: "ses_child" }));
-  assert.deepEqual(said.map(each => [each.delivered.ok, each.delivered.retry]), [[false, undefined], [false, undefined], [false, undefined]]);
+  await take(second.peer, letter({ to: "ses_archived" }));
+  assert.deepEqual(said.map(each => [each.delivered.ok, each.delivered.retry]), [[false, undefined], [false, undefined], [false, undefined], [false, undefined]]);
   assert.equal(said[2].delivered.why, "That conversation doesn't take messages.", "a subagent's");
+  assert.equal(said[3].delivered.why, "That conversation doesn't take messages.", "one put away");
   assert.equal(prompts.length, 0);
 
   // Its sender as that box named it, waiting: delivered, said to be there, answered by a letter back.
@@ -193,7 +197,7 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   // A few at a time from each box: the rest to try again later.
   said.length = 0;
   for (let i = 0; i < 18; i++) await take(second.peer, letter());
-  assert.equal(said.filter(each => each.delivered.ok).length, 14, "twenty in ten minutes, the six before counted");
+  assert.equal(said.filter(each => each.delivered.ok).length, 13, "twenty in ten minutes, the seven before counted");
   assert.equal(said.at(-1).delivered.retry, true);
 });
 
