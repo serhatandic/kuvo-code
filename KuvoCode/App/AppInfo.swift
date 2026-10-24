@@ -16,6 +16,14 @@ nonisolated enum AppInfo {
     static let isHostingTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
 
+    /// For what shows you a macOS prompt (Touch ID, a login item, the usage panel's Keychain reads):
+    /// a test reaching it stops the run at once, saying what and from where, rather than waiting
+    /// on you to answer. The tests use stand-ins for these (see `Keychain`, `Notifier`).
+    static func neverInTests(_ what: String, file: StaticString = #fileID, line: UInt = #line) {
+        guard isHostingTests else { return }
+        fatalError("A test reached \(what), which would show a macOS prompt and wait on it. Give it a stand-in in the tests.", file: file, line: line)
+    }
+
     /// The tests' own folder, in the temporary folder: their data, Trash and repositories.
     static var testRoot: URL { FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests") }
     /// Where the tests' Trash is (see `FileManager.moveToTrash`).

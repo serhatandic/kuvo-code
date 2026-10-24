@@ -17,6 +17,10 @@ relay = [
     {"name": "deliver", "from": "relay", "address": a.hex(), "payload": "68656c6c6f", "bytes": (b"\x02" + a + b"hello").hex()},
     {"name": "unreachable", "from": "relay", "address": b.hex(), "bytes": (b"\x03" + b).hex()},
     {"name": "pushed", "from": "relay", "address": b.hex(), "status": 2, "bytes": (b"\x06" + b + b"\x02").hex()},
+    {"name": "gone", "from": "relay", "address": b.hex(), "reason": 0, "reads": "replaced", "bytes": (b"\x07" + b + b"\x00").hex()},
+    {"name": "gone", "from": "relay", "address": a.hex(), "reason": 1, "reads": "left", "bytes": (b"\x07" + a + b"\x01").hex()},
+    # A reason from a later relay reads as left.
+    {"name": "gone", "from": "relay", "address": a.hex(), "reason": 9, "reads": "left", "bytes": (b"\x07" + a + b"\x09").hex()},
 ]
 
 frames = [

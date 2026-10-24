@@ -16,8 +16,18 @@ public enum RelayMessage: Equatable, Sendable {
     case deliver(from: LinkAddress, payload: Data)
     case unreachable(LinkAddress)
     case pushed(to: LinkAddress, status: PushStatus)
+    /// The device at this address, which sent it something on its current connection, has a new
+    /// connection now or none: whatever sessions it had are over.
+    case gone(LinkAddress, Gone)
 
     public static let maxPayload = 65_600
+
+    public enum Gone: UInt8, Sendable {
+        /// A new connection took the address (a host that started again, or came back).
+        case replaced = 0
+        /// Its connection closed, and nothing is at the address now. Any reason but 0 reads as this.
+        case left = 1
+    }
 
     public enum PushStatus: UInt8, Sendable {
         case sent = 0, noPhone, notAllowed, refused
@@ -33,6 +43,7 @@ public enum RelayMessage: Equatable, Sendable {
         case .register(let registration): Data([4]) + ((try? JSONEncoder().encode(registration)) ?? Data())
         case .push(let to, let payload): Data([5]) + to.bytes + payload
         case .pushed(let to, let status): Data([6]) + to.bytes + Data([status.rawValue])
+        case .gone(let address, let gone): Data([7]) + address.bytes + Data([gone.rawValue])
         }
     }
 
@@ -49,6 +60,9 @@ public enum RelayMessage: Equatable, Sendable {
         case 6 where rest.count == LinkAddress.length + 1:
             guard let status = PushStatus(rawValue: rest.last!) else { throw FrameError.malformed }
             self = .pushed(to: address!, status: status)
+        case 7 where rest.count == LinkAddress.length + 1:
+            // A reason this doesn't know yet counts as left: the sessions are over either way.
+            self = .gone(address!, rest.last! == Gone.replaced.rawValue ? .replaced : .left)
         default: throw FrameError.malformed
         }
     }

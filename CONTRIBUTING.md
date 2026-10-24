@@ -92,7 +92,11 @@ Run them with the script: it builds a copy of the app of their own
 (`run.kuvo.code.tests`), outside the checkout, and removes what that copy keeps
 (its settings, caches and website data) before and after each run. The app itself refuses to host them,
 as they'd use your settings, and a copy built under Desktop or Documents waits on a
-privacy prompt while tests run.
+privacy prompt while tests run. For the same reason the test copy keeps its Keychain
+in memory (`KuvoCode/Stores/Keychain.swift`) and never asks to show notifications:
+macOS would ask whether each new build may use what the last one kept, and the
+tests would wait for your answer. Reach the Keychain only through `Keychain`; the
+script won't run the tests otherwise.
 `ONLY=KuvoCodeTests/ChangesDiscardTests` runs one suite. Test what people see
 happen, with the app's real parts; leave out what only restates the code.
 Some run the agents bridge the app ships for real (`RealBridge`, with a stand-in

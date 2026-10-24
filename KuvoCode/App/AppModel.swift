@@ -235,6 +235,7 @@ final class AppModel {
     /// Puts the usage panel in the menu bar. It reads the engine's database for spend, so it
     /// starts with the app, not with the engine.
     func startUsage() {
+        AppInfo.neverInTests("the usage panel (it reads other apps' sign-ins from your Keychain)")
         usage.start(engineData: engineFolders.dataDirectory) { [weak self] in
             self?.openMainWindow?()
         }

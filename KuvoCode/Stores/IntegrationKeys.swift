@@ -124,7 +124,7 @@ nonisolated enum IntegrationKeys {
             kSecReturnData as String: true,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        guard Keychain.copyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -139,18 +139,18 @@ nonisolated enum IntegrationKeys {
         guard let value, !value.isEmpty else {
             // Its file too, for an engine that's running.
             try? FileManager.default.removeItem(at: folder.appending(path: variable))
-            let status = SecItemDelete(base as CFDictionary)
+            let status = Keychain.delete(base)
             return status == errSecSuccess || status == errSecItemNotFound
         }
         let data = Data(value.utf8)
-        let updated = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let updated = Keychain.update(base, [kSecValueData as String: data])
         var saved = updated == errSecSuccess
         if updated == errSecItemNotFound {
             var item = base
             item[kSecValueData as String] = data
             item[kSecAttrLabel as String] = "Kuvo Code integration key"
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            saved = SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+            saved = Keychain.add(item) == errSecSuccess
         }
         if saved { writeFile(value, for: variable) }
         return saved
@@ -175,7 +175,7 @@ nonisolated enum IntegrationKeys {
             kSecMatchLimit as String: kSecMatchLimitAll,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
+        guard Keychain.copyMatching(query, &result) == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
         return items.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 }

@@ -2400,7 +2400,7 @@ final class PhoneLink {
             kSecReturnData as String: true,
         ]
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = Keychain.copyMatching(query, &result)
         switch status {
         case errSecSuccess: return result as? Data
         case errSecItemNotFound: return nil
@@ -2414,12 +2414,12 @@ final class PhoneLink {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary) != errSecItemNotFound { return }
+        if Keychain.update(base, [kSecValueData as String: data]) != errSecItemNotFound { return }
         var item = base
         item[kSecValueData as String] = data
         item[kSecAttrLabel as String] = "Kuvo Code phone link"
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(item as CFDictionary, nil)
+        Keychain.add(item)
     }
 }
 

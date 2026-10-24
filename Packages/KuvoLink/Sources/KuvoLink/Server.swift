@@ -71,7 +71,10 @@ public actor LinkServer {
         self.mailed = mailed
     }
 
-    /// Serves over `relay` until it closes. Sessions on an earlier connection end.
+    /// Serves over `relay` until it closes. Sessions on an earlier connection end. While a
+    /// connection stays up, a session ends only with the phone told (a close) or by the phone's
+    /// own doing: phones count on that rather than checking before each request (PROTOCOL.md,
+    /// "The relay").
     public func serve(_ relay: any RelayTransport) async {
         for session in sessions.values { end(session, notify: false) }
         self.relay = relay
@@ -82,6 +85,10 @@ public actor LinkServer {
                 await receive(frame, from: from)
             case .unreachable(let address):
                 // The phone's gone (asleep, out of reach): nothing it asked for has anyone to go to.
+                for session in sessions.values where session.key.address == address { end(session, notify: false) }
+            case .gone(let address, _):
+                // The phone's relay connection went or was replaced (it woke on a new one): it
+                // ended its sessions with it, so what's under way for them stops here too.
                 for session in sessions.values where session.key.address == address { end(session, notify: false) }
             case .pushed(let to, let status):
                 pushed?(to, status)
