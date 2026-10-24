@@ -38,6 +38,14 @@ export class EngineLink {
     return Boolean(this.url)
   }
 
+  private waiting: (() => void)[] = []
+
+  /** Once it's known where the engine is (at once on a machine, told by the app on the Mac). */
+  whenReady(): Promise<void> {
+    if (this.ready) return Promise.resolve()
+    return new Promise((resolve) => this.waiting.push(resolve))
+  }
+
   /** Where the engine is now; a new one (it restarted) starts a new feed. */
   configure(url: string | undefined, password: string | undefined) {
     const authorization = password ? "Basic " + Buffer.from(`opencode:${password}`).toString("base64") : undefined
@@ -50,6 +58,7 @@ export class EngineLink {
     const generation = ++this.generation
     if (this.url) void this.feed(generation)
     for (const set of this.listeners.values()) for (const listener of set) listener.reconnected()
+    if (this.url) for (const resolve of this.waiting.splice(0)) resolve()
   }
 
   async request<T = any>(method: string, path: string, body?: unknown, timeout = 30_000, directory?: string): Promise<T> {

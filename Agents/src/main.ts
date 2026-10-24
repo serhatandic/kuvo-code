@@ -118,16 +118,41 @@ const sessions = new Sessions(
   (directory) => link.titleModel(directory),
 )
 
-// On a machine, the group chats that live there, run here (on the Mac, the app runs its own). One
-// that fails to start leaves the rest of the bridge as it is.
+// The group chats that live on this computer, run here: on a machine, in its Kuvo Code folder; on
+// the Mac, where the app says (KUVO_GROUPS, with its bots in KUVO_BOTS and its trash in
+// KUVO_TRASH), once it does (until then the app runs its own). One that fails to start leaves the
+// rest of the bridge as it is.
 let self: ReturnType<typeof requester> | undefined
 let groups: { runner: GroupRunner; store: GroupStore } | undefined
-if (onMachine) {
+const groupFolders = onMachine
+  ? { root: join(machineHome!, "groups"), bots: process.env.KUVO_BOTS ?? join(machineHome!, "bots"), trash: join(machineHome!, "trash") }
+  : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH
+    ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH }
+    : undefined
+const groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined
+// Nor do the agents get these.
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
+if (groupFolders) {
   try {
-    const store = new GroupStore(join(machineHome!, "groups"), process.env.KUVO_BOTS ?? join(machineHome!, "bots"))
+    const store = new GroupStore(groupFolders.root, groupFolders.bots)
     groups = {
       store,
-      runner: new GroupRunner({ store, engine: link, bridge: () => self, trash: join(machineHome!, "trash"), listen: (session, listener) => link.listen(session, listener) }),
+      runner: new GroupRunner({
+        store,
+        engine: link,
+        bridge: () => self,
+        trash: groupFolders.trash,
+        listen: (session, listener) => link.listen(session, listener),
+        place: onMachine ? "this machine" : undefined,
+        memoryKey: groupMemoryKey,
+        // A coding agent's own account, as Settings › Accounts shows it: one with a way to sign in, not signed in.
+        agentAccount: async (provider) => {
+          const agent = roster.find(provider)
+          if (!agent) return undefined
+          const account = await agent.account()
+          return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 }
+        },
+      }),
     }
   } catch (error) {
     console.error("group chats:", error)
@@ -149,11 +174,15 @@ try {
 }
 console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}` }))
 self = requester(`http://127.0.0.1:${server.port}`, password)
-try {
-  groups?.runner.start()
-} catch (error) {
-  console.error("group chats:", error)
-}
+// Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
+// way are followed again, and meetings held.
+void link.whenReady().then(() => {
+  try {
+    groups?.runner.start()
+  } catch (error) {
+    console.error("group chats:", error)
+  }
+})
 // On a machine, where it's reached, for kuvo-wake and Kuvo Code's tools there (as the engine's
 // launch writes engine.json): only this user can read it, and it goes when the bridge does.
 const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
