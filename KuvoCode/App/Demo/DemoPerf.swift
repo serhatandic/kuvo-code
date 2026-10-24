@@ -8,9 +8,6 @@ import SwiftUI
 /// settled. Debug builds only.
 @MainActor
 enum DemoPerf {
-    /// How long after launch a run starts.
-    private static let settled = DemoWait.Pace.seconds(10)
-
     static func start(_ environment: [String: String], app: AppModel, window: DemoWindow) {
         Task { await PerfLayers.run() }
         if let count = environment["KUVO_PERF_SWITCH"].flatMap(Int.init) { Task { await switchTabs(count, environment, app: app, window: window) } }
@@ -35,7 +32,7 @@ enum DemoPerf {
     /// KUVO_PERF_SWITCH=<n>: goes to the next session tab n times, a second and a half apart, and
     /// writes how the main thread kept up.
     private static func switchTabs(_ count: Int, _ environment: [String: String], app: AppModel, window: DemoWindow) async {
-        await DemoWait.pause(settled)
+        await DemoWait.pause(.launchSettles)
         // KUVO_PERF_SWITCH_CHECK: each tab's session with a draft of its own, and after each
         // switch, whether the composer shows it, and takes what's typed there.
         let check = environment["KUVO_PERF_SWITCH_CHECK"] != nil
@@ -67,7 +64,7 @@ enum DemoPerf {
     /// KUVO_PERF_TOGGLE=<n>: the sidebar hidden and shown n times, then the panel, as their buttons
     /// do, a second apart; how the main thread kept up with the slides.
     private static func toggle(_ count: Int, _ environment: [String: String], window: DemoWindow) async {
-        await DemoWait.pause(settled)
+        await DemoWait.pause(.launchSettles)
         let sidebar = PerfMeter()
         sidebar.start()
         // KUVO_PERF_TOGGLE_ONLY=panel: the panel alone (and its profile alone).
@@ -93,7 +90,7 @@ enum DemoPerf {
     /// KUVO_PERF_SIDEBAR=<n>: the sidebar scrolled down and back up, n frames each way, as a
     /// trackpad does; then ten seconds left alone. How the main thread kept up with each.
     private static func scrollSidebar(_ count: Int, _ environment: [String: String]) async {
-        await DemoWait.pause(settled)
+        await DemoWait.pause(.launchSettles)
         func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews) }
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }), let content = window.contentView,
               let sidebar = scrollViews(in: content).first(where: { $0.convert($0.bounds, to: nil).minX < 60 && $0.frame.height > 200 }) else { return }
@@ -134,7 +131,7 @@ enum DemoPerf {
     /// KUVO_PERF_RESIZE=<n>: goes through the next three session tabs and back, then makes the
     /// window narrower and wider again, n frames each way; how the main thread kept up.
     private static func resize(_ count: Int, _ environment: [String: String], window: DemoWindow) async {
-        await DemoWait.pause(settled)
+        await DemoWait.pause(.launchSettles)
         for by in [1, 1, 1, -3] {
             window.cycleTabs(by)
             await DemoWait.pause(.step(.milliseconds(1500)))
@@ -158,7 +155,7 @@ enum DemoPerf {
     /// KUVO_PERF_TYPE=<n>: types n characters into the composer, one every 60 ms; how the main
     /// thread kept up, and the longest a character took to be handled.
     private static func type(_ count: Int, _ environment: [String: String]) async {
-        await DemoWait.pause(settled)
+        await DemoWait.pause(.launchSettles)
         guard let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) else { return }
         let meter = PerfMeter()
         meter.start()

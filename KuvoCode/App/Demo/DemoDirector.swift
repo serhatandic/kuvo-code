@@ -103,7 +103,7 @@ enum DemoDirector {
         // then moves the newest chat into that project.
         if let message = environment["KUVO_DEMO_CHAT"] {
             Task {
-                await DemoWait.until(.seconds(180)) { app.api != nil }
+                await DemoWait.until("the engine (KUVO_DEMO_CHAT)", limit: DemoWait.unbounded) { app.api != nil }
                 guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: nil, agent: nil) else { return }
                 window.openTab(session.id)
                 workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false, commands: [])
@@ -111,9 +111,8 @@ enum DemoDirector {
         }
         if let folder = environment["KUVO_DEMO_MOVE_CHAT"] {
             Task {
-                await DemoWait.until { workspace.isLoaded }
                 // With KUVO_DEMO_CHAT, after its reply, while it's open.
-                await DemoWait.pause(.seconds(environment["KUVO_DEMO_CHAT"] == nil ? 3 : 16))
+                await DemoWait.pause(.replyComes(afterChat: environment["KUVO_DEMO_CHAT"] != nil))
                 guard let chat = workspace.chats.first else { return log.error("KUVO_DEMO_MOVE_CHAT: no chat") }
                 do {
                     try await workspace.move(chat.id, toProject: folder)
@@ -127,13 +126,12 @@ enum DemoDirector {
         // sends it again after that many seconds.
         if let wait = environment["KUVO_DEMO_UNDO_RESEND"].flatMap(Double.init) {
             Task {
-                // Once its conversation has come in and shown a while.
-                await DemoWait.pause(.seconds(6))
+                await DemoWait.pause(.conversationRead)
                 guard let id = window.sessionInView(), let model = workspace.model(for: id) else { return }
                 if !model.isLoaded { await model.load() }
                 guard let last = model.transcript.messages.last(where: { if case .user = $0 { true } else { false } }), case .user(let user) = last else { return }
                 model.undo(from: user)
-                await DemoWait.pause(.seconds(wait))
+                await DemoWait.pause(.asked(wait))
                 model.submit(model.draftText, files: model.draftFiles, for: nil, queue: false, commands: [])
                 model.draftText = ""
                 model.draftFiles = []
@@ -144,7 +142,7 @@ enum DemoDirector {
         if let value = environment["KUVO_DEMO_MACHINE_BROWSING"] {
             let parts = value.split(separator: "|").map(String.init)
             Task {
-                await DemoWait.pause(.seconds(parts.count > 1 ? Double(parts[1]) ?? 3 : 3))
+                await DemoWait.pause(.asked(parts.count > 1 ? Double(parts[1]) ?? 3 : 3))
                 let json = #"{"id":"evt_demo","type":"session.tool.input.started","data":{"sessionID":"ses_demo","assistantMessageID":"msg_demo","id":"call_demo","name":"kuvo-browser_browser_navigate"}}"#
                 if let event = try? ServerEvent(json: Data(json.utf8)) { workspace.handle(event, machine: parts[0]) }
             }
@@ -156,7 +154,7 @@ enum DemoDirector {
             Task {
                 var opened = false
                 while true {
-                    await DemoWait.pause(.seconds(5))
+                    await DemoWait.pause(.betweenAsks)
                     if !opened, !["", "1"].contains(title), let session = workspace.sessions.first(where: { $0.title == title }) {
                         window.openTab(session.id)
                         opened = true
@@ -170,7 +168,7 @@ enum DemoDirector {
         if let wait = environment["KUVO_DEMO_CYCLE_TABS"].flatMap(Double.init) {
             Task {
                 for _ in 0..<4 {
-                    await DemoWait.pause(.seconds(wait))
+                    await DemoWait.pause(.asked(wait))
                     window.cycleTabs(1)
                 }
             }
@@ -179,9 +177,9 @@ enum DemoDirector {
         // KUVO_DEMO_REOPEN_WINDOW=<seconds>: closes the window after that long, and opens it again.
         if let wait = environment["KUVO_DEMO_REOPEN_WINDOW"].flatMap(Double.init) {
             Task {
-                await DemoWait.pause(.seconds(wait))
+                await DemoWait.pause(.asked(wait))
                 NSApp.windows.first { $0.isVisible && $0.canBecomeMain }?.performClose(nil)
-                await DemoWait.pause(.seconds(2))
+                await DemoWait.pause(.windowStaysClosed)
                 app.openMainWindow?()
             }
         }
@@ -189,7 +187,7 @@ enum DemoDirector {
         if let every = environment["KUVO_DEMO_TOGGLE_PANEL"].flatMap(Double.init) {
             Task {
                 for _ in 0..<6 {
-                    await DemoWait.pause(.seconds(every))
+                    await DemoWait.pause(.asked(every))
                     withAnimation(.ui) { window.showPanel(!window.showsPanel()) }
                 }
             }
@@ -232,7 +230,7 @@ enum DemoDirector {
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
                 // Once a session there is in view, so the tab shows.
                 Task {
-                    await DemoWait.until(.seconds(30)) { utilities.place == rest[0] }
+                    await DemoWait.until("a session on \(rest[0]) in view (KUVO_DEMO_PANEL)", limit: .seconds(30)) { utilities.place == rest[0] }
                     utilities.newMachinePage(rest[0], address: rest.count > 1 ? rest[1] : nil)
                 }
             case "files": utilities.showFiles()
@@ -250,7 +248,7 @@ enum DemoDirector {
                 let wait = Double(parts[1]) ?? 3
                 Task {
                     for _ in 0..<4 {
-                        await DemoWait.pause(.seconds(wait))
+                        await DemoWait.pause(.asked(wait))
                         withAnimation(.ui) { window.expandPanel(!window.panelExpanded()) }
                     }
                 }
@@ -277,7 +275,7 @@ enum DemoDirector {
         if environment["KUVO_DEMO_EDIT_GROUP"] != nil { window.openGroupEditor(group) }
         // KUVO_DEMO_GROUP_UNDO=<seconds>: then undoes from your last message there, into the composer.
         if let wait = environment["KUVO_DEMO_GROUP_UNDO"].flatMap(Double.init) {
-            await DemoWait.pause(.seconds(wait))
+            await DemoWait.pause(.asked(wait))
             if let last = groups.messages(in: group.id).last(where: { $0.author == nil && $0.kind != .note }),
                let text = await groups.undo(from: last.id, in: group.id) {
                 Drafts.shared[BotGroups.tabKey(group.id)].text = text
@@ -288,7 +286,7 @@ enum DemoDirector {
         if let place = environment["KUVO_DEMO_MOVE_GROUP"], groups.machine(of: group.id) != (place.isEmpty ? nil : place) {
             let machine = place.isEmpty ? nil : place
             let ends = [machine, groups.machine(of: group.id)].compactMap { $0 }
-            await DemoWait.until(.seconds(180)) { ends.allSatisfy(app.machineGroups.running.contains) }
+            await DemoWait.until("group chats running on \(ends) (KUVO_DEMO_MOVE_GROUP)", limit: .seconds(180)) { ends.allSatisfy(app.machineGroups.running.contains) }
             do {
                 try await app.moves.move(group: group.id, to: machine)
                 print("KUVO_DEMO_MOVE_GROUP moved \(group.name)")
@@ -297,16 +295,15 @@ enum DemoDirector {
             }
         }
         guard parts.count > 2, !parts[2].isEmpty else { return }
-        await DemoWait.until(.seconds(180)) { app.api != nil }
+        guard await DemoWait.until("the engine (KUVO_DEMO_GROUP)", limit: DemoWait.unbounded, { app.api != nil }) else { return }
         // One on a machine: once it's reached there, as its composer waits.
-        await DemoWait.until(.seconds(180)) { groups.unreachable(group.id) == nil }
-        // A moment with the chat in view before its message goes, for a recording.
-        await DemoWait.pause(.seconds(2))
+        await DemoWait.until("the group chat's machine (KUVO_DEMO_GROUP)", limit: .seconds(180)) { groups.unreachable(group.id) == nil }
+        await DemoWait.pause(.beforeSending)
         groups.send(parts[2], to: group.id)
         // KUVO_DEMO_GROUP_LATER=<seconds>|<message>: another message, sent while they talk.
         let later = (environment["KUVO_DEMO_GROUP_LATER"] ?? "").split(separator: "|", maxSplits: 1).map(String.init)
         if later.count == 2, let seconds = Double(later[0]) {
-            await DemoWait.pause(.seconds(seconds))
+            await DemoWait.pause(.asked(seconds))
             groups.send(later[1], to: group.id)
         }
     }
@@ -324,7 +321,7 @@ enum DemoDirector {
         if bot == nil {
             let machine = parts.count > 3 && !parts[3].isEmpty ? parts[3] : nil
             if let machine, let engine = app.machines.engine(machine) {
-                await DemoWait.until(.seconds(300)) { engine.isReady }
+                await DemoWait.until("\(machine) (KUVO_DEMO_BOT)", limit: DemoWait.unbounded) { engine.isReady }
             }
             do {
                 // Its job, as it would have written it in its memory.
@@ -336,7 +333,7 @@ enum DemoDirector {
                 // (The coding agents' list first, for a model of theirs: the workspace is handed
                 // the agents bridge without observation knowing.)
                 if OutsideAgents.runsInBridge(model?.providerID) {
-                    await DemoWait.poll { workspace.agents(forFolder: machine.map { RemoteFolder.folder("/", on: $0) } ?? "/")?.api != nil }
+                    await DemoWait.poll("the coding agents (KUVO_DEMO_BOT)") { workspace.agents(forFolder: machine.map { RemoteFolder.folder("/", on: $0) } ?? "/")?.api != nil }
                 }
                 bot = try await bots.create(name: name, job: job.line.isEmpty && job.details.isEmpty ? nil : job,
                                             look: .random(), model: model, machine: machine, project: parts.count > 4 && !parts[4].isEmpty ? parts[4] : nil)
@@ -359,11 +356,11 @@ enum DemoDirector {
         if let place = environment["KUVO_DEMO_MOVE_BOT"] {
             let machine = place.isEmpty ? nil : place
             if let machine, let engine = app.machines.engine(machine) {
-                await DemoWait.until(.seconds(300)) { engine.isReady }
+                await DemoWait.until("\(machine) (KUVO_DEMO_MOVE_BOT)", limit: DemoWait.unbounded) { engine.isReady }
             }
             // Its prompt's run has started by then.
-            await DemoWait.pause(.seconds(3))
-            await DemoWait.until(.seconds(1800)) { !workspace.isWorking(bot.sessionID) }
+            await DemoWait.pause(.runStarts)
+            await DemoWait.until("the bot to finish (KUVO_DEMO_MOVE_BOT)", limit: DemoWait.unbounded) { !workspace.isWorking(bot.sessionID) }
             do {
                 try await app.moves.move(bot: bot.id, to: machine)
                 print("KUVO_DEMO_MOVE_BOT moved \(bot.name)")
@@ -380,7 +377,7 @@ enum DemoDirector {
         if let spec = environment["KUVO_DEMO_SHOW_IN_PANEL"] {
             let parts = spec.split(separator: "|").map(String.init)
             Task {
-                await DemoWait.pause(.seconds(18))
+                await DemoWait.pause(.connectedAWhile)
                 guard let id = window.sessionInView(), let session = workspace.session(id), parts.count == 2 else { return }
                 let machine = RemoteFolder.machine(of: session.location.directory)
                 let said = BrowserTools.shown(parts[0], isFolder: parts[1] == "folder", inView: true)
@@ -400,7 +397,7 @@ enum DemoDirector {
             // KUVO_DEMO_FIND=<words>: Find in it, looking for those (once it's read, on a machine).
             if let words = environment["KUVO_DEMO_FIND"] {
                 Task {
-                    guard await DemoWait.until(.seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
+                    guard await DemoWait.until("\(id) to load (KUVO_DEMO_FIND)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
                     await DemoWait.pause(.beat)
                     model.showFind(words)
                 }
@@ -409,7 +406,7 @@ enum DemoDirector {
             // a text of "<words>@<picture path>" has that picture attached.
             if let waiting = environment["KUVO_DEMO_WAITING"] {
                 Task {
-                    guard await DemoWait.until(.seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
+                    guard await DemoWait.until("\(id) to load (KUVO_DEMO_WAITING)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }), let model = workspace.model(for: id) else { return }
                     model.showWaiting(waiting.split(separator: "|").enumerated().map { index, entry in
                         let parts = entry.split(separator: "@", maxSplits: 1).map(String.init)
                         return Transcript.Pending(id: "msg_demo_waiting_\(index)", text: parts[0], delivery: .queue, isLocal: false,
@@ -440,8 +437,7 @@ enum DemoDirector {
         // session in view, on that line of the changes.
         if let spec = environment["KUVO_DEMO_COMMENT"], let directory = window.activeDirectory() {
             let parts = spec.split(separator: ":", maxSplits: 2).map(String.init)
-            // Once its changes have been read.
-            await DemoWait.pause(.seconds(2))
+            await DemoWait.pause(.changesRead)
             if parts.count == 3, let line = Int(parts[1]), let selection = window.selection(), let model = workspace.model(for: selection),
                let text = try? String(contentsOfFile: directory + "/" + parts[0], encoding: .utf8) {
                 let lines = text.components(separatedBy: "\n")
@@ -455,9 +451,9 @@ enum DemoDirector {
             let catalog = catalog(for: folder, app: app)
             guard let session = try? await workspace.createSession(in: folder, model: catalog.defaultModel?.ref, agent: nil) else { return }
             window.openTab(session.id)
-            await DemoWait.until(.seconds(10)) { workspace.model(for: session.id)?.isLoaded == true }
+            await DemoWait.until("the replay's session to load", limit: .seconds(10)) { workspace.model(for: session.id)?.isLoaded == true }
             // Its conversation drawn, before the run starts.
-            await DemoWait.pause(.seconds(2))
+            await DemoWait.pause(.beforeSending)
             await PerfReplay.play(file, into: session.id, workspace: workspace)
             return
         }
@@ -474,7 +470,7 @@ enum DemoDirector {
         // gives it a worktree of its own.
         // A folder on a machine: once the machine is connected and its models are known.
         if let engine = app.machines.engine(RemoteFolder.machine(of: folder)) {
-            await DemoWait.until { engine.isReady && engine.catalog.defaultModel != nil }
+            await DemoWait.until("\(engine.machine.name)'s models (KUVO_DEMO_PROMPT)") { engine.isReady && engine.catalog.defaultModel != nil }
         }
         let catalog = catalog(for: folder, app: app)
         guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.defaultModel?.ref, agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
@@ -485,7 +481,7 @@ enum DemoDirector {
         workspace.model(for: session.id)?.submit(prompt, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: folder))
         // KUVO_DEMO_QUEUE: messages separated by "|", queued once the agent is working.
         guard let queue = environment["KUVO_DEMO_QUEUE"], let running = workspace.model(for: session.id) else { return }
-        await DemoWait.until(.seconds(10)) { running.isRunning }
+        await DemoWait.until("the agent to start (KUVO_DEMO_QUEUE)", limit: .seconds(10)) { running.isRunning }
         for message in queue.split(separator: "|") {
             running.submit(String(message), files: [], for: catalog.model(session.model), queue: true, commands: catalog.commands(in: folder))
         }
