@@ -63,6 +63,8 @@ final class AppModel {
     /// The coding agents you already have (Claude Code, Codex, Cursor, Grok, Antigravity), run by
     /// the agents bridge beside the engine.
     let agents = OutsideAgents()
+    /// This Mac's box (`kuvo-link.js serve`), which answers the areas that have moved onto it.
+    let box = BoxProcess()
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
     /// The engine's settings file, for Settings.
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(file: engineFolders.configFile)
@@ -160,7 +162,7 @@ final class AppModel {
         }
     }
 
-    private var server: ServerProcess?
+    private(set) var server: ServerProcess?
     private var eventTask: Task<Void, Never>?
     /// When the engine was last started again on its own, after stopping while it ran.
     private var automaticRestarts: [Date] = []
@@ -386,6 +388,10 @@ final class AppModel {
             #endif
             wirePhoneLink()
             phoneLink.start(endpoint: server.endpoint)
+            // This Mac's box finds the engine as a machine's does, and starts once.
+            BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
+            let boxEnvironment = shell
+            Task { await box.start(engine: binary, environment: boxEnvironment) }
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)
             agents.engineEndpoint = server.endpoint
@@ -511,6 +517,7 @@ final class AppModel {
         eventTask = nil
         server?.stop()
         server = nil
+        BoxProcess.engineChanged(nil, version: nil, pid: nil)
         api = nil
         isLive = false
         phoneLink.stop()

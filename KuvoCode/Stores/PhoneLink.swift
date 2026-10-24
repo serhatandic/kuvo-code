@@ -614,6 +614,12 @@ final class PhoneLink {
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
+        // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
+        if Self.boxRoutes.contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
+            guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
+            let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
+            return EngineRoutes.forward(request, to: base, password: box.password, allowing: { path, _ in path.hasPrefix("kuvo/") })
+        }
         var routed = request
         routed.path = route
         if route == "kuvo/file" { return Self.file(request.path) }
@@ -1014,6 +1020,20 @@ final class PhoneLink {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
+    /// requests and the app's own (`BoxClient`) go there.
+    nonisolated static let boxRoutes: [String] = []
+    /// Where this Mac's box is reached while it runs.
+    nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
+
+    nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+            continuation.yield(.body(Self.message("This Mac’s box isn’t running. Try again in a moment.")))
+            continuation.finish()
         }
     }
 

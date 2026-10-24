@@ -169,15 +169,17 @@ public enum EngineRoutes {
                     var headers: [String: String] = [:]
                     for name in responseHeaders { if let value = http.value(forHTTPHeaderField: name) { headers[name] = value } }
                     continuation.yield(.head(status: http.statusCode, headers: headers))
-                    // In pieces: at each event's end (a blank line), so an event goes as soon as
-                    // it's whole and each costs the relay one message, or every 32 KB of a long body.
+                    // In pieces: at each event's end (a blank line; a line, for a box's stream of
+                    // JSON lines), so an event goes as soon as it's whole and each costs the relay
+                    // one message, or every 32 KB of a long body.
+                    let lines = headers["content-type"]?.hasPrefix("application/x-ndjson") == true
                     var piece = Data()
                     piece.reserveCapacity(32 * 1024)
                     var previous: UInt8 = 0
                     for try await byte in bytes {
                         piece.append(byte)
                         defer { previous = byte }
-                        if (byte == UInt8(ascii: "\n") && previous == UInt8(ascii: "\n")) || piece.count >= 32 * 1024 {
+                        if (byte == UInt8(ascii: "\n") && (lines || previous == UInt8(ascii: "\n"))) || piece.count >= 32 * 1024 {
                             continuation.yield(.body(piece))
                             piece.removeAll(keepingCapacity: true)
                         }

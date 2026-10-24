@@ -1003,12 +1003,6 @@ final class Workspace {
     private struct Empty: Decodable {}
 
     /// What a machine's box said when it said no: what to show, and its status.
-    struct BoxRefusal: LocalizedError {
-        var status: Int
-        var message: String
-        var errorDescription: String? { message }
-    }
-
     /// A request to `machine`'s box (`MachineBox.route`): its answer, or what it said when it
     /// said no (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ machine: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {

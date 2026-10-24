@@ -16,6 +16,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.30";
+export const BRIDGE_VERSION = "0.9.33";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -5870,6 +5871,71 @@ async function box(command) {
   }
 }
 
+// `serve`: this box's routes over HTTP, for a Mac, whose app starts its own box as it starts the
+// coding agents' bridge: on 127.0.0.1, `{"url"}` said once it listens, answering only with the
+// password in OPENCODE_PASSWORD, and gone when its stdin closes, so it never outlives the app. The
+// same routes as a phone's through the relay, the path checked the same way; a stream goes as it
+// comes, and stops when the client goes. The engine and the agents' bridge are found as on a
+// machine (`run/engine.json`, `run/bridge.json`), which the app writes.
+export function serveBox(password, handle = engineHandler(readEngineFile, { name: os.hostname() })) {
+  const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
+  return http.createServer(async (request, response) => {
+    const given = Buffer.from(request.headers.authorization ?? "");
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+      response.writeHead(401);
+      return response.end();
+    }
+    const sent = canonicalPath((request.url ?? "").replace(/^\/+/, ""));
+    if (sent === null) {
+      response.writeHead(403);
+      return response.end();
+    }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const abort = new AbortController();
+    response.on("close", () => abort.abort());
+    let headed = false;
+    try {
+      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks) }, {}, abort.signal)) {
+        if (abort.signal.aborted) break;
+        if (part.head && !headed) {
+          response.writeHead(part.head.status, part.head.headers ?? {});
+          response.flushHeaders();
+          headed = true;
+        }
+        if (part.body) response.write(part.body);
+      }
+    } catch (error) {
+      if (!headed) {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.write(JSON.stringify({ message: String(error?.message ?? error) }));
+        headed = true;
+      }
+    }
+    if (!headed) response.writeHead(502);
+    response.end();
+  });
+}
+
+async function serve() {
+  const password = process.env.OPENCODE_PASSWORD;
+  if (!password) {
+    console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
+    process.exit(2);
+  }
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  const server = serveBox(password);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
+  // Its app gone (its stdin closed): so is it.
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.resume();
+}
+
 // Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
 function peerTargets() {
   const targets = [];
@@ -6032,6 +6098,7 @@ if (main) {
   else if (mode === "setup") await setup();
   else if (mode === "pair") pair(argument);
   else if (mode === "box") await box(argument);
+  else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
   else if (mode === "update") {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
@@ -6054,7 +6121,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | setup | pair [relay] | box <command> | leave <mac> | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | update [--now] | selftest");
     process.exit(2);
   }
 }
