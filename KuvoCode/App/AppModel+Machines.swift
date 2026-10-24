@@ -96,6 +96,12 @@ extension AppModel {
         EngineConfig.machines = { [weak self] in self?.machines.engines.values.map(\.config) ?? [] }
         // Your personalities, one library on every computer.
         Personalities.shared.onChange = { [weak self] in self?.personalitiesChanged() }
+        // A machine's view of them, by mail, that changed some here (PROTOCOL.md, "Documents"): bots
+        // with one of those hear what it is now.
+        phoneLink.tookPersonalities = { [weak self] ids in
+            guard let self else { return }
+            Task { for id in ids { await self.bots.personalityChanged(id) } }
+        }
         workspace.onRunEnded = { [weak self] session in
             self?.bots.runEnded(session: session)
             // An ask its agent left in this Mac's browser has no one waiting for it now.
@@ -444,9 +450,6 @@ extension AppModel {
             // still starting): now, not at its next connection.
             { await AgentMail.shared.deliverWaiting(to: engine) },
             { await self.wakeUps.share(with: engine) },
-            // Your personalities as the machine has them now (one changed on another machine
-            // reaches it box to box), so this Mac never tells a bot older words.
-            { await self.syncPersonalities(with: engine) },
         ])
         // Settings changed here while it connected, after it took the ones it has.
         connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
@@ -618,6 +621,8 @@ extension AppModel {
     /// Your personalities changed here (made, changed or removed, or taken from one machine): the
     /// machines connected now take them, with what their bots and group chats are told.
     func personalitiesChanged(except machine: String? = nil) {
+        // Every machine hears it by mail too, connected or not (PROTOCOL.md, "Documents").
+        Task { await phoneLink.tellMachines() }
         for engine in machines.engines.values where engine.machine.id != machine {
             // A moment on, the last change's round only.
             engine.activeConnection?.run("personalities") { [weak self] in

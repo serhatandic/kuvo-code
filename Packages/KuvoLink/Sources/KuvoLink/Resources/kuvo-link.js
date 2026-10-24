@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.30";
+export const BRIDGE_VERSION = "0.9.31";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -1594,6 +1594,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const given = parsed(request.body);
       const changed = updateLink(link => link && removePhones(link, phone?.key?.toString("base64url"), given?.phones) ? link : null);
       if (!changed) return yield* json(400, { message: "Only phones paired here can be removed, and never your Mac." });
+      noteDocsChanged();
       // Once this answer is on its way: a phone that removed itself gets it too.
       setTimeout(() => phonesChanged(readLink() ?? changed), 200);
       return yield* json(200, {});
@@ -3705,22 +3706,26 @@ export async function watchAsks(tell, { signal, every = 2000, read = readAsks, a
 }
 
 // ---- Personalities you make (PROTOCOL.md, "Personalities") ----
-// One library on every computer: each keeps its copy, and copies meet as a Mac connects (or as a
-// phone changes each): per personality, the newest change wins, a removal too, which stays noted
-// so no copy brings it back. Kuvo Code's own presets aren't in it; they come with the kit.
+// One library on every computer: each keeps its copy, and copies meet box to box (each box's view
+// is a document of its own, PROTOCOL.md "Documents") and as a Mac connects: per personality a
+// removal wins, and stays noted so no copy brings it back; otherwise the newest change, by a count
+// each change moves on from the one before it (`updated`), whatever any clock says. Kuvo Code's own
+// presets aren't in it; they come with the kit.
 
 const PERSONALITIES_FILE = path.join(K, "bots", "personalities.json");
 const PERSONALITIES_LOCK = path.join(RUN, ".personalities.lock");
 const PERSONALITY_ID = /^custom\.[A-Za-z0-9._-]{1,80}$/;
 // Removals noted, the newest kept.
 const MOST_REMOVALS = 500;
+// A change's count no higher than this, so the next one is always higher.
+const MOST_COUNT = 2 ** 52;
 
 const changedAt = entry => Number(entry?.removed ?? entry?.updated ?? 0) || 0;
 const isRemoval = entry => entry?.removed !== undefined;
 
 // One personality as kept: what's needed, plain and of a sane length; null for what isn't one.
 function keptPersonality(entry) {
-  if (!isObject(entry) || !PERSONALITY_ID.test(String(entry.id))) return null;
+  if (!isObject(entry) || !PERSONALITY_ID.test(String(entry.id)) || changedAt(entry) > MOST_COUNT) return null;
   if (isRemoval(entry)) return Number.isFinite(Number(entry.removed)) ? { id: entry.id, removed: Number(entry.removed) } : null;
   const name = plainName(entry.name).slice(0, 80);
   const description = String(entry.description ?? "").trim().slice(0, 2000);
@@ -3728,12 +3733,12 @@ function keptPersonality(entry) {
   return { id: entry.id, name, description, symbol: typeof entry.symbol === "string" && entry.symbol ? entry.symbol.slice(0, 80) : "person.crop.circle", updated: Number(entry.updated) || 0 };
 }
 
-// The newer of two takes of one personality: a removal over a change made at the same moment,
-// else the one whose words sort last, so every copy picks the same.
+// The take of one personality that wins: a removal over any change; else the newer change, and at
+// the same count the one whose words sort last, so every copy picks the same.
 function newerTake(a, b) {
+  if (isRemoval(a) !== isRemoval(b)) return isRemoval(a) ? a : b;
   const at = changedAt(a), bt = changedAt(b);
   if (at !== bt) return at > bt ? a : b;
-  if (isRemoval(a) !== isRemoval(b)) return isRemoval(a) ? a : b;
   return `${a.name ?? ""}\n${a.description ?? ""}` >= `${b.name ?? ""}\n${b.description ?? ""}` ? a : b;
 }
 
@@ -3774,17 +3779,9 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
   });
 }
 
-// A copy from elsewhere without what's dated ahead of this box's clock by more than a day, which
-// would win over every change to come.
-export function timelyPersonalities(given, now = Date.now()) {
-  const timely = list => (Array.isArray(list) ? list : []).filter(entry => changedAt(entry) <= now + 86_400_000);
-  return { personalities: timely(given?.personalities), removed: timely(given?.removed) };
-}
-
-// A peer's copy met with this one's (each box tells the others its own, box to box, with no Mac
-// needed): the personalities that changed here, whose bots here are told what they are now.
-export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK, now = Date.now()) {
-  given = timelyPersonalities(given, now);
+// Another copy met with this one's (a peer's view, a Mac's over SSH): the personalities that changed
+// here, whose bots here are told what they are now.
+export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
   const before = readPersonalities(file);
   const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
   const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
@@ -3814,27 +3811,40 @@ export async function retellBots(ids, readEngine = readEngineFile, readBridge = 
 // What a phone asks of the library (`kuvo/personalities`): `[status, value]`.
 export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
   const now = Date.now();
+  const incomplete = [400, { message: "A personality needs a name and a description." }];
+  const full = [400, { message: FULL_LIBRARY }];
   if (id === undefined) {
     if (method === "GET") return [200, { personalities: readPersonalities(file).personalities }];
     if (method !== "POST") return [405, {}];
     const made = keptPersonality({ id: `custom.${crypto.randomUUID().toLowerCase()}`, name: body?.name, description: body?.description, updated: now });
-    if (!made) return [400, { message: "A personality needs a name and a description." }];
-    changePersonalities(library => ({ ...library, personalities: [...library.personalities, made] }), file, lock);
+    if (!made) return incomplete;
+    let refused = false;
+    changePersonalities(library => {
+      const after = { ...library, personalities: [...library.personalities, made] };
+      if (fitsLibrary(after)) return after;
+      refused = true;
+      return library;
+    }, file, lock);
+    if (refused) return full;
+    noteDocsChanged();
     return [200, made];
   }
   if (!PERSONALITY_ID.test(id)) return [404, {}];
   let found = null;
   if (method === "PATCH") {
-    let refused = false;
+    let refused = null;
     changePersonalities(library => {
       const kept = library.personalities.find(each => each.id === id);
       if (!kept) return library;
-      const changed = keptPersonality({ ...kept, name: body?.name ?? kept.name, description: body?.description ?? kept.description, updated: Math.max(now, kept.updated + 1) });
-      if (!changed) { refused = true; return library; }
+      const changed = keptPersonality({ ...kept, name: body?.name ?? kept.name, description: body?.description ?? kept.description, updated: kept.updated + 1 });
+      if (!changed) { refused = incomplete; return library; }
+      const after = { ...library, personalities: library.personalities.map(each => each.id === id ? changed : each) };
+      if (!fitsLibrary(after)) { refused = full; return library; }
       found = changed;
-      return { ...library, personalities: library.personalities.map(each => each.id === id ? changed : each) };
+      return after;
     }, file, lock);
-    if (refused) return [400, { message: "A personality needs a name and a description." }];
+    if (refused) return refused;
+    if (found) noteDocsChanged();
     return found ? [200, found] : [404, {}];
   }
   if (method === "DELETE") {
@@ -3842,12 +3852,19 @@ export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE,
       const kept = library.personalities.find(each => each.id === id);
       if (!kept) return library;
       found = kept;
+      // Counted past its last change; among removals, the newest are the ones kept.
       return { personalities: library.personalities.filter(each => each.id !== id), removed: [...library.removed, { id, removed: Math.max(now, kept.updated + 1) }] };
     }, file, lock);
+    if (found) noteDocsChanged();
     return found ? [200, {}] : [404, {}];
   }
   return [405, {}];
 }
+
+// The library fits in one document, with room to spare; a change that would take it past that is
+// refused, as on the Mac.
+const FULL_LIBRARY = "There’s no room for more in your personalities. Shorten or remove one, then try again.";
+const fitsLibrary = library => Buffer.byteLength(JSON.stringify(mergePersonalities(library))) <= MOST_DOC - 4096;
 
 // The personalities a bot made here can have: the kit's presets, then the library's, each with
 // what the bot is told (`personalityWords`, as the Mac words it).
@@ -4096,7 +4113,7 @@ export function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, l
 
 export function readLink() {
   try {
-    return JSON.parse(fs.readFileSync(LINK_FILE, "utf8"));
+    return migratedLink(JSON.parse(fs.readFileSync(LINK_FILE, "utf8")));
   } catch {
     return null;
   }
@@ -4174,32 +4191,31 @@ export function authorizePhone(key, hello, address) {
     paired = true;
     return link;
   });
+  if (paired) noteDocsChanged();
   return paired || Boolean(readLink()?.phones?.some(phone => phone.key === encoded));
 }
 
 // ---- Paired phones (PROTOCOL.md, "Paired phones") ----
-// A pairing adds a phone; a removal, from a phone on the list or a Mac that set this machine up,
-// takes one off for good (`removed`, with the pairing it ended): only a pairing of its own, with a
-// new pairing id, lets it back in, and nobody removes a Mac. Each Mac's list adds and removes only
-// the phones it listed. The Mac's are the same rules (PairedPhones in KuvoLink), and both are held
-// to Vectors/link.json.
+// A pairing adds a phone; a removal, from a phone on the list, takes one off for good (`removed`,
+// with the pairing it ended): only a pairing of its own, with a new pairing id, lets it back in,
+// and nobody removes a Mac. The phones this box pairs and removes are its own phones document; a
+// Mac's come in that Mac's, and a removal in any document this box takes is noted here too
+// (PROTOCOL.md, "Documents"). The Mac's are the same rules (PairedPhones in KuvoLink), and both
+// are held to Vectors/link.json.
 
 const KEY = /^[A-Za-z0-9_-]{43}$/;
 const PAIRING = /^[A-Za-z0-9_-]{0,32}$/;
+const ADDRESS = /^[A-Za-z0-9_-]{22}$/;
 // At most so many in one removal, and so many removals kept (the oldest go first).
 const MOST_AT_ONCE = 16;
 const MOST_KEPT = 256;
 
-// The Macs that set this machine up (`setup`), whose lists and mail it takes.
+// The Macs that set this machine up (`setup`), whose documents and mail it takes.
 export const macsOf = link => [...new Set([...(Array.isArray(link?.macs) ? link.macs : []), ...(typeof link?.mac === "string" ? [link.mac] : [])])];
 
-// When a Mac's last list came (its own clock, milliseconds).
-const lastFrom = (link, mac) => link.macAts?.[mac] ?? 0;
-
 // A Mac this machine hasn't heard from in 30 days, by its own clock (gone, or its key made anew):
-// it no longer sets the list, and the phones it listed are as ones from before Macs were named,
-// which another Mac's list takes off, not for good. One back sets the machine up again. `keep`,
-// heard from now.
+// it's no longer one of its Macs, and its documents no longer count. One back sets the machine up
+// again. `keep`, heard from now.
 const MAC_GONE_AFTER = 30 * 24 * 3600 * 1000;
 export function forgetOldMacs(link, keep, now = Date.now()) {
   link.macSeen ??= {};
@@ -4207,14 +4223,8 @@ export function forgetOldMacs(link, keep, now = Date.now()) {
   if (keep) link.macSeen[keep] = now;
   const gone = macsOf(link).filter(mac => mac !== keep && now - link.macSeen[mac] > MAC_GONE_AFTER);
   if (!gone.length) return;
-  link.macs = macsOf(link).filter(mac => !gone.includes(mac));
+  for (const mac of gone) leaveMac(link, mac);
   if (gone.includes(link.mac)) link.mac = keep;
-  for (const mac of gone) {
-    delete link.macSeen[mac];
-    if (link.macAts) delete link.macAts[mac];
-    if (link.peersFrom) delete link.peersFrom[mac];
-  }
-  for (const phone of link.phones ?? []) if (gone.includes(phone.mac)) delete phone.mac;
 }
 
 const removedAlready = (link, key, pairing) => (link.removed ?? []).some(r => r.key === key && r.pairing === pairing);
@@ -4257,130 +4267,499 @@ export function removePhones(link, by, entries) {
   return true;
 }
 
-// The phones the Mac `by` has paired as it lists them now (from: "mac"), and the removals it heard
-// of, beside the ones paired with this machine itself (from: "pair") and other Macs', keeping when
-// each was added and where it is. One of its own it no longer lists is removed; one removed here
-// stays out, unless the Mac paired it again (another pairing). One from before Macs were named goes
-// off the list, not for good: another Mac may list it.
-export function takeMacList(link, given, removed, by = link.mac) {
+// The phones this box lets in, from its documents (`link.phones`, which the rest reads): the ones
+// each of its Macs lists in its phones document (or, for a Mac that hasn't signed one yet, as it
+// listed them before), and the ones paired here, less every pairing removed in a document this box
+// takes, which it notes as its own removal too, so it stays removed whatever becomes of that
+// document. Each keeps when it was added here and where it was last seen.
+export function foldPhones(link, now = Date.now()) {
   const macs = macsOf(link);
+  for (const doc of phoneDocs(link)) {
+    for (const entry of Array.isArray(doc.body.removed) ? doc.body.removed.slice(0, MOST_KEPT) : []) {
+      if (fits(entry, macs) && typeof entry.pairing === "string") noteRemoved(link, entry.key, entry.pairing);
+    }
+  }
   const known = new Map((link.phones ?? []).map(phone => [phone.key, phone]));
-  const ADDRESS = /^[A-Za-z0-9_-]{22}$/;
+  const signed = macs.filter(mac => macDoc(link, mac, "phones"));
   const listed = [];
-  for (const phone of Array.isArray(given) ? given : []) {
-    if (!fits(phone, macs) || listed.some(each => each.key === phone.key)) continue;
-    const pairing = phone.pairing ?? "";
-    if (removedAlready(link, phone.key, pairing)) continue;
-    listed.push({
-      key: phone.key,
-      name: String(phone.name ?? "").slice(0, 100),
-      added: known.get(phone.key)?.added ?? Math.floor(Date.now() / 1000),
-      from: "mac",
-      mac: by,
-      address: ADDRESS.test(phone.address ?? "") ? phone.address : known.get(phone.key)?.address,
-      pairing,
+  const add = phone => {
+    if (!fits(phone, macs) || removedAlready(link, phone.key, phone.pairing ?? "") || listed.some(each => each.key === phone.key)) return;
+    listed.push(phone);
+  };
+  for (const mac of macs) {
+    const doc = macDoc(link, mac, "phones");
+    if (!doc) {
+      for (const phone of link.phones ?? []) if (phone.from === "mac" && phone.mac === mac) add(phone);
+      continue;
+    }
+    for (const phone of Array.isArray(doc.body.phones) ? doc.body.phones.slice(0, 64) : []) {
+      if (!isObject(phone)) continue;
+      add({
+        key: phone.key,
+        name: String(phone.name ?? "").slice(0, 100),
+        added: known.get(phone.key)?.added ?? Math.floor(now / 1000),
+        from: "mac",
+        mac,
+        address: ADDRESS.test(phone.address ?? "") ? phone.address : known.get(phone.key)?.address,
+        pairing: typeof phone.pairing === "string" ? phone.pairing : "",
+      });
+    }
+  }
+  // One from before Macs were named: kept until a Mac signs its phones.
+  if (!signed.length) for (const phone of link.phones ?? []) if (phone.from === "mac" && phone.mac == null) add(phone);
+  for (const phone of link.phones ?? []) if (phone.from === "pair") add(phone);
+  link.phones = listed;
+}
+
+// This box's own phones document: the phones paired here, and every removal it knows of.
+const ownPhones = link => ({
+  phones: (link.phones ?? []).filter(phone => phone.from === "pair").map(phone => ({ key: phone.key, name: phone.name ?? "", ...(phone.address ? { address: phone.address } : {}), pairing: phone.pairing ?? "" })),
+  removed: (link.removed ?? []).map(({ key, pairing }) => ({ key, pairing })),
+});
+
+// ---- Documents (PROTOCOL.md, "Documents") ----
+// What boxes copy between them: who a Mac's boxes are (its peers document), the phones each box
+// pairs and removes (its phones document), and your personalities (each box's view of the
+// library). Each origin signs its own with a key of its own (Ed25519: `sign` in link.json, made
+// with this box's other keys; a Mac's comes in setup, over SSH), and numbers each version; any box
+// passes a copy on, and a box keeps the newest one it can verify from each origin it takes that
+// kind from. No clock decides anything: boxes tell each other what they have as they meet
+// (`have`), what changed as it changes (`give`), and what they have again with their agents.
+
+const DOC_SIGNED = Buffer.from("kuvo-link doc v1\0");
+const DOC_KINDS = ["peers", "phones", "personalities"];
+// A document at most so big (its JSON), and in a mail at most so much of one; a bigger one goes in parts.
+export const MOST_DOC = 512 * 1024;
+const DOC_PART = 40_000;
+const MOST_PARTS = Math.ceil(MOST_DOC * 4 / 3 / DOC_PART) + 1;
+const SIGN = /^[A-Za-z0-9_-]{43}$/;
+const ED_PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
+const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
+
+export const newSigningSeed = () => crypto.randomBytes(32).toString("base64url");
+const edPrivate = seed => crypto.createPrivateKey({ key: Buffer.concat([ED_PKCS8, Buffer.from(seed, "base64url")]), format: "der", type: "pkcs8" });
+const edPublic = key => crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(key, "base64url")]), format: "der", type: "spki" });
+const signingKeys = new Map();
+// The public half of a signing key (its 32-byte seed): what documents name as their origin.
+export function signingKeyOf(seed) {
+  let key = signingKeys.get(seed);
+  if (!key) {
+    key = crypto.createPublicKey(edPrivate(seed)).export({ format: "der", type: "spki" }).subarray(ED_SPKI.length).toString("base64url");
+    signingKeys.set(seed, key);
+  }
+  return key;
+}
+export const ownSign = link => { try { return typeof link?.sign === "string" ? signingKeyOf(link.sign) : null; } catch { return null; } };
+
+const shortHash = bytes => crypto.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
+const bodyHash = body => shortHash(Buffer.from(JSON.stringify(body)));
+// The bytes an origin signs for one version of its document.
+export const docBytes = (origin, kind, n, body) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));
+
+// Version `n` of the document of `kind` that the key `seed` signs: `{d, s}`, as it's given.
+export function signDoc(seed, kind, n, body) {
+  const bytes = docBytes(signingKeyOf(seed), kind, n, body);
+  return { d: bytes.toString("base64url"), s: crypto.sign(null, Buffer.concat([DOC_SIGNED, bytes]), edPrivate(seed)).toString("base64url") };
+}
+
+// A document as given, checked: signed by the origin it names, of a kind there is, its version a
+// whole number from 1, no bigger than a document can be. `{origin, kind, n, body, h, envelope}`
+// (`h`, its bytes' hash, as digests name it), or null.
+export function readDoc(envelope) {
+  if (!isObject(envelope) || typeof envelope.d !== "string" || typeof envelope.s !== "string" || envelope.d.length > Math.ceil(MOST_DOC * 4 / 3) + 4) return null;
+  let bytes, doc;
+  try {
+    bytes = Buffer.from(envelope.d, "base64url");
+    if (bytes.length > MOST_DOC || bytes.toString("base64url") !== envelope.d) return null;
+    doc = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!isObject(doc) || doc.v !== 1 || !DOC_KINDS.includes(doc.kind) || typeof doc.origin !== "string" || !SIGN.test(doc.origin)
+    || !Number.isSafeInteger(doc.n) || doc.n < 1 || !isObject(doc.body)) return null;
+  try {
+    const signature = Buffer.from(envelope.s, "base64url");
+    if (signature.length !== 64 || !crypto.verify(null, Buffer.concat([DOC_SIGNED, bytes]), edPublic(doc.origin), signature)) return null;
+  } catch {
+    return null;
+  }
+  return { origin: doc.origin, kind: doc.kind, n: doc.n, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
+}
+
+// One this box keeps (`link.docs`, checked as it came), read again; remembered, as it's read often.
+const heldDocs = new Map();
+function held(envelope) {
+  if (typeof envelope?.d !== "string") return null;
+  let doc = heldDocs.get(envelope.d);
+  if (!doc) {
+    try {
+      const bytes = Buffer.from(envelope.d, "base64url");
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      doc = { origin: parsed.origin, kind: parsed.kind, n: parsed.n, body: isObject(parsed.body) ? parsed.body : {}, h: shortHash(bytes), envelope };
+    } catch {
+      return null;
+    }
+    if (heldDocs.size >= 256) heldDocs.delete(heldDocs.keys().next().value);
+    heldDocs.set(envelope.d, doc);
+  }
+  return doc;
+}
+const docKey = (origin, kind) => `${origin} ${kind}`;
+
+// The signing key a Mac of this box's gave in setup, over SSH; null for one that gave none yet (a
+// Mac with Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For released Macs").
+const macSign = (link, mac) => (typeof link?.macSigns?.[mac] === "string" && SIGN.test(link.macSigns[mac]) ? link.macSigns[mac] : null);
+function macDoc(link, mac, kind) {
+  const sign = macSign(link, mac);
+  return sign ? held(link.docs?.[docKey(sign, kind)]) : null;
+}
+// The phones documents this box takes now: its Macs' and its peers'.
+const phoneDocs = link => Object.values(link?.docs ?? {}).map(held).filter(doc => doc?.kind === "phones");
+
+// Whether this box takes `kind` from `origin`: who its boxes are, only from its own Macs; phones and
+// personalities from those Macs, its peers, and itself (a copy of its own it lost count of).
+function takesFrom(link, origin, kind) {
+  const macs = macsOf(link).map(mac => macSign(link, mac)).filter(Boolean);
+  if (kind === "peers") return macs.includes(origin);
+  return macs.includes(origin) || origin === ownSign(link) || peersOf(link).some(peer => peer.sign === origin);
+}
+
+// Whether the box with the key `to` takes `kind` from `origin`, as far as this box knows: one of
+// this box's Macs lists them both (or is `origin`; who a Mac's boxes are, only from that Mac).
+function takenBy(link, to, origin, kind) {
+  for (const mac of macsOf(link)) {
+    const doc = macDoc(link, mac, "peers");
+    const boxes = Array.isArray(doc?.body.boxes) ? doc.body.boxes : [];
+    if (!boxes.some(box => box?.key === to)) continue;
+    if (origin === doc.origin || (kind !== "peers" && boxes.some(box => box?.sign === origin))) return true;
+  }
+  return false;
+}
+
+// Who this box gives documents to: its peers that sign their own (a Mac that gave no signing key
+// yet takes none).
+const docPeers = link => peersOf(link).filter(peer => typeof peer.sign === "string");
+
+// A document given (`{d, s}`), taken when it verifies, comes from an origin this box takes that kind
+// from, and is newer than the one it has (at the same version, the one whose hash sorts first, so
+// every box keeps the same one). Another's personalities aren't kept, only met with this box's own
+// (`link.views` notes how far each has come); one of this box's own, newer than it knew of (it lost
+// count), moves its count on. The document (`mine` for one of its own), or null.
+export function takeDoc(link, envelope) {
+  const doc = readDoc(envelope);
+  if (!doc || !takesFrom(link, doc.origin, doc.kind)) return null;
+  if (doc.origin === ownSign(link)) {
+    if (doc.kind === "peers" || doc.n > MOST_COUNT) return null;
+    const had = link.own?.[doc.kind];
+    if (had && (doc.n < had.n || (doc.n === had.n && doc.h === had.h))) return null;
+    link.own = { ...(link.own ?? {}), [doc.kind]: { n: Math.max(doc.n, had?.n ?? 0), h: doc.h, b: bodyHash(doc.body) } };
+    return { ...doc, mine: true };
+  }
+  const newer = had => !had || doc.n > had.n || (doc.n === had.n && doc.h < had.h);
+  if (doc.kind === "personalities") {
+    if (!newer(link.views?.[doc.origin])) return null;
+    link.views = { ...(link.views ?? {}), [doc.origin]: { n: doc.n, h: doc.h } };
+    return doc;
+  }
+  const key = docKey(doc.origin, doc.kind);
+  if (!newer(held(link.docs?.[key]))) return null;
+  link.docs = { ...(link.docs ?? {}), [key]: doc.envelope };
+  return doc;
+}
+
+// Documents from origins this box no longer takes them from (a Mac gone, a box it no longer lists):
+// let go. Who its boxes are first, as the rest follows from it.
+function pruneDocs(link) {
+  for (const kind of DOC_KINDS) {
+    for (const [key, envelope] of Object.entries(link.docs ?? {})) {
+      const doc = held(envelope);
+      if (!doc) delete link.docs[key];
+      else if (doc.kind === kind && !takesFrom(link, doc.origin, doc.kind)) delete link.docs[key];
+    }
+  }
+  for (const origin of Object.keys(link.views ?? {})) if (!takesFrom(link, origin, "personalities")) delete link.views[origin];
+}
+
+// This box's own document of `kind` with `body`: the version it has, or the next one when `body`
+// changed. `{envelope, changed}`, or null without a signing key.
+export function ownDoc(link, kind, body) {
+  if (!ownSign(link)) return null;
+  const b = bodyHash(body);
+  const had = link.own?.[kind];
+  const changed = !had || had.b !== b;
+  const n = changed ? (had?.n ?? 0) + 1 : had.n;
+  const envelope = signDoc(link.sign, kind, n, body);
+  if (changed) link.own = { ...(link.own ?? {}), [kind]: { n, h: shortHash(Buffer.from(envelope.d, "base64url")), b } };
+  return { envelope, changed };
+}
+
+// This box's own documents as they are now (its phones, its view of your personalities), each with
+// its next version where it changed: `{phones, personalities}`, each `{envelope, changed}`.
+function ownDocs(state) {
+  const docs = {};
+  const phones = ownDoc(state.link, "phones", ownPhones(state.link));
+  if (phones) docs.phones = phones;
+  const library = mergePersonalities(state.library);
+  if (Buffer.byteLength(JSON.stringify(library)) <= MOST_DOC - 4096) {
+    const personalities = ownDoc(state.link, "personalities", library);
+    if (personalities) docs.personalities = personalities;
+  }
+  return docs;
+}
+
+// What this box has, as it tells other boxes: each document's origin, kind, version and hash.
+export function digestOf(link) {
+  const have = [];
+  for (const envelope of Object.values(link?.docs ?? {})) {
+    const doc = held(envelope);
+    if (doc) have.push([doc.origin, doc.kind, doc.n, doc.h]);
+  }
+  for (const [origin, seen] of Object.entries(link?.views ?? {})) have.push([origin, "personalities", seen.n, seen.h]);
+  const own = ownSign(link);
+  if (own) for (const kind of ["phones", "personalities"]) if (link.own?.[kind]) have.push([own, kind, link.own[kind].n, link.own[kind].h]);
+  return have;
+}
+
+// A document too big for one mail comes in parts (`{whole, i, of, d, s}`: `whole`, its `d`'s hash),
+// put together here, at most four on their way from one box at a time. The document once all are
+// here, or null.
+function assemble(parts, from, part) {
+  if (!isObject(part) || typeof part.whole !== "string" || !Number.isInteger(part.i) || !Number.isInteger(part.of) || part.of < 2 || part.of > MOST_PARTS
+    || part.i < 0 || part.i >= part.of || typeof part.d !== "string" || part.d.length > DOC_PART || typeof part.s !== "string") return null;
+  const key = `${from} ${part.whole}`;
+  let pending = parts.get(key);
+  if (!pending || pending.of !== part.of) {
+    const theirs = [...parts.keys()].filter(each => each.startsWith(`${from} `));
+    if (theirs.length >= 4) parts.delete(theirs[0]);
+    pending = { of: part.of, s: part.s, pieces: new Map() };
+    parts.set(key, pending);
+  }
+  pending.pieces.set(part.i, part.d);
+  if (pending.pieces.size < part.of) return null;
+  parts.delete(key);
+  const d = Array.from({ length: part.of }, (_, i) => pending.pieces.get(i)).join("");
+  if (crypto.createHash("sha256").update(d).digest("base64url") !== part.whole) return null;
+  return { d, s: pending.s };
+}
+
+// What goes to one box (`{give, have, reply}`), as the mails it takes: documents together while
+// they fit, a bigger one in parts, the digest last.
+export function docMails(docs) {
+  const mails = [];
+  let give = [], size = 0;
+  for (const envelope of docs.give ?? []) {
+    const length = envelope.d.length + envelope.s.length + 16;
+    if (length > 48_000) {
+      const whole = crypto.createHash("sha256").update(envelope.d).digest("base64url");
+      const of = Math.ceil(envelope.d.length / DOC_PART);
+      for (let i = 0; i < of; i++) mails.push({ part: { whole, i, of, d: envelope.d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: envelope.s } });
+      continue;
+    }
+    if (size + length > 48_000 && give.length) {
+      mails.push({ give });
+      give = [];
+      size = 0;
+    }
+    give.push(envelope);
+    size += length;
+  }
+  if (give.length) mails.push({ give });
+  if (docs.have) mails.push({ have: docs.have, ...(docs.reply ? { reply: true } : {}) });
+  return mails;
+}
+
+// What this box does with documents another box or Mac sent it (`sender`, `{key, sign?}`; `docs`,
+// `{give?, part?, have?, reply?}`), as work on `state` (`{link, library, parts}`, changed in place):
+// what it takes, the Macs that said this box is no longer theirs, and what goes to whom now
+// (`send`, `[{to, docs}]`). Each document it took goes on to the boxes that take it, but back to the
+// one it came from; its own that changed, to all of them; and for a digest, what the sender lacks,
+// and, unless it's an answer, this box's own digest when the sender has something newer.
+export function docsWork(state, sender, docs) {
+  const { link } = state;
+  const sends = new Map();
+  const to = (peer, change) => {
+    const docs = sends.get(peer.key) ?? { peer, give: [] };
+    change(docs);
+    sends.set(peer.key, docs);
+  };
+  const given = Array.isArray(docs?.give) ? docs.give.slice(0, 64) : [];
+  if (isObject(docs?.part)) {
+    state.parts ??= new Map();
+    const whole = assemble(state.parts, sender.key, docs.part);
+    if (whole) given.push(whole);
+  }
+  // Who its boxes are first: the rest is taken from the boxes they name.
+  const took = [];
+  for (const kind of DOC_KINDS) {
+    for (const envelope of given) {
+      const peeked = held(envelope);
+      if (peeked?.kind !== kind) continue;
+      const doc = takeDoc(link, envelope);
+      if (doc) took.push(doc);
+    }
+  }
+  const left = [];
+  const own = ownKey(link);
+  for (const doc of took) {
+    if (doc.kind !== "peers") continue;
+    const mac = macsOf(link).find(each => macSign(link, each) === doc.origin);
+    const named = Array.isArray(doc.body.boxes) && doc.body.boxes.some(box => box?.key === own);
+    if (mac && !named && Array.isArray(doc.body.left) && doc.body.left.includes(own)) left.push(mac);
+  }
+  for (const mac of left) leaveMac(link, mac);
+  pruneDocs(link);
+  foldPhones(link);
+  const personalities = took.filter(doc => doc.kind === "personalities").map(doc => doc.body);
+  if (personalities.length) state.library = mergePersonalities(state.library, ...personalities);
+  // A digest: what the sender lacks, and whether it has something this box lacks.
+  let ask = false;
+  if (Array.isArray(docs?.have)) {
+    const theirs = new Map();
+    for (const entry of docs.have.slice(0, 512)) {
+      if (Array.isArray(entry) && typeof entry[0] === "string" && DOC_KINDS.includes(entry[1]) && Number.isSafeInteger(entry[2])) theirs.set(docKey(entry[0], entry[1]), { n: entry[2], h: String(entry[3] ?? "") });
+    }
+    const self = ownSign(link);
+    // One of this box's own further on than it knew (it lost count): its next one goes past it.
+    for (const kind of ["phones", "personalities"]) {
+      const there = self && theirs.get(docKey(self, kind));
+      if (there && there.n <= MOST_COUNT && there.n > (link.own?.[kind]?.n ?? 0)) link.own = { ...(link.own ?? {}), [kind]: { n: there.n, h: there.h, b: "" } };
+    }
+    const senderSign = sender.sign ?? macSign(link, sender.key);
+    const behind = (key, n, h) => {
+      const there = theirs.get(key);
+      return !there || there.n < n || (there.n === n && there.h > h);
+    };
+    for (const envelope of Object.values(link.docs ?? {})) {
+      const doc = held(envelope);
+      if (doc && behind(docKey(doc.origin, doc.kind), doc.n, doc.h) && takenBy(link, sender.key, doc.origin, doc.kind)) to(sender, docs => docs.give.push(envelope));
+    }
+    if (!docs.reply) {
+      for (const [key, there] of theirs) {
+        const [origin, kind] = key.split(" ");
+        if (origin === self || (kind === "personalities" && origin !== senderSign) || !takesFrom(link, origin, kind)) continue;
+        const have = kind === "personalities" ? link.views?.[origin] : held(link.docs?.[key]);
+        if (!have || have.n < there.n || (have.n === there.n && have.h > there.h)) ask = true;
+      }
+    }
+    state.theirs = theirs;
+  }
+  const ownNow = ownDocs(state);
+  const peers = docPeers(link);
+  const mine = ownSign(link);
+  for (const doc of took.filter(doc => doc.kind !== "personalities" && !doc.mine)) {
+    for (const peer of peers) {
+      if (peer.key !== sender.key && peer.sign !== doc.origin && takenBy(link, peer.key, doc.origin, doc.kind)) to(peer, docs => docs.give.push(doc.envelope));
+    }
+  }
+  for (const made of Object.values(ownNow)) {
+    if (made.changed) for (const peer of peers) if (takenBy(link, peer.key, mine, "phones")) to(peer, docs => docs.give.push(made.envelope));
+  }
+  // What the sender's digest lacks of this box's own (those that changed went already).
+  if (state.theirs) {
+    const senderPeer = peers.find(peer => peer.key === sender.key);
+    for (const [kind, made] of Object.entries(ownNow)) {
+      const record = link.own[kind];
+      const there = state.theirs.get(docKey(mine, kind));
+      if (senderPeer && !made.changed && (!there || there.n < record.n || (there.n === record.n && there.h > record.h))) to(senderPeer, docs => docs.give.push(made.envelope));
+    }
+    delete state.theirs;
+  }
+  if (ask) {
+    const senderPeer = peers.find(peer => peer.key === sender.key) ?? sender;
+    to(senderPeer, docs => {
+      docs.have = digestOf(link);
+      docs.reply = true;
     });
   }
-  const keys = new Set(listed.map(phone => phone.key));
-  const kept = [];
-  for (const phone of link.phones ?? []) {
-    if (keys.has(phone.key)) continue;
-    if (phone.from === "pair" || (phone.mac != null && phone.mac !== by)) kept.push(phone);
-    else if (by != null && phone.mac === by) noteRemoved(link, phone.key, phone.pairing ?? "");
-  }
-  link.phones = [...listed, ...kept];
-  for (const entry of Array.isArray(removed) ? removed : []) {
-    if (fits(entry, macs)) takeOff(link, entry.key, entry.pairing ?? "");
-  }
+  return {
+    took,
+    left,
+    send: [...sends.values()].filter(docs => docs.give.length || docs.have).map(({ peer, ...docs }) => ({ to: peer, docs: { ...docs, give: dedupe(docs.give) } })),
+  };
+}
+const dedupe = envelopes => [...new Map(envelopes.map(envelope => [envelope.d, envelope])).values()];
+
+// Meeting the others (just connected): this box's own documents as they are now, and its digest to
+// each, so each gives what this one lacks, and asks for what it has.
+export function greetWork(state) {
+  ownDocs(state);
+  const have = digestOf(state.link);
+  return { send: docPeers(state.link).map(peer => ({ to: peer, docs: { have } })) };
 }
 
-// A Mac's phone list, mailed through the relay (sealed with its key, which its setup gave): one
-// you removed there loses its way in here at once, though the Mac can't reach this machine
-// itself. Only a newer list from that Mac than its last one counts.
-export function phonesFromMac(body, host) {
-  const found = readLink();
-  if (!found?.key) return;
-  const opened = openMail(body, found);
-  if (opened?.sender.kind === "mac" && macsOf(found).includes(opened.sender.key)) takeFromMac(opened.payload, opened.sender.key, host);
+// Something changed here (a phone paired or removed, a personality, a Mac's documents that came by
+// SSH): this box's own documents that changed go to every box that takes them, and with `tell`,
+// its digest too, so each gives what this one lacks and asks for what it has.
+export function changedWork(state, tell = false) {
+  const made = Object.values(ownDocs(state)).filter(each => each.changed).map(each => each.envelope);
+  const mine = ownSign(state.link);
+  const have = tell ? digestOf(state.link) : null;
+  return {
+    send: docPeers(state.link).filter(peer => takenBy(state.link, peer.key, mine, "phones"))
+      .map(peer => ({ to: peer, docs: { give: made, ...(have ? { have } : {}) } }))
+      .filter(each => each.docs.give.length || each.docs.have),
+  };
 }
 
-// What a Mac that set this box up mails it: the phones you've paired, and its peers (PROTOCOL.md,
-// "Peers"), each list taken only if it's newer than that Mac's last.
-export function takeFromMac(given, by, host) {
-  if (typeof given?.at !== "number") return;
-  const changed = updateLink(link => {
-    if (!link) return null;
-    let took = false;
-    if (Array.isArray(given.phones) && given.at > lastFrom(link, by)) {
-      takeMacList(link, given.phones, given.removed, by);
-      link.macAts = { ...(link.macAts ?? {}), [by]: given.at };
-      took = true;
-    }
-    if (Array.isArray(given.peers)) took = takePeers(link, by, given.peers, given.at, given.moved) || took;
-    if (!took) return null;
-    forgetOldMacs(link, by);
-    return link;
-  });
-  if (changed) host?.keepOnly(new Set(changed.phones.map(phone => phone.key)));
+// A Mac that no longer counts here (it removed this machine, or wasn't heard from in 30 days): what
+// it gave goes, and the phones it listed with it; another Mac's stay.
+export function leaveMac(link, mac) {
+  link.macs = macsOf(link).filter(each => each !== mac);
+  if (link.mac === mac) {
+    if (link.macs.length) link.mac = link.macs[0];
+    else delete link.mac;
+  }
+  for (const field of ["macSeen", "macSigns", "legacy"]) if (link[field]) delete link[field][mac];
+  link.phones = (link.phones ?? []).filter(phone => !(phone.from === "mac" && phone.mac === mac));
 }
 
 // ---- Peers (PROTOCOL.md, "Peers") ----
-// The other boxes a Mac set this one up with: itself and its other machines, each kept as that Mac
-// last listed them (a newer list replaces its last), so one a Mac removed leaves every list it gives.
-// Only a Mac that set this box up lists them; mail is taken from them, and goes to them.
+// The other boxes a Mac set this one up with: itself and its other machines, each as that Mac's
+// newest peers document names them, so one a Mac removed leaves every box it lists.
 
 const MOST_PEERS = 64;
-const fitsPeer = peer => isObject(peer) && typeof peer.key === "string" && /^[A-Za-z0-9_-]{43}$/.test(peer.key)
-  && typeof peer.address === "string" && /^[A-Za-z0-9_-]{22}$/.test(peer.address) && (peer.kind === "mac" || peer.kind === "machine");
+const fitsPeer = peer => isObject(peer) && typeof peer.key === "string" && KEY.test(peer.key)
+  && typeof peer.address === "string" && ADDRESS.test(peer.address) && (peer.kind === "mac" || peer.kind === "machine");
+const cleanPeer = ({ key, address, name, kind, id, sign }) => ({ key, address, kind, name: plainName(name).slice(0, 100), ...(typeof id === "string" ? { id: id.slice(0, 200) } : {}), ...(typeof sign === "string" && SIGN.test(sign) ? { sign } : {}) });
+const cleanMoved = moved => (Array.isArray(moved) ? moved : []).filter(each => isObject(each) && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && KEY.test(each.key))
+  .slice(0, 500).map(({ session, key }) => ({ session, key }));
 
-export function takePeers(link, by, peers, at, moved = []) {
-  if (!Array.isArray(peers) || typeof at !== "number") return false;
-  link.peersFrom ??= {};
-  if (at <= (link.peersFrom[by]?.at ?? 0)) return false;
-  link.peersFrom[by] = { at, peers: peers.filter(fitsPeer).slice(0, MOST_PEERS).map(({ key, address, name, kind, id }) => ({ key, address, kind, name: plainName(name).slice(0, 100), ...(typeof id === "string" ? { id: id.slice(0, 200) } : {}) })),
-    moved: (Array.isArray(moved) ? moved : []).filter(each => isObject(each) && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && /^[A-Za-z0-9_-]{43}$/.test(each.key))
-      .slice(0, 500).map(({ session, key }) => ({ session, key })) };
+// A list of peers from a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For
+// released Macs"): that Mac's newest, by its own `at`, used as its peers document would be, and
+// never passed on. False when it isn't taken.
+export function takeLegacyPeers(link, mac, peers, at, moved = []) {
+  if (macSign(link, mac) || !Array.isArray(peers) || typeof at !== "number") return false;
+  link.legacy ??= {};
+  if (at <= (link.legacy[mac]?.at ?? 0)) return false;
+  link.legacy[mac] = { at, peers: peers.filter(fitsPeer).slice(0, MOST_PEERS).map(cleanPeer), moved: cleanMoved(moved) };
   return true;
+}
+
+// Each of this box's Macs' word on its boxes: its peers document, or the list it gave before it
+// signed them (`legacy`).
+function macWords(link) {
+  return macsOf(link).map(mac => {
+    const doc = macDoc(link, mac, "peers");
+    if (doc) return { boxes: Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, MOST_PEERS) : [], moved: doc.body.moved };
+    return link?.legacy?.[mac] ? { boxes: link.legacy[mac].peers ?? [], moved: link.legacy[mac].moved } : null;
+  }).filter(Boolean);
 }
 
 // Conversations a Mac moved from one box to another, by where each lives now (its box's key): the
 // box it left may still list it, until it's back to let it go.
 export function movedOf(link) {
-  const macs = new Set(macsOf(link));
   const moved = new Map();
-  for (const [mac, given] of Object.entries(link?.peersFrom ?? {})) {
-    if (!macs.has(mac)) continue;
-    for (const { session, key } of given?.moved ?? []) moved.set(session, key);
-  }
+  for (const word of macWords(link)) for (const { session, key } of cleanMoved(word.moved)) moved.set(session, key);
   return moved;
 }
 
-// This box's peers now: from each of its Macs' lists, itself left out.
+// This box's peers now: every box its Macs name, itself left out.
 export function peersOf(link) {
-  if (!link?.peersFrom || !Object.keys(link.peersFrom).length) return [];
-  // Each of this box's Macs' lists as that Mac last gave it: its own copy, or a newer one a
-  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail. (A machine
-  // a newer list dropped has nothing newer to pass on: that Mac stopped telling it.)
-  return composedPeers(link, peersFromMacs(link).filter(peer => peer.kind === "machine"));
-}
-
-// This box's Macs' lists, each the newest of its own copy and those `vouchers` passed on; a copy
-// one passed on counts that machine too (a Mac's list to a machine leaves that machine out).
-function composedPeers(link, vouchers) {
+  if (!link) return [];
   const own = ownKey(link);
   const byKey = new Map();
-  for (const mac of macsOf(link)) {
-    let newest = link.peersFrom[mac], from = null;
-    // Only a machine that Mac itself named carries its word.
-    for (const voucher of vouchers.filter(each => (link.peersFrom[mac]?.peers ?? []).some(peer => peer.key === each.key))) {
-      const passed = link.vouched?.[voucher.key]?.[mac];
-      if (passed && passed.at > (newest?.at ?? 0)) {
-        newest = passed;
-        from = voucher;
-      }
-    }
-    const listed = [...(newest?.peers ?? []), ...(from ? [from] : [])];
-    for (const peer of listed) if (fitsPeer(peer) && peer.key !== own && !byKey.has(peer.key)) byKey.set(peer.key, peer);
+  for (const word of macWords(link)) {
+    for (const peer of word.boxes) if (fitsPeer(peer) && peer.key !== own && !byKey.has(peer.key)) byKey.set(peer.key, cleanPeer(peer));
   }
   return [...byKey.values()];
 }
@@ -4390,39 +4769,20 @@ function ownKey(link) {
   try { return publicOf(Buffer.from(link.key, "base64url")).toString("base64url"); } catch { return null; }
 }
 
-// The peers this box's own Macs told it of (`peersFrom`), itself left out.
-export function peersFromMacs(link) {
-  if (!link?.peersFrom || !Object.keys(link.peersFrom).length) return [];
-  const own = ownKey(link);
-  const macs = new Set(macsOf(link));
-  const byKey = new Map();
+// link.json as an earlier bridge left it: each Mac's list it had (`peersFrom`) kept as that Mac's
+// word until it signs a document; what lists passed on and their dates needed, gone.
+function migratedLink(link) {
+  if (!isObject(link) || !(link.peersFrom || link.vouched || link.macAts)) return link;
   for (const [mac, given] of Object.entries(link.peersFrom ?? {})) {
-    if (!macs.has(mac)) continue;
-    for (const peer of given?.peers ?? []) if (fitsPeer(peer) && peer.key !== own) byKey.set(peer.key, peer);
+    if (!macSign(link, mac) && isObject(given)) {
+      link.legacy ??= {};
+      link.legacy[mac] ??= { at: given.at ?? 0, peers: Array.isArray(given.peers) ? given.peers : [], moved: given.moved ?? [] };
+    }
   }
-  return [...byKey.values()];
-}
-
-// The lists a machine this box's Macs named passes on, each as one of its Macs gave it
-// (`[{mac, at, peers}]`): kept for the Macs that are this box's own too, a newer copy replacing
-// that machine's last. Only a Mac says who a box's peers are; a machine only carries its word, to
-// a box that missed it. False when nothing's kept.
-export function takeVouched(link, by, lists) {
-  if (!Array.isArray(lists)) return false;
-  if (!peersFromMacs(link).some(peer => peer.key === by && peer.kind === "machine")) return false;
-  const macs = new Set(macsOf(link));
-  let changed = false;
-  for (const list of lists.slice(0, 16)) {
-    // Never one dated ahead of this box's clock by more than a day, which would win over every
-    // list its Mac gives after.
-    if (!isObject(list) || !macs.has(list.mac) || typeof list.at !== "number" || list.at > Date.now() + 86_400_000 || !Array.isArray(list.peers)) continue;
-    link.vouched ??= {};
-    link.vouched[by] ??= {};
-    if (list.at <= (link.vouched[by][list.mac]?.at ?? 0)) continue;
-    link.vouched[by][list.mac] = { at: list.at, peers: list.peers.filter(fitsPeer).slice(0, MOST_PEERS).map(({ key, address, name, kind, id }) => ({ key, address, kind, name: plainName(name).slice(0, 100), ...(typeof id === "string" ? { id: id.slice(0, 200) } : {}) })) };
-    changed = true;
-  }
-  return changed;
+  delete link.peersFrom;
+  delete link.vouched;
+  delete link.macAts;
+  return link;
 }
 
 // A mail frame's body opened: from one of this box's Macs, or one of its peers. `{sender, payload}`,
@@ -4734,20 +5094,11 @@ export function peerMail(sender, payload, host, targets = () => []) {
   if (isObject(payload.agents)) {
     if (takeAgents(sender, payload.agents)) writeAgents();
   }
-  // Your personalities only from a machine this box's own Macs named (all its peers are).
-  if (isObject(payload.personalities) && sender.kind === "machine") {
-    takePersonalities(payload.personalities).catch(() => {});
-  }
-  if (isObject(payload.vouched) && sender.kind === "machine") {
-    const changed = updateLink(link => link && takeVouched(link, sender.key, payload.vouched.lists) ? link : null);
-    if (changed) writeAgents(changed);
-  }
+  // Documents (PROTOCOL.md, "Documents"): given, in parts, or a digest of what it has.
+  if (isObject(payload.docs)) receiveDocs(sender, payload.docs, host).catch(() => {});
   // It's just connected, and may have missed what this box told it (the relay keeps nothing):
   // told again at the next round.
-  if (payload.ask === "agents") {
-    toldPeers.delete(sender.key);
-    toldPersonalities.delete(sender.key);
-  }
+  if (payload.ask === "agents") toldPeers.delete(sender.key);
   if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer }).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered);
 }
@@ -4775,28 +5126,28 @@ export async function refreshOwn(readEngine, link = readLink()) {
   return ownList;
 }
 
-// Tells each peer this box's agents: when they change, and every ten minutes. `told` remembers
-// what went to whom, and when. `ask`: just connected, so each is told, and asked for theirs.
+// Tells each peer this box's agents: when they change, and every ten minutes, with a digest of
+// its documents to each that takes them, so one that missed what was given gets it then (PROTOCOL.md,
+// "Documents"). `told` remembers what went to whom, and when. `ask`: just connected, so each is
+// told, and asked for theirs.
 const toldPeers = new Map();
-// What each machine was last told of your personalities, and when.
-const toldPersonalities = new Map();
 export async function announce(host, readEngine, link = readLink(), now = Date.now(), ask = false) {
   if (!link?.key) return;
   await refreshOwn(readEngine, link);
   if (!ownList) return;
-  // With them, to a machine this box's Macs named, their lists as they gave them (`vouched`), for
-  // one that missed a Mac's mail.
-  const lists = macsOf(link).filter(mac => link.peersFrom?.[mac]).map(mac => ({ mac, at: link.peersFrom[mac].at, peers: link.peersFrom[mac].peers }));
-  const json = JSON.stringify([ownList, lists]);
+  const json = JSON.stringify(ownList);
+  let have = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
     if (!ask && last && last.json === json && now - last.at < 600_000) continue;
-    const others = peer.kind === "machine" && lists.length ? { vouched: { lists } } : {};
+    // Not as it connects: `docsChanged` greets each with its digest then.
+    if (have === null) have = ask ? false : currentDigest();
+    const docs = peer.sign && have ? { docs: { have } } : {};
     // As many as fit in one mail: the first (bots, then the latest sessions) first.
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent }, ...others, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;
@@ -4805,33 +5156,93 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
       toldPeers.set(peer.key, { json, at: now, sessions: new Set(sent.map(agent => agent.session)) });
     } catch {}
   }
-  // Your personalities, to your other machines (a Mac meets a box's copy as it connects): when
-  // this copy changes, and every ten minutes, so one that was away catches up.
+}
+
+// ---- Documents, between this box and the others ----
+
+// Parts of documents on their way here, from each box (`assemble`).
+const docParts = new Map();
+// Something changed here, from another process (`setup`, `pair`, a Mac's `box personalities`, over
+// SSH): the bridge notes it within seconds (`docsNoted`), and tells the others.
+const DOCS_CHANGED = path.join(RUN, "docs.changed");
+export function noteDocsChanged() {
+  try {
+    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(DOCS_CHANGED, "", { mode: 0o600 });
+  } catch {}
+}
+function docsNoted() {
+  try {
+    fs.rmSync(DOCS_CHANGED);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// This box's digest, its own documents brought up to date first.
+function currentDigest() {
   const library = readPersonalities();
-  const words = JSON.stringify(library);
-  if (!library.personalities.length && !library.removed.length) return;
-  for (const peer of peersOf(link).filter(peer => peer.kind === "machine")) {
-    const last = toldPersonalities.get(peer.key);
-    if (!ask && last && last.words === words && now - last.at < 600_000) continue;
-    // In as many mails as it takes (each personality is met on its own), the newest first.
-    const entries = [...library.personalities, ...library.removed].sort((a, b) => changedAt(b) - changedAt(a));
-    const parts = [[]];
-    let size = 0;
-    for (const entry of entries) {
-      // Well within a mail (`mailFor`'s limit), as JSON.
-      const length = Buffer.byteLength(JSON.stringify(entry));
-      if (size + length > 40_000 && parts.at(-1).length) {
-        parts.push([]);
-        size = 0;
-      }
-      parts.at(-1).push(entry);
-      size += length;
+  let have = null;
+  updateLink(link => {
+    if (!link?.sign) return null;
+    const before = JSON.stringify(link.own ?? {});
+    greetWork({ link, library });
+    have = digestOf(link);
+    return JSON.stringify(link.own ?? {}) === before ? null : link;
+  });
+  return have;
+}
+
+// Sends what `work` says goes (`[{to, docs}]`), in as many mails as each takes.
+function sendDocs(host, link, sends) {
+  if (!host || !link?.key) return;
+  for (const { to, docs } of sends ?? []) {
+    for (const payload of docMails(docs)) {
+      const bytes = mailFor(to, { docs: payload, at: Date.now() }, link);
+      if (bytes) try { host.send(bytes); } catch {}
     }
-    const mails = parts.map(list => mailFor(peer, { personalities: { personalities: list.filter(entry => !isRemoval(entry)), removed: list.filter(isRemoval) }, at: now }, link)).filter(Boolean);
-    try {
-      for (const mail of mails) host.send(mail);
-      toldPersonalities.set(peer.key, { words, at: now });
-    } catch {}
+  }
+}
+
+// What another box or a Mac sent of documents, taken under link.json's lock: your personalities met
+// with this box's (its bots told of those that changed), its phones as its documents say now (one
+// removed losing its sessions), a Mac that's let it go forgotten, and what goes on, sent.
+export async function receiveDocs(sender, docs, host) {
+  const before = readPersonalities();
+  let work = null, library = before;
+  const link = updateLink(link => {
+    if (!link) return null;
+    const state = { link, library: before, parts: docParts };
+    work = docsWork(state, sender, docs);
+    library = state.library;
+    return link;
+  });
+  if (!work || !link) return;
+  await afterDocs(work, before, library, link, host);
+}
+
+async function afterDocs(work, before, library, link, host) {
+  if (library !== before) await takePersonalities(library).catch(() => {});
+  for (const mac of work.left) forgetMacsAgents(mac, link);
+  host?.keepOnly?.(new Set((link.phones ?? []).map(phone => phone.key)));
+  writeAgents(link);
+  sendDocs(host, link, work.send);
+}
+
+// Something changed here, or this box just connected (`greet`): its own documents that changed go
+// to the others, and with `tell` (a Mac's documents came over SSH) or `greet`, its digest.
+export function docsChanged(host, { greet = false, tell = false } = {}) {
+  const library = readPersonalities();
+  let work = null;
+  const link = updateLink(link => {
+    if (!link?.sign) return null;
+    work = greet ? greetWork({ link, library }) : changedWork({ link, library }, tell);
+    return link;
+  });
+  if (work && link) {
+    host?.keepOnly?.(new Set((link.phones ?? []).map(phone => phone.key)));
+    sendDocs(host, link, work.send);
   }
 }
 
@@ -5010,10 +5421,26 @@ export function receiveMail(body, host, peerMail = () => {}, attended = () => {}
   const opened = openMail(body, link);
   if (!opened) return;
   const { sender, payload } = opened;
-  if (macsOf(link).includes(sender.key) && (Array.isArray(payload.phones) || Array.isArray(payload.peers))) takeFromMac(payload, sender.key, host);
+  if (macsOf(link).includes(sender.key)) heardFromMac(sender.key, payload);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
   if (attention && typeof payload.at === "number") attended(sender.key, attention, payload.at);
   peerMail(sender, payload);
+}
+
+// Mail from one of this box's Macs: heard from (the 30 days a Mac counts for start again, noted
+// once an hour at most), and, from a Mac that signs no documents yet, its list of peers (Kuvo Code
+// 0.8.0-beta.1, PROTOCOL.md "For released Macs").
+function heardFromMac(mac, payload, now = Date.now()) {
+  const link = readLink();
+  const legacy = !macSign(link, mac) && Array.isArray(payload.peers) && typeof payload.at === "number" && payload.at > (link?.legacy?.[mac]?.at ?? 0);
+  if (!legacy && now - (link?.macSeen?.[mac] ?? 0) < 3_600_000) return;
+  const changed = updateLink(link => {
+    if (!link || !macsOf(link).includes(mac)) return null;
+    if (legacy) takeLegacyPeers(link, mac, payload.peers, payload.at, payload.moved);
+    forgetOldMacs(link, mac, now);
+    return link;
+  });
+  if (changed && legacy) writeAgents(changed);
 }
 
 // A phone's session proved its own: its notifications go where it is now.
@@ -5578,6 +6005,7 @@ export function connectOnce(relay, secret, host) {
         host.welcomed = true;
         // Your other computers hear who's here at once, and tell who's there.
         announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
+        try { docsChanged(host, { greet: true }); } catch {}
         // A new bridge an update put here: it reached the relay, so it's well.
         try { confirmUpdate(); } catch {}
         return;
@@ -5652,6 +6080,13 @@ async function run() {
   for (const folder of ["present", "connected"]) fs.rmSync(path.join(RUN, folder), { recursive: true, force: true });
   // Its bots' folders' settings, as its integrations are now (after an update, say).
   try { refreshBotsKeys(); } catch {}
+  // A link from an earlier bridge: its signing key made, and kept as this one keeps it.
+  updateLink(link => {
+    if (!link) return null;
+    link.sign ??= newSigningSeed();
+    foldPhones(link);
+    return link;
+  });
   const cleanUp = () => {
     try { if (fs.readFileSync(PID_FILE, "utf8") === String(process.pid)) fs.unlinkSync(PID_FILE); } catch {}
     process.exit(0);
@@ -5740,6 +6175,7 @@ async function run() {
     else refreshOwn(readEngineFile).catch(() => {});
   }, 60_000);
   setInterval(() => {
+    if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
   }, 3_000);
@@ -5859,10 +6295,14 @@ async function box(command) {
       refreshBotsKeys();
       return say({ status: 200 });
     case "personalities": {
-      // A Mac's copy met with this one's: both end up as one.
+      // A Mac's copy met with this one's: both end up as one, and the bridge tells your other
+      // computers if this one changed.
       let given = null;
       try { given = JSON.parse((await input()) || "null"); } catch {}
-      return say({ status: 200, ...changePersonalities(library => mergePersonalities(library, timelyPersonalities(given))) });
+      const before = JSON.stringify(readPersonalities());
+      const met = changePersonalities(library => mergePersonalities(library, given));
+      if (JSON.stringify(met) !== before) noteDocsChanged();
+      return say({ status: 200, ...met });
     }
     default:
       console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-now");
@@ -5888,41 +6328,48 @@ async function setup() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    console.error("setup takes JSON on stdin: {relay, name, mac, at, phones?: [{key, name, address, pairing}], peers, …}");
+    console.error("setup takes JSON on stdin: {relay, name, mac, macSign, docs: [{d, s}], id, …}");
     process.exit(2);
   }
-  const phones = Array.isArray(input.phones) ? input.phones : [];
   const mac = typeof input.mac === "string" ? input.mac : undefined;
   const running = runningBridge();
   const old = readLink();
-  let link = null;
+  const before = readPersonalities();
+  let link = null, work = null, library = before;
   updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
-    // The Mac's key, which a phone list it mails later must come from, and its list, unless one it
-    // sent later came first (by mail, as this was on its way).
-    const at = typeof input.at === "number" ? input.at : 0;
+    next.sign ??= newSigningSeed();
     if (mac) {
-      // Its phones, when it gives them (with the phone link off it gives none, and changes none).
-      if (Array.isArray(input.phones) && at > lastFrom(next, mac)) {
-        takeMacList(next, phones, input.removed, mac);
-        next.macAts = { ...(next.macAts ?? {}), [mac]: at };
-      }
       next.mac = mac;
       next.macs = [...new Set([...macsOf(next), mac])];
       forgetOldMacs(next, mac);
-      // Its peers: itself and its other machines.
-      if (Array.isArray(input.peers)) takePeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : at, input.moved);
+      // The key its documents are signed with (over SSH, so this box knows it's that Mac's), which
+      // takes the place of a list it gave before it signed them.
+      if (typeof input.macSign === "string" && SIGN.test(input.macSign)) {
+        next.macSigns = { ...(next.macSigns ?? {}), [mac]: input.macSign };
+        if (next.legacy) delete next.legacy[mac];
+      } else if (Array.isArray(input.peers)) {
+        // A Mac that signs none yet (0.8.0-beta.1): its peers as it lists them.
+        takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : (typeof input.at === "number" ? input.at : 0), input.moved);
+      }
     }
     if (typeof input.id === "string") next.id = input.id.slice(0, 200);
     // Whether this Mac leaves a newer box as it is, by its ID (as its engine launches name it): the
     // box updates itself only while every Mac that started its engine lately does (PROTOCOL.md, "Updates").
     if (typeof input.macID === "string" && /^[A-Za-z0-9-]{1,100}$/.test(input.macID)) next.tolerantIDs = { ...(next.tolerantIDs ?? {}), [input.macID]: input.tolerates === 1 };
+    // Its documents, and those it carries of your other computers: taken as any are.
+    const state = { link: next, library: before };
+    work = docsWork(state, { key: mac ?? "", sign: mac ? macSign(next, mac) : undefined }, { give: Array.isArray(input.docs) ? input.docs : [] });
+    library = state.library;
     if (!next.phones.length && !peersOf(next).length) return current ? next : null;
     next.relay = String(input.relay);
     next.name = String(input.name || next.name || os.hostname()).slice(0, 100);
     link = next;
     return next;
   });
+  if (work && library !== before) await takePersonalities(library).catch(() => {});
+  // The running bridge tells your other computers what changed.
+  noteDocsChanged();
   // None paired any more (each removed for good, as one at a time would be): no bridge.
   if (!link) {
     if (running) process.kill(running, "SIGTERM");
@@ -5945,7 +6392,17 @@ async function setup() {
     key: publicOf(Buffer.from(link.key, "base64url")).toString("base64url"),
     // Talks to other boxes itself (PROTOCOL.md, "Peers").
     peers: true,
+    // Its signing key, and the documents it has, for the Mac to take (PROTOCOL.md, "Documents").
+    sign: ownSign(link),
+    docs: setupDocs(link),
   }));
+}
+
+// What setup gives back of documents: those this box keeps, and its own as they are now.
+function setupDocs(link) {
+  const state = { link, library: readPersonalities() };
+  const own = ownDocs(state);
+  return [...Object.values(link.docs ?? {}), ...Object.values(own).map(each => each.envelope)];
 }
 
 // `leave <mac>`: Mac `mac` removed this machine. It's no longer one of its Macs: its lists of
@@ -5955,16 +6412,19 @@ export function leave(mac) {
   if (typeof mac !== "string" || !KEY.test(mac)) return false;
   const link = updateLink(link => {
     if (!link || !macsOf(link).includes(mac)) return null;
-    link.macs = macsOf(link).filter(each => each !== mac);
-    if (link.mac === mac) {
-      if (link.macs.length) link.mac = link.macs[0];
-      else delete link.mac;
-    }
-    for (const field of ["macSeen", "macAts", "peersFrom"]) if (link[field]) delete link[field][mac];
-    for (const phone of link.phones ?? []) if (phone.mac === mac) delete phone.mac;
+    leaveMac(link, mac);
+    pruneDocs(link);
+    foldPhones(link);
     return link;
   });
   if (!link) return false;
+  forgetMacsAgents(mac, link);
+  noteDocsChanged();
+  return true;
+}
+
+// What peers only `mac` named told this box, and what that Mac said over SSH, gone with it.
+function forgetMacsAgents(mac, link) {
   const keep = new Set(peersOf(link).map(peer => peer.key));
   locked(PEER_LOCK, () => {
     let all = {};
@@ -5974,7 +6434,6 @@ export function leave(mac) {
   });
   try { if (JSON.parse(fs.readFileSync(MAC_AGENTS_FILE, "utf8"))?.key === mac) fs.rmSync(MAC_AGENTS_FILE, { force: true }); } catch {}
   writeAgents(link);
-  return true;
 }
 
 // A pairing's token, good once, for `PAIRING_MINUTES`.
@@ -5996,6 +6455,7 @@ export function pairingLink(link) {
 function pair(relay) {
   const link = updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
+    next.sign ??= newSigningSeed();
     if (relay) next.relay = relay;
     if (!next.relay) return null;
     next.pairing = newPairingToken();

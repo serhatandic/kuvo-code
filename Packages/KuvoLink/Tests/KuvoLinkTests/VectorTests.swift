@@ -70,7 +70,7 @@ import Testing
     }
 
     /// The Mac's side of the rules: pairing here and removing, up to the first step that's a
-    /// machine's alone (taking the Mac's list).
+    /// machine's alone (taking a Mac's phones document).
     @Test func pairedPhones() {
         for book in list("phoneBooks") {
             let name = book["name"] as! String
@@ -87,7 +87,7 @@ import Testing
                     ok = phones.remove(entries, by: step["by"] as! String, macs: macs)
                 default: break
                 }
-                guard step["op"] as! String != "macList" else { break }
+                guard step["op"] as! String != "macDoc" else { break }
                 #expect(ok == step["ok"] as! Bool, "\(name): \(step["op"]!)")
                 let after = step["after"] as! [String: Any]
                 let expected = (after["phones"] as! [[String: Any]]).map { "\($0["key"]!)/\($0["pairing"]!)" }

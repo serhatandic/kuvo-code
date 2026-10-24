@@ -37,7 +37,7 @@ const opened = (bytes, to) => {
   return { address: relayed.address, payload: JSON.parse(link.openOneWay(body, to.key, link.publicOf(here.key)).payload.toString("utf8")) };
 };
 
-test("a Mac's peers come in its mail, a newer list replacing its last; this box left out, and no one else's list taken", () => {
+test("a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1): its peers come in its mail, a newer list by its own clock replacing its last; this box left out, and no one else's list taken", () => {
   fresh();
   link.receiveMail(mailFrom(mac, { at: 10, peers: [mac.peer, second.peer, here.peer, { key: "bad", address: "bad", kind: "machine" }] }));
   assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name), ["mac", "second"]);
@@ -353,15 +353,27 @@ test("a machine a Mac removed no longer counts that Mac: its peers and lists go,
   assert.deepEqual(link.macsOf(after), [other.pub]);
   assert.equal(after.mac, other.pub);
   assert.deepEqual(link.peersOf(after).map(peer => peer.name), ["mac"]);
-  assert.equal(after.phones[0].mac, undefined, "its phones are as ones from before Macs were named");
+  assert.deepEqual(after.phones, [], "the phones it listed go with it");
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(run, "peer-agents.json"), "utf8"))), [other.pub]);
 });
 
-test("your personalities go box to box with no Mac: each machine tells the others its copy, the newest change to each wins, and bots there with one that changed are told", async () => {
-  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+// A Mac that signs its documents, and its seed; a machine's signing key, as the Mac's peers
+// document names it.
+const signer = () => {
+  const seed = link.newSigningSeed();
+  const counts = {};
+  return { seed, key: link.signingKeyOf(seed), doc: (kind, body) => link.signDoc(seed, kind, (counts[kind] = (counts[kind] ?? 0) + 1), body) };
+};
+
+test("your personalities go box to box with no Mac: a peer's view met with this box's, a removal winning, and bots here with one that changed told", async () => {
+  const macSigner = signer(), secondSigner = signer();
+  const signed = { ...second.peer, sign: secondSigner.key };
+  fresh({ sign: link.newSigningSeed(), macSigns: { [mac.pub]: macSigner.key } });
   const library = path.join(home, "bots", "personalities.json");
   fs.rmSync(path.join(home, "bots"), { recursive: true, force: true });
   link.changePersonalities(() => ({ personalities: [{ id: "custom.calm", name: "Calm", description: "Calm and brief.", updated: 10 }], removed: [] }));
+  const host = { sent: [], send(bytes) { this.sent.push(bytes); }, keepOnly() {} };
+  await link.receiveDocs({ key: mac.pub, sign: macSigner.key }, { give: [macSigner.doc("peers", { boxes: [{ ...mac.peer, sign: macSigner.key }, signed, { ...here.peer, sign: link.ownSign(link.readLink()) }], moved: [], left: [] })] }, host);
   // A bot here with it, and the engine its conversation runs on.
   const folder = path.join(home, "bots", "bot_scout00001");
   fs.mkdirSync(folder, { recursive: true });
@@ -380,80 +392,86 @@ test("your personalities go box to box with no Mac: each machine tells the other
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port: server.address().port, password: "pw" }));
   try {
-    const target = { port: server.address().port, password: "pw" };
-    // Told to the other machine, not to the Mac (which meets this copy as it connects).
-    const sent = [];
-    const host = { send: bytes => sent.push(bytes) };
-    await link.announce(host, () => ({ ...target }), link.readLink(), Date.now());
-    const toSecond = sent.filter(bytes => k(bytes.subarray(1, 17)) === second.address).map(bytes => opened(bytes, second).payload);
-    assert.deepEqual(toSecond.find(payload => payload.personalities)?.personalities.personalities.map(each => each.name), ["Calm"]);
-    assert.equal(sent.filter(bytes => k(bytes.subarray(1, 17)) === mac.address).some(bytes => opened(bytes, mac).payload.personalities), false);
-
-    // The other machine changed it later, and made another: taken here, the bot told.
-    const changed = await link.takePersonalities({ personalities: [
-      { id: "custom.calm", name: "Calm", description: "Calm, brief and kind.", updated: 20 },
-      { id: "custom.bold", name: "Bold", description: "Bold.", updated: 5 },
-    ] }, () => target, () => null);
-    assert.deepEqual(changed.sort(), ["custom.bold", "custom.calm"]);
+    // The other machine changed it later, and made another: its view, taken here, the bot told, and
+    // this box's own view, changed, given to the boxes that take it.
+    host.sent.length = 0;
+    await link.receiveDocs(signed, { give: [link.signDoc(secondSigner.seed, "personalities", 5, { personalities: [
+      { id: "custom.calm", name: "Calm", description: "Calm, brief and kind.", symbol: "person.crop.circle", updated: 20 },
+      { id: "custom.bold", name: "Bold", description: "Bold.", symbol: "person.crop.circle", updated: 5 },
+    ], removed: [] })] }, host);
     assert.deepEqual(link.readPersonalities(library).personalities.map(each => each.description).sort(), ["Bold.", "Calm, brief and kind."]);
     assert.equal(told.length, 1);
     assert.equal(told[0].url, "/api/experimental/session/ses_scout/instructions/entries/kuvo.bot");
     assert.match(told[0].value, /Calm, brief and kind\./);
-    // A change dated days ahead of this box's clock isn't taken (it would win over every one to come).
-    assert.deepEqual(await link.takePersonalities({ removed: [{ id: "custom.bold", removed: Date.now() + 10 * 86_400_000 }] }, () => target, () => null), []);
-    // An older copy changes nothing; a removal wins over an older change, and the bot is told it's gone.
-    assert.deepEqual(await link.takePersonalities({ personalities: [{ id: "custom.calm", name: "Calm", description: "Old.", updated: 1 }] }, () => target, () => null), []);
-    await link.takePersonalities({ removed: [{ id: "custom.calm", removed: 30 }] }, () => target, () => null);
-    assert.equal(told.length, 2);
+    const given = host.sent.map(bytes => opened(bytes, [mac, second].find(each => k(bytes.subarray(1, 17)) === each.address)));
+    assert.deepEqual(given.map(each => each.address).sort(), [mac.address, second.address].sort());
+    assert.ok(given.every(each => each.payload.docs.give.some(envelope => link.readDoc(envelope)?.kind === "personalities")));
+    // A stranger's view, or one the Mac didn't sign as the machine's, changes nothing; nor does an
+    // older one of the machine's.
+    await link.receiveDocs(stranger.peer, { give: [signer().doc("personalities", { personalities: [{ id: "custom.sly", name: "Sly", description: "Sly.", updated: 1 }], removed: [] })] }, host);
+    await link.receiveDocs(signed, { give: [link.signDoc(secondSigner.seed, "personalities", 4, { personalities: [{ id: "custom.calm", name: "Calm", description: "Old.", updated: 99 }], removed: [] })] }, host);
+    assert.deepEqual(link.readPersonalities(library).personalities.map(each => each.id).sort(), ["custom.bold", "custom.calm"]);
+    // A removal wins, and the bot is told it's gone.
+    await link.receiveDocs(signed, { give: [link.signDoc(secondSigner.seed, "personalities", 6, { personalities: [], removed: [{ id: "custom.calm", removed: 21 }] })] }, host);
+    assert.equal(told.length, 2, JSON.stringify(told.map(each => each.value)));
     assert.doesNotMatch(told[1].value, /Calm/);
   } finally {
     server.closeAllConnections();
     server.close();
     fs.rmSync(path.join(home, "bots"), { recursive: true, force: true });
+    fs.rmSync(path.join(home, "run", "engine.json"), { force: true });
   }
 });
 
-test("a box that missed its Mac's mail learns that Mac's newer list from a machine the Mac named; another Mac's list, an older one, or one passed on twice counts for nothing", async t => {
-  const third = box("machine", "third"), otherMac = box("mac", "other");
-  fresh({ peersFrom: { [mac.pub]: { at: 10, peers: [mac.peer, second.peer] } } });
-  const passOn = (from, lists) => link.receiveMail(mailFrom(from, { vouched: { lists }, at: Date.now() }), undefined, link.peerMail);
+test("a Mac's peers document by mail, or passed on by a peer, counts once it's that Mac's signature; a list a peer passes on unsigned, never", async () => {
+  const third = box("machine", "third"), fourth = box("machine", "fourth");
+  const macSigner = signer(), secondSigner = signer(), thirdSigner = signer();
+  const named = (each, by) => ({ ...each.peer, sign: by.key });
+  fresh({ sign: link.newSigningSeed(), macSigns: { [mac.pub]: macSigner.key } });
+  const mine = () => ({ ...here.peer, sign: link.ownSign(link.readLink()) });
   const names = () => link.peersOf(link.readLink()).map(peer => peer.name).sort();
-  // The Mac added `third` while this box was away: `second` heard it, and passes it on, as the
-  // Mac gave it (a Mac's list to a machine leaves that machine out): `second` stays a peer here.
-  passOn(second, [{ mac: mac.pub, at: 20, peers: [mac.peer, third.peer, here.peer] }]);
+  const host = { send() {}, keepOnly() {} };
+  const first = macSigner.doc("peers", { boxes: [named(mac, macSigner), named(second, secondSigner), mine()], moved: [], left: [] });
+  link.receiveMail(mailFrom(mac, { docs: { give: [first] }, at: 1 }), host, (sender, payload) => link.peerMail(sender, payload, host));
+  for (let i = 0; i < 50 && names().length < 2; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(names(), ["mac", "second"]);
+  // The Mac added `third` while this box was away: `second` passes on the Mac's document as the Mac
+  // signed it.
+  const added = macSigner.doc("peers", { boxes: [named(mac, macSigner), named(second, secondSigner), named(third, thirdSigner), mine()], moved: [], left: [] });
+  await link.receiveDocs(named(second, secondSigner), { give: [added] }, host);
   assert.deepEqual(names(), ["mac", "second", "third"]);
-  const kept = [];
-  link.receiveMail(mailFrom(second, { agents: { at: 2, list: [] } }), undefined, sender => kept.push(sender.name));
-  assert.deepEqual(kept, ["second"], "its mail is still opened");
-  // A list dated far ahead isn't taken (it would win over every list to come).
-  passOn(second, [{ mac: mac.pub, at: Date.now() + 10 * 86_400_000, peers: [mac.peer] }]);
+  // Lists passed on the way an earlier bridge did, unsigned, change nothing.
+  link.receiveMail(mailFrom(second, { vouched: { lists: [{ mac: mac.pub, at: Date.now(), peers: [mac.peer, fourth.peer] }] }, at: 1 }), host, (sender, payload) => link.peerMail(sender, payload, host));
   assert.deepEqual(names(), ["mac", "second", "third"]);
-  // So `third` can write here now, and is told this box's agents, with the Mac's list as this box
-  // has it from the Mac itself (only that is passed on: one hop).
+  // So `third` can write here now.
   const heard = [];
   link.receiveMail(mailFrom(third, { agents: { at: 1, list: [] } }), undefined, sender => heard.push(sender.name));
   assert.deepEqual(heard, ["third"]);
-  const { target } = await engine(t);
-  const sent = [];
-  await link.announce({ send: bytes => sent.push(bytes) }, () => target, link.readLink(), Date.now());
-  const to = who => sent.filter(bytes => k(bytes.subarray(1, 17)) === who.address).map(bytes => opened(bytes, who).payload);
-  assert.deepEqual(to(second)[0].vouched.lists.map(list => [list.mac, list.at]), [[mac.pub, 10]], "the Mac's list as it gave it here");
-  assert.deepEqual(to(third)[0].vouched.lists.map(list => [list.mac, list.at]), [[mac.pub, 10]]);
-  assert.equal(to(mac)[0].vouched, undefined);
-  // Another Mac's list, one passed on by `third`, and an older copy: nothing.
-  const fourth = box("machine", "fourth");
-  passOn(second, [{ mac: otherMac.pub, at: 50, peers: [otherMac.peer, fourth.peer] }]);
-  passOn(third, [{ mac: mac.pub, at: 60, peers: [mac.peer, fourth.peer] }]);
-  passOn(second, [{ mac: mac.pub, at: 15, peers: [mac.peer] }]);
-  assert.deepEqual(names(), ["mac", "second", "third"]);
-  // Personalities from a machine this box's Mac named (in its newest list) are taken; from one it
-  // didn't, nothing's even opened.
-  link.receiveMail(mailFrom(stranger, { personalities: { personalities: [{ id: "custom.sly", name: "Sly", description: "Sly.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
-  link.receiveMail(mailFrom(third, { personalities: { personalities: [{ id: "custom.kind", name: "Kind", description: "Kind.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(link.readPersonalities().personalities.map(each => each.id).filter(id => ["custom.sly", "custom.kind"].includes(id)), ["custom.kind"]);
-  // The Mac's own newer word wins over what was passed on: it dropped `third` and `second`.
-  link.receiveMail(mailFrom(mac, { at: 30, peers: [mac.peer] }));
-  assert.deepEqual(names(), ["mac"]);
+  // The Mac removed this machine: its newer document says so, and it no longer counts here.
+  await link.receiveDocs(named(second, secondSigner), { give: [macSigner.doc("peers", { boxes: [named(mac, macSigner), named(second, secondSigner)], moved: [], left: [here.pub] })] }, host);
+  assert.deepEqual(link.macsOf(link.readLink()), []);
+  assert.deepEqual(names(), []);
+});
+
+test("a Mac that signs no documents yet: its list is never passed on, and once it signs one, that takes the list's place", async () => {
+  const macSigner = signer(), secondSigner = signer();
+  fresh({ sign: link.newSigningSeed() });
+  link.receiveMail(mailFrom(mac, { at: 10, peers: [mac.peer, second.peer, here.peer] }));
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second"]);
+  // What this box gives others of documents: none of that list (nobody signed it), and no digest
+  // of it.
+  assert.deepEqual(link.digestOf(link.readLink()).filter(([, kind]) => kind === "peers"), []);
+  // Set up again by that Mac, updated: its key, and its document, take the list's place.
+  link.updateLink(current => {
+    current.macSigns = { [mac.pub]: macSigner.key };
+    delete current.legacy[mac.pub];
+    return current;
+  });
+  await link.receiveDocs({ key: mac.pub, sign: macSigner.key }, { give: [macSigner.doc("peers", { boxes: [{ ...mac.peer, sign: macSigner.key }, { ...second.peer, sign: secondSigner.key }], moved: [], left: [] })] }, { send() {}, keepOnly() {} });
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => [peer.name, peer.sign]).sort(), [["mac", macSigner.key], ["second", secondSigner.key]]);
+  // Its unsigned list in mail, after, changes nothing.
+  link.receiveMail(mailFrom(mac, { at: 20, peers: [mac.peer] }));
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second"]);
 });

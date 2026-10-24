@@ -18,11 +18,11 @@ import Testing
         let store = Personalities(folder: folder)
         var told = 0
         store.onChange = { told += 1 }
-        let owl = store.add(name: "Night Owl", description: "Works late.")
+        let owl = try store.add(name: "Night Owl", description: "Works late.")
         let older = store.library
         var changed = owl
         changed.description = "Works late, writes short."
-        store.update(changed)
+        try store.update(changed)
         #expect((store.personality(owl.id)?.updated ?? 0) > (owl.updated ?? 0))
         #expect(told == 2)
         // A machine's copy from before the change: nothing here changes.
