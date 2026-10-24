@@ -520,7 +520,7 @@ nonisolated private final class Counter: @unchecked Sendable {
 }
 
 /// A machine whose `~/.kuvo-code` is a folder here: what goes there over SSH goes there.
-private struct FolderMachine: MoveTransport {
+struct FolderMachine: MoveTransport {
     let root: URL
     let here = SSHMoveTransport()
 

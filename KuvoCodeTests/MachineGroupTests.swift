@@ -93,7 +93,7 @@ import Testing
         }
     }
 
-    private func app() -> AppModel {
+    private func app(machine: String = "box") -> AppModel {
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
@@ -101,8 +101,8 @@ import Testing
         app.machineGroups.app = app
         app.moves.app = app
         app.workspace.api = mac.api
-        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: bridge.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: "box"))
-        app.machineGroups.bridge = { $0 == "box" ? api : nil }
+        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: bridge.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
+        app.machineGroups.bridge = { $0 == machine ? api : nil }
         let held = held
         bridge.on("GET", "/api/kuvo/groups") { held.answer($0) }
         for method in ["GET", "PUT", "PATCH", "DELETE", "POST"] { bridge.on(method, "/api/kuvo/groups/*") { held.answer($0) } }
@@ -283,6 +283,36 @@ import Testing
             #expect(error.localizedDescription.contains("live on different computers"), "\(error.localizedDescription)")
         }
         #expect(app.groups.group(chat.id) != nil && held.actions.allSatisfy { !$0.hasPrefix("PUT grp") })
+    }
+
+    /// A meeting that comes due while its chat moves to a machine waits, and is held once where
+    /// the chat is when the move is over: here still, as the machine turned it down.
+    @Test func aMeetingDueWhileItsChatMovesIsHeldOnceAfter() async throws {
+        defer { Self.clean(); mac.stop() }
+        let machine = "box.invalid"
+        try saveBots([("bot_pal", "Pal", machine), ("bot_lb", "Lokum Builder", machine)])
+        let app = app(machine: machine)
+        let chat = app.groups.create(name: "k", members: ["bot_pal", "bot_lb"], meeting: .init(next: .now.addingTimeInterval(-60), topic: "Where we are"))
+        await app.machineGroups.connected(machine)
+        let waypoint = Waypoint()
+        bridge.on("PUT", "/api/kuvo/groups/\(chat.id)") { _ in
+            waypoint.block()
+            return StubWeb.json(["message": "Disk full"], status: 500)
+        }
+        let meetings = { app.groups.messages(in: chat.id).filter { $0.kind == .meeting }.count }
+
+        let move = Task { try await app.moves.move(group: chat.id, to: machine) }
+        await waypoint.arrived()
+        app.groups.meetDue()
+        #expect(meetings() == 0, "not while it moves")
+        waypoint.open()
+        await #expect(throws: (any Error).self) { try await move.value }
+
+        app.groups.meetDue()
+        app.groups.meetDue()
+        #expect(meetings() == 1)
+        #expect(app.groups.group(chat.id) != nil && !held.has(chat.id))
+        app.groups.stop(chat.id)
     }
 
     /// The app quit as a chat went to the machine, before it was let go here: taken back, so it

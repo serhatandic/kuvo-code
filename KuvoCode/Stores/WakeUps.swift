@@ -647,7 +647,8 @@ final class WakeUps {
     /// How long a wake-up that has nowhere to go waits before it's tried again.
     static let unreachableRetry: TimeInterval = 30
 
-    private func wakeDue() async {
+    /// Sends this Mac's wake-ups that have come due: a round of `start`'s.
+    func wakeDue() async {
         await adoptStrays()
         for owner in localOwners() where !FileManager.default.fileExists(atPath: Self.pauseFile(of: owner)) {
             let pending = Self.localWakes(of: owner)
