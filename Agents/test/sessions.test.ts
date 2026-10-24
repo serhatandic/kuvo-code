@@ -2254,3 +2254,221 @@ describe("a session the bridge stopped in the middle of", () => {
     expect(sessions.list().some((session) => session.id === "ses_broken")).toBe(false)
   })
 })
+
+describe("what comes in while a turn starts, ends or is stopped, step by step", () => {
+  // No clock here: the agents' runs end, and the files are kept and put back, when the test says.
+
+  /** Lets go on whatever can without a step the test holds (only what's due already: no timers). */
+  async function drain() {
+    for (let i = 0; i < 50; i++) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+
+  /** Snapshots kept in memory (each turn changes a.txt), whose takes and restores the test can hold and let go. */
+  class StepSnapshots {
+    hold = { take: false, restore: false }
+    held: { kind: "take" | "restore"; go: () => void }[] = []
+    trees = 0
+    restored: string[] = []
+    private async wait(kind: "take" | "restore") {
+      if (this.hold[kind]) await new Promise<void>((go) => this.held.push({ kind, go }))
+    }
+    async take() {
+      await this.wait("take")
+      return `tree${++this.trees}`
+    }
+    async changed() {
+      return ["a.txt"]
+    }
+    async changes(_directory: string, _from: string, _to: string, paths: string[]) {
+      return paths.map((file) => ({ file, patch: "", additions: 1, deletions: 1 }))
+    }
+    async restore(_directory: string, tree: string) {
+      await this.wait("restore")
+      this.restored.push(tree)
+    }
+    release(kind: "take" | "restore") {
+      const at = this.held.findIndex((held) => held.kind === kind)
+      if (at < 0) throw new Error(`No ${kind} is held.`)
+      this.held.splice(at, 1)[0].go()
+    }
+  }
+
+  function withSteps() {
+    const snapshots = new StepSnapshots()
+    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, undefined, undefined, snapshots as unknown as Snapshots)
+    return snapshots
+  }
+
+  /** Alpha's runs end when the test ends them, in order (Stop alone doesn't end one). */
+  function heldRuns() {
+    const ends: ((result: RunResult) => void)[] = []
+    a.script = (input, turn) => {
+      turn.startStep()
+      turn.text(`on: ${input.text}`)
+      return new Promise((resolve) => ends.push(resolve))
+    }
+    return ends
+  }
+
+  const own = () => a.threads[0].onOwnTurn!({ text: "Alpha carried on by itself." })
+
+  test("a turn the agent begins on its own while Undo puts the files back is turned away once it's staged; a message sent meanwhile goes after", async () => {
+    const snapshots = withSteps()
+    const id = create()
+    const first = send(id, "change it")
+    await drain()
+    expect(idles(id)).toHaveLength(1)
+    snapshots.hold.restore = true
+    const staging = sessions.stageRevert(id, first)
+    await drain()
+    expect(snapshots.held.map((held) => held.kind)).toEqual(["restore"])
+    // Taken for now; and your message waits for the files.
+    expect(own()).toBe(true)
+    send(id, "and now this")
+    await drain()
+    expect(a.runs).toHaveLength(1)
+    snapshots.release("restore")
+    await staging
+    await drain()
+    expect(a.threads[0].turnedAway).toBe(1)
+    expect(a.runs.map((run) => run.text)).toEqual(["change it", "and now this"])
+    // Your message made the undo final.
+    expect(events.some((event) => event.type === "session.revert.committed")).toBe(true)
+    expect(sessions.messages(id).some((message) => message.id === first)).toBe(false)
+    expect(snapshots.restored).toEqual(["tree1"])
+  })
+
+  test("a turn the agent begins on its own right after Stop is turned away, and what waits stays held", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "work")
+    await drain()
+    send(id, "waits", "queue")
+    const stopping = sessions.interrupt(id)
+    expect(own()).toBe(false)
+    ends[0]({ outcome: "interrupted" })
+    expect(await stopping).toBe(true)
+    await drain()
+    expect(idles(id).map((idle) => idle.outcome)).toEqual(["interrupted"])
+    expect(a.runs).toHaveLength(1)
+    expect(sessions.inbox(id).map((item) => item.payload.text)).toEqual(["waits"])
+    expect(sessions.active()).not.toContain(id)
+  })
+
+  test("a turn the agent begins on its own as its turn ends goes first, and the message waiting goes after it", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    send(id, "second", "queue")
+    expect(own()).toBe(true)
+    ends[0]({ outcome: "succeeded" })
+    await drain()
+    expect(a.runs).toHaveLength(2)
+    expect(a.runs[1].text).toContain("carried on by itself")
+    expect(sessions.inbox(id)).toHaveLength(1)
+    ends[1]({ outcome: "succeeded" })
+    await drain()
+    expect(a.runs.map((run) => run.text)[2]).toBe("second")
+    ends[2]({ outcome: "succeeded" })
+    await drain()
+    expect(idles(id).map((idle) => idle.outcome)).toEqual(["succeeded", "succeeded", "succeeded"])
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+
+  test("a message the agent turns away just as its turn ends goes next, once", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const answers: ((taken: boolean) => void)[] = []
+    a.threads[0].steer = () => new Promise((resolve) => answers.push(resolve))
+    const late = send(id, "one more thing")
+    await drain()
+    expect(answers).toHaveLength(1)
+    ends[0]({ outcome: "succeeded" })
+    await drain()
+    // Not started while it's being handed to the turn that just ended.
+    expect(a.runs).toHaveLength(1)
+    answers[0](false)
+    await drain()
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "one more thing"])
+    ends[1]({ outcome: "succeeded" })
+    await drain()
+    expect(sessions.messages(id).filter((message) => message.id === late)).toHaveLength(1)
+    expect(sessions.inbox(id)).toHaveLength(0)
+    expect(idles(id)).toHaveLength(2)
+  })
+
+  test("Send Now while the stopped turn's files are kept starts the message you picked once they are", async () => {
+    const snapshots = withSteps()
+    const ends = heldRuns()
+    const id = create()
+    send(id, "work")
+    await drain()
+    send(id, "held")
+    const picked = send(id, "picked")
+    expect(sessions.inbox(id).map((item) => item.delivery)).toEqual(["queue", "queue"])
+    snapshots.hold.take = true
+    const stopping = sessions.interrupt(id)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    expect(snapshots.held.map((held) => held.kind)).toEqual(["take"])
+    sessions.setDelivery(id, picked, "steer")
+    expect(await sessions.interrupt(id, true)).toBe(false)
+    snapshots.hold.take = false
+    snapshots.release("take")
+    await drain()
+    expect(a.runs.map((run) => run.text)).toEqual(["work", "picked"])
+    expect(sessions.inbox(id).map((item) => item.payload.text)).toEqual(["held"])
+  })
+
+  test("a session deleted mid-turn starts nothing: not what waits, nor a turn its agent begins on its own", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "work")
+    await drain()
+    send(id, "waits", "queue")
+    const removing = sessions.remove(id)
+    expect(own()).toBe(false)
+    expect(() => send(id, "late")).toThrow()
+    ends[0]({ outcome: "interrupted" })
+    await removing
+    await drain()
+    expect(a.runs).toHaveLength(1)
+    expect(a.threads[0].interrupted).toBe(1)
+    expect(sessions.list().some((session) => session.id === id)).toBe(false)
+    expect(sessions.active()).not.toContain(id)
+    expect(events.filter((event) => event.type === "session.execution.started" && event.data.sessionID === id)).toHaveLength(1)
+    expect(events.filter((event) => event.type === "session.deleted" && event.data.sessionID === id)).toHaveLength(1)
+  })
+
+  test("Undo while the files are still being kept waits for them, then takes back what the turn changed", async () => {
+    const snapshots = withSteps()
+    const ends = heldRuns()
+    const id = create()
+    const first = send(id, "change it")
+    await drain()
+    snapshots.hold.take = true
+    ends[0]({ outcome: "succeeded" })
+    await drain()
+    expect(snapshots.held.map((held) => held.kind)).toEqual(["take"])
+    let staged = false
+    const staging = sessions.stageRevert(id, first).then((revert) => {
+      staged = true
+      return revert
+    })
+    await drain()
+    expect(staged).toBe(false)
+    expect(snapshots.restored).toEqual([])
+    snapshots.hold.take = false
+    snapshots.release("take")
+    const revert = await staging
+    expect(revert.messageID).toBe(first)
+    expect(revert.files?.map((file) => file.file)).toEqual(["a.txt"])
+    expect(snapshots.restored).toEqual(["tree1"])
+    expect(sessions.get(id).revert?.messageID).toBe(first)
+  })
+})
