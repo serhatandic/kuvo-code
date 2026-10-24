@@ -657,10 +657,11 @@ final class PhoneLink {
             }
         }
         // A conversation carried on with the coding agents, as picking one of their models in it does.
-        if let id = Self.sessionID(in: route, then: "agents"), request.method.uppercased() == "POST" {
+        if let id = Self.sessionID(in: route, then: "agents") {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.moveToAgents(id, with: request.body) ?? (503, Data())
+                    let posts = request.method.uppercased() == "POST"
+                    let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -759,7 +760,8 @@ final class PhoneLink {
         if route == "kuvo/accounts/credentials" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.credentialsJSON() ?? (503, Data())
+                    let reads = ["GET", "HEAD"].contains(request.method.uppercased())
+                    let (status, body) = reads ? await link?.credentialsJSON() ?? (503, Data()) : (405, Data("{}".utf8))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -926,6 +928,10 @@ final class PhoneLink {
             var hosts: [Host]
         }
         let encoder = JSONEncoder()
+        // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
+        if ["kuvo/bots", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+            return (405, Data("{}".utf8))
+        }
         switch request.path {
         case "kuvo/info":
             var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder)
@@ -999,6 +1005,8 @@ final class PhoneLink {
             return UsageMenuBar.shared.refreshAll() ? (200, Data("{}".utf8)) : (404, Data())
         case let path where path.hasPrefix("kuvo/asks/") && request.method.uppercased() == "POST":
             return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
+        case let path where path.hasPrefix("kuvo/asks/"):
+            return (405, Data("{}".utf8))
         case "kuvo/config":
             return answerConfig(request)
         case "kuvo/mac":
