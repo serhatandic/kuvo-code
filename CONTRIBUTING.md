@@ -119,7 +119,8 @@ bridge's real handler. Only the engine is a stand-in, the same small one on both
   `"<array>"`, `"<any>"`, `"<absent>"` stand for volatile values; lists match in order, or with
   `{"<includes>": […]}`, `{"<excludes>": […]}`, `{"<length>": n}`; `{"<contains>": "…"}` in a
   string. `null` matches null or left out. `{{name}}` fills in what was saved, the box's places
-  (`chats`, `skills`, `work`, `keys`) and `{{now+3600}}`.
+  (`chats`, `skills`, `work`, `keys`) and `{{now+3600}}`. Both runners match by
+  `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
 - Run both runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a

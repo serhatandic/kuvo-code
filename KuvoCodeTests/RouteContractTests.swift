@@ -29,6 +29,22 @@ import Testing
         #expect(RouteScenarios.problems.isEmpty, "\(RouteScenarios.problems)")
     }
 
+    /// Matching an answer and filling in a scenario as the machine's runner does (`routes/match`).
+    @Test func bothRunnersMatchAndFillInAlike() throws {
+        let file = try #require(RouteScenarios.folder).appending(path: "match/cases.json")
+        let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let cases = read["cases"] as? [[String: Any]] ?? [], fills = read["filled"] as? [[String: Any]] ?? []
+        #expect(cases.count > 40 && fills.count > 5)
+        for each in cases {
+            #expect((RouteMatch.mismatch(each["expected"] ?? NSNull(), each["actual"]) == nil) == (each["matches"] as? Bool), "\(each)")
+        }
+        let written = { (value: Any) in try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]) }
+        for each in fills {
+            let filled = RouteMatch.filled(each["template"] ?? "", each["vars"] as? [String: Any] ?? [:])
+            #expect(try written(filled) == written(each["filled"] ?? NSNull()), "\(each)")
+        }
+    }
+
     /// The machine's runner sets its box up with what a Mac leaves on a machine (`routes/box`):
     /// these say it's still what this Mac's code writes. `scripts/route-vectors.sh` writes them again.
     @Test func theMachinesRunnerHasWhatAMacLeavesThere() throws {

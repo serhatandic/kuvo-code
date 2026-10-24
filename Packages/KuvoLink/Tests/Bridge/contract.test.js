@@ -375,6 +375,14 @@ for (const file of fs.readdirSync(vectors).filter(name => name.endsWith(".json")
   }
 }
 
+// The Mac's runner holds its matching to the same cases.
+test("both runners match an answer and fill in a scenario alike (Vectors/routes/match/cases.json)", () => {
+  const { cases, filled: fills } = JSON.parse(read(vectors, "match/cases.json"));
+  assert.ok(cases.length > 40 && fills.length > 5);
+  for (const each of cases) assert.equal(mismatch(each.expected, "actual" in each ? each.actual : undefined) === null, each.matches, JSON.stringify(each));
+  for (const each of fills) assert.deepEqual(filled(each.template, each.vars), each.filled, JSON.stringify(each));
+});
+
 // So a scenario can't pass by checking nothing: each has a name of its own, each step does one
 // thing, each request says what it expects of both boxes, and each difference says why.
 test("every scenario is written so both runners check it, and says why where the boxes differ on purpose", () => {
