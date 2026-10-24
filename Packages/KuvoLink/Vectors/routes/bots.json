@@ -1,0 +1,146 @@
+{
+  "about": "kuvo/bots, its templates, making, changing and deleting a bot, and a bot's keys of its own (PROTOCOL.md, kuvo/bots and \"Bots' own keys\"), as both boxes answer them for the bots that live there.",
+  "scenarios": [
+    {
+      "name": "kuvo/bots lists each bot with its look, job, wake-ups and watches",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada", "job": "Watches the build" } } },
+        { "given": { "wake": { "session": "ses_ada", "in": 7200, "note": "Morning digest", "letters": "AbC123" } } },
+        { "given": { "watch": { "session": "ses_ada", "letters": "Qq1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } } },
+        {
+          "send": "GET kuvo/bots",
+          "expect": { "status": 200, "json": { "bots": [ {
+            "id": "bot_ada", "session": "ses_ada", "name": "Ada", "job": "Watches the build",
+            "look": { "color": "mint", "shape": "round", "face": "calm" },
+            "paused": false, "wakes": "<number>", "watching": 1, "agents": false
+          } ] } }
+        },
+        {
+          "send": "GET kuvo/bots",
+          "why": "A Mac leaves `machine` out for its own bots; a machine names itself in each of its own.",
+          "expect": {
+            "mac": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "machine": "<absent>" } ] } },
+            "machine": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "machine": "lab.invalid" } ] } }
+          }
+        },
+        {
+          "send": "GET kuvo/bots?memory=1",
+          "why": "A Mac reads a machine's bots' jobs from their memory there (?memory=1, as it connects); it reads its own itself, so it leaves memoryJob out.",
+          "expect": {
+            "mac": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": "<absent>" } ] } },
+            "machine": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": { "line": "", "section": "" } } ] } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a bot whose wake-ups you paused says so, and one with none leaves wakes out",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "pause": { "session": "ses_ada" } } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "paused": true, "wakes": "<absent>", "watching": 0, "job": "" } ] } } }
+      ]
+    },
+    {
+      "name": "kuvo/bots/templates offers New Bot's templates, personalities, looks and starting places",
+      "steps": [
+        {
+          "send": "GET kuvo/bots/templates",
+          "expect": { "status": 200, "json": {
+            "templates": { "<includes>": [
+              { "id": "news", "name": "Herald", "wantsProject": false, "look": "<object>", "job": "<string>", "instructions": "<string>" },
+              { "id": "ci", "wantsProject": true, "personality": "preset.perfectionist", "look": { "shape": "squircle" } }
+            ] },
+            "personalities": { "<includes>": [ { "id": "preset.straight", "name": "Straight Shooter", "custom": false, "description": "<string>" } ] },
+            "looks": { "colors": { "<includes>": [ "mint" ] }, "shapes": { "<includes>": [ "bloom" ] }, "faces": { "<includes>": [ "wink" ] } },
+            "startingModel": "<object>",
+            "projects": "<array>"
+          } }
+        }
+      ]
+    },
+    {
+      "name": "making a bot: what's missing or unknown is said in words",
+      "steps": [
+        { "send": "POST kuvo/bots", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/bots", "body": { "name": "   " }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/bots", "body": { "name": "Herald", "template": "nope" }, "expect": { "status": 400, "json": { "message": "There’s no template “nope”." } } },
+        { "send": "POST kuvo/bots", "body": { "name": "Herald", "personality": "preset.nope" }, "expect": { "status": 400, "json": { "message": "There’s no personality “preset.nope”." } } },
+        { "send": "POST kuvo/bots", "body": { "name": "Herald", "project": "/nowhere/at/all" }, "expect": { "status": 400, "json": { "message": "That project isn’t in Kuvo Code." } } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [] } } }
+      ]
+    },
+    {
+      "name": "a bot made from a template waits, with the template's job for the composer",
+      "steps": [
+        {
+          "send": "POST kuvo/bots",
+          "body": { "name": "Herald", "template": "news", "model": { "providerID": "opencode", "id": "big-pickle" } },
+          "expect": { "status": 201, "json": {
+            "bot": { "id": "<string>", "session": "<string>", "name": "Herald", "look": "<object>", "paused": false, "watching": 0, "agents": false,
+                     "model": { "providerID": "opencode", "id": "big-pickle" } },
+            "firstMessage": "<string>"
+          } },
+          "save": { "made": "bot.id", "madeSession": "bot.session" }
+        },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "{{made}}", "session": "{{madeSession}}", "name": "Herald" } ] } } }
+      ]
+    },
+    {
+      "name": "changing a bot as Edit Bot does: its name, look and personality, and what can't be",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "name": "Ada Lovelace" }, "expect": { "status": 200, "json": { "bot": { "id": "bot_ada", "name": "Ada Lovelace" } } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "look": { "color": "sky", "shape": "squircle", "face": "wink" } }, "expect": { "status": 200, "json": { "bot": { "look": { "color": "sky", "shape": "squircle", "face": "wink" } } } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "personality": "preset.straight" }, "expect": { "status": 200, "json": { "bot": { "personality": "preset.straight" } } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "personality": null }, "expect": { "status": 200, "json": { "bot": { "personality": "<absent>" } } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "name": "" }, "expect": { "status": 400, "json": { "message": "A bot needs a name." } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "look": { "color": "plaid", "shape": "round", "face": "calm" } }, "expect": { "status": 400, "json": { "message": "That isn’t a look a bot can have." } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "personality": "preset.nope" }, "expect": { "status": 400, "json": { "message": "There’s no personality “preset.nope”." } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "model": "big-pickle" }, "expect": { "status": 400, "json": { "message": "That isn’t a model." } } },
+        { "send": "PATCH kuvo/bots/bot_nobody", "body": { "name": "Nobody" }, "expect": { "status": 404, "json": { "message": "That bot isn’t there any more." } } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "name": "Ada Lovelace", "look": { "color": "sky" } } ] } } }
+      ]
+    },
+    {
+      "name": "deleting a bot, and one that isn't there",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "send": "DELETE kuvo/bots/bot_ada", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [] } } },
+        { "send": "DELETE kuvo/bots/bot_ada", "expect": { "status": 404, "json": { "message": "That bot isn’t there any more." } } }
+      ]
+    },
+    {
+      "name": "a bot's keys of its own: listed, given, read back and taken away",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        {
+          "send": "GET kuvo/bots/bot_ada/keys",
+          "expect": { "status": 200, "json": { "keys": { "<includes>": [
+            { "integration": "todoist", "own": false, "shared": false, "title": "Todoist", "symbol": "checkmark.circle",
+              "keys": [ { "name": "TODOIST_API_KEY", "label": "API token", "prompt": "<string>" } ], "help": "<string>" }
+          ] } } }
+        },
+        { "send": "PUT kuvo/bots/bot_ada/keys/todoist", "body": { "keys": {} }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/bots/bot_ada/keys/todoist", "expect": { "status": 404 } },
+        { "send": "PUT kuvo/bots/bot_ada/keys/todoist", "body": { "keys": { "TODOIST_API_KEY": " tok_ada " } }, "expect": { "status": 200, "json": { "integration": "todoist", "own": true, "shared": false } } },
+        { "send": "GET kuvo/bots/bot_ada/keys/todoist", "expect": { "status": 200, "json": { "keys": { "TODOIST_API_KEY": "tok_ada" } } } },
+        { "send": "GET kuvo/bots/bot_ada/keys", "expect": { "status": 200, "json": { "keys": { "<includes>": [ { "integration": "todoist", "own": true } ] } } } },
+        { "send": "DELETE kuvo/bots/bot_ada/keys/todoist", "expect": { "status": 200, "json": {} } },
+        { "send": "DELETE kuvo/bots/bot_ada/keys/todoist", "expect": { "status": 404 } },
+        { "send": "GET kuvo/bots/bot_ada/keys/nothing", "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/bots/bot_nobody/keys", "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/bots/bot_ada/keys", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "a bot that works in a project uses the project's keys",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "given": { "bot": { "id": "bot_ci", "name": "Fixer", "session": "ses_ci", "project": "{{shop}}" } } },
+        { "send": "GET kuvo/bots/bot_ci/keys", "expect": { "status": 409, "json": { "message": "Fixer works in a project, so it uses the keys that project's sessions use." } } }
+      ]
+    }
+  ]
+}

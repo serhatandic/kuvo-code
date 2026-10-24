@@ -1,0 +1,97 @@
+{
+  "about": "kuvo/worktrees (PROTOCOL.md, \"Settings › Worktrees\"): the git worktrees sessions run in, each box its own: made for a new session as the composer's Worktree makes one, listed with what to know before removing one, and removed. Real git on both; the engine is the stand-in that makes and removes them with git, as it does.",
+  "scenarios": [
+    {
+      "name": "one made for a new session, listed, and removed",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        {
+          "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" },
+          "expect": { "status": 200, "json": { "project": "{{shop}}", "root": "<string>", "folder": "<string>", "branch": { "<contains>": "kuvo/" }, "base": "main" } },
+          "save": { "root": "root", "folder": "folder", "branch": "branch" }
+        },
+        {
+          "send": "GET kuvo/worktrees",
+          "expect": { "status": 200, "json": { "worktrees": [ {
+            "path": "{{root}}", "folder": "{{folder}}", "project": "{{shop}}", "projectName": "shop", "branch": "{{branch}}", "base": "main",
+            "sessions": 0, "working": false, "uncommitted": false, "ahead": 0, "size": "<number>"
+          } ] } }
+        },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}" }, "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}" }, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "a project in a repository's folder: its sessions run in the same folder of the worktree",
+      "steps": [
+        { "given": { "repository": { "as": "shop", "files": { "app/README.md": "# App\n", "README.md": "# Shop\n" } } } },
+        {
+          "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}/app" },
+          "expect": { "status": 200, "json": { "project": "{{shop}}/app", "root": "<string>", "folder": "<string>" } },
+          "save": { "root": "root", "folder": "folder" }
+        },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}", "folder": "{{root}}/app", "project": "{{shop}}/app", "projectName": "app" } ] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}" }, "expect": { "status": 200, "json": {} } }
+      ]
+    },
+    {
+      "name": "one with changes not committed stays when asked to, and goes with them otherwise",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" }, "expect": { "status": 200 }, "save": { "root": "root" } },
+        { "given": { "write": { "path": "{{root}}/notes.txt", "text": "Half done\n" } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}", "uncommitted": true } ] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}", "discard": false }, "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}" } ] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}" }, "expect": { "status": 200, "json": {} } }
+      ]
+    },
+    {
+      "name": "one made for a session that never started is taken back, but not once a session has it",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" }, "expect": { "status": 200 }, "save": { "root": "root", "folder": "folder" } },
+        { "given": { "session": { "id": "ses_tree", "title": "Fix the cart", "directory": "{{folder}}" } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}", "sessions": 1 } ] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}", "forget": true }, "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}" } ] } } }
+      ]
+    },
+    {
+      "name": "not while an agent works there",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" }, "expect": { "status": 200 }, "save": { "root": "root", "folder": "folder" } },
+        { "given": { "session": { "id": "ses_tree", "title": "Fix the cart", "directory": "{{folder}}", "running": true } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [ { "path": "{{root}}", "sessions": 1, "working": true } ] } } },
+        { "send": "POST kuvo/worktrees/remove", "body": { "path": "{{root}}" }, "expect": { "status": 409, "json": { "message": "<string>" } } }
+      ]
+    },
+    {
+      "name": "what can't be made, and the methods each route takes",
+      "steps": [
+        { "given": { "file": { "as": "notes", "name": "plain/notes.txt", "text": "Not a repository\n" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "relative/folder" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/worktrees", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{work}}/nowhere" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{work}}/plain" }, "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/worktrees", "expect": { "status": 200, "json": { "worktrees": [] } } },
+        { "send": "DELETE kuvo/worktrees", "expect": { "status": 405 } },
+        { "send": "GET kuvo/worktrees/remove", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "a machine hands over the records a Mac kept of its worktrees",
+      "only": "machine",
+      "why": "Only a machine takes a Mac's old records (?records=1 and /record), from before machines kept their own worktrees.",
+      "steps": [
+        { "given": { "repository": { "as": "shop" } } },
+        { "send": "POST kuvo/worktrees", "body": { "project": "{{shop}}" }, "expect": { "status": 200, "json": { "made": "<string>", "prefix": "kuvo/" } }, "save": { "root": "root" } },
+        { "send": "GET kuvo/worktrees?records=1", "expect": { "status": 200, "json": { "worktrees": [ { "project": "{{shop}}", "root": "{{root}}", "made": "<string>", "prefix": "kuvo/", "size": "<absent>" } ] } } },
+        { "send": "POST kuvo/worktrees/record", "body": { "project": "{{shop}}", "root": "{{work}}/gone", "branch": "kuvo/gone" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/worktrees/record", "body": { "project": "{{shop}}" }, "expect": { "status": 400, "json": { "message": "<string>" } } }
+      ]
+    }
+  ]
+}

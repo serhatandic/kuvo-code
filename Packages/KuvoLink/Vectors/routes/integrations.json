@@ -1,0 +1,71 @@
+{
+  "about": "kuvo/integrations (PROTOCOL.md, \"Integrations\"): Settings › Integrations, each box its own, added with the keys you bring and removed with everything that goes with them. A machine's catalog is the one its Mac leaves there (Vectors/routes/box/integrations.json).",
+  "scenarios": [
+    {
+      "name": "the catalog, by kind, with what's added and whose keys are kept",
+      "steps": [
+        {
+          "send": "GET kuvo/integrations",
+          "expect": { "status": 200, "json": { "integrations": { "<includes>": [
+            { "id": "todoist", "title": "Todoist", "kind": "Code and Work", "way": "package", "symbol": "checkmark.circle", "site": "<string>", "how": "<string>", "by": "<string>",
+              "added": false, "keysSaved": false, "health": "<absent>", "keys": [ { "name": "TODOIST_API_KEY", "label": "API token", "prompt": "<string>" } ] },
+            { "id": "linkedin", "way": "browser", "kind": "Social", "added": false, "keysSaved": "<absent>" },
+            { "id": "linear", "way": "official", "added": false }
+          ] } } }
+        },
+        {
+          "send": "GET kuvo/integrations",
+          "why": "Apple Calendar and Reminders uses the Mac's own apps, so a machine's catalog leaves it out.",
+          "expect": {
+            "mac": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "apple-calendar", "macOnly": true } ] } } },
+            "machine": { "status": 200, "json": { "integrations": { "<excludes>": [ { "id": "apple-calendar" } ] } } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "adding one with its keys, again with the keys it has, and removing it with them",
+      "steps": [
+        { "send": "POST kuvo/integrations/todoist", "body": {}, "expect": { "status": 400, "json": { "message": "Todoist needs API token: send them as {\"keys\": {\"TODOIST_API_KEY\": …}}." } } },
+        {
+          "send": "POST kuvo/integrations/todoist", "body": { "keys": { "TODOIST_API_KEY": " tok_123 " } },
+          "expect": { "status": 200, "json": { "integration": { "id": "todoist", "added": true, "keysSaved": true, "health": "starting" } } }
+        },
+        { "send": "GET kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 200, "json": { "value": "tok_123" } } },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "mcp": { "servers": { "todoist": { "environment": { "TODOIST_API_KEY": "{file:{{keys}}/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } } } } } },
+        { "send": "POST kuvo/integrations/todoist", "body": {}, "expect": { "status": 200, "json": { "integration": { "id": "todoist", "added": true } } } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": true, "keysSaved": true, "health": "starting" } ] } } } },
+        { "send": "DELETE kuvo/integrations/todoist", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 404 } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": false, "keysSaved": false, "health": "<absent>" } ] } } } },
+        { "send": "DELETE kuvo/integrations/todoist", "expect": { "status": 404, "json": {} } }
+      ]
+    },
+    {
+      "name": "one turned off in MCP Servers says so, not that it's starting",
+      "steps": [
+        { "send": "POST kuvo/integrations/todoist", "body": { "keys": { "TODOIST_API_KEY": "tok_123" } }, "expect": { "status": 200 } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "mcp", "servers", "todoist", "disabled" ], "value": true } ] }, "expect": { "status": 200 } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": true, "health": "disabled" } ] } } } },
+        { "send": "DELETE kuvo/integrations/todoist", "expect": { "status": 200 } }
+      ]
+    },
+    {
+      "name": "one used on its site isn't added, and one there isn't is 404",
+      "steps": [
+        { "send": "POST kuvo/integrations/linkedin", "body": {}, "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/integrations/nothing", "body": {}, "expect": { "status": 404, "json": {} } },
+        { "send": "PUT kuvo/integrations/todoist", "body": {}, "expect": { "status": 405, "json": {} } },
+        { "send": "POST kuvo/integrations", "body": {}, "expect": { "status": 405, "json": {} } }
+      ]
+    },
+    {
+      "name": "a settings file that can't be changed: listed with the problem, nothing added",
+      "steps": [
+        { "given": { "settings": { "text": "{ // mine\n}\n" } } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "problem": "<string>" } } },
+        { "send": "POST kuvo/integrations/todoist", "body": { "keys": { "TODOIST_API_KEY": "tok_123" } }, "expect": { "status": 409, "json": { "message": "<string>" } } }
+      ]
+    }
+  ]
+}

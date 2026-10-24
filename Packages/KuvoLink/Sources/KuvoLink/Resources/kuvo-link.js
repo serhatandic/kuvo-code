@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.26";
+export const BRIDGE_VERSION = "0.9.27";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -1475,7 +1475,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     const text = (status, words) => [{ head: { status, headers: { "content-type": "text/plain" } } }, { body: Buffer.from(words) }];
     // A phone using this machine, whatever it asks.
     phoneHere();
-    if (request.path === "kuvo/info") {
+    // Which route answers, by its path alone: a query string never changes it (as on a Mac).
+    const route = request.path.split("?")[0];
+    if (route === "kuvo/info") {
       let engine = {};
       try { engine = readEngine(); } catch {}
       // When the engine running now came up, in seconds since 1970 (each start writes its record):
@@ -1494,10 +1496,10 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return;
     }
     const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
-    if (request.path.split("?")[0] === "kuvo/file") return yield* fileAt(request.path, json);
+    if (route === "kuvo/file") return yield* fileAt(request.path, json);
     // This box's updates (PROTOCOL.md, "Updates"): how it stands, Update Now. It always updates
     // by itself: there's no switch.
-    if (request.path.split("?")[0] === "kuvo/update") {
+    if (route === "kuvo/update") {
       const method = request.method.toUpperCase();
       if (method === "GET") return yield* json(200, updateStatus());
       if (method === "PATCH") return yield* json(400, { message: ALWAYS_UPDATES });
@@ -1531,7 +1533,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (/^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path)) {
       // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
       if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
-      const route = request.path.split("?")[0];
       const method = request.method.toUpperCase();
       const answered = ({ status, settings, message }) => json(status, message ? { message } : settings ?? {});
       if (route === "kuvo/config") {
@@ -1570,14 +1571,14 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The phones paired with this machine, and removing some (a lost one, say), from any phone
     // paired with it: what a removal takes off stays off (see `removePhones`).
-    if (request.path === "kuvo/phones") {
+    if (route === "kuvo/phones") {
       const link = readLink();
       const asking = phone?.key?.toString("base64url");
       return yield* json(200, {
         phones: (link?.phones ?? []).map(each => ({ key: each.key, name: each.name, added: each.added ?? null, pairing: each.pairing ?? "", you: each.key === asking })),
       });
     }
-    if (request.path === "kuvo/phones/remove") {
+    if (route === "kuvo/phones/remove") {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const given = parsed(request.body);
       const changed = updateLink(link => link && removePhones(link, phone?.key?.toString("base64url"), given?.phones) ? link : null);
@@ -1588,7 +1589,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // A link for another phone to pair with this machine, as `kuvo-link.js pair` shows one: good
     // once, for a while; a new one takes the place of the last. DELETE ends it.
-    if (request.path === "kuvo/phones/pair") {
+    if (route === "kuvo/phones/pair") {
       const method = request.method.toUpperCase();
       if (method === "DELETE") {
         updateLink(link => {
@@ -1605,7 +1606,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
     // latest sessions (`machine` null), then those its other computers told it of.
-    if (request.path === "kuvo/named") {
+    if (route === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const link = readLink();
       const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
@@ -1613,7 +1614,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
     // as a Mac's), and answered.
-    if (request.path === "kuvo/asks" || request.path === "kuvo/asks/events") {
+    if (route === "kuvo/asks" || route === "kuvo/asks/events") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const read = async () => ({
         asks: await Promise.all(readAsks().map(async ask => {
@@ -1621,7 +1622,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
           return listedAsk(shown, info.name ?? os.hostname(), asker);
         })),
       });
-      if (request.path === "kuvo/asks") return yield* json(200, await read());
+      if (route === "kuvo/asks") return yield* json(200, await read());
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
       let last = "";
       while (!signal?.aborted) {
@@ -1634,7 +1635,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return;
     }
-    const answering = request.path.match(/^kuvo\/asks\/([^/?]+)$/);
+    const answering = route.match(/^kuvo\/asks\/([^/]+)$/);
     if (answering) {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const ask = readAsks().find(each => each.id === decodeURIComponent(answering[1]));
@@ -1645,13 +1646,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});
     }
     // (No Stop: a machine's engine keeps running, and up to date. Start is for one an older Mac stopped.)
-    const control = request.path.match(/^kuvo\/engine\/(start|restart)$/);
+    const control = route.match(/^kuvo\/engine\/(start|restart)$/);
     if (control) {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const { status, message } = await engineControl(control[1]);
       return yield* json(status, message ? { message } : {});
     }
-    if (request.path === "kuvo/sign-in/return") {
+    if (route === "kuvo/sign-in/return") {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       return yield* loadSignInReturn(request.body, signal);
     }
@@ -1669,7 +1670,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* forward(target, path, request, signal, agentsAllowed);
     }
     // This machine's sign-ins, listed (`api/credential` has what each is signed in with too).
-    if (request.path.split("?")[0] === "kuvo/accounts/credentials") {
+    if (route === "kuvo/accounts/credentials") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       let engine;
       try {
@@ -1696,7 +1697,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // New bots and group chats, made here as New Bot and New Group Chat make them on the Mac,
     // which takes them in when it next connects.
-    const route = request.path.split("?")[0];
     // The personalities you make, this machine's copy of the library.
     const personality = route.match(/^kuvo\/personalities(?:\/([^/]+))?$/);
     if (personality) {
@@ -1762,7 +1762,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The group chats that live here, as the Mac answers its own (`kuvo/groups`), from the
     // coding agents' bridge, which runs them.
-    const group = request.path.split("?")[0].match(GROUP_ROUTE);
+    const group = route.match(GROUP_ROUTE);
     if (group) {
       const target = bridge();
       if (!target) {
@@ -1773,7 +1773,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* answerGroups(target, group[1], group[2], request, signal);
     }
     // This machine's bots and wake-ups, from their folders.
-    if (request.path.split("?")[0] === "kuvo/bots") {
+    if (route === "kuvo/bots") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
       // A Mac's read (`?memory=1`): with each one's job as its memory has it now.
@@ -1781,13 +1781,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
       return;
     }
-    if (request.path.split("?")[0] === "kuvo/wakes") {
+    if (route === "kuvo/wakes") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
       yield { body: Buffer.from(JSON.stringify({ sessions: listWakes() })) };
       return;
     }
-    const wakes = request.path.split("?")[0].match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
+    const wakes = route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
     if (wakes) {
       let session;
       try {
@@ -1797,7 +1797,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return yield* answerWakes(session, wakes[2], request, readEngine, bridge, signal);
     }
-    const stop = request.path.match(/^kuvo\/shell\/([^/?]+)\/stop$/);
+    const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
     if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
     let engine;
     try {
@@ -4349,14 +4349,16 @@ export function composeAgents(own, ownID, peers, told, moved = new Map()) {
 
 // Who `&` can name here (`kuvo/named`), as a Mac's composer offers them: this box's own (`machine`
 // null), then each peer's it alone lists (`peerOf`): a machine's by its id, a Mac's own by the
-// Mac's name, and those of machines a Mac speaks for by theirs.
+// Mac's name, and those of machines a Mac speaks for by theirs. Every bot, and only sessions with a
+// title (the lists name one without "New session").
 export function namedAgents(own, peers, told, moved = new Map()) {
   const entry = (agent, machine) => ({ session: agent.session, name: agent.name, kind: agent.kind, machine, project: agent.project ?? null, about: agent.about ?? null });
-  const agents = own.map(agent => entry(agent, null));
+  const titled = agent => agent.kind === "bot" || (Boolean(agent.name) && agent.name !== "New session");
+  const agents = own.filter(titled).map(agent => entry(agent, null));
   const seen = new Set(agents.map(agent => agent.session));
   for (const peer of peers) {
     for (const agent of told[peer.key]?.list ?? []) {
-      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
+      if (!titled(agent) || seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
       seen.add(agent.session);
       agents.push(entry(agent, peer.kind === "machine" ? peer.id ?? peer.name ?? null : agent.machine ?? peer.name ?? null));
     }
@@ -4364,9 +4366,13 @@ export function namedAgents(own, peers, told, moved = new Map()) {
   return agents;
 }
 
+// Put away: archived, as a Mac archives one (`kuvo.archived` in its metadata) or the engine does.
+const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Boolean(session?.metadata?.kuvo?.archived) || Boolean(session?.time?.archived);
+
 // This box's own agents: its bots, then its latest sessions, its engine's and its coding
 // agents' (not a bot's, a subagent's, a group chat's seat, nor one put away), as the Mac lists its
-// own. Null when its engine can't say (then what it last said stands).
+// own: one without a title is "New session", and a chat's project is "Chats". Null when its engine
+// can't say (then what it last said stands).
 export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile) {
   const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", ...(bot.job ? { about: bot.job } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
@@ -4382,9 +4388,10 @@ export async function ownAgents(readEngine, machine, kit = readKit(), readBridge
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) sessions = sessions.concat(await sessionsOf(bridge));
   } catch {}
   const projects = kit?.projects ?? [];
-  const named = directory => projects.find(project => project.directory === directory)?.name ?? (directory ? path.basename(directory) : undefined);
+  const named = directory => projects.find(project => project.directory === directory)?.name
+    ?? (directory === path.join(K, "chats") ? "Chats" : directory ? path.basename(directory) : undefined);
   const recent = sessions
-    .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !session.metadata?.kuvo?.archived && !session.time?.archived)
+    .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
     .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     .slice(0, 40)
     .map(session => ({ session: session.id, name: session.title || "New session", kind: "session", ...(named(session.location?.directory ?? session.directory) ? { project: named(session.location?.directory ?? session.directory) } : {}) }));
@@ -4505,7 +4512,7 @@ export async function takeLetter(sender, letter, { send, targets, answer = () =>
     place = await placeOfSession(letter.to, targets);
     if (!place) return no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
-    if (place.data?.parentID || kuvo.seat || kuvo.archived || place.data?.time?.archived) return no("That conversation doesn't take messages.");
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data)) return no("That conversation doesn't take messages.");
     // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
     const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
     if (listed && !(await placeOfSession(letter.from, targets).catch(() => ({})))) fromAgent = listed;

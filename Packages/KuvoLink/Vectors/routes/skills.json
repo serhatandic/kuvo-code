@@ -1,0 +1,58 @@
+{
+  "about": "kuvo/skills and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: PhoneSkillsTests and skills.test.js cover those, each against its own stand-in.",
+  "scenarios": [
+    {
+      "name": "the skills folder, and which skills came from GitHub",
+      "steps": [
+        { "given": { "skill": { "name": "release-notes", "text": "---\nname: release-notes\ndescription: Writes the release notes\n---\nKeep them short.\n" } } },
+        { "given": { "skill": { "name": "pdf", "text": "---\nname: pdf\n---\nPDFs.\n", "github": { "repository": "anthropics/skills", "path": "skills/pdf" } } } },
+        { "send": "GET kuvo/skills", "expect": { "status": 200, "json": { "folder": "{{skills}}", "github": { "pdf": { "repository": "anthropics/skills", "path": "skills/pdf" }, "release-notes": "<absent>" } } } }
+      ]
+    },
+    {
+      "name": "writing a skill as Settings does: a new one's name, never over another, and one from GitHub stays as it came",
+      "steps": [
+        { "given": { "skill": { "name": "pdf", "text": "---\nname: pdf\n---\nPDFs.\n", "github": { "repository": "anthropics/skills", "path": "skills/pdf" } } } },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nKeep them short.\n", "new": true }, "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nKeep them short.\n" } } },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "Again", "new": true }, "expect": { "status": 409, "json": { "message": "There's a skill called release-notes already." } } },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nAnd kind.\n" }, "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nAnd kind.\n" } } },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "  " }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PUT kuvo/skills/Release%20Notes", "body": { "text": "Hi", "new": true }, "expect": { "status": 400, "json": { "message": "Names use lowercase letters a to z, digits and hyphens." } } },
+        { "send": "PUT kuvo/skills/..%2Fescape", "body": { "text": "Hi" }, "expect": { "status": 400, "json": { "message": "That isn't a skill's name." } } },
+        { "send": "GET kuvo/skills/%E0%A4%A", "expect": { "status": 400, "json": { "message": "That isn't a path." } } },
+        { "send": "PUT kuvo/skills/nowhere", "body": { "text": "Hi" }, "expect": { "status": 404, "json": {} } },
+        { "send": "PUT kuvo/skills/pdf", "body": { "text": "Mine now" }, "expect": { "status": 409, "json": { "message": "pdf came from GitHub, so it isn't edited here." } } },
+        { "send": "GET kuvo/skills/nowhere", "expect": { "status": 404, "json": {} } }
+      ]
+    },
+    {
+      "name": "putting a skill away, and the methods each route takes",
+      "steps": [
+        { "given": { "skill": { "name": "release-notes", "text": "Keep them short.\n" } } },
+        { "send": "DELETE kuvo/skills/release-notes", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/skills/release-notes", "expect": { "status": 404, "json": {} } },
+        { "send": "DELETE kuvo/skills/release-notes", "expect": { "status": 404, "json": {} } },
+        { "send": "POST kuvo/skills", "expect": { "status": 405, "json": {} } },
+        { "send": "PATCH kuvo/skills/release-notes", "expect": { "status": 405, "json": {} } },
+        { "send": "GET kuvo/skills/a/b", "expect": { "status": 404, "json": {} } }
+      ]
+    },
+    {
+      "name": "GitHub's well-known collections, in the same order on both",
+      "steps": [
+        {
+          "send": "GET kuvo/skill-library",
+          "expect": { "status": 200, "json": { "repositories": [
+            { "id": "anthropics/skills", "owner": "anthropics", "name": "skills", "title": "Anthropic", "summary": "<string>", "branch": "<absent>" },
+            { "id": "openai/skills" }, { "id": "obra/superpowers" }, { "id": "mattpocock/skills" }, { "id": "addyosmani/agent-skills" },
+            { "id": "vercel-labs/agent-skills" }, { "id": "github/awesome-copilot" }, { "id": "huggingface/skills" }, { "id": "cloudflare/skills" },
+            { "id": "trailofbits/skills" }, { "id": "K-Dense-AI/scientific-agent-skills" }, { "id": "wshobson/agents" }
+          ] } }
+        },
+        { "send": "PUT kuvo/skill-library", "expect": { "status": 404, "json": {} } }
+      ]
+    }
+  ]
+}

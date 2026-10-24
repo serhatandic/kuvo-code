@@ -174,6 +174,51 @@ final class AppModel {
         EngineFolders(root: AppInfo.supportDirectory.appending(path: "opencode"))
     }
 
+    /// The stores told of each other, and of the machines' engines, once this Mac's engine is up.
+    /// Also what the route scenarios run with (RouteContractTests).
+    func wireStores() {
+        workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
+        workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
+        bots.app = self
+        wakeUps.app = self
+        groups.app = self
+        machineGroups.app = self
+        moves.app = self
+        workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
+        workspace.runsOnAgents(bots.agentSessionIDs)
+        workspace.botSessions = bots.sessionIDs
+        workspace.runsOnAgents(groups.agentSeatIDs.union(machineGroups.agentSeatIDs))
+        workspace.seats = groups.seatIDs.union(machineGroups.seatIDs)
+    }
+
+    /// What a phone's request reaches on this Mac (`PhoneLink`): its stores, as they are now, and
+    /// what it does with them. Also what the route scenarios run against (RouteContractTests).
+    func wirePhoneLink() {
+        phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
+        // With machines, this Mac meets them at the relay, phone or not.
+        phoneLink.hasMachines = { [weak self] in !(self?.machines.list.isEmpty ?? true) }
+        phoneLink.movedSessions = { [weak self] in self?.moves.livePlaces ?? [:] }
+        Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
+        phoneLink.bots = bots
+        phoneLink.wakeUps = wakeUps
+        phoneLink.browserAsks = browserAsks
+        phoneLink.groups = chats
+        phoneLink.workspace = workspace
+        phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
+        phoneLink.agents = agents
+        phoneLink.endedSignIns = { [weak self] in self?.catalog.endedProviders ?? [] }
+        phoneLink.forgetSignIn = { [weak self] provider in
+            // One of your plans, as Settings › Accounts lists them; never an integration's server.
+            guard let self, catalog.integrations.contains(where: { $0.id == provider && !$0.isMCP }) else { return false }
+            forgetSignIn(provider)
+            return true
+        }
+        phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
+        phoneLink.engineConfig = engineConfig
+        phoneLink.engineStarted = { [weak self] in self?.engineStarted }
+        phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
+    }
+
     /// Puts the usage panel in the menu bar. It reads the engine's database for spend, so it
     /// starts with the app, not with the engine.
     func startUsage() {
@@ -320,51 +365,18 @@ final class AppModel {
             }
             Analytics.shared.catalog = catalog
             workspace.api = api
-            workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
-            workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
-            bots.app = self
-            wakeUps.app = self
-            groups.app = self
-            machineGroups.app = self
-            moves.app = self
+            wireStores()
             // A move cut short (the app quit) is finished or taken back.
             Task { await moves.recover() }
-            workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
-            workspace.runsOnAgents(bots.agentSessionIDs)
-            workspace.botSessions = bots.sessionIDs
             // Bots' keys of their own, in their folders' settings as integrations are now.
             Task { await BotKeys.applyAll(on: nil, app: self) }
-            workspace.runsOnAgents(groups.agentSeatIDs.union(machineGroups.agentSeatIDs))
-            workspace.seats = groups.seatIDs.union(machineGroups.seatIDs)
             usage.api = api
             engineStarted = .now
             engine = .ready
             #if DEBUG
             E2E.note(server.endpoint)
             #endif
-            phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
-            // With machines, this Mac meets them at the relay, phone or not.
-            phoneLink.hasMachines = { [weak self] in !(self?.machines.list.isEmpty ?? true) }
-            phoneLink.movedSessions = { [weak self] in self?.moves.livePlaces ?? [:] }
-            Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
-            phoneLink.bots = bots
-            phoneLink.wakeUps = wakeUps
-            phoneLink.browserAsks = browserAsks
-            phoneLink.groups = chats
-            phoneLink.workspace = workspace
-            phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
-            phoneLink.agents = agents
-            phoneLink.endedSignIns = { [weak self] in self?.catalog.endedProviders ?? [] }
-            phoneLink.forgetSignIn = { [weak self] provider in
-                // One of your plans, as Settings › Accounts lists them; never an integration's server.
-                guard let self, catalog.integrations.contains(where: { $0.id == provider && !$0.isMCP }) else { return false }
-                forgetSignIn(provider)
-                return true
-            }
-            phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
-            phoneLink.engineConfig = engineConfig
-            phoneLink.engineStarted = { [weak self] in self?.engineStarted }
-            phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
+            wirePhoneLink()
             phoneLink.start(endpoint: server.endpoint)
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)

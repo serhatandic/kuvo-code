@@ -13,8 +13,10 @@ extension PhoneLink {
         case ("POST", "kuvo/worktrees"):
             // One for a new session, as the composer's Worktree makes it; the phone makes the
             // session in its folder.
+            var isFolder: ObjCBool = false
             guard let project = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["project"] as? String,
-                  project.hasPrefix("/"), RemoteFolder.machine(of: project) == nil else {
+                  project.hasPrefix("/"), RemoteFolder.machine(of: project) == nil,
+                  FileManager.default.fileExists(atPath: project, isDirectory: &isFolder), isFolder.boolValue else {
                 return (400, Self.message("Send the project's folder on this Mac as {\"project\"}."))
             }
             guard workspace.api(forFolder: project) != nil else { return (503, Self.message("This Mac's engine isn't running.")) }
@@ -87,8 +89,10 @@ extension PhoneLink {
         }.value
         return trees.map { tree in
             let sessions = workspace.sessions.filter { workspace.worktrees[$0.location.directory]?.root == tree.root }
+            // Where its sessions run: the project's place in the worktree, as it was made.
+            let folder = workspace.worktrees.filter { $0.value.root == tree.root }.keys.sorted().first ?? tree.root
             var entry: [String: Any] = [
-                "path": tree.root, "project": tree.project, "projectName": workspace.projectName(tree.project), "branch": tree.branch,
+                "path": tree.root, "folder": folder, "project": tree.project, "projectName": workspace.projectName(tree.project), "branch": tree.branch,
                 "sessions": sessions.count, "working": sessions.contains { workspace.isWorking($0.id) },
             ]
             if let base = tree.base { entry["base"] = base }

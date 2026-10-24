@@ -376,7 +376,10 @@ like HTTP:
 | `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings before sending on a session that's been quiet (a host started again since closes the session, and the phone opens a new one before anything's lost), and while a request waits with nothing from the host (no answer ends the session). Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
-itself. A host serves:
+itself. Which route answers is told by its path before any `?`: a query string never changes it,
+and a method is read in any case (a Mac from this version, a machine's bridge from 0.9.27; before,
+a Mac answered 404 to a `kuvo/…` route with a query, and a machine's bridge 403 to some). Both are
+held to the same route scenarios (`Vectors/routes`). A host serves:
 
 - `api/…`: passed to its engine, all of its API. A paired phone is yours, with the reach the app
   has on that computer: sessions, files, terminals and commands, accounts and their keys, the
@@ -679,7 +682,8 @@ itself. A host serves:
   - `GET kuvo/worktrees` → `{"worktrees": [{path, folder, project, projectName, branch, base?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `folder`
     where its session runs (the project's place in its repository), `project` its project's,
-    `sessions` how many run there and `working` whether an agent is at work in one.
+    `sessions` how many run there and `working` whether an agent is at work in one. (A Mac before
+    this version left `folder` out: take `path` then.)
     What git says, left out when it can't say (a folder deleted by hand): `uncommitted`, changes
     not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
     stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
@@ -811,7 +815,8 @@ itself. A host serves:
   project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else where it
   lives: a machine's id, or, asked of a machine, a Mac's name for that Mac's own. A machine's
   bridge answers it too (from 0.9.23), with the Mac closed: its own, then those its other
-  computers told it of (`Peers`). Insert
+  computers told it of (`Peers`); before 0.9.27 it also listed its sessions without a title (as
+  "New session") and archived ones, and named a chat's project "chats". Insert
   `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
   agent reads, so a machine's bridge, with the Mac closed, sends it without. Show a message

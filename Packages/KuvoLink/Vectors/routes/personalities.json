@@ -1,0 +1,34 @@
+{
+  "about": "kuvo/personalities (PROTOCOL.md, \"Personalities\"): the personalities you make, each box's copy of the library, which New Bot there offers too.",
+  "scenarios": [
+    {
+      "name": "made, listed, changed and removed",
+      "steps": [
+        { "send": "GET kuvo/personalities", "expect": { "status": 200, "json": { "personalities": [] } } },
+        {
+          "send": "POST kuvo/personalities", "body": { "name": "Night  Owl", "description": "  Talks quietly, late.  " },
+          "expect": { "status": 200, "json": { "id": { "<contains>": "custom." }, "name": "Night Owl", "description": "Talks quietly, late.", "symbol": "person.crop.circle", "updated": "<number>" } },
+          "save": { "owl": "id" }
+        },
+        { "send": "GET kuvo/personalities", "expect": { "status": 200, "json": { "personalities": [ { "id": "{{owl}}", "name": "Night Owl" } ] } } },
+        { "send": "GET kuvo/bots/templates", "expect": { "status": 200, "json": { "personalities": { "<includes>": [ { "id": "{{owl}}", "name": "Night Owl", "custom": true } ] } } } },
+        { "send": "PATCH kuvo/personalities/{{owl}}", "body": { "name": "Early Bird" }, "expect": { "status": 200, "json": { "id": "{{owl}}", "name": "Early Bird", "description": "Talks quietly, late." } } },
+        { "send": "PATCH kuvo/personalities/{{owl}}", "body": { "description": "" }, "expect": { "status": 400, "json": { "message": "A personality needs a name and a description." } } },
+        { "send": "PATCH kuvo/personalities/custom.nothing", "body": { "name": "Ghost" }, "expect": { "status": 404 } },
+        { "send": "DELETE kuvo/personalities/{{owl}}", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/personalities", "expect": { "status": 200, "json": { "personalities": [] } } },
+        { "send": "DELETE kuvo/personalities/{{owl}}", "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "one needs a name and a description, and presets aren't yours to change",
+      "steps": [
+        { "send": "POST kuvo/personalities", "body": { "name": "Owl" }, "expect": { "status": 400, "json": { "message": "A personality needs a name and a description." } } },
+        { "send": "POST kuvo/personalities", "body": { "description": "No name" }, "expect": { "status": 400, "json": { "message": "A personality needs a name and a description." } } },
+        { "send": "PATCH kuvo/personalities/preset.straight", "body": { "name": "Mine" }, "expect": { "status": 404 } },
+        { "send": "DELETE kuvo/personalities/preset.straight", "expect": { "status": 404 } },
+        { "send": "PUT kuvo/personalities", "body": {}, "expect": { "status": 405 } }
+      ]
+    }
+  ]
+}

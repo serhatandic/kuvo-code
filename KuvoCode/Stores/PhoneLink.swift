@@ -606,12 +606,17 @@ final class PhoneLink {
                 EngineRoutes.forward($0, to: base, password: bridge.password, allowing: { EngineRoutes.allowsAgents($0, method: $1) })
             }
         }
-        if request.path.split(separator: "?").first == "kuvo/file" { return Self.file(request.path) }
+        // Which route answers, by its path alone: a query string never changes it (as on a machine).
+        // Those that read the query get the request whole; the rest, its route.
+        let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
+        var routed = request
+        routed.path = route
+        if route == "kuvo/file" { return Self.file(request.path) }
         // The phones paired with this Mac, removing some, and pairing another, from any of them.
-        if ["kuvo/phones", "kuvo/phones/remove", "kuvo/phones/pair"].contains(request.path) {
-            return AsyncThrowingStream { continuation in
+        if ["kuvo/phones", "kuvo/phones/remove", "kuvo/phones/pair"].contains(route) {
+            return AsyncThrowingStream { [routed] continuation in
                 Task { @MainActor in
-                    let (status, body) = link?.answerPhones(request, asking: asking) ?? (503, Data())
+                    let (status, body) = link?.answerPhones(routed, asking: asking) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -619,10 +624,10 @@ final class PhoneLink {
             }
         }
         // A new bot or group chat, as New Bot and New Group Chat make them.
-        if request.method.uppercased() == "POST", request.path == "kuvo/bots" || request.path == "kuvo/groups" {
+        if request.method.uppercased() == "POST", route == "kuvo/bots" || route == "kuvo/groups" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await (request.path == "kuvo/bots" ? link?.makeBot(request.body) : link?.makeGroup(request.body)) ?? (503, Data())
+                    let (status, body) = await (route == "kuvo/bots" ? link?.makeBot(request.body) : link?.makeGroup(request.body)) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -641,7 +646,7 @@ final class PhoneLink {
             }
         }
         // A bot changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
-        if let id = Self.botID(in: request.path), ["PATCH", "DELETE"].contains(request.method.uppercased()) {
+        if let id = Self.botID(in: route), ["PATCH", "DELETE"].contains(request.method.uppercased()) {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await (request.method.uppercased() == "PATCH" ? link?.changeBot(id, with: request.body) : link?.deleteBot(id)) ?? (503, Data())
@@ -652,10 +657,11 @@ final class PhoneLink {
             }
         }
         // A conversation carried on with the coding agents, as picking one of their models in it does.
-        if let id = Self.sessionID(in: request.path, then: "agents"), request.method.uppercased() == "POST" {
+        if let id = Self.sessionID(in: route, then: "agents") {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.moveToAgents(id, with: request.body) ?? (503, Data())
+                    let posts = request.method.uppercased() == "POST"
+                    let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -663,7 +669,7 @@ final class PhoneLink {
             }
         }
         // Settings › Integrations: this Mac's, added and removed as the page does it.
-        if request.path == "kuvo/integrations" || request.path.hasPrefix("kuvo/integrations/") || request.path.hasPrefix("kuvo/integrations?") {
+        if route == "kuvo/integrations" || route.hasPrefix("kuvo/integrations/") {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.answerIntegrations(request) ?? (503, Data())
@@ -674,7 +680,7 @@ final class PhoneLink {
             }
         }
         // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
-        if request.path.hasPrefix("kuvo/skills") || request.path.hasPrefix("kuvo/skill-library") {
+        if ["kuvo/skills", "kuvo/skill-library"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.answerSkills(request) ?? (503, Data())
@@ -687,8 +693,7 @@ final class PhoneLink {
         // Settings › Machines and Settings › Worktrees: this Mac's machines, and the worktrees its
         // sessions run in. Adding a machine checks it first: the phone going stops that (and
         // nothing else, which would leave a removal half done).
-        if request.path == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
-        let route = request.path.split(separator: "?").first.map(String.init) ?? request.path
+        if route == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
         if ["kuvo/machines", "kuvo/worktrees"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             return AsyncThrowingStream { continuation in
                 let task = Task { @MainActor in
@@ -701,7 +706,7 @@ final class PhoneLink {
             }
         }
         // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
-        if request.path.split(separator: "?").first == "kuvo/claude-code" {
+        if route == "kuvo/claude-code" {
             // `?machine=<id>`: named and said to be there as that machine's pages have them.
             let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value
             return AsyncThrowingStream { continuation in
@@ -713,11 +718,11 @@ final class PhoneLink {
                 }
             }
         }
-        if request.path == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
-        if request.path == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
-        if let id = Self.groupID(in: request.path, then: "events") { return Self.followingGroup(id, link: link) }
+        if route == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
+        if route == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
+        if let id = Self.groupID(in: route, then: "events") { return Self.followingGroup(id, link: link) }
         // A sign-in's page that sent the browser back to this Mac, loaded here.
-        if request.path == "kuvo/sign-in/return" {
+        if route == "kuvo/sign-in/return" {
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     let (status, body) = request.method.uppercased() == "POST" ? await Self.loadSignInReturn(request.body) : (405, Data())
@@ -728,12 +733,12 @@ final class PhoneLink {
                 continuation.onTermination = { _ in task.cancel() }
             }
         }
-        if request.path == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
+        if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
         // A chat's name, purpose, bots or meeting changed, as Edit Group Chat changes them.
-        if request.path.hasPrefix("kuvo/groups/"), request.method.uppercased() == "PATCH" {
+        if route.hasPrefix("kuvo/groups/"), request.method.uppercased() == "PATCH" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.changeGroup(String(request.path.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
+                    let (status, body) = await link?.changeGroup(String(route.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -741,10 +746,10 @@ final class PhoneLink {
             }
         }
         // What a phone does in a group chat: one on a machine answers once the machine has.
-        if request.path.hasPrefix("kuvo/groups/"), request.method.uppercased() == "POST" {
+        if route.hasPrefix("kuvo/groups/"), request.method.uppercased() == "POST" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.answerGroup(String(request.path.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
+                    let (status, body) = await link?.answerGroup(String(route.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -752,10 +757,11 @@ final class PhoneLink {
             }
         }
         // This Mac's sign-ins, listed (`api/credential` has what each is signed in with too).
-        if request.path.split(separator: "?").first == "kuvo/accounts/credentials" {
+        if route == "kuvo/accounts/credentials" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.credentialsJSON() ?? (503, Data())
+                    let reads = ["GET", "HEAD"].contains(request.method.uppercased())
+                    let (status, body) = reads ? await link?.credentialsJSON() ?? (503, Data()) : (405, Data("{}".utf8))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -763,7 +769,7 @@ final class PhoneLink {
             }
         }
         // A session's wake-ups and watches: read, or one canceled.
-        if request.path.hasPrefix("kuvo/wakes/") {
+        if route.hasPrefix("kuvo/wakes/") {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.answerWakes(request) ?? (503, Data())
@@ -773,7 +779,7 @@ final class PhoneLink {
                 }
             }
         }
-        if let id = Self.shellID(in: request.path), request.method.uppercased() == "POST" {
+        if let id = Self.shellID(in: route), request.method.uppercased() == "POST" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.stopShell(id, with: request.body) ?? (503, Data())
@@ -783,9 +789,9 @@ final class PhoneLink {
                 }
             }
         }
-        return AsyncThrowingStream { continuation in
+        return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
-                let (status, body) = link?.answer(request) ?? (503, Data())
+                let (status, body) = link?.answer(routed) ?? (503, Data())
                 continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                 continuation.yield(.body(body))
                 continuation.finish()
@@ -922,6 +928,10 @@ final class PhoneLink {
             var hosts: [Host]
         }
         let encoder = JSONEncoder()
+        // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
+        if ["kuvo/bots", "kuvo/groups", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+            return (405, Data("{}".utf8))
+        }
         switch request.path {
         case "kuvo/info":
             var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder)
@@ -988,13 +998,15 @@ final class PhoneLink {
         case "kuvo/usage":
             guard let usage = usageJSON() else { return (404, Data()) }
             return (200, usage)
-        case "kuvo/usage/refresh" where request.method == "POST":
+        case "kuvo/usage/refresh" where request.method.uppercased() == "POST":
             #if DEBUG
             if Self.usageSample { return (200, Data("{}".utf8)) }
             #endif
             return UsageMenuBar.shared.refreshAll() ? (200, Data("{}".utf8)) : (404, Data())
-        case let path where path.hasPrefix("kuvo/asks/") && request.method == "POST":
+        case let path where path.hasPrefix("kuvo/asks/") && request.method.uppercased() == "POST":
             return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
+        case let path where path.hasPrefix("kuvo/asks/"):
+            return (405, Data("{}".utf8))
         case "kuvo/config":
             return answerConfig(request)
         case "kuvo/mac":

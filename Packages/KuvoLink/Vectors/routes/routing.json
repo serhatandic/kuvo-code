@@ -1,0 +1,157 @@
+{
+  "about": "What every route has alike on both boxes: a query string never changes which route answers, a method is read in any case, kuvo/info and kuvo/file, the engine's routes passed on (a phone's message says it's from the phone), and a route a box doesn't have.",
+  "scenarios": [
+    {
+      "name": "kuvo/info: what the box is",
+      "steps": [
+        {
+          "send": "GET kuvo/info",
+          "why": "Each box says what kind it is: a Mac, or a machine (whose bridge also says its version and whether its engine runs).",
+          "expect": {
+            "mac": { "status": 200, "json": { "kind": "mac", "name": "<string>", "chats": "{{chats}}", "agents": false, "engine": "<string>", "app": "<string>" } },
+            "machine": { "status": 200, "json": { "kind": "machine", "name": "lab.invalid", "chats": "{{chats}}", "agents": false, "bridge": "<string>", "running": "<bool>", "stopped": false } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a query string never changes which route answers",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "send": "GET kuvo/info?from=phone", "expect": { "status": 200, "json": { "chats": "{{chats}}" } } },
+        { "send": "GET kuvo/bots?from=phone", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada" } ] } } },
+        { "send": "GET kuvo/bots/templates?from=phone", "expect": { "status": 200, "json": { "templates": "<array>" } } },
+        { "send": "GET kuvo/wakes?from=phone", "expect": { "status": 200, "json": { "sessions": [] } } },
+        { "send": "GET kuvo/wakes/ses_ada?from=phone", "expect": { "status": 200, "json": { "wakes": [] } } },
+        { "send": "GET kuvo/named?from=phone", "expect": { "status": 200, "json": { "agents": [ { "session": "ses_ada" } ] } } },
+        { "send": "GET kuvo/asks?from=phone", "expect": { "status": 200, "json": { "asks": [] } } },
+        { "send": "GET kuvo/personalities?from=phone", "expect": { "status": 200, "json": { "personalities": [] } } },
+        { "send": "GET kuvo/config?from=phone", "expect": { "status": 200, "json": "<object>" } },
+        { "send": "GET kuvo/mcp/catalog?from=phone", "expect": { "status": 200, "json": { "servers": "<array>" } } },
+        { "send": "GET kuvo/keys?from=phone", "expect": { "status": 200, "json": { "keys": "<array>" } } },
+        { "send": "GET kuvo/skills?from=phone", "expect": { "status": 200, "json": { "folder": "{{skills}}" } } },
+        { "send": "GET kuvo/skill-library?from=phone", "expect": { "status": 200, "json": { "repositories": "<array>" } } },
+        { "send": "GET kuvo/integrations?from=phone", "expect": { "status": 200, "json": { "integrations": "<array>" } } },
+        { "send": "GET kuvo/worktrees?from=phone", "expect": { "status": 200, "json": { "worktrees": [] } } },
+        { "send": "GET kuvo/bots/bot_ada/keys?from=phone", "expect": { "status": 200, "json": { "keys": "<array>" } } },
+        { "send": "GET kuvo/accounts/credentials?from=phone", "expect": { "status": 200, "json": { "credentials": [] } } },
+        { "send": "PATCH kuvo/bots/bot_ada?from=phone", "body": { "name": "Ada Lovelace" }, "expect": { "status": 200, "json": { "bot": { "name": "Ada Lovelace" } } } },
+        { "send": "POST kuvo/wakes/ses_ada/pause?from=phone", "body": { "paused": true }, "expect": { "status": 200, "json": { "paused": true } } }
+      ]
+    },
+    {
+      "name": "a method is read in any case",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 3600, "note": "Check the build", "letters": "Wk1" } } },
+        { "send": "get kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada" } ] } } },
+        { "send": "Get kuvo/info", "expect": { "status": 200, "json": { "chats": "{{chats}}" } } },
+        { "send": "patch kuvo/bots/bot_ada", "body": { "name": "Ada Lovelace" }, "expect": { "status": 200, "json": { "bot": { "name": "Ada Lovelace" } } } },
+        { "send": "post kuvo/personalities", "body": { "name": "Owl", "description": "Quiet" }, "expect": { "status": 200, "json": { "name": "Owl" } }, "save": { "owl": "id" } },
+        { "send": "delete kuvo/personalities/{{owl}}", "expect": { "status": 200, "json": {} } },
+        { "send": "put kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": { "value": "tok" }, "expect": { "status": 200, "json": {} } },
+        { "send": "delete kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 200, "json": {} } },
+        { "send": "post kuvo/wakes/ses_plan/cancel", "body": { "wake": "Wk1" }, "expect": { "status": 200, "json": {} } },
+        { "send": "post kuvo/mcp/catalog/context7", "expect": { "status": 200, "json": { "mcp": { "servers": { "context7": "<object>" } } } } },
+        { "send": "get kuvo/skills", "expect": { "status": 200, "json": { "folder": "{{skills}}" } } },
+        { "send": "post kuvo/sign-in/return", "body": { "url": "https://example.invalid/" }, "expect": { "status": 400, "json": { "message": "<string>" } } }
+      ]
+    },
+    {
+      "name": "a list answers only the methods it takes",
+      "steps": [
+        { "given": { "agentsBridge": {} } },
+        { "send": "PUT kuvo/groups", "body": {}, "expect": { "status": 405 } },
+        { "send": "PUT kuvo/bots", "body": {}, "expect": { "status": 405 } },
+        { "send": "DELETE kuvo/wakes", "expect": { "status": 405 } },
+        { "send": "POST kuvo/named", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/asks", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/mcp/catalog", "expect": { "status": 405 } },
+        { "send": "POST kuvo/accounts/credentials", "expect": { "status": 405 } },
+        { "send": "POST kuvo/personalities/custom.nothing", "body": {}, "expect": { "status": 405 } },
+        { "send": "HEAD kuvo/bots", "expect": { "status": 200 } }
+      ]
+    },
+    {
+      "name": "kuvo/file: a file an agent named, by its file:// address",
+      "steps": [
+        { "given": { "file": { "as": "notes", "name": "notes.txt", "text": "Ship it on Friday.\n" } } },
+        { "send": "GET kuvo/file?uri={{notes.uri}}", "expect": { "status": 200, "type": "text/plain", "text": "Ship it on Friday.\n" } },
+        { "send": "GET kuvo/file?uri=file:///nowhere/at/all.txt", "expect": { "status": 404, "json": { "message": "That file isn’t there anymore." } } },
+        { "send": "GET kuvo/file?uri=https://example.invalid/a.png", "expect": { "status": 400, "json": { "message": "That isn’t a file:// address." } } },
+        { "send": "GET kuvo/file", "expect": { "status": 400, "json": { "message": "That isn’t a file:// address." } } }
+      ]
+    },
+    {
+      "name": "kuvo/sign-in/return takes only an address on this computer",
+      "steps": [
+        { "send": "POST kuvo/sign-in/return", "body": { "url": "https://example.invalid/callback?code=1" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/sign-in/return", "body": { "url": "http://127.0.0.1/callback?code=1" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/sign-in/return", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/sign-in/return", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "this box's sign-ins, listed",
+      "steps": [
+        { "given": { "credential": { "id": "cred_1", "integrationID": "github-copilot", "label": "Work", "active": true } } },
+        { "send": "GET kuvo/accounts/credentials", "expect": { "status": 200, "json": { "credentials": [ { "id": "cred_1", "integrationID": "github-copilot", "label": "Work", "active": true } ] } } }
+      ]
+    },
+    {
+      "name": "a message a phone sends tells the agent it's from the phone",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "send": "POST api/session/ses_plan/prompt", "body": { "text": "How's the build?" }, "expect": { "status": 200 } },
+        { "engineGot": { "method": "POST", "path": "/api/session/ses_plan/prompt", "json": { "text": { "<contains>": "How's the build?\n\n<from-phone>\n" } } } },
+        { "send": "GET api/session/ses_plan", "expect": { "status": 200, "json": { "data": { "id": "ses_plan", "title": "Plan the launch" } } } },
+        { "send": "GET api/session/..%2Fsecret", "expect": { "status": 403 } }
+      ]
+    },
+    {
+      "name": "stopping a command no agent left running",
+      "steps": [
+        { "send": "POST kuvo/shell/sh_nothing/stop", "body": {}, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "the phones paired here, removing some, and pairing another, with the phone link off",
+      "steps": [
+        { "send": "GET kuvo/phones", "expect": { "status": 200, "json": { "phones": [] } } },
+        { "send": "POST kuvo/phones/remove", "body": { "phones": [] }, "expect": { "status": 400, "json": { "message": "Only phones paired here can be removed, and never your Mac." } } },
+        { "send": "GET kuvo/phones/remove", "expect": { "status": 405 } },
+        { "send": "POST kuvo/phones/pair", "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "DELETE kuvo/phones/pair", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/phones/pair", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "a machine updates itself, and starts an engine an older Mac stopped",
+      "only": "machine",
+      "why": "Only a machine's box updates itself (kuvo/update) and has an engine an older Mac's Stop leaves down (kuvo/engine/start); a Mac updates through its own app.",
+      "steps": [
+        { "send": "GET kuvo/update", "expect": { "status": 200, "json": { "auto": true, "updating": null } } },
+        { "send": "PATCH kuvo/update", "body": { "auto": false }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/update", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/engine/start", "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/engine/start", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "a route this box doesn't have",
+      "steps": [
+        {
+          "send": "GET kuvo/nothing",
+          "why": "A Mac says 404 and a machine 403 for a route it doesn't have; the phone takes 403, 404 and 405 alike, as a route this box doesn't have (HostModel.isMissingRoute).",
+          "expect": { "mac": { "status": 404 }, "machine": { "status": 403 } }
+        },
+        {
+          "send": "GET kuvo/hosts",
+          "why": "Only a Mac reaches your machines for a phone (kuvo/hosts, kuvo/machines).",
+          "expect": { "mac": { "status": 200, "json": { "hosts": [] } }, "machine": { "status": 403 } }
+        }
+      ]
+    }
+  ]
+}
