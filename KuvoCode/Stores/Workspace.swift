@@ -2082,11 +2082,15 @@ final class Workspace {
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
     /// the model it last used. While it moves to another computer it waits, and goes once it's
-    /// there. Says so in a notification if it didn't go.
+    /// there (if the app quits first, it's in the conversation's composer the next time). Says so
+    /// in a notification if it didn't go.
     func send(_ text: String, to id: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let failure: String
+        // Kept until it's gone: one the app quits on while it waits is in the composer next time.
+        let kept = Drafts.shared.onItsWay(text, to: id)
+        defer { Drafts.shared.sent(kept) }
         do {
             // Moving to another computer: once it's there.
             try await Deliveries.send(text, to: id, delivery: .queue, on: api(forSession: id))

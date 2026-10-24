@@ -103,6 +103,16 @@ final class Drafts {
         return (id, draft)
     }
 
+    /// `text`, sent to `key` from elsewhere (a notification's Reply), kept on disk as on its way
+    /// under the ID given until it's `sent`: if the app quits first (it waited for a move), it's
+    /// in `key`'s composer the next time.
+    func onItsWay(_ text: String, to key: String) -> String {
+        let id = UUID().uuidString
+        sending[id] = Sending(key: key, draft: Draft(text: text), at: .now)
+        saveNow()
+        return id
+    }
+
     /// The draft taken out as `id` has gone: nothing of it is kept.
     func sent(_ id: String) {
         guard sending.removeValue(forKey: id) != nil else { return }

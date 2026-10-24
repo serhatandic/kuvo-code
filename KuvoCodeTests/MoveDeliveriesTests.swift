@@ -212,6 +212,42 @@ import Testing
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
     }
 
+    /// A reply from a notification that waits for the bot's move is kept until it's gone: had the
+    /// app quit meanwhile, it's in the bot's composer at the next launch. Once it's gone, nothing
+    /// of it is kept.
+    @Test func aReplyWaitingAsTheAppQuitsIsInTheComposerNextTime() async throws {
+        defer {
+            Self.clean()
+            mac.stop()
+            Drafts.shared.remove("ses_deliver5")
+            Drafts.shared.saveNow()
+        }
+        let id = "bot_deliver005", session = "ses_deliver5"
+        let original = try bot(id, session: session, in: Bots.root)
+        let app = app()
+        let workspace = original.appending(path: "workspace").path
+        mac.list([StubEngine.session(session, title: "Scout", directory: workspace)])
+        await app.workspace.refresh()
+        conversation(session, directory: workspace, on: mac, bot: id)
+        box.on("POST", "/api/session/\(session)/prompt", json: [:])
+        let machine = machine
+
+        let move = Task { try await app.moves.move(bot: id, to: machine) }
+        await waypoint.arrived()
+        let replied = Task { await app.workspace.send("Ship it.", to: session) }
+        // It reaches the move before the move goes on (the main actor takes them in turn).
+        await Task.yield()
+        // The app quitting now: the next launch reads what's kept.
+        #expect(Drafts(defaults: .standard)[session].text == "Ship it.")
+
+        waypoint.open()
+        try await move.value
+        await replied.value
+        #expect(prompts(box, session, saying: "Ship it.") == 1)
+        #expect(prompts(mac, session, saying: "Ship it.") == 0)
+        #expect(Drafts(defaults: .standard)[session].isEmpty, "once it's gone, it isn't put back")
+    }
+
     /// A bot whose move was cut short after it switched (the app quit), before it went over to its
     /// copy, takes nothing where it was until that's finished: its turn in a group chat is sat
     /// out, and nothing goes to an engine for it.
