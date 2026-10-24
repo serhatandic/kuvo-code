@@ -192,6 +192,25 @@ export class GroupRunner {
   }
 
   /**
+   * What a bot is still to be told of its chats (`pending-memory.json`): the chats it forgets go
+   * from what it remembers, and it remembers the rest. Only bots known here now (this computer's,
+   * or one your other computers told of); the rest wait for the next look.
+   */
+  async catchUpMemory() {
+    const pending = this.context.store.pendingMemory()
+    const left: Record<string, string[]> = {}
+    for (const [bot, gone] of Object.entries(pending)) {
+      if (!this.member(bot)) {
+        left[bot] = gone
+        continue
+      }
+      for (const chat of new Set(gone)) if (/^grp_[a-z0-9]+$/.test(chat)) await this.remember(bot, { changed: chat, forgetting: chat })
+      await this.remember(bot)
+    }
+    if (Object.keys(left).length !== Object.keys(pending).length) this.context.store.setPendingMemory(left)
+  }
+
+  /**
    * A chat's conversations for one question (a guest's turn, a work list) still there half an
    * hour on, on the engine or this bridge: what was asking stopped before deleting them (the
    * bridge stopped or updated itself). They go.

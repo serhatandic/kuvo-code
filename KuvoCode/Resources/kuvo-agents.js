@@ -1,6 +1,6 @@
 // @bun
 // Agents/src/main.ts
-import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync19, renameSync as renameSync8, rmSync as rmSync12, writeFileSync as writeFileSync14 } from "fs";
+import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync20, renameSync as renameSync8, rmSync as rmSync12, writeFileSync as writeFileSync14 } from "fs";
 import { join as join19 } from "path";
 
 // Agents/src/accounts.ts
@@ -11372,9 +11372,11 @@ function write(file, value) {
 class GroupStore {
   root;
   bots;
-  constructor(root, bots) {
+  agentsFile;
+  constructor(root, bots, agentsFile) {
     this.root = root;
     this.bots = bots;
+    this.agentsFile = agentsFile;
     mkdirSync13(root, { recursive: true, mode: 448 });
   }
   folder(id) {
@@ -11425,6 +11427,7 @@ class GroupStore {
     const into = join17(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync13(into, { recursive: true, mode: 448 });
     renameSync5(this.folder(id), join17(into, id));
+    emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
     const value = read(join17(this.root, "settings.json"));
@@ -11525,6 +11528,18 @@ class GroupStore {
       delete all[task];
     write(join17(this.root, "peer-work.json"), all);
   }
+  pendingMemory() {
+    const value = read(join17(this.root, "pending-memory.json"));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return {};
+    return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings(chats)));
+  }
+  setPendingMemory(pending) {
+    if (Object.keys(pending).length === 0)
+      rmSync10(join17(this.root, "pending-memory.json"), { force: true });
+    else
+      write(join17(this.root, "pending-memory.json"), pending);
+  }
   writeFile(path, contents) {
     mkdirSync13(join17(path, ".."), { recursive: true });
     writeFileSync11(path + ".new", contents, { mode: 384 });
@@ -11533,6 +11548,73 @@ class GroupStore {
   removeFile(path) {
     rmSync10(path, { force: true });
   }
+}
+
+// Agents/src/groups/named.ts
+import { readFileSync as readFileSync17 } from "fs";
+var start = "<named-agents>";
+var end = "</named-agents>";
+var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
+function readDirectory(file) {
+  if (!file)
+    return { machine: null, agents: [] };
+  try {
+    const value = JSON.parse(readFileSync17(file, "utf8"));
+    const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
+    return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
+  } catch {
+    return { machine: null, agents: [] };
+  }
+}
+var fold2 = (text2) => text2.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+var isWordCharacter = (character) => character !== undefined && /[\p{L}\p{N}]/u.test(character);
+function namedIn(text2, agents, excluding = new Set) {
+  if (!text2.includes("&"))
+    return [];
+  const byName = new Map;
+  for (const agent of agents) {
+    if (excluding.has(agent.session))
+      continue;
+    const key = fold2(agent.name);
+    if (key && !byName.has(key))
+      byName.set(key, agent);
+  }
+  const folded = fold2(text2);
+  const found = [];
+  for (const [key, agent] of [...byName].sort((a, b) => b[0].length - a[0].length)) {
+    const needle = "&" + key;
+    let from = 0;
+    for (;; ) {
+      const at = folded.indexOf(needle, from);
+      if (at < 0)
+        break;
+      from = at + needle.length;
+      const to = at + needle.length;
+      if (isWordCharacter(folded[at - 1]) || isWordCharacter(folded[to]))
+        continue;
+      if (found.some((each) => at < each.to && each.at < to))
+        continue;
+      found.push({ at, to, agent });
+    }
+  }
+  const named2 = [];
+  for (const { agent } of found.sort((a, b) => a.at - b.at))
+    if (!named2.includes(agent))
+      named2.push(agent);
+  return named2;
+}
+function what(agent, here) {
+  const machine = agent.machine ?? null;
+  const place = machine === here ? here === null ? "on the Mac" : "here" : machine === null ? "on the Mac" : `on ${machine}`;
+  return `${agent.kind}, ${place}` + (agent.project ? `, in ${agent.project}` : "");
+}
+function namedBlock(text2, directory, excluding = new Set) {
+  const named2 = namedIn(text2, directory.agents, excluding);
+  if (!named2.length)
+    return;
+  const lines3 = named2.map((agent) => `- &${agent.name} (${agent.session}): ${what(agent, directory.machine)}` + (agent.about ? `: ${agent.about}` : ""));
+  return [start, heading, ...lines3, end].join(`
+`);
 }
 
 // Agents/src/groups/time.ts
@@ -11763,8 +11845,10 @@ async function groupRoutes(runner, store, method, parts2, body) {
     return error(409, "That chat is moving.");
   switch (action) {
     case "send": {
-      const { text: text2, named: named2 } = await body();
-      const message = typeof text2 === "string" ? runner.send(id, text2, typeof named2 === "string" ? named2 : undefined) : undefined;
+      const { text: text2 } = await body();
+      const members = new Set(found.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []));
+      const named2 = typeof text2 === "string" ? namedBlock(text2, readDirectory(store.agentsFile), members) : undefined;
+      const message = typeof text2 === "string" ? runner.send(id, text2, named2) : undefined;
       return message ? json({ data: message }) : error(400, "Nothing to send.");
     }
     case "stop":
@@ -12051,7 +12135,7 @@ async function make(runner, store, given, here) {
 }
 
 // Agents/src/groups/post.ts
-import { existsSync as existsSync12, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync12 } from "fs";
+import { existsSync as existsSync12, readFileSync as readFileSync18, renameSync as renameSync6, writeFileSync as writeFileSync12 } from "fs";
 
 // Agents/src/groups/api.ts
 function server2(url, password) {
@@ -12506,7 +12590,7 @@ class Seats {
       }
       misses = 0;
       const run2 = read2.messages.slice(1);
-      let end = run2.findIndex((message2, index) => {
+      let end2 = run2.findIndex((message2, index) => {
         if (message2?.type !== "idle")
           return false;
         if (message2.outcome !== "interrupted")
@@ -12514,13 +12598,13 @@ class Seats {
         return run2[index + 1]?.type === "user";
       });
       const lastIndex = run2.length - 1;
-      if (end < 0 && lastIndex >= 0 && run2[lastIndex]?.type === "idle" && run2[lastIndex].outcome === "interrupted") {
+      if (end2 < 0 && lastIndex >= 0 && run2[lastIndex]?.type === "idle" && run2[lastIndex].outcome === "interrupted") {
         if (++stoppedChecks >= 2)
-          end = lastIndex;
+          end2 = lastIndex;
       } else {
         stoppedChecks = 0;
       }
-      const answered = end >= 0 || run2.some((message2) => message2?.type === "assistant" && message2.time?.completed !== undefined);
+      const answered = end2 >= 0 || run2.some((message2) => message2?.type === "assistant" && message2.time?.completed !== undefined);
       if (!answered)
         continue;
       const stillActive = await api.active().catch(() => {
@@ -12528,10 +12612,10 @@ class Seats {
       });
       if (!stillActive || stillActive.has(bot.sessionID))
         continue;
-      const found = said2(end >= 0 ? run2.slice(0, end) : run2);
+      const found = said2(end2 >= 0 ? run2.slice(0, end2) : run2);
       let error2 = found.error;
-      if (error2 === undefined && end >= 0 && run2[end]?.outcome === "failed")
-        error2 = run2[end].error?.message;
+      if (error2 === undefined && end2 >= 0 && run2[end2]?.outcome === "failed")
+        error2 = run2[end2].error?.message;
       if (!wanted())
         return;
       if (!found.text)
@@ -12547,8 +12631,8 @@ class Seats {
       return { kind: "unreadable" };
     }
     let messages = page.data;
-    const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000;
-    while (!messages.some((message2) => message2?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page.cursor) {
+    const start2 = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000;
+    while (!messages.some((message2) => message2?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start2 && messages.length < 2000 && page.cursor) {
       let older;
       try {
         older = await api.messages(session, 200, page.cursor);
@@ -12671,11 +12755,11 @@ class Seats {
   }
   async reply(seat, promptID, sent, api) {
     const { data } = await api.messages(seat, 60);
-    const start = data.findIndex((message2) => message2?.id === promptID);
+    const start2 = data.findIndex((message2) => message2?.id === promptID);
     const since = sent - 2000;
     const tokens = [...data].reverse().find((message2) => message2?.type === "assistant" && message2.tokens)?.tokens;
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
-    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message2) => (message2?.time?.created ?? 0) >= since)), size };
+    return { ...said2(start2 >= 0 ? data.slice(start2 + 1) : data.filter((message2) => (message2?.time?.created ?? 0) >= since)), size };
   }
 }
 
@@ -12702,7 +12786,7 @@ class RemoteHome {
       if (signal.aborted)
         return reject(new Cancelled);
       const pending = { turn, report, done: resolve5, seat: turn.seat, started: false, told: new Set };
-      const end = () => {
+      const end2 = () => {
         for (const timer of [pending.asking, pending.silent, pending.limit])
           if (timer !== undefined)
             this.clock.clearTimeout(timer);
@@ -12710,12 +12794,12 @@ class RemoteHome {
         signal.removeEventListener("abort", stop);
       };
       pending.done = (result) => {
-        end();
+        end2();
         resolve5(result);
       };
       const stop = () => {
         this.transport.send(this.box, { kind: "stop", id: turn.id }, false);
-        end();
+        end2();
         reject(new Cancelled);
       };
       signal.addEventListener("abort", stop, { once: true });
@@ -12973,7 +13057,7 @@ class PeerPost {
     let kept2 = [];
     try {
       if (file && existsSync12(file))
-        kept2 = JSON.parse(readFileSync17(file, "utf8"));
+        kept2 = JSON.parse(readFileSync18(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept2) ? kept2.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -13044,10 +13128,10 @@ var json3 = (value, status = 200) => new Response(JSON.stringify(value), { statu
 async function peerRoutes(parts2, method, path, body, signal) {
   if (!parts2)
     return json3({ message: "Group chats don't run here." }, 404);
-  const [what] = path;
-  if (what === "mail" && method === "GET")
+  const [what2] = path;
+  if (what2 === "mail" && method === "GET")
     return parts2.post.follow(signal);
-  if (what === "mail" && method === "POST") {
+  if (what2 === "mail" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
@@ -13056,7 +13140,7 @@ async function peerRoutes(parts2, method, path, body, signal) {
     receive(parts2, given.from, given.mail);
     return json3({});
   }
-  if (what === "sent" && method === "POST") {
+  if (what2 === "sent" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
@@ -13065,7 +13149,7 @@ async function peerRoutes(parts2, method, path, body, signal) {
     parts2.post.sent(given.ids);
     return json3({});
   }
-  if (!what && method === "PUT")
+  if (!what2 && method === "PUT")
     return parts2.directory.set(await body().catch(() => {
       return;
     })) ? json3({}) : json3({ message: "That isn't who your computers are." }, 400);
@@ -13209,16 +13293,16 @@ async function models(agents) {
 function page(items2, url) {
   const limit2 = Number(url.searchParams.get("limit") ?? 100) || 100;
   const cursor = url.searchParams.get("cursor");
-  let start = 0;
+  let start2 = 0;
   if (cursor) {
     const after = cursor.split(":")[1];
     const index = items2.findIndex((item) => item.id === after);
-    start = index >= 0 ? index + 1 : items2.length;
+    start2 = index >= 0 ? index + 1 : items2.length;
   }
-  const data = items2.slice(start, start + limit2);
+  const data = items2.slice(start2, start2 + limit2);
   const order = cursor?.split(":", 1)[0] ?? url.searchParams.get("order") ?? "desc";
   const filter = url.searchParams.get("parentID") ?? cursor?.split(":")[2];
-  const next2 = start + limit2 < items2.length && data.length ? `${order}:${data[data.length - 1].id}${filter ? `:${filter}` : ""}` : undefined;
+  const next2 = start2 + limit2 < items2.length && data.length ? `${order}:${data[data.length - 1].id}${filter ? `:${filter}` : ""}` : undefined;
   return { data, cursor: { next: next2 } };
 }
 function handler(context) {
@@ -13597,7 +13681,7 @@ ${all}`;
 }
 
 // Agents/src/store.ts
-import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync18, renameSync as renameSync7, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
+import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync19, renameSync as renameSync7, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
 import { join as join18 } from "path";
 
 class Store {
@@ -13610,14 +13694,14 @@ class Store {
     for (const id of readdirSync7(root)) {
       try {
         const folder = join18(root, id);
-        const session = JSON.parse(readFileSync18(join18(folder, "session.json"), "utf8"));
+        const session = JSON.parse(readFileSync19(join18(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync18(join18(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync19(join18(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync18(join18(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync19(join18(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -13744,6 +13828,22 @@ class GroupRunner {
     this.resumeWork();
     this.scheduleMeetings(1e4);
     this.dropLeftScratch();
+  }
+  async catchUpMemory() {
+    const pending = this.context.store.pendingMemory();
+    const left = {};
+    for (const [bot, gone] of Object.entries(pending)) {
+      if (!this.member(bot)) {
+        left[bot] = gone;
+        continue;
+      }
+      for (const chat2 of new Set(gone))
+        if (/^grp_[a-z0-9]+$/.test(chat2))
+          await this.remember(bot, { changed: chat2, forgetting: chat2 });
+      await this.remember(bot);
+    }
+    if (Object.keys(left).length !== Object.keys(pending).length)
+      this.context.store.setPendingMemory(left);
   }
   async dropLeftScratch() {
     const old = Date.now() - 30 * 60000;
@@ -13979,12 +14079,12 @@ class GroupRunner {
   }
   meetingEnded(id) {
     const live = this.state(id);
-    const start = live.meeting;
+    const start2 = live.meeting;
     live.meeting = undefined;
     const kept2 = this.chats.get(id);
-    if (!start || !kept2)
+    if (!start2 || !kept2)
       return;
-    const index = kept2.messages.findIndex((message2) => message2.id === start);
+    const index = kept2.messages.findIndex((message2) => message2.id === start2);
     const since = index >= 0 ? kept2.messages.slice(index + 1) : [];
     const last2 = [...since].reverse().find((message2) => message2.author !== undefined && message2.kind !== "note");
     emit("kuvo.group.met", { id, name: kept2.group.name, ...last2 ? { last: last2, who: this.name(last2.author) } : {} });
@@ -14164,8 +14264,8 @@ class GroupRunner {
     }
     return epoch;
   }
-  async turn(botID, id, signal, wrapUp = false, namedIn) {
-    const guest = namedIn !== undefined;
+  async turn(botID, id, signal, wrapUp = false, namedIn2) {
+    const guest = namedIn2 !== undefined;
     const bot = this.member(botID);
     if (!bot)
       return "absent";
@@ -14182,8 +14282,8 @@ class GroupRunner {
         return "absent";
       const all = [...kept2.messages];
       const heard = kept2.group.heard[botID];
-      const start = heard ? all.findIndex((message2) => message2.id === heard) + 1 : 0;
-      const unheard = all.slice(start).filter((message2) => message2.author !== botID && message2.kind !== "note");
+      const start2 = heard ? all.findIndex((message2) => message2.id === heard) + 1 : 0;
+      const unheard = all.slice(start2).filter((message2) => message2.author !== botID && message2.kind !== "note");
       const retracted = guest ? undefined : kept2.group.retracted?.[botID];
       const name = (author) => this.name(author);
       const peers = this.context.peers;
@@ -14204,7 +14304,7 @@ class GroupRunner {
         seat = undefined;
       }
       const fresh = guest ? undefined : seatStartText(botID, kept2.group, all, wrapUp, name, named2(all));
-      const text2 = guest ? guestText(botID, kept2.group, all, namedIn?.author, name) : seat ? turnText(botID, kept2.group, unheard, wrapUp, name, named2(unheard)) : fresh;
+      const text2 = guest ? guestText(botID, kept2.group, all, namedIn2?.author, name) : seat ? turnText(botID, kept2.group, unheard, wrapUp, name, named2(unheard)) : fresh;
       const last2 = all.at(-1);
       const home2 = this.home(bot.box);
       const result = await home2.turn({
@@ -14348,8 +14448,8 @@ class GroupRunner {
     });
     const all = kept2.messages;
     const found = all.findIndex((message2) => message2.id === wrapUpID);
-    const end = found >= 0 ? found : all.length;
-    const before = all.slice(0, end);
+    const end2 = found >= 0 ? found : all.length;
+    const before = all.slice(0, end2);
     let begin = 0;
     for (let index = before.length - 1;index >= 0; index--) {
       if (before[index].kind === "wrapUp") {
@@ -14357,7 +14457,7 @@ class GroupRunner {
         break;
       }
     }
-    const yours = all.slice(begin, end).filter((message2) => message2.author === undefined && message2.kind === "message").slice(-6).map((message2) => [...new Intl.Segmenter().segment(ownWords2(message2.text))].slice(0, 800).map((part) => part.segment).join(""));
+    const yours = all.slice(begin, end2).filter((message2) => message2.author === undefined && message2.kind === "message").slice(-6).map((message2) => [...new Intl.Segmenter().segment(ownWords2(message2.text))].slice(0, 800).map((part) => part.segment).join(""));
     const live = this.state(id);
     const epoch = live.asked;
     live.splitting = lead;
@@ -14367,7 +14467,7 @@ class GroupRunner {
     live.splitStop = stopSplit;
     const stopped = either(signal, newer.signal);
     try {
-      const chat2 = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
+      const chat2 = chatText(lead, kept2.group, all.slice(0, Math.min(end2 + 1, all.length)), (author) => this.name(author));
       const result = await this.home(bot.box).turn({ id: turnID(), chat: this.context_(kept2.group), bot: lead, kind: "split", text: chat2 + `
 ` + splitText(members.map((member2) => member2.name), yours) }, () => {}, stopped.signal);
       if (signal.aborted || newer.signal.aborted)
@@ -14953,11 +15053,12 @@ var self;
 var groups;
 var groupFolders = onMachine ? { root: join19(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join19(machineHome, "bots"), trash: join19(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...onMachine ? [] : ["KUVO_BOTS"]])
+var agentsFile = onMachine ? join19(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
 if (groupFolders) {
   try {
-    const store2 = new GroupStore(groupFolders.root, groupFolders.bots);
+    const store2 = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile);
     const post = new PeerPost(join19(groupFolders.root, "peer-outbox.json"));
     const directory = new LinkDirectory(post);
     const runner = new GroupRunner({
@@ -15001,6 +15102,11 @@ link2.whenReady().then(() => {
   try {
     groups?.runner.start();
     groups?.peers.server.start();
+    if (groups) {
+      const runner = groups.runner;
+      runner.catchUpMemory().catch((error3) => console.error("group memory:", error3));
+      setInterval(() => void runner.catchUpMemory().catch(() => {}), 60000).unref?.();
+    }
   } catch (error3) {
     console.error("group chats:", error3);
   }
@@ -15017,7 +15123,7 @@ function stop() {
   stopping = true;
   cancelSignIns();
   try {
-    if (record && JSON.parse(readFileSync19(record, "utf8")).pid === process.pid)
+    if (record && JSON.parse(readFileSync20(record, "utf8")).pid === process.pid)
       rmSync12(record, { force: true });
   } catch {}
   sessions.closeAll();
@@ -15040,4 +15146,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src fd10a2adff71d699f4af5db0786bda85a594853f15c5c63a1c8dec9c81eb7a95
+// Built from Agents/src 55432e1076bb8b8d493ec64b9a738379065992710f4f2f36a03e5acc0832e2de

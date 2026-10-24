@@ -3,6 +3,7 @@
 
 import type { GroupRunner } from "./runner"
 import { isGroup, isMeeting, isMessages, version, type GroupStore } from "./store"
+import { namedBlock, readDirectory } from "./named"
 import { planMeeting } from "./time"
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })
@@ -86,8 +87,11 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
   if (found.status !== "active") return error(409, "That chat is moving.")
   switch (action) {
     case "send": {
-      const { text, named } = await body()
-      const message = typeof text === "string" ? runner.send(id, text, typeof named === "string" ? named : undefined) : undefined
+      const { text } = await body()
+      // Who it names with "&" is worked out here, for every client alike: the chat's own bots aren't named again.
+      const members = new Set(found.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []))
+      const named = typeof text === "string" ? namedBlock(text, readDirectory(store.agentsFile), members) : undefined
+      const message = typeof text === "string" ? runner.send(id, text, named) : undefined
       return message ? json({ data: message }) : error(400, "Nothing to send.")
     }
     case "stop":
