@@ -10,7 +10,7 @@ import Testing
 /// own kuvo-wake sends it there). The machine is a folder of the test's own and a second engine,
 /// stubbed; the move is held at its first step while things are sent to it.
 @MainActor
-@Suite(.serialized) struct MoveDeliveriesTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct MoveDeliveriesTests {
     let mac = StubEngine(port: 47906)
     let box = StubEngine(port: 47907, alongside: true)
     let machine = "box.invalid"
@@ -266,7 +266,7 @@ import Testing
         let group = app.groups.create(name: "Crew", members: [id])
 
         app.groups.send("Where are we?", to: group.id)
-        try await eventually { app.groups.messages(in: group.id).contains { $0.kind == .note } && !app.groups.discussing.contains(group.id) }
+        try await until { app.groups.messages(in: group.id).contains { $0.kind == .note } && !app.groups.discussing.contains(group.id) }
 
         #expect(app.groups.messages(in: group.id).contains { $0.kind == .note && $0.text.contains("sat this out") })
         #expect(mac.asked.allSatisfy { !$0.hasPrefix("POST") }, "nothing went to an engine for it: \(mac.asked)")

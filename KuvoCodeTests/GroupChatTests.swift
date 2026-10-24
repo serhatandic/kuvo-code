@@ -10,7 +10,7 @@ import Testing
 /// said since its last turn. The engine is stubbed: each seat answers its turn with the next of
 /// its bot's lines.
 @MainActor
-@Suite(.serialized) struct GroupChatTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct GroupChatTests {
     let engine = StubEngine(port: 47984)
     let root = AppInfo.testRoot.appending(path: "GroupChat-\(UUID().uuidString.prefix(6))")
     let botsFile = AppInfo.supportDirectory.appending(path: "bots.json")
@@ -173,9 +173,8 @@ import Testing
     }
 
     private func talkedThrough(_ app: AppModel, _ group: BotGroup) async throws {
-        for _ in 0..<300 where !app.groups.discussing.contains(group.id) { try await Task.sleep(for: .milliseconds(20)) }
-        for _ in 0..<1500 where app.groups.discussing.contains(group.id) { try await Task.sleep(for: .milliseconds(20)) }
-        #expect(!app.groups.discussing.contains(group.id), "the talk should end once everyone passes")
+        // Begun as it was asked (a message sent, Keep Going, a meeting due): until it's over.
+        try await until { !app.groups.discussing.contains(group.id) }
     }
 
     @Test func theLeadFirstNobodyTwiceInARowUntilEveryonePasses() async throws {

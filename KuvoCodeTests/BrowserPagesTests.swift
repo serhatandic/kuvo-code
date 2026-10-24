@@ -9,7 +9,7 @@ import WebKit
 /// rows the page adds as it's scrolled too; a site where nothing answers is said to be down, with
 /// the page it was on kept. Real WebKit, on local pages.
 @MainActor
-@Suite(.serialized) struct BrowserPagesTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BrowserPagesTests {
     let folder = AppInfo.testRoot.appending(path: "Pages-\(UUID().uuidString.prefix(6))")
     let utilities = Utilities()
 
@@ -51,7 +51,7 @@ import WebKit
 
         // A link to a new window: a tab of its own, listed, switched to, read.
         _ = await agent.click(try #require(number(of: "Open the report", in: page), "\(page)"))
-        try await eventually { tabCount == 2 }
+        try await until { tabCount == 2 }
         #expect(tabCount == 2)
         let listed = await agent.tabs("list", tab: nil)
         #expect(listed.contains("Report"), "\(listed)")
@@ -61,16 +61,16 @@ import WebKit
         // A sign-in window: it reports to the page that opened it, closes, and that page is back.
         let shop = await agent.tabs("switch", tab: try #require(number(of: "Shop —", in: listed)))
         _ = await agent.click(try #require(number(of: "Sign in with Lighthouse", in: shop), "\(shop)"))
-        try await eventually { tabCount == 3 }
+        try await until { tabCount == 3 }
         #expect(tabCount == 3)
         let three = await agent.tabs("list", tab: nil)
         let signIn = await agent.tabs("switch", tab: try #require(number(of: "Sign in —", in: three), "\(three)"))
         _ = await agent.click(try #require(number(of: "Continue as Ada", in: signIn), "\(signIn)"))
-        try await eventually { tabCount == 2 }
+        try await until { tabCount == 2 }
         #expect(tabCount == 2, "it closed itself")
         // The page that opened it heard from it.
         let titles = { utilities.browserTabs(of: utilities.panelKey).map(\.browser.title) }
-        try await eventually { titles().contains("Signed in as Ada") }
+        try await until { titles().contains("Signed in as Ada") }
         #expect(titles().contains("Signed in as Ada"), "\(titles())")
         let opener = try #require(utilities.browserTabs(of: utilities.panelKey).first { $0.browser.url?.lastPathComponent == "start.html" })
         let said = try? await opener.browser.webView.callAsyncJavaScript("return document.title", contentWorld: .page) as? String

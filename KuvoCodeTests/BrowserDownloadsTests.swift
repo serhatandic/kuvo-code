@@ -8,7 +8,7 @@ import WebKit
 /// agent hears where it is, to work with it. Nothing is left in the app's temporary folder. Real
 /// WebKit; Downloads is a folder of the test's own (KUVO_DEMO_DOWNLOADS).
 @MainActor
-@Suite(.serialized) struct BrowserDownloadsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BrowserDownloadsTests {
     let downloads = AppInfo.testRoot.appending(path: "Downloads-\(UUID().uuidString.prefix(6))")
     let pages = AppInfo.testRoot.appending(path: "DownloadPages-\(UUID().uuidString.prefix(6))")
 
@@ -26,12 +26,12 @@ import WebKit
             .write(to: page, atomically: true, encoding: .utf8)
         let session = BrowserSession()
         session.load(page.path(percentEncoded: false))
-        for _ in 0..<200 where session.webView.isLoading || session.url == nil { try await Task.sleep(for: .milliseconds(20)) }
+        try await until { !session.isLoading && session.url != nil }
 
         func download() async throws {
             let before = session.downloads.filter { $0.state == .done }.count
             _ = try await session.webView.evaluateJavaScript("document.getElementById('csv').click(); true")
-            for _ in 0..<300 where session.downloads.filter({ $0.state == .done }).count == before { try await Task.sleep(for: .milliseconds(20)) }
+            try await until { session.downloads.filter { $0.state == .done }.count > before }
         }
         try await download()
         let first = downloads.appending(path: "weather.csv")

@@ -7,7 +7,7 @@ import Testing
 /// the rest as paths the agent can open, and once the agent has the message, it still shows its
 /// files, each once, under the words you wrote. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct SentFilesTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct SentFilesTests {
     let engine = StubEngine(port: 47991)
     let workspace = Workspace()
     let id = "ses_files"
@@ -49,7 +49,7 @@ import Testing
         await model.load()
 
         model.send("Summarize the report", files: [report, archive], for: nil)
-        try await eventually { !engine.requests("POST", "/prompt").isEmpty }
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/prompt").first)
         let messageID = try #require(sent.body["id"] as? String)
         let text = try #require(sent.body["text"] as? String)

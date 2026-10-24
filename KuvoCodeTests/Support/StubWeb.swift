@@ -86,6 +86,8 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
         let handler = Self.lock.withLock { Self.handlers.first { url.absoluteString.hasPrefix($0.prefix) }?.answer }
         let answer = Self.lock.withLock { Self.answers[url.absoluteString] } ?? requestRoute?(request, Self.body(of: request))
             ?? route?(components) ?? handler?(request, Self.body(of: request)) ?? Answer(status: 404)
+        // Answered: what a test's answer noted on its way is there for a wait to see (`until`).
+        TestPulse.beat()
         let response = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: answer.body)

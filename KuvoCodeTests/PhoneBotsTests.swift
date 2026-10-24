@@ -10,7 +10,7 @@ import Testing
 /// phone's composer; a chat of two of them; and what's missing or unknown said in words. The
 /// engine is stubbed.
 @MainActor
-@Suite(.serialized) struct PhoneBotsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneBotsTests {
     let engine = StubEngine(port: 47996)
     let app = AppModel()
     let link = PhoneLink()
@@ -122,7 +122,7 @@ import Testing
         #expect(made.json?["firstMessage"] is NSNull, "no job for the composer: it writes first")
         #expect(app.bots.bot(id)?.look == BotLook(color: .mint, shape: .round, face: .calm))
         // It writes first, as a new bot does.
-        for _ in 0..<100 where engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        try await until { !engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_bot1/synthetic").count == 1)
         // Listed by its id, as group chats name their members.
         let listed = try #require(try await ask("kuvo/bots").json?["bots"] as? [[String: Any]])
