@@ -1032,7 +1032,10 @@ extension AgentMail {
             // As many as fit in one mail: the first (bots, then the latest sessions) first.
             for count in [list.count, list.count / 2, list.count / 4] where count > 0 || list.isEmpty {
                 guard let encoded = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(Array(list.prefix(count)))) else { break }
-                let mailed = await app.phoneLink.mail(["agents": ["at": Self.now, "list": encoded], "at": Self.now], to: machine)
+                // With this Mac's digest of documents, so a machine that missed one gets it now.
+                var payload: [String: Any] = ["agents": ["at": Self.now, "list": encoded], "at": Self.now]
+                if let have = app.phoneLink.documentsDigest() { payload["docs"] = ["have": have] }
+                let mailed = await app.phoneLink.mail(payload, to: machine)
                 if mailed == .sent { announcedTo[machine] = (data, now, Set(list.prefix(count).map(\.session))) }
                 if mailed != .tooBig { break }
             }

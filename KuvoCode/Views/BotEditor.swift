@@ -709,7 +709,11 @@ private struct PersonalityPicker: View {
     @Binding var selection: String?
     @Environment(Bots.self) private var bots
     /// A personality of yours being made (no ID yet) or changed.
-    @State private var draft: Draft?
+    @State private var draft: Draft? {
+        didSet { if draft?.id != oldValue?.id || draft == nil { refusal = nil } }
+    }
+    /// Why the draft couldn't be saved (your personalities are full), above its buttons.
+    @State private var refusal: String?
     @FocusState private var draftFocus: DraftField?
 
     private struct Draft {
@@ -788,6 +792,14 @@ private struct PersonalityPicker: View {
                     .focused($draftFocus, equals: .description)
                     .padding(12)
             }
+            if let refusal {
+                Text(refusal)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { draft = nil }
@@ -820,13 +832,18 @@ private struct PersonalityPicker: View {
         guard canSave, let draft else { return }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let id = draft.id, var personality = store.personality(id) {
-            personality.name = name
-            personality.description = description
-            store.update(personality)
-            Task { await bots.personalityChanged(id) }
-        } else {
-            selection = store.add(name: name, description: description).id
+        do {
+            if let id = draft.id, var personality = store.personality(id) {
+                personality.name = name
+                personality.description = description
+                try store.update(personality)
+                Task { await bots.personalityChanged(id) }
+            } else {
+                selection = try store.add(name: name, description: description).id
+            }
+        } catch {
+            refusal = error.localizedDescription
+            return
         }
         self.draft = nil
     }

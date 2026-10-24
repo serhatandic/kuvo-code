@@ -66,7 +66,9 @@ struct BotRecipe: Codable, Equatable {
         let personalities = Personalities.shared
         if let known = personalities.all.first(where: { $0.id == shared.id && !$0.isCustom }) { return (known.id, false) }
         if let same = personalities.all.first(where: { $0.name == shared.name && $0.description == shared.description }) { return (same.id, false) }
-        return (personalities.add(name: shared.name, description: shared.description).id, true)
+        // With no room for more, the bot has none of its own.
+        guard let added = try? personalities.add(name: shared.name, description: shared.description) else { return nil }
+        return (added.id, true)
     }
 
     /// Saves a bot's recipe where you choose.
