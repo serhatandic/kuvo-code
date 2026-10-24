@@ -123,7 +123,10 @@ connection.
   and its other machines whose bridge said `"peers": true` in setup's answer. `id` is the
   machine's name on that Mac. A machine keeps each Mac's list (`peersFrom`), a newer one replacing
   that Mac's last, and takes lists only from its Macs. Its peers are every list's, itself left
-  out. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
+  out. From 0.9.23 a machine also tells its peer machines, in its agents' mail, `"vouched": {at,
+  peers}`: the peers its own Macs told it of. A box keeps the newest from each machine its own
+  Macs told it of (`vouched`), and those peers count too, one hop only: computers set up from
+  different Macs meet with those Macs closed, and one a Mac drops goes from what it vouched for. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
   carry `moved: [{session, key}]`: conversations being moved, by the key of the computer each
   lives on now (the one it left may still list it until it's let go). With the
   phone link off, a Mac's setup and mail leave out `phones` and `removed`, and the machine keeps

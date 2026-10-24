@@ -407,3 +407,28 @@ test("your personalities go box to box with no Mac: each machine tells the other
     fs.rmSync(path.join(home, "bots"), { recursive: true, force: true });
   }
 });
+
+test("boxes meet with no Mac: a machine tells the others the peers its Macs told it of, and those count one hop away, from a machine this box's Macs vouched for, only while they do", async t => {
+  const third = box("machine", "third");
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  // `second`'s other Mac set up `third`, which this box's Mac doesn't know.
+  link.receiveMail(mailFrom(second, { vouched: { at: 5, peers: [third.peer, here.peer] }, at: 5 }), undefined, link.peerMail);
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second", "third"]);
+  // So `third` can write here now, and is told this box's agents, with this box's own peers.
+  const heard = [];
+  link.receiveMail(mailFrom(third, { agents: { at: 1, list: [] } }), undefined, sender => heard.push(sender.name));
+  assert.deepEqual(heard, ["third"]);
+  const { target } = await engine(t);
+  const sent = [];
+  await link.announce({ send: bytes => sent.push(bytes) }, () => target, link.readLink(), Date.now());
+  const toThird = sent.filter(bytes => k(bytes.subarray(1, 17)) === third.address).map(bytes => opened(bytes, third).payload);
+  assert.deepEqual(toThird[0].vouched.peers.map(peer => peer.name).sort(), ["mac", "second"]);
+  // Only one hop: what `third` vouches for counts for nothing here; an older list from `second` neither.
+  const fourth = box("machine", "fourth");
+  link.receiveMail(mailFrom(third, { vouched: { at: 9, peers: [fourth.peer] }, at: 9 }), undefined, link.peerMail);
+  link.receiveMail(mailFrom(second, { vouched: { at: 3, peers: [] }, at: 3 }), undefined, link.peerMail);
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second", "third"]);
+  // This box's Mac drops `second`: what it vouched for goes with it.
+  link.receiveMail(mailFrom(mac, { at: 30, peers: [mac.peer] }));
+  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name), ["mac"]);
+});
