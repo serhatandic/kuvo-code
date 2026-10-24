@@ -1,14 +1,12 @@
-// The group chats that live on this machine, run here as the Mac's `BotGroups` runs its own: the
-// lead first, then whoever's named or next in line, one bot at a time, until they've nothing to add;
-// the lead's wrap-up and who does what; each part in its bot's own conversation, its report back
-// in the chat; meetings at their times; and each bot remembering its chats. They go on while the
-// Mac is off. The Mac (and the phone) follow them through the bridge's API and its event feed.
+// The group chats that live on this computer, run here: the lead first, then whoever's named or
+// next in line, one bot at a time, until they've nothing to add; the lead's wrap-up and who does
+// what; each part in its bot's own conversation, its report back in the chat; meetings at their
+// times; and each bot remembering its chats. Each bot takes its turns on the computer it lives on
+// (`seat.ts`). They go on with no client connected; the Mac's window and the phone follow them
+// through the bridge's API and its event feed.
 
-import { parseProvider } from "../accounts"
-import { autoProvider } from "../auto"
 import { emit } from "../events"
 import { newID } from "../ids"
-import type { ModelRef } from "../wire"
 import { SeatAPI, type Requester } from "./api"
 import {
   compose,
@@ -19,20 +17,14 @@ import {
   ownWords,
   ring,
   said,
-  seatInstructions,
-  seatRules,
   splitText,
   chatText,
   seatStartText,
   guestText,
   guests,
-  outgrew,
-  seatBudget,
   ampersands,
   stamp,
   tasks as splitTasks,
-  activity as activityOf,
-  thought,
   trim,
   trimmed,
   turnText,
@@ -41,15 +33,13 @@ import {
   type GroupMessage,
   type GroupTask,
   type Meeting,
-  plainError,
-  isWaiting,
 } from "./rules"
+import { Cancelled, Seats, type ChatContext, type SeatState } from "./seat"
 import type { GroupStore, Kept, MachineBot, Status } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
 
-/** The key of a seat's instructions, and of the chats here a bot's own conversation remembers. */
-export const seatKey = "kuvo.seat"
-/** On a machine; the Mac's own chats use the key its app always used (`kuvo.groups`). */
+export { seatKey } from "./seat"
+/** The key of the chats here a bot's own conversation remembers, on a machine; the Mac's own chats use the key its app always used (`kuvo.groups`). */
 export const memoryKey = "kuvo.groups.machine"
 
 export interface RunnerContext {
@@ -93,11 +83,11 @@ interface Live {
   asked: number
   /** The meeting being talked over, by its message: how it went is told when it ends. */
   meeting?: string
+  /** Stops the lead's list of who does what: a message of yours is newer than the go-ahead it reads. */
+  splitStop?: () => void
 }
 
 type Outcome = "said" | "passed" | "absent"
-
-class Cancelled extends Error {}
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done, fail) => {
@@ -115,40 +105,42 @@ const sleep = (ms: number, signal?: AbortSignal) =>
   })
 
 const groupMessageID = () => "gm_" + crypto.randomUUID().toLowerCase()
+const turnID = () => "trn_" + crypto.randomUUID().toLowerCase()
 const reason = (error: any) => String(error?.message ?? error ?? "it failed").trim()
-const runsWithAgents = (model?: ModelRef) => Boolean(model && (model.providerID === autoProvider || parseProvider(model.providerID)))
+
+/** One signal that goes when any of `signals` does. */
+function either(...signals: AbortSignal[]): { signal: AbortSignal; done: () => void } {
+  const controller = new AbortController()
+  const stop = () => controller.abort()
+  for (const signal of signals) {
+    if (signal.aborted) stop()
+    else signal.addEventListener("abort", stop, { once: true })
+  }
+  return { signal: controller.signal, done: () => signals.forEach((signal) => signal.removeEventListener("abort", stop)) }
+}
 
 export class GroupRunner {
   private chats: Map<string, Kept>
   private live = new Map<string, Live>()
-  /** Each seat's context at its first turn since the bridge started: its growth past that makes it start over (`outgrew`). */
-  private seatBase = new Map<string, number>()
   private runs = 0
   /** Parts being handed to their bots or followed, so none is followed twice. */
   private following = new Set<string>()
-  /** Requests from seats already turned down. */
-  private declined = new Set<string>()
-  /** Seats whose rules were brought up to date since this runner started, and what each was last told. */
-  private seatsChecked = new Set<string>()
+  /** This computer's bots' seats. */
+  readonly seats: Seats
 
   /** What's asked first or denied changed: each seat is told again at its next turn. */
   rulesChanged() {
-    this.seatsChecked.clear()
+    this.seats.rulesChanged()
   }
-  private seatTexts = new Map<string, string>()
   private syncs = new Map<string, ReturnType<typeof setTimeout>>()
   private meetings?: ReturnType<typeof setTimeout>
-
-  /** Where this is, as what a bot can't do here says it (" on this machine"; nothing on the Mac). */
-  private get here(): string {
-    return this.context.place ? ` on ${this.context.place}` : ""
-  }
 
   private get memoryKey(): string {
     return this.context.memoryKey ?? memoryKey
   }
 
   constructor(private readonly context: RunnerContext) {
+    this.seats = new Seats(context)
     this.chats = context.store.load()
     for (const [id, kept] of this.chats) {
       // Talking when it last stopped (the engine started over): it waits for Keep Going.
@@ -380,6 +372,7 @@ export class GroupRunner {
     this.append(message, id)
     const live = this.state(id)
     live.asked++
+    live.splitStop?.()
     live.paused = false
     if (live.speaking) void this.steer(live.speaking, id, message)
     if (!live.abort) this.begin(id)
@@ -393,6 +386,7 @@ export class GroupRunner {
     const message = this.append({ id: groupMessageID(), text: topic, time: stamp(), kind: "meeting" }, id)
     const live = this.state(id)
     live.asked++
+    live.splitStop?.()
     live.paused = false
     live.meeting = message.id
     if (live.speaking) void this.steer(live.speaking, id, message)
@@ -444,16 +438,11 @@ export class GroupRunner {
   stop(id: string) {
     const live = this.state(id)
     live.meeting = undefined
+    // The bot talking (or the lead handing out the work) stops mid-sentence, where its seat is.
     live.abort?.abort()
     live.abort = undefined
     live.run = undefined
     live.paused = false
-    for (const speaker of [live.speaking, live.splitting]) {
-      const kept = this.chats.get(id)
-      const seat = speaker ? kept?.group.seats[speaker] : undefined
-      const bot = this.bot(speaker)
-      if (seat && bot && kept) void this.seatAPI(bot, kept.group, seat).then((api) => api?.interrupt(seat).catch(() => {}))
-    }
     live.speaking = undefined
     live.activity = undefined
     live.splitting = undefined
@@ -595,8 +584,9 @@ export class GroupRunner {
 
   /**
    * One bot's turn: what it hasn't heard yet goes to its seat (the whole chat, to a seat new to
-   * it), and its answer to the chat. A `guest` (a bot outside the chat that a message there named)
-   * answers in a conversation of its own for the turn, given the whole chat, which goes once it has.
+   * it), on the computer it lives on, and its answer to the chat. A `guest` (a bot outside the
+   * chat that a message there named) answers in a conversation of its own for the turn, given the
+   * whole chat, which goes once it has.
    */
   private async turn(botID: string, id: string, signal: AbortSignal, wrapUp = false, namedIn?: GroupMessage): Promise<Outcome> {
     const guest = namedIn !== undefined
@@ -608,162 +598,76 @@ export class GroupRunner {
     // turn may be the same bot's).
     const run = live.run
     this.told(id)
-    // Its discussion stopped meanwhile (Stop, Undo, a move): it stops where it is.
-    const going = () => {
-      if (signal.aborted) throw new Cancelled()
-    }
     // Taken out of the chat as it spoke: it leaves quietly (a guest was never in it).
     const left = () => !guest && !this.chat(id)?.group.members.includes(botID)
-    // A guest's conversation for the turn, deleted once it's over.
-    let scratch: { seat: string; api: SeatAPI } | undefined
-    // Its model's provider, named in what it says when that turns it down.
-    let provider: string | undefined
+    // Its turn alone, stopped when the discussion is, or when it's taken out as its seat is made.
+    const own = new AbortController()
+    const stopped = either(signal, own.signal)
     try {
       const kept = this.chat(id)
       if (!kept) return "absent"
-      const first = await this.seatAPI(bot, kept.group, kept.group.seats[botID])
-      going()
-      if (!first) {
-        this.note(`${bot.name} couldn’t answer: the coding agents aren’t running.`, id)
-        return "absent"
-      }
-      // Its model can't run here (its account signed out of): said, rather than sent to an
-      // engine that drops it without a word.
-      // A coding agent's model, by the agent's own account (Auto picks one that can run itself).
-      const model = await this.model(bot)
-      if (model && model.providerID !== autoProvider) {
-        const account = runsWithAgents(model)
-          ? await this.context.agentAccount?.(model.providerID).catch(() => undefined)
-          : await new SeatAPI(this.context.engine).account(model).catch(() => undefined)
-        going()
-        provider = account?.name
-        if (account?.signedOut) {
-          this.note(`${bot.name} couldn’t answer: ${model.id} needs a sign-in${this.here}: sign in to ${account.name} in Settings › Accounts, or choose another model.`, id)
-          return "absent"
-        }
-      }
-      let seat: string
-      let isNew: boolean
-      if (guest) {
-        seat = await this.scratch(bot, kept.group, first, `${bot.name} asked into ${kept.group.name}`)
-        scratch = { seat, api: first }
-        isNew = true
-      } else {
-        ;({ seat, isNew } = await this.seat(bot, id, first))
-      }
-      going()
-      const current = this.chat(id)
-      if (!current) return "absent"
-      // Where the seat is now (a new one, on another model, can run elsewhere).
-      const api = guest ? first : await this.seatAPI(bot, current.group, seat)
-      going()
-      if (!api) {
-        this.note(`${bot.name} couldn’t answer: the coding agents aren’t running.`, id)
-        return "absent"
-      }
       // What it's told is what's there now: a message that comes while it's sent wasn't in it.
-      const all = [...current.messages]
-      const heard = current.group.heard[botID]
+      const all = [...kept.messages]
+      const heard = kept.group.heard[botID]
       const start = heard ? all.findIndex((message) => message.id === heard) + 1 : 0
       const unheard = all.slice(start).filter((message) => message.author !== botID && message.kind !== "note")
-      const promptID = newID("msg")
-      const retracted = guest ? undefined : current.group.retracted?.[botID]
+      const retracted = guest ? undefined : kept.group.retracted?.[botID]
       const name = (author?: string) => this.name(author)
-      const prompt = guest
-        ? guestText(botID, current.group, all, namedIn?.author, name)
-        : isNew
-          ? seatStartText(botID, current.group, all, wrapUp, name, named(all))
-          : turnText(botID, current.group, unheard, wrapUp, name, named(unheard))
-      await api.prompt(seat, promptID, prompt, "queue")
-      going()
+      const seat = guest ? undefined : kept.group.seats[botID]
+      const fresh = guest ? undefined : seatStartText(botID, kept.group, all, wrapUp, name, named(all))
+      const text = guest ? guestText(botID, kept.group, all, namedIn?.author, name) : seat ? turnText(botID, kept.group, unheard, wrapUp, name, named(unheard)) : fresh!
       const last = all.at(-1)
-      if (last && !guest) this.setHeard(last.id, botID, id)
-      // What it was told to set aside, it has been (unless it was taken back again meanwhile).
-      const now = this.chat(id)?.group
-      if (now && retracted !== undefined && now.retracted?.[botID] === retracted) {
-        delete now.retracted[botID]
-        if (Object.keys(now.retracted).length === 0) now.retracted = undefined
-        this.changed(id)
-      }
-      const sent = Date.now()
-      // Its latest thought, from the engine's stream, in a line under its name, a few times a
-      // second at most; a look at its messages, which can be a step behind, doesn't take it back
-      // for a moment.
-      let thinking = ""
-      let streamedAt = 0
-      const show = (now: Activity[]) => {
-        if (live.run !== run || live.speaking !== botID || JSON.stringify(now) === JSON.stringify(live.activity ?? [])) return
-        const sameKind = live.activity?.[0]?.kind === now[0]?.kind
-        if (sameKind && Date.now() - streamedAt < 300) return
-        live.activity = now
-        streamedAt = Date.now()
-        this.told(id)
-      }
-      const unlisten = this.context.listen?.(seat, {
-        event: (event) => {
-          const data = event?.data ?? {}
-          if (event?.type === "session.reasoning.started") thinking = ""
-          else if (event?.type === "session.reasoning.delta") {
-            thinking = (thinking + String(data.delta ?? "")).slice(-2000)
-            const line = thought(thinking)
-            if (line) show([{ kind: "thinking", text: line }])
-          } else if (event?.type === "session.text.started" || event?.type === "session.text.delta") show([{ kind: "writing" }])
+      const home = this.seats
+      const result = await home.turn(
+        {
+          id: turnID(),
+          chat: this.context_(kept.group),
+          bot: botID,
+          ...(seat ? { seat, agentsSeat: kept.group.agentSeats?.includes(seat) ?? false, fresh } : {}),
+          kind: guest ? "guest" : wrapUp ? "wrapUp" : "turn",
+          text,
+          ...(guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept.group, all, name)).length }),
         },
-        reconnected() {},
-      })
-      try {
-        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, (messages) => {
-          const now = activityOf(messages, promptID, sent)
-          if (live.run !== run || live.speaking !== botID || now.length === 0 || JSON.stringify(now) === JSON.stringify(live.activity ?? [])) return
-          if (Date.now() - streamedAt < 3000) return
-          live.activity = now
-          this.told(id)
-        })
-      } finally {
-        unlisten?.()
-      }
+        (state) => this.heardOf(state, { id, botID, guest, run, last: last?.id, retracted, own }),
+        stopped.signal,
+      )
       if (left()) return "absent"
-      const reply = await this.reply(seat, promptID, sent, api)
-      going()
-      // Grown well past the chat it's in (pages it read, drafts, long answers): it starts over at
-      // its next turn, in a new seat given the whole chat, and this one goes. Grown from its first
-      // turn here, so what every turn carries (its instructions and tools) doesn't count.
-      if (!guest && reply.size !== undefined) {
-        const base = this.seatBase.get(seat) ?? reply.size
-        this.seatBase.set(seat, base)
-        const grown = reply.size - base
-        if (grown > seatBudget && outgrew(grown, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
-          this.seatBase.delete(seat)
-          await this.startOver(botID, id)
+      if (!result.ok) {
+        this.note(`${bot.name} couldn’t answer: ${result.why}`, id)
+        return "absent"
+      }
+      // Grown well past the chat it's in: its seat went, and its next turn starts anew.
+      if (result.outgrown) {
+        const now = this.chat(id)
+        const went = now?.group.seats[botID]
+        if (now && went) {
+          delete now.group.seats[botID]
+          delete now.group.heard[botID]
+          if (now.group.agentSeats?.includes(went)) now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went)
+          this.changed(id)
         }
       }
-      if (!reply.text) {
-        if (reply.error) {
-          this.note(`${bot.name} couldn’t answer: ${plainError(reply.error, provider, this.context.place)}`, id)
-          return "absent"
-        }
-        return "passed"
-      }
-      if (!wrapUp && isPass(reply.text)) return "passed"
+      if (!result.text) return "passed"
+      if (!wrapUp && isPass(result.text)) return "passed"
       this.append(
         {
           id: groupMessageID(),
           author: botID,
-          text: ampersands(reply.text, this.context.store.allBots().map((each) => each.name)),
+          text: ampersands(result.text, this.context.store.allBots().map((each) => each.name)),
           time: stamp(),
           kind: wrapUp ? "wrapUp" : "message",
-          ...(reply.steps.length ? { steps: reply.steps.map(trimmed) } : {}),
+          ...(result.steps.length ? { steps: result.steps.map(trimmed) } : {}),
         },
         id,
       )
       return "said"
     } catch (error) {
-      if (signal.aborted || error instanceof Cancelled || left()) return "absent"
+      if (signal.aborted || own.signal.aborted || error instanceof Cancelled || left()) return "absent"
       console.error(`${botID}'s turn in ${id} failed:`, reason(error))
-      this.note(`${bot.name} couldn’t answer: ${plainError(reason(error), provider, this.context.place)}`, id)
+      this.note(`${bot.name} couldn’t answer: ${reason(error)}`, id)
       return "absent"
     } finally {
-      if (scratch) void scratch.api.delete(scratch.seat).catch(() => {})
+      stopped.done()
       if (live.speaking === botID && live.run === run) {
         live.speaking = undefined
         live.activity = undefined
@@ -772,121 +676,68 @@ export class GroupRunner {
     }
   }
 
+  /** The chat as a bot's seat needs it: who's there, the lead first. */
+  private context_(group: Group): ChatContext {
+    return {
+      id: group.id,
+      name: group.name,
+      ...(group.purpose ? { purpose: group.purpose } : {}),
+      members: group.members.flatMap((member) => {
+        const bot = this.bot(member)
+        return bot ? [{ id: bot.id, name: bot.name, job: bot.job }] : []
+      }),
+    }
+  }
+
+  /** What a bot's turn says of how it goes, kept in the chat: its seat, what it's heard, what it's doing. */
+  private heardOf(state: SeatState, turn: { id: string; botID: string; guest: boolean; run?: number; last?: string; retracted?: string; own: AbortController }) {
+    const { id, botID } = turn
+    const live = this.state(id)
+    if (state.phase === "activity") {
+      if (live.run !== turn.run || live.speaking !== botID || JSON.stringify(state.activity) === JSON.stringify(live.activity ?? [])) return
+      live.activity = state.activity
+      this.told(id)
+      return
+    }
+    if (state.phase === "steered") {
+      this.setHeard(state.message, botID, id)
+      return
+    }
+    if (turn.guest) return
+    if (state.phase === "seated") {
+      // A seat made now: the chat deleted meanwhile, or the bot taken out of it, and it goes with it.
+      const now = this.chat(id)
+      if (!now || !now.group.members.includes(botID)) {
+        void this.seats.drop(state.seat, state.agents)
+        turn.own.abort()
+        return
+      }
+      if (state.replaced) {
+        if (now.group.agentSeats?.includes(state.replaced)) now.group.agentSeats = now.group.agentSeats.filter((each) => each !== state.replaced)
+        delete now.group.heard[botID]
+      }
+      now.group.seats[botID] = state.seat
+      if (state.agents) now.group.agentSeats = [...new Set([...(now.group.agentSeats ?? []), state.seat])]
+      this.changed(id)
+      return
+    }
+    if (turn.last) this.setHeard(turn.last, botID, id)
+    // What it was told to set aside, it has been (unless it was taken back again meanwhile).
+    const group = this.chat(id)?.group
+    if (group && turn.retracted !== undefined && group.retracted?.[botID] === turn.retracted) {
+      delete group.retracted[botID]
+      if (Object.keys(group.retracted).length === 0) group.retracted = undefined
+      this.changed(id)
+    }
+  }
+
   /** Your message, to the bot talking now: it hears it at its next step. */
   private async steer(botID: string, id: string, message: GroupMessage) {
     const kept = this.chat(id)
-    const bot = this.bot(botID)
     const seat = kept?.group.seats[botID]
-    if (!kept || !bot || !seat) return
-    const api = await this.seatAPI(bot, kept.group, seat)
-    // Only into a run: one that hasn't started yet gets it with the rest at its turn.
-    if (!api || !(await api.active().catch(() => new Set<string>())).has(seat)) return
+    if (!kept || !this.bot(botID) || !seat) return
     const text = "The user, just now: " + message.text + (message.named ? "\n\n" + message.named : "")
-    try {
-      await api.prompt(seat, newID("msg"), text, "steer")
-      this.setHeard(message.id, botID, id)
-    } catch {}
-  }
-
-  /**
-   * Until the seat's run ends. Questions and requests for permission are turned down on the way,
-   * since nobody's there to answer them, and so is what an MCP server asks in its folder
-   * (`directory`) while a tool of it runs there. `seen` hears its latest messages now and then,
-   * for what it's doing.
-   */
-  private async waitForRun(seat: string, promptID: string, sent: number, api: SeatAPI, signal: AbortSignal, directory: string, seen?: (messages: any[]) => void, stops?: () => boolean) {
-    const pace = this.context.pace ?? 1
-    let looked = Date.now()
-    let gone = 0
-    // Reads of its inbox that found no seat (deleted, as the bot left the chat), in a row.
-    let missing = 0
-    let idleSince: number | undefined
-    let woken = false
-    for (;;) {
-      await sleep(600 * pace, signal)
-      // Not worth waiting for any more (you wrote, while the work list was asked): stopped.
-      if (stops?.()) {
-        await api.interrupt(seat).catch(() => {})
-        throw new Cancelled()
-      }
-      await this.decline(seat, api, directory)
-      if (seen && Date.now() - looked > 1500 * pace) {
-        looked = Date.now()
-        const page = await api.messages(seat, 12).catch(() => undefined)
-        if (page) seen(page.data)
-      }
-      const active = await api.active().catch(() => undefined)
-      if (active && !active.has(seat)) {
-        // No seat (404) is told from a moment's trouble, which is asked again.
-        const inbox = await api.inbox(seat).catch((error) => (error?.status === 404 ? null : undefined))
-        if (inbox === null) {
-          // Its seat is gone (the bot left the chat as it spoke): nothing more comes.
-          if (++missing >= 3) return
-          continue
-        }
-        missing = 0
-        if (inbox && !inbox.some((item) => item.id === promptID)) {
-          const read = await api.messages(seat, 60).catch(() => undefined)
-          const at = read ? read.data.findIndex((message) => message?.id === promptID) : -1
-          // Its run ended (its end marker after the message); or the message is nowhere, a few reads running.
-          if (at >= 0 ? read!.data.slice(at + 1).some((message) => message?.type === "idle") : read ? ++gone >= 3 : false) return
-          if (at >= 0) gone = 0
-          idleSince = undefined
-        } else if (inbox) {
-          // Still waiting on a seat that isn't at work (held there after a stop): woken, then let go.
-          idleSince ??= Date.now()
-          if (Date.now() - idleSince > 8_000 * pace) {
-            if (!woken) {
-              woken = true
-              idleSince = Date.now()
-              await api.setDelivery(seat, promptID, "steer").catch(() => {})
-            } else {
-              await api.cancelInbox(seat, promptID).catch(() => {})
-              return
-            }
-          }
-        }
-      } else {
-        idleSince = undefined
-      }
-      if (Date.now() - sent > 600_000) {
-        await api.interrupt(seat).catch(() => {})
-        throw new Error("It took too long, so it was stopped.")
-      }
-    }
-  }
-
-  private async decline(seat: string, api: SeatAPI, directory: string) {
-    for (const request of await api.permissions(seat).catch(() => [])) {
-      if (this.declined.has(request.id)) continue
-      this.declined.add(request.id)
-      await api.reject(seat, request.id, "Nobody can approve this in a group chat. Carry on without it, or say who should do it.").catch(() => {})
-    }
-    for (const form of await api.forms(seat).catch(() => [])) {
-      if (this.declined.has(form.id)) continue
-      this.declined.add(form.id)
-      await api.dismiss(seat, form.id, "Ask the group in your reply instead.").catch(() => {})
-    }
-    // What an MCP server asks in its folder, filed under no session: the seat's while a tool of
-    // that server runs in it (its messages read only when something's asked).
-    const asked = (await api.sharedForms(directory).catch(() => [])).filter((form) => form?.metadata?.kind === "mcp-elicitation" && !this.declined.has(form.id))
-    if (asked.length === 0) return
-    const messages = (await api.messages(seat, 8).catch(() => undefined))?.data ?? []
-    for (const form of asked) {
-      if (!isWaiting(String(form.metadata.server ?? ""), messages)) continue
-      this.declined.add(form.id)
-      await api.dismissShared(form.id, directory).catch(() => {})
-    }
-  }
-
-  /** What the seat said since `promptID`, for the chat, and how much it sent the model at its last step (its whole context, in tokens). */
-  private async reply(seat: string, promptID: string, sent: number, api: SeatAPI) {
-    const { data } = await api.messages(seat, 60)
-    const start = data.findIndex((message) => message?.id === promptID)
-    const since = sent - 2000
-    const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens
-    const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined
-    return { ...said(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size: size as number | undefined }
+    if (await this.seats.steer(seat, kept.group.agentSeats?.includes(seat) ?? false, text)) this.setHeard(message.id, botID, id)
   }
 
   // MARK: Splitting the work
@@ -896,8 +747,6 @@ export class GroupRunner {
     const kept = this.chat(id)
     const bot = this.bot(lead)
     if (!kept || !bot) return
-    const api = await this.seatAPI(bot, kept.group, kept.group.seats[lead])
-    if (!api) return
     const members = kept.group.members.flatMap((member) => {
       const found = this.bot(member)
       return found ? [{ id: member, name: found.name }] : []
@@ -919,25 +768,31 @@ export class GroupRunner {
       .filter((message) => message.author === undefined && message.kind === "message")
       .slice(-6)
       .map((message) => [...new Intl.Segmenter().segment(ownWords(message.text))].slice(0, 800).map((part) => part.segment).join(""))
-    const promptID = newID("msg")
     const live = this.state(id)
     const epoch = live.asked
     live.splitting = lead
     this.told(id)
-    const sent = Date.now()
-    // Asked apart from the lead's seat, so its list doesn't stay in what the lead carries to every
-    // turn after: in a conversation of its own, given the chat up to the wrap-up, which goes once
-    // it's answered.
-    let seat: string | undefined
+    // You writing meanwhile comes first: the list stops, and your message has the next turn.
+    const newer = new AbortController()
+    const stopSplit = () => newer.abort()
+    live.splitStop = stopSplit
+    const stopped = either(signal, newer.signal)
     try {
-      seat = await this.scratch(bot, kept.group, api, `${bot.name} handing out the work in ${kept.group.name}`)
+      // Asked apart from the lead's seat, so its list doesn't stay in what the lead carries to
+      // every turn after: in a conversation of its own, given the chat up to the wrap-up, which
+      // goes once it's answered.
       const chat = chatText(lead, kept.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author))
-      await api.prompt(seat, promptID, chat + "\n" + splitText(members.map((member) => member.name), yours), "queue")
-      // You writing meanwhile comes first: the list stops, and your message has the next turn.
-      await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, undefined, () => this.state(id).asked !== epoch)
-      const reply = await this.reply(seat, promptID, sent, api)
-      const { tasks, go } = splitTasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase())
-      if (signal.aborted) return
+      const result = await this.seats.turn(
+        { id: turnID(), chat: this.context_(kept.group), bot: lead, kind: "split", text: chat + "\n" + splitText(members.map((member) => member.name), yours) },
+        () => {},
+        stopped.signal,
+      )
+      if (signal.aborted || newer.signal.aborted) return
+      if (!result.ok) {
+        this.note(`${bot.name} couldn’t hand out the work: ${result.why}`, id)
+        return
+      }
+      const { tasks, go } = splitTasks(result.text, members, () => "gt_" + crypto.randomUUID().toLowerCase())
       if (tasks.length === 0) {
         if (go) this.note(`${bot.name} didn’t say who does what, so no parts were handed out.`, id)
         return
@@ -949,7 +804,8 @@ export class GroupRunner {
       if (signal.aborted || error instanceof Cancelled) return
       this.note(`${bot.name} couldn’t hand out the work: ${reason(error)}`, id)
     } finally {
-      if (seat) void api.delete(seat).catch(() => {})
+      stopped.done()
+      if (live.splitStop === stopSplit) live.splitStop = undefined
       if (live.splitting === lead) live.splitting = undefined
       this.told(id)
     }
@@ -1014,9 +870,7 @@ export class GroupRunner {
 
   /** The API where a bot's own conversation runs. */
   private ownAPI(bot: MachineBot): SeatAPI | undefined {
-    if (!bot.agents) return new SeatAPI(this.context.engine)
-    const bridge = this.context.bridge()
-    return bridge ? new SeatAPI(bridge) : undefined
+    return this.seats.ownAPI(bot)
   }
 
   /** One part, to its bot's conversation; then it's followed until the bot reports. */
@@ -1225,146 +1079,9 @@ export class GroupRunner {
 
   // MARK: Seats
 
-  /** Where a bot's seat runs: this bridge for one on a coding agent's model (or Auto), else the engine. */
-  private async seatAPI(bot: MachineBot, group: Group, seat?: string): Promise<SeatAPI | undefined> {
-    let onAgents: boolean
-    if (seat) onAgents = group.agentSeats?.includes(seat) ?? false
-    else onAgents = runsWithAgents(await this.model(bot))
-    if (!onAgents) return new SeatAPI(this.context.engine)
-    const bridge = this.context.bridge()
-    return bridge ? new SeatAPI(bridge) : undefined
-  }
-
-  /**
-   * The model a bot talks on: the one picked for it (Edit Bot's) while it can run here; otherwise
-   * (its account signed out of here, which takes its models away, so Edit Bot shows none) what its
-   * own conversation is on now.
-   */
-  private async model(bot: MachineBot): Promise<ModelRef | undefined> {
-    const conversation = async () => (await this.ownAPI(bot)?.session(bot.sessionID).catch(() => undefined))?.model as ModelRef | undefined
-    if (!bot.model) return conversation()
-    if (runsWithAgents(bot.model)) return bot.model
-    const account = await new SeatAPI(this.context.engine).account(bot.model).catch(() => undefined)
-    return account?.signedOut ? ((await conversation()) ?? bot.model) : bot.model
-  }
-
-  /** The bot's seat in the chat, made the first time it's needed, told who's there now, on its bot's model. */
-  private async seat(bot: MachineBot, id: string, api: SeatAPI): Promise<{ seat: string; isNew: boolean }> {
-    const kept = this.chat(id)
-    if (!kept) throw new Cancelled()
-    // The chat as it is now: one brought here in its place meanwhile isn't this one.
-    const same = () => this.chat(id) === kept
-    const settings = this.context.store.settings()
-    const rules = seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? [])
-    const text = this.seatText(bot, kept.group)
-    const existing = kept.group.seats[bot.id]
-    if (existing) {
-      if (!this.seatsChecked.has(existing)) {
-        this.seatsChecked.add(existing)
-        await api.setPermissions(existing, rules).catch(() => {})
-      }
-      if (this.seatTexts.get(existing) !== text) {
-        await api.setInstruction(existing, seatKey, text).catch(() => {})
-        this.seatTexts.set(existing, text)
-      }
-      if (await this.keepModel(existing, bot, id, api)) return { seat: existing, isNew: false }
-    }
-    if (!same()) throw new Cancelled()
-    const current = kept
-    const model = await this.model(bot)
-    const onAgents = runsWithAgents(model)
-    const seatAPI = onAgents ? (this.context.bridge() ? new SeatAPI(this.context.bridge()!) : undefined) : new SeatAPI(this.context.engine)
-    if (!seatAPI) throw new Error("the coding agents aren’t running")
-    const agent = onAgents && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined
-    const session = await seatAPI.create(bot.directory, `${bot.name} in ${current.group.name}`, agent, model, rules)
-    await seatAPI.setMetadata(session.id, { kuvo: { seat: { group: id, bot: bot.id } } }).catch(() => {})
-    await seatAPI.setInstruction(session.id, seatKey, text)
-    this.seatTexts.set(session.id, text)
-    this.seatsChecked.add(session.id)
-    // The chat deleted or replaced meanwhile, or the bot taken out of it: the new seat goes with it.
-    const after = kept
-    if (!same() || !after.group.members.includes(bot.id)) {
-      await seatAPI.delete(session.id).catch(() => {})
-      throw new Cancelled()
-    }
-    after.group.seats[bot.id] = session.id
-    if (onAgents) after.group.agentSeats = [...new Set([...(after.group.agentSeats ?? []), session.id])]
-    this.changed(id)
-    return { seat: session.id, isNew: true }
-  }
-
-  /** A seat that outgrew the chat: it goes, with what it gathered, and the bot's next turn makes a new one, given the whole chat. */
-  private async startOver(botID: string, id: string) {
-    const kept = this.chat(id)
-    const seat = kept?.group.seats[botID]
-    if (!kept || !seat) return
-    await this.deleteSeat(seat, kept.group, botID)
-    if (kept.group.seats[botID] !== seat) return
-    delete kept.group.seats[botID]
-    delete kept.group.heard[botID]
-    this.changed(id)
-  }
-
-  /**
-   * A conversation of a bot's own for one question in a chat, beside its seat (a guest's turn, the
-   * work list): made as a seat is, marked as one so it stays out of the lists, and deleted once
-   * answered, so nothing of it piles up.
-   */
-  private async scratch(bot: MachineBot, group: Group, api: SeatAPI, title: string): Promise<string> {
-    const settings = this.context.store.settings()
-    const rules = seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? [])
-    const model = await this.model(bot)
-    const agent = runsWithAgents(model) && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined
-    const session = await api.create(bot.directory, title, agent, model, rules)
-    await api.setMetadata(session.id, { kuvo: { seat: { group: group.id, bot: bot.id, scratch: true } } }).catch(() => {})
-    try {
-      await api.setInstruction(session.id, seatKey, this.seatText(bot, group))
-    } catch (error) {
-      await api.delete(session.id).catch(() => {})
-      throw error
-    }
-    return session.id
-  }
-
-  /** What a seat is told, from its bot and the others as their folders have them now. */
-  private seatText(bot: MachineBot, group: Group): string {
-    const settings = this.context.store.settings()
-    const others = group.members.filter((member) => member !== bot.id).flatMap((member) => this.bot(member) ?? [])
-    const lead = this.bot(group.members[0])
-    const personality = bot.personality ? settings?.personalities[bot.personality] : undefined
-    return seatInstructions(bot, group, others, lead, personality, settings?.identityNote ?? "")
-  }
-
-  /**
-   * A seat on its bot's model, as the Mac's `modelChanged` keeps it: switched where it runs, or,
-   * when the model runs elsewhere (the engine, the coding agents), gone, for a new one at this turn
-   * that hears the whole chat. Whether the seat is still the one.
-   */
-  private async keepModel(seat: string, bot: MachineBot, id: string, api: SeatAPI): Promise<boolean> {
-    const model = await this.model(bot)
-    if (!model) return true
-    const session = await api.session(seat).catch(() => undefined)
-    if (!session) return true
-    if (session.model?.id === model.id && session.model?.providerID === model.providerID) return true
-    const kept = this.chat(id)
-    if (!kept) return true
-    const onSeatAgents = kept.group.agentSeats?.includes(seat) ?? false
-    if (onSeatAgents || !runsWithAgents(model)) {
-      await api.selectModel(seat, model).catch(() => {})
-      if (onSeatAgents) await api.selectAgent(seat, model.providerID.split("@")[0] === "cursor" ? "plan" : "build").catch(() => {})
-      return true
-    }
-    await this.deleteSeat(seat, kept.group, bot.id)
-    delete kept.group.seats[bot.id]
-    delete kept.group.heard[bot.id]
-    this.changed(id)
-    return false
-  }
-
   private async deleteSeat(seat: string, group: Group, botID: string) {
-    const bot = this.bot(botID)
-    const api = bot ? await this.seatAPI(bot, group, seat) : new SeatAPI(this.context.engine)
-    await api?.delete(seat).catch(() => {})
+    void botID
+    await this.seats.drop(seat, group.agentSeats?.includes(seat) ?? false)
     const kept = this.chats.get(group.id)
     if (kept?.group.agentSeats?.includes(seat)) {
       kept.group.agentSeats = kept.group.agentSeats.filter((each) => each !== seat)
