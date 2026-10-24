@@ -7,6 +7,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter, once } from "node:events";
 import { after, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -67,7 +68,12 @@ test("addresses, relay messages, frames and messages match the vectors", () => {
     if (r.name === "deliver") assert.deepEqual(link.readRelay(bytes), { kind: "deliver", address: hex(r.address), payload: hex(r.payload) });
     if (r.name === "unreachable") assert.equal(link.readRelay(bytes).kind, "unreachable");
     if (r.name === "pushed") assert.equal(link.readRelay(bytes).status, r.status);
+    if (r.name === "gone") assert.deepEqual(link.readRelay(bytes), { kind: "gone", address: hex(r.address), reason: ["replaced", "left"][r.reason] });
   }
+  // A gone of another length, or with a reason it doesn't know, isn't one.
+  const gone = hex(v.relay.find(r => r.name === "gone").bytes);
+  assert.equal(link.readRelay(Buffer.concat([gone, Buffer.from([0])])), null);
+  assert.equal(link.readRelay(Buffer.concat([gone.subarray(0, 17), Buffer.from([2])])), null);
   for (const f of v.frames) {
     assert.equal(link.frame(f.kind, f.session, hex(f.body)).toString("hex"), f.bytes);
     assert.deepEqual(link.readFrame(hex(f.bytes)), { kind: f.kind, session: f.session, body: hex(f.body) });
@@ -101,13 +107,15 @@ function phoneFor(host, hostKey) {
   const session = crypto.randomInt(1, 2 ** 32);
   const inbox = [];
   const waiting = [];
-  // What the host sends goes straight to the phone.
-  host.send = bytes => {
+  // What the host sends goes straight to the phone it's for.
+  host.phones ??= new Map();
+  host.phones.set(address.toString("hex"), bytes => {
     const message = link.readRelay(Buffer.concat([Buffer.from([2]), bytes.subarray(1, 17), bytes.subarray(17)]));
     const frame = link.readFrame(message.payload);
     const resolve = waiting.shift();
     if (resolve) resolve(frame); else inbox.push(frame);
-  };
+  });
+  host.send = bytes => host.phones.get(bytes.subarray(1, 17).toString("hex"))?.(bytes);
   const next = () => new Promise((resolve, reject) => {
     if (inbox.length) return resolve(inbox.shift());
     waiting.push(resolve);
@@ -183,13 +191,15 @@ test("the host lets in a phone with the pairing token once, then by its key", as
 // An engine on a free port that answers like opencode does, and records what it was asked.
 async function fakeEngine() {
   const asked = [];
+  // Says when a stream the bridge opened closes.
+  const closes = new EventEmitter();
   const server = http.createServer((request, response) => {
     asked.push({ method: request.method, url: request.url, auth: request.headers.authorization, directory: request.headers["x-opencode-directory"] });
     if (request.url === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write('data: {"type":"server.connected"}\n\n');
       const timer = setInterval(() => response.write('data: {"type":"server.heartbeat"}\n\n'), 10);
-      request.on("close", () => { clearInterval(timer); asked.push({ closed: request.url }); });
+      request.on("close", () => { clearInterval(timer); asked.push({ closed: request.url }); closes.emit("closed", request.url); });
       return;
     }
     if (request.url === "/api/credential" && request.method === "GET") {
@@ -208,7 +218,7 @@ async function fakeEngine() {
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { asked, port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
+  return { asked, closes, port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 test("a conversation archived from a phone holds its wake-ups, with the Mac closed too, and brought back lets them go; a pause of your own stays", async t => {
@@ -549,6 +559,84 @@ test("a session the host doesn't know is closed, and tampering ends one", async 
   await host.receive(crypto.randomBytes(16), link.frame(link.Frame.transport, 99, Buffer.from("junk")));
   assert.equal(sent.at(-1).kind, link.Frame.close);
   assert.equal(sent.at(-1).session, 99);
+});
+
+// A phone's event stream through the host, past its first event.
+async function listening(phone, id) {
+  phone.send({ t: "req", id, m: "GET", p: "api/event", h: { Accept: "text/event-stream" } });
+  const head = await phone.receive();
+  assert.equal(head.head.h["content-type"], "text/event-stream");
+}
+
+// The rule phones count on now that they don't check before each request (PROTOCOL.md, "The
+// relay"): while its relay connection stays up, the host keeps a phone's session through whatever
+// else happens, and ends it only with the phone told.
+test("a host keeps a phone's session while its relay connection stays up, and ends it only with the phone told", async t => {
+  const engine = await fakeEngine();
+  t.after(engine.close);
+  const hostKey = link.newKey();
+  const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "s3cret", version: "2.0.30" }));
+  let handshakes = 0;
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => { handshakes += 1; return true; }, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  await listening(phone, 1);
+
+  // Another phone comes, asks, goes without a word (the relay can't reach it, or says it's gone),
+  // comes again and is removed; mail comes for the machine.
+  const other = phoneFor(host, hostKey);
+  await other.open({});
+  other.send({ t: "req", id: 1, m: "GET", p: "api/config", h: {} });
+  assert.equal((await other.response()).head.s, 200);
+  host.forget(other.address);
+  link.fromRelay(host, link.readRelay(Buffer.concat([Buffer.from([7]), other.address, Buffer.from([1])])), crypto.randomBytes(16));
+  const again = phoneFor(host, hostKey);
+  await again.open({});
+  host.keepOnly(new Set([link.publicOf(phone.key).toString("base64url")]));
+  assert.deepEqual(await again.receive(), { closed: true });
+  await host.receive(other.address, link.frame(link.Frame.mail, 0, Buffer.from("not for this test")));
+
+  // The first phone's session is the one it had: its stream goes on, and it asks on it.
+  const before = handshakes;
+  assert.equal((await phone.receive()).head.t, "data");
+  phone.send({ t: "ping" });
+  for (let message = await phone.receive(); message.head.t !== "pong"; message = await phone.receive());
+  phone.send({ t: "req", id: 2, m: "GET", p: "api/config", h: {} });
+  let answer = await phone.receive();
+  while (answer.head.id !== 2) answer = await phone.receive();
+  assert.equal(answer.head.s, 200);
+  assert.equal(handshakes, before);
+
+  // Ending it, the host says so.
+  host.keepOnly(new Set());
+  let closed;
+  do closed = await phone.receive(); while (!closed.closed);
+  assert.ok(closed.closed);
+});
+
+test("a phone the relay says is gone loses its sessions on the host, which stops what it asked for, with nothing sent", async t => {
+  const engine = await fakeEngine();
+  t.after(engine.close);
+  const hostKey = link.newKey();
+  const self = crypto.randomBytes(16);
+  const handle = link.engineHandler(() => ({ pid: process.pid, port: engine.port, password: "s3cret", version: "2.0.30" }));
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  for (const reason of [0, 1]) {
+    const phone = phoneFor(host, hostKey);
+    await phone.open({});
+    await listening(phone, 1);
+    // What this host sent itself coming back gone means nothing for its phones.
+    link.fromRelay(host, link.readRelay(Buffer.concat([Buffer.from([7]), self, Buffer.from([reason])])), self);
+    assert.equal(host.active, 1);
+
+    const closed = once(engine.closes, "closed");
+    const sent = [];
+    host.phones.set(phone.address.toString("hex"), bytes => sent.push(link.readFrame(bytes.subarray(17))));
+    link.fromRelay(host, link.readRelay(Buffer.concat([Buffer.from([7]), phone.address, Buffer.from([reason])])), self);
+    assert.equal(host.active, 0);
+    assert.deepEqual(await closed, ["/api/event"]);
+    assert.ok(!sent.some(frame => frame?.kind === link.Frame.close));
+  }
 });
 
 test("the self-test passes here", () => {
