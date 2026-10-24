@@ -127,7 +127,7 @@ struct MacGroupsBar: View {
             .help(failure ?? "Group chats on this Mac are starting")
             Spacer(minLength: 8)
             if failure != nil {
-                Button("Restart") { Task { await app.agents.startAgain() } }
+                Button("Restart") { Task { await app.restartGroupChats() } }
                     .buttonStyle(.glass)
                     .help("Start what runs your group chats on this Mac again")
             }

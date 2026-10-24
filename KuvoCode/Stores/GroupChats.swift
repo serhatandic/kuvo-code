@@ -76,9 +76,9 @@ final class GroupChats {
         try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting)
     }
 
-    /// Its name, purpose, bots or meeting changed, where it lives; what stops it is said.
-    func update(_ id: String, name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async {
-        do { try await boxes.update(id, name: name, purpose: purpose, members: members, meeting: meeting) } catch { Modal.show(error) }
+    /// Its name, purpose, bots or meeting changed, where it lives; what it refuses throws.
+    func change(_ id: String, name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async throws {
+        try await boxes.update(id, name: name, purpose: purpose, members: members, meeting: meeting)
     }
 
     func delete(_ group: BotGroup) async {

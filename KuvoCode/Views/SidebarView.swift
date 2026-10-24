@@ -412,7 +412,7 @@ struct SidebarView: View {
             }
             // This Mac's bridge runs its group chats: stopped, they show as last seen until it's back.
             if box.machine == nil, !groupsHere.isEmpty, case .stopped(let failure) = groups.macReach {
-                SidebarRow(isSelected: false, action: { Task { await app.agents.startAgain() } }) {
+                SidebarRow(isSelected: false, action: { Task { await app.restartGroupChats() } }) {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(.orange)
                 } title: {

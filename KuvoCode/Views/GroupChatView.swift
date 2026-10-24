@@ -26,6 +26,8 @@ struct GroupChatView: View {
     var body: some View {
         let messages = groups.messages(in: group.id)
         let speaker = groups.speaking[group.id].flatMap { bots.bot($0) }
+        // Where it lives can't be reached now: what needs it (undo, the work, Keep Going) waits.
+        let reachable = groups.reach(group.id) == .ready
         // What you select, to reply to (over the composer) or copy.
         ConversationScroll(scroller: scroller, spacing: 18, change: [messages.last?.id, speaker?.id, String(messages.count)], quote: { text in
             addQuote(text, how: "selection")
@@ -35,7 +37,8 @@ struct GroupChatView: View {
                      text: { FindText.shown(markdown: $0.text, folders: []) }) { message, _ in
                 GroupMessageRow(message: message, author: message.author.flatMap { bots.bot($0) }, members: members,
                                 reply: { reply(to: message) }, undo: { undo(from: message) },
-                                startWork: message.tasks?.contains { $0.state == .proposed } == true ? { groups.startWork(message.id, in: group.id) } : nil)
+                                startWork: reachable && message.tasks?.contains { $0.state == .proposed } == true ? { groups.startWork(message.id, in: group.id) } : nil,
+                                isOffline: !reachable)
                     .equatable()
                     .environment(\.findHighlight, find.highlight(for: message.id))
             }
@@ -75,7 +78,7 @@ struct GroupChatView: View {
                     EmptyView()
                 }
                 // Once the wrap-up after the limit is done: Keep Going does nothing before.
-                if groups.paused.contains(group.id) && !groups.discussing.contains(group.id) {
+                if reachable && groups.paused.contains(group.id) && !groups.discussing.contains(group.id) {
                     PausedBar { groups.keepGoing(group.id) }
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
@@ -191,7 +194,7 @@ private struct MeetingRow: View {
 private struct GroupMessageRow: View, Equatable {
     static func == (lhs: GroupMessageRow, rhs: GroupMessageRow) -> Bool {
         lhs.message == rhs.message && lhs.author == rhs.author && lhs.members == rhs.members && (lhs.reply == nil) == (rhs.reply == nil)
-            && (lhs.startWork == nil) == (rhs.startWork == nil)
+            && (lhs.startWork == nil) == (rhs.startWork == nil) && lhs.isOffline == rhs.isOffline
     }
 
     let message: GroupMessage
@@ -204,6 +207,8 @@ private struct GroupMessageRow: View, Equatable {
     let undo: () -> Void
     /// On a wrap-up whose work waits for you: hands each part to its bot.
     var startWork: (() -> Void)?
+    /// Where the chat lives can't be reached now: undoing waits.
+    var isOffline = false
     @State private var hovering = false
     @State private var confirmsUndo = false
     @Environment(\.answerAgent) private var answerAgent
@@ -229,7 +234,8 @@ private struct GroupMessageRow: View, Equatable {
         } else if message.author == nil {
             YourMessage(text: message.text, references: MessageMentions.agents(namedIn: message.text).map(\.reference),
                         sent: message.time, undo: undo,
-                        undoNote: "The chat goes back to before this message, and the message comes back to the composer. The bots are told to set aside what was taken back.")
+                        undoNote: "The chat goes back to before this message, and the message comes back to the composer. The bots are told to set aside what was taken back.",
+                        isOffline: isOffline)
         } else {
             HStack(alignment: .top, spacing: 10) {
                 if let author {

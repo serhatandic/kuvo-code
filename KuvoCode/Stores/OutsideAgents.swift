@@ -206,6 +206,9 @@ final class OutsideAgents {
         }
     }
 
+    /// Whether it was started (there was a Bun to run it with), so it can be started again.
+    var wasStarted: Bool { engine != nil }
+
     /// Started again after it stopped for good (Restart where that shows), as it was started.
     func startAgain() async {
         guard server == nil, !isStarting, let engine else { return }

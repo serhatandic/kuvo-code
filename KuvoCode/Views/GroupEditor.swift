@@ -97,9 +97,9 @@ struct GroupEditor: View {
         return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
     }
 
-    /// This Mac's group chats aren't running now (starting, or stopped): a new one waits for them.
-    private var macWaits: Bool { isNew && groups.macReach != .ready }
-    private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && !meetingPassed && !isSaving && !macWaits }
+    /// The computer it lives on (this Mac, for a new one) can't be reached now: saving waits.
+    private var reach: BoxGroups.Reach { group.map { groups.reach($0.id) } ?? groups.macReach }
+    private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && !meetingPassed && !isSaving && reach == .ready }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -288,7 +288,7 @@ struct GroupEditor: View {
             // Why it couldn't be made, or that this Mac's group chats are starting (or stopped).
             if let note = failure ?? macNote {
                 HStack(spacing: 8) {
-                    if failure == nil, groups.macReach == .starting {
+                    if failure == nil, reach == .starting {
                         Spinner(size: 13)
                     } else {
                         Image(systemName: "exclamationmark.circle.fill")
@@ -326,13 +326,13 @@ struct GroupEditor: View {
         .animation(.ui, value: failure ?? macNote)
     }
 
-    /// A new chat while this Mac's group chats aren't running: what it waits for.
+    /// What saving waits for, while the computer it lives on can't be reached.
     private var macNote: String? {
-        guard isNew else { return nil }
-        switch groups.macReach {
-        case .starting: return "Group chats on this Mac are starting. You can start this one in a moment."
-        case .stopped: return "Group chats on this Mac stopped. Restart them from the sidebar, then start this one."
-        default: return nil
+        switch reach {
+        case .starting: return isNew ? "Group chats on this Mac are starting. You can start this one in a moment." : "Group chats on this Mac are starting. You can save in a moment."
+        case .stopped: return isNew ? "Group chats on this Mac stopped. Restart them from the sidebar, then start this one." : "Group chats on this Mac stopped. Restart them from the sidebar, then save."
+        case .away(let machine): return "\(machine) isn’t connected. Connect to it, then save."
+        case .ready: return nil
         }
     }
 
@@ -341,10 +341,20 @@ struct GroupEditor: View {
         let members = picked.map(\.id)
         let purpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
         if let group {
-            // The computer it lives on says what can be, and what it refuses is said.
+            // The computer it lives on says what can be: what it refuses is said here, with your
+            // edits kept.
+            isSaving = true
+            failure = nil
             let meeting = meeting
-            Task { await groups.update(group.id, name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting) }
-            close()
+            Task {
+                defer { isSaving = false }
+                do {
+                    try await groups.change(group.id, name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting)
+                    close()
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
         } else {
             isSaving = true
             failure = nil
