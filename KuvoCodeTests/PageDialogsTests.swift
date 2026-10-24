@@ -66,6 +66,15 @@ import WebKit
         #expect(BrowserSession.url(from: "swift concurrency")?.isFileURL == false)
     }
 
+    /// A search reaches the search engine as typed: it reads `+` as a space, so "c++" must be sent
+    /// as `c%2B%2B`, or it searches for "c".
+    @Test func aSearchIsSentAsTyped() throws {
+        let typed = "c++ templates & more=1"
+        let url = try #require(BrowserSession.url(from: typed))
+        let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQueryItems?.first { $0.name == "q" }?.value)
+        #expect(query.replacingOccurrences(of: "+", with: " ").removingPercentEncoding == typed)
+    }
+
     /// While the agent's step works in the page: answered at once, declined unless the step said
     /// to accept; it hears what the page asked.
     @Test(arguments: [false, true])

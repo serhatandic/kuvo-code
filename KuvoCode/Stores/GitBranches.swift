@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 /// Branches and worktrees: what a session in a worktree needs to start, and to bring its work
 /// back (a merge, or a pull request).
@@ -136,14 +137,10 @@ nonisolated extension Git {
     /// The pull request page with its title and description filled in.
     static func pullRequestPage(_ page: URL, title: String, body: String) -> URL {
         guard var components = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return page }
-        let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?#"))
-        func item(_ name: String, _ value: String) -> URLQueryItem {
-            URLQueryItem(name: name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name, value: value.addingPercentEncoding(withAllowedCharacters: allowed))
-        }
         let items = page.host()?.contains("gitlab") == true
-            ? [item("merge_request[title]", title), item("merge_request[description]", body)]
-            : [item("title", title), item("body", body)]
-        components.percentEncodedQueryItems = (components.percentEncodedQueryItems ?? []) + items
+            ? [URLQueryItem(name: "merge_request[title]", value: title), URLQueryItem(name: "merge_request[description]", value: body)]
+            : [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body)]
+        components.percentEncodedQueryItems = (components.percentEncodedQueryItems ?? []) + items.map(\.formEscaped)
         return components.url ?? page
     }
 
