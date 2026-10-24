@@ -418,7 +418,7 @@ test("what's missing or unknown is said, and nothing is made", async () => {
 });
 
 // The Mac's and the coding agents' bridge's job readers are held to these (Bots.job(inMemory:)).
-const groupVectors = JSON.parse(fs.readFileSync(new URL("../../../../Agents/test/groups-vectors.json", import.meta.url), "utf8"));
+const groupVectors = JSON.parse(fs.readFileSync(new URL("../../../../Agents/test/box-vectors.json", import.meta.url), "utf8"));
 
 test("a bot's job is read from its memory as the Mac reads it", () => {
   assert.ok(groupVectors.job.length > 5);

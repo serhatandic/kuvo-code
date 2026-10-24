@@ -603,6 +603,31 @@ final class AgentMail {
     /// What each machine was last given.
     private var shared: [String: Data] = [:]
 
+    /// Where this Mac's box finds the list of everyone, as a machine's finds `run/agents.json`
+    /// there: what its group chats name with & (`KUVO_AGENTS_FILE`).
+    static var boxDirectoryFile: URL { BoxProcess.run.appending(path: "agents.json") }
+
+    /// Puts the list of everyone where this Mac's box reads it, when it's changed: this Mac's
+    /// agents (`machine` null) and its machines', as `directory` has them.
+    func writeBoxDirectory() {
+        struct Box: Encodable { var machine: String?; var agents: [Agent] }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(Box(machine: nil, agents: directory())), boxDirectory != data else { return }
+        let file = Self.boxDirectoryFile
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let staged = file.deletingLastPathComponent().appending(path: "agents.json.new")
+            FileManager.default.createFile(atPath: staged.path, contents: data, attributes: [.posixPermissions: 0o600])
+            _ = try FileManager.default.replaceItemAt(file, withItemAt: staged)
+            boxDirectory = data
+        } catch {
+            log.error("This Mac's box didn't get the list of agents: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private var boxDirectory: Data?
+
     /// Delivers what `engine`'s machine's agents left for agents elsewhere. Each letter's file
     /// there goes once it's delivered, or can't ever be; one that can't go now (the engine it's
     /// for is starting over, or the machine sent many lately), or whose reading was cut off, goes
@@ -1002,6 +1027,7 @@ extension AgentMail {
     /// your machines whose link talks to other computers, as they change (and every ten minutes).
     func tick() async {
         guard let app else { return }
+        writeBoxDirectory()
         let now = Self.now
         tried = tried.filter { entry in mailing.contains { $0.id == entry.key } }
         for letter in mailing {

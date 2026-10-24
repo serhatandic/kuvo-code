@@ -56,9 +56,6 @@ final class PhoneLink {
     /// What agents ask you for while they browse, for `kuvo/asks`: a phone answers them as the
     /// cards in the window do; set by AppModel.
     @ObservationIgnored weak var browserAsks: BrowserAsks?
-    /// Your group chats, for `kuvo/groups`: a phone reads and writes in them as the window does;
-    /// set by AppModel.
-    @ObservationIgnored weak var groups: GroupChats?
     /// Your sessions, for stopping a command an agent left running (`kuvo/shell/<id>/stop`); set
     /// by AppModel.
     @ObservationIgnored weak var workspace: Workspace?
@@ -759,6 +756,11 @@ final class PhoneLink {
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
+        // This Mac's group chats: its coding agents' bridge runs them, and answers for them as a
+        // machine's does (`kuvo-link.js`, `forwardGroups`), with every rule of what can be.
+        if route == "kuvo/groups" || route.hasPrefix("kuvo/groups/") {
+            return Self.forwardGroups(request, route: route, agents: agents)
+        }
         // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
         if Self.boxRoutes.contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
@@ -793,10 +795,10 @@ final class PhoneLink {
             }
         }
         // A new bot or group chat, as New Bot and New Group Chat make them.
-        if request.method.uppercased() == "POST", route == "kuvo/bots" || route == "kuvo/groups" {
+        if request.method.uppercased() == "POST", route == "kuvo/bots" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await (route == "kuvo/bots" ? link?.makeBot(request.body) : link?.makeGroup(request.body)) ?? (503, Data())
+                    let (status, body) = await link?.makeBot(request.body) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -887,8 +889,6 @@ final class PhoneLink {
             }
         }
         if route == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
-        if route == "kuvo/groups/events" { return Self.following { link?.groupsJSON() } }
-        if let id = Self.groupID(in: route, then: "events") { return Self.followingGroup(id, link: link) }
         // A sign-in's page that sent the browser back to this Mac, loaded here.
         if route == "kuvo/sign-in/return" {
             return AsyncThrowingStream { continuation in
@@ -902,39 +902,6 @@ final class PhoneLink {
             }
         }
         if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
-        // A chat's name, purpose, bots or meeting changed, as Edit Group Chat changes them.
-        if route.hasPrefix("kuvo/groups/"), request.method.uppercased() == "PATCH" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.changeGroup(String(route.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // A chat deleted, as Delete Group Chat… deletes it.
-        if request.path.hasPrefix("kuvo/groups/"), request.method.uppercased() == "DELETE" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.deleteGroup(String(request.path.split(separator: "?").first?.dropFirst("kuvo/groups/".count) ?? "")) ?? (503, Self.message("Group chats aren’t ready yet. Try again in a moment."))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // What a phone does in a group chat: one on a machine answers once the machine has.
-        if route.hasPrefix("kuvo/groups/"), request.method.uppercased() == "POST" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerGroup(String(route.dropFirst("kuvo/groups/".count)), with: request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // This Mac's sign-ins, listed (`api/credential` has what each is signed in with too).
         if route == "kuvo/accounts/credentials" {
             return AsyncThrowingStream { continuation in
@@ -1183,6 +1150,56 @@ final class PhoneLink {
         }
     }
 
+    /// The routes of a computer's group chats a client takes (PROTOCOL.md, `kuvo/groups`), as a
+    /// machine's link checks them.
+    nonisolated private static let groupRoute = #"\Akuvo/groups(?:/(?:events|joinable|grp_[a-z0-9]+(?:/(?:events|stop|keep-going|viewed|undo|start))?))?\z"#
+
+    /// A client's group chat route, to this Mac's coding agents' bridge (at
+    /// `api/kuvo/link/groups…`) and back as it answers, a followed one line by line, as a
+    /// machine's link passes them on. Not answering now: 503, to ask again, never taken as none.
+    nonisolated static func forwardGroups(_ request: LinkRequest, route: String, agents: OutsideAgents.Address?) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        func refused(_ status: Int, _ message: String) -> AsyncThrowingStream<LinkResponsePart, Error> {
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Self.message(message)))
+                continuation.finish()
+            }
+        }
+        guard route.range(of: groupRoute, options: .regularExpression) != nil else { return refused(404, "Not found") }
+        guard let bridge = agents?.endpoint else { return refused(503, "Group chats on this Mac are starting. Try again in a moment.") }
+        let base = bridge.url.absoluteString.hasSuffix("/") ? bridge.url : URL(string: bridge.url.absoluteString + "/")!
+        var copy = request
+        copy.path = "api/kuvo/link/" + request.path.dropFirst("kuvo/".count)
+        let forwarded = copy
+        let writes = request.method.uppercased() == "POST" && route.split(separator: "/").count == 3
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                // Who a message names with & is worked out there, from the list as it is now.
+                if writes { await MainActor.run { AgentMail.shared.writeBoxDirectory() } }
+                var answered = false
+                do {
+                    for try await part in EngineRoutes.forward(forwarded, to: base, password: bridge.password, allowing: { path, _ in path.hasPrefix("api/kuvo/link/groups") }) {
+                        if case .head(let status, _) = part, !answered, status >= 500 {
+                            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                            continuation.yield(.body(Self.message("Group chats on this Mac aren’t answering. Try again in a moment.")))
+                            break
+                        }
+                        answered = true
+                        continuation.yield(part)
+                    }
+                    continuation.finish()
+                } catch {
+                    if !Task.isCancelled, !answered {
+                        continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                        continuation.yield(.body(Self.message("Group chats on this Mac aren’t answering. Try again in a moment.")))
+                    }
+                    continuation.finish()
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     nonisolated private static func unavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
@@ -1196,7 +1213,7 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
-        "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog",
+        "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "wakes", "wakes.edit", "worktrees", "worktrees.events",
         // The Mac's own.
@@ -1230,7 +1247,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/bots", "kuvo/groups", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if ["kuvo/bots", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
@@ -1286,8 +1303,6 @@ final class PhoneLink {
                 Listed.Entry(session: key, next: wakes[key]?.map(\.due).min()?.timeIntervalSince1970, watching: watches[key]?.isEmpty == false)
             }
             return (200, (try? JSONEncoder().encode(Listed(sessions: entries))) ?? Data())
-        case "kuvo/groups":
-            return (200, groupsJSON())
         case "kuvo/accounts/ended":
             return (200, (try? JSONEncoder().encode(["providers": endedSignIns()])) ?? Data())
         case let path where path.hasPrefix("kuvo/accounts/") && path.hasSuffix("/forget") && request.method.uppercased() == "POST":
@@ -1708,99 +1723,7 @@ final class PhoneLink {
     }
     #endif
 
-    // MARK: Group chats
-
-    /// A chat's bots as a phone draws them: their face and name, and where each lives.
-    private struct GroupMember: Encodable {
-        var id: String
-        var name: String
-        var look: BotLook
-        var session: String
-        var directory: String
-        /// Its own conversation is with the coding agents.
-        var agents: Bool
-    }
-
-    private func members(of group: BotGroup) -> [GroupMember] {
-        group.members.compactMap { bots?.bot($0) }.map { GroupMember(id: $0.id, name: $0.name, look: $0.look, session: $0.sessionID, directory: $0.directory, agents: $0.agents == true) }
-    }
-
-    private static var groupEncoder: JSONEncoder {
-        let encoder = JSONEncoder()
-        // Sorted, as a stream sends what it's encoded only when the text differs, and JSONEncoder
-        // writes a struct's keys in another order almost every time.
-        encoder.outputFormatting = .sortedKeys
-        encoder.dateEncodingStrategy = .secondsSince1970
-        return encoder
-    }
-
-    /// Your group chats as the sidebar lists them: who's in each, who's talking, whether it
-    /// waits on you to keep going, and the last thing said.
-    private func groupsJSON() -> Data {
-        struct Listed: Encodable { var groups: [GroupEntry] }
-        guard let groups else { return Data(#"{"groups":[]}"#.utf8) }
-        return (try? Self.groupEncoder.encode(Listed(groups: groups.list.map { entry($0, in: groups) }))) ?? Data()
-    }
-
-    /// A chat as `kuvo/groups` lists it.
-    private struct GroupEntry: Encodable {
-        var id: String
-        var name: String
-        var purpose: String?
-        var members: [GroupMember]
-        var speaking: String?
-        var discussing: Bool
-        var paused: Bool
-        var unread: Bool
-        var last: GroupMessage?
-        var meeting: BotGroup.Meeting?
-        /// The machine it lives on (its bots' too), by id as bots name theirs; none for this Mac.
-        var machine: String?
-        /// On its way to another computer: what would change it waits until it's there.
-        var moving: Bool
-    }
-
-    private func entry(_ group: BotGroup, in groups: GroupChats) -> GroupEntry {
-        var last = groups.messages(in: group.id).last { $0.kind != .note }
-        last?.steps = nil
-        return GroupEntry(id: group.id, name: group.name, purpose: group.purpose, members: members(of: group),
-                          speaking: groups.speaking[group.id], discussing: groups.discussing.contains(group.id),
-                          paused: groups.paused.contains(group.id), unread: groups.isUnread(group), last: last, meeting: group.meeting,
-                          machine: groups.machine(of: group.id), moving: isMoving(group.id))
-    }
-
-    /// One chat as it reads now: its latest messages (with what each bot did on its turn), who's
-    /// talking, and whether it's under way or paused. Nil once the chat's gone.
-    private func groupJSON(_ id: String) -> Data? {
-        groupLines(id)?.whole
-    }
-
-    /// One chat's line, whole and without its messages (`state`), for `followingGroup`.
-    struct GroupLines: Equatable {
-        var messages: Data
-        var state: Data
-        /// `state` with its `messages` first.
-        var whole: Data { Data(#"{"messages":"#.utf8) + messages + Data(",".utf8) + state.dropFirst() }
-    }
-
-    private func groupLines(_ id: String) -> GroupLines? {
-        struct Chat: Encodable {
-            var speaking: String?
-            var discussing: Bool
-            var paused: Bool
-            var moving: Bool
-            /// What the bot talking is doing, its last step (see `GroupActivity`).
-            var activity: [GroupActivity]?
-        }
-        guard let groups, groups.group(id) != nil else { return nil }
-        let chat = Chat(speaking: groups.speaking[id], discussing: groups.discussing.contains(id), paused: groups.paused.contains(id),
-                        moving: isMoving(id), activity: groups.activity[id])
-        guard let messages = try? Self.groupEncoder.encode(Array(groups.messages(in: id).suffix(300))),
-              let state = try? Self.groupEncoder.encode(chat) else { return nil }
-        return GroupLines(messages: messages, state: state)
-    }
-
-    // MARK: Making bots and group chats
+    // MARK: Making bots
 
     /// A bot as `kuvo/bots` lists it: by its session (here or on a machine), with its name, look
     /// and job, and what the Mac knows of it that its session doesn't say: paused, when it next
@@ -2036,179 +1959,6 @@ final class PhoneLink {
         return String(parts[2]).removingPercentEncoding
     }
 
-    /// A meeting as a phone sends it: `{next, every, topic}`, `next` in seconds since 1970 and
-    /// `every` as kuvo-wake writes it (`1d`, `weekdays`, `1w`…; null for once).
-    struct GivenMeeting: Decodable {
-        var next: Double
-        var every: String?
-        var topic: String?
-
-        /// As Edit Group Chat sets it up (`BotGroup.Meeting.planned`), or why it can't be.
-        func planned(before: BotGroup.Meeting?) -> Result<BotGroup.Meeting, PhoneLink.Refusal> {
-            var repeats: Wakes.Repeat?
-            if let every {
-                guard let parsed = Wakes.Repeat(every) else { return .failure(.init("“\(every)” isn’t how often a meeting can come back.")) }
-                repeats = parsed
-            }
-            guard let meeting = BotGroup.Meeting.planned(at: Date(timeIntervalSince1970: next), every: repeats, topic: topic ?? "", before: before) else {
-                return .failure(.init("That time has passed. Pick one to come."))
-            }
-            return .success(meeting)
-        }
-    }
-
-    struct Refusal: Error {
-        var message: String
-        init(_ message: String) { self.message = message }
-    }
-
-    /// `POST kuvo/groups`: a group chat made as New Group Chat makes it, on this Mac, `{name,
-    /// members, purpose?, meeting?}` (members by bot id; a meeting as `GivenMeeting`). Answers 201
-    /// `{group}`, as `kuvo/groups` lists it; 400 without a name or two bots, or for a meeting that
-    /// can't be, 404 for a bot that isn't there.
-    func makeGroup(_ body: Data) async -> (Int, Data) {
-        struct Given: Decodable { var name: String?, members: [String]?, purpose: String?, meeting: GivenMeeting? }
-        guard let groups, let bots else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
-        guard let given = try? JSONDecoder().decode(Given.self, from: body) else { return (400, Self.message("That isn’t a group chat to make.")) }
-        let name = Bots.oneLine(given.name ?? "")
-        guard !name.isEmpty else { return (400, Self.message("A group chat needs a name.")) }
-        var members: [String] = []
-        for id in given.members ?? [] where !members.contains(id) { members.append(id) }
-        guard members.count >= 2 else { return (400, Self.message("A group chat needs at least two bots.")) }
-        if let missing = members.first(where: { bots.bot($0) == nil }) { return (404, Self.message("There’s no bot “\(missing)”.")) }
-        var meeting: BotGroup.Meeting?
-        if let given = given.meeting {
-            switch given.planned(before: nil) {
-            case .success(let planned): meeting = planned
-            case .failure(let refusal): return (400, Self.message(refusal.message))
-            }
-        }
-        let purpose = given.purpose?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let group = groups.create(name: name, purpose: purpose?.isEmpty == false ? purpose : nil, members: members, meeting: meeting)
-        return (201, (try? Self.groupEncoder.encode(["group": entry(group, in: groups)])) ?? Data())
-    }
-
-    /// `PATCH kuvo/groups/<id>`: its name, purpose, bots or meeting changed, as Edit Group Chat
-    /// changes them: `{name?, purpose?, members?, meeting?}`, a meeting as `GivenMeeting` (null
-    /// for none, an empty purpose for none). Answers 200 `{group}`, as `kuvo/groups` lists it;
-    /// 404 for no such chat, 400 for what can't be, 409 while it moves. A machine's chat is the
-    /// machine's to answer: the change goes there as it came, and its answer comes back.
-    func changeGroup(_ id: String, with body: Data) async -> (Int, Data) {
-        guard let groups else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
-        guard !id.contains("/"), var group = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
-        guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return (400, Self.message("That isn’t a change to a group chat.")) }
-        // One that lives on a machine: that machine answers it, with its rules (who can join, a
-        // meeting on its clock), as it does a phone that asks it.
-        if groups.machine(of: id) != nil {
-            guard let asked = try? JSONDecoder().decode(JSONValue.self, from: body) else { return (400, Self.message("That isn’t a change to a group chat.")) }
-            do {
-                try await groups.changeThere(id, asked)
-            } catch Moves.Failure.moving {
-                return (409, Self.message("That chat is moving. Try again once it’s there."))
-            } catch let refused as ServerError where [400, 404, 409].contains(refused.status) {
-                return (refused.status, Self.message(refused.message))
-            } catch {
-                return (503, Self.message(error.localizedDescription))
-            }
-            guard let changed = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
-            return (200, (try? Self.groupEncoder.encode(["group": entry(changed, in: groups)])) ?? Data())
-        }
-        guard let bots else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
-        if fields["name"] != nil {
-            let name = Bots.oneLine(fields["name"] as? String ?? "")
-            guard !name.isEmpty else { return (400, Self.message("A group chat needs a name.")) }
-            group.name = name
-        }
-        if fields["purpose"] != nil {
-            let purpose = (fields["purpose"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            group.purpose = purpose.isEmpty ? nil : purpose
-        }
-        if let given = fields["members"] {
-            guard let list = given as? [String] else { return (400, Self.message("Those aren’t bots.")) }
-            var members: [String] = []
-            for member in list where !members.contains(member) { members.append(member) }
-            guard members.count >= 2 else { return (400, Self.message("A group chat needs at least two bots.")) }
-            // This Mac's chat can have any bot, as Edit Group Chat allows.
-            if let missing = members.first(where: { bots.bot($0) == nil }) { return (404, Self.message("There’s no bot “\(missing)”.")) }
-            group.members = members
-        }
-        if let given = fields["meeting"] {
-            if given is NSNull {
-                group.meeting = nil
-            } else {
-                guard let data = try? JSONSerialization.data(withJSONObject: given), let meeting = try? JSONDecoder().decode(GivenMeeting.self, from: data) else {
-                    return (400, Self.message("That isn’t a meeting."))
-                }
-                switch meeting.planned(before: group.meeting) {
-                case .success(let planned): group.meeting = planned
-                case .failure(let refusal): return (400, Self.message(refusal.message))
-                }
-            }
-        }
-        do {
-            try await groups.change(group)
-        } catch Moves.Failure.moving {
-            return (409, Self.message("That chat is moving. Try again once it’s there."))
-        } catch {
-            return (503, Self.message(error.localizedDescription))
-        }
-        guard let changed = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
-        return (200, (try? Self.groupEncoder.encode(["group": entry(changed, in: groups)])) ?? Data())
-    }
-
-    /// `DELETE kuvo/groups/<id>`: deleted as Delete Group Chat… deletes it, wherever it lives: its
-    /// messages and seats go, and its bots forget it. Answers 200 `{}`, for one gone already too;
-    /// 409 while it moves, 503 when its machine can't be reached, each with a message.
-    func deleteGroup(_ id: String) async -> (Int, Data) {
-        guard let groups else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
-        guard !id.isEmpty, !id.contains("/") else { return (400, Self.message("That isn’t a group chat.")) }
-        guard let group = groups.group(id) else { return (200, Data("{}".utf8)) }
-        do {
-            try await groups.deleteNow(group)
-        } catch Moves.Failure.moving {
-            return (409, Self.message("That chat is moving. Try again once it’s there."))
-        } catch {
-            return (503, Self.message(error.localizedDescription))
-        }
-        return (200, Data("{}".utf8))
-    }
-
-    /// What a phone does in a chat, as in the window: writes to it (`{"text"}`), stops it, lets it
-    /// keep going, looks at it, takes a message of yours back (`{"message"}`, answering with
-    /// what was taken, for the phone's composer), or starts the work a wrap-up split up
-    /// (`{"message"}`, the wrap-up).
-    private func answerGroup(_ path: String, with body: Data) async -> (Int, Data) {
-        let parts = path.split(separator: "/").map(String.init)
-        guard let groups, let id = parts.first, groups.group(id) != nil else { return (404, Data()) }
-        struct Given: Decodable { var text: String?; var message: String? }
-        let given = try? JSONDecoder().decode(Given.self, from: body)
-        switch parts.dropFirst().first {
-        case nil:
-            guard let text = given?.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (400, Data()) }
-            // Moving, or its machine away or saying no: the phone keeps it, and says so.
-            guard await groups.sendNow(text, to: id) else { return (409, Data(#"{"message":"It can't take messages right now. Try again in a moment."}"#.utf8)) }
-        case "stop":
-            groups.stop(id)
-        case "keep-going":
-            groups.keepGoing(id)
-        case "viewed":
-            groups.markViewed(id)
-        case "undo":
-            guard let message = given?.message else { return (404, Data()) }
-            // Moving, or its machine away: as for what you write.
-            guard !isMoving(id), groups.unreachable(id) == nil else { return (409, Data()) }
-            guard let taken = await groups.undo(from: message, in: id) else { return (404, Data()) }
-            return (200, (try? JSONEncoder().encode(["text": taken])) ?? Data())
-        case "start":
-            guard let message = given?.message, groups.messages(in: id).contains(where: { $0.id == message && $0.tasks != nil }) else { return (404, Data()) }
-            groups.startWork(message, in: id)
-        default:
-            return (404, Data())
-        }
-        return (200, Data("{}".utf8))
-    }
-
-    /// The chat in `kuvo/groups/<id>/<action>`.
     /// `kuvo/shell/<id>/stop` → the engine's id of the command.
     nonisolated private static func shellID(in path: String) -> String? {
         let parts = path.split(separator: "/")
@@ -2315,12 +2065,6 @@ final class PhoneLink {
         return (200, Data(#"{"stopped":"\#(how)"}"#.utf8))
     }
 
-    nonisolated private static func groupID(in path: String, then action: String) -> String? {
-        let parts = path.split(separator: "/")
-        guard parts.count == 4, parts[0] == "kuvo", parts[1] == "groups", parts[3] == action else { return nil }
-        return String(parts[2])
-    }
-
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
     /// changes, until the phone stops reading. 404 when there's nothing to follow (no usage panel,
     /// no such chat), as reading it once answers.
@@ -2341,33 +2085,6 @@ final class PhoneLink {
                         last = now
                     }
                     await changed(current)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    /// One chat's events (`kuvo/groups/<id>/events`), as `following` sends them, but a line whose
-    /// messages are as they were (who's talking, or what they're doing, changed) leaves them out,
-    /// and the phone keeps the ones it has.
-    nonisolated private static func followingGroup(_ id: String, link: PhoneLink?) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                guard link?.groupLines(id) != nil else {
-                    continuation.yield(.head(status: 404, headers: [:]))
-                    continuation.finish()
-                    return
-                }
-                continuation.yield(.head(status: 200, headers: ["content-type": "application/x-ndjson"]))
-                var last: GroupLines?
-                while !Task.isCancelled {
-                    guard let now = link?.groupLines(id) else { break }
-                    if now != last {
-                        continuation.yield(.body((now.messages == last?.messages ? now.state : now.whole) + Data("\n".utf8)))
-                        last = now
-                    }
-                    await changed { link?.groupLines(id)?.whole }
                 }
                 continuation.finish()
             }

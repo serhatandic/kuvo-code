@@ -92,6 +92,44 @@ struct MachineWaitingView: View {
 
 }
 
+/// Over a group chat's composer while this Mac's group chats aren't running: starting (a moment
+/// after launch), or stopped, with Restart. As `MachineOfflineBar` says it for a machine: the chat
+/// above is as last seen, and what you write waits.
+struct MacGroupsBar: View {
+    @Environment(AppModel.self) private var app
+    @Environment(GroupChats.self) private var groups
+
+    var body: some View {
+        let failure: String? = if case .stopped(let reason) = groups.macReach { reason } else { nil }
+        HStack(spacing: 10) {
+            if failure == nil {
+                Spinner(size: 13)
+            } else {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.orange)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(failure == nil ? "Group chats on this Mac are starting" : "Group chats on this Mac stopped")
+                    .font(.system(size: 13, weight: .medium))
+                Text("This is the chat as last seen. You can write meanwhile, and send once they’re running.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .help(failure ?? "Group chats on this Mac are starting")
+            Spacer(minLength: 8)
+            if failure != nil {
+                Button("Restart") { Task { await app.agents.startAgain() } }
+                    .buttonStyle(.glass)
+                    .help("Start what runs your group chats on this Mac again")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// Over the composer while a session's machine can't be reached: what's happening, that the
 /// conversation above is as last seen and what you write waits, and a way to connect now.
 struct MachineOfflineBar: View {

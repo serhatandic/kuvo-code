@@ -41,11 +41,14 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
-    let groups = BotGroups()
-    /// Group chats that live on your machines, which their machines run.
-    let boxGroups = BoxGroups()
-    /// Every group chat, this Mac's and your machines', as the window and the phone show them.
-    @ObservationIgnored private(set) lazy var chats = GroupChats(mac: groups, machines: boxGroups)
+    /// Your group chats, wherever they live: each computer's coding agents' bridge runs its own,
+    /// this Mac's too (what an older version kept here moves into it first, `GroupMigration`).
+    let boxGroups: BoxGroups = {
+        GroupMigration.run()
+        return BoxGroups()
+    }()
+    /// Every group chat, as the window shows them.
+    @ObservationIgnored private(set) lazy var chats = GroupChats(boxes: boxGroups)
     /// What this Mac keeps, brought up to date with this version once, as it launches.
     let calibration = Calibration()
     /// Bots and chats moving to another computer.
@@ -68,6 +71,8 @@ final class AppModel {
     /// This Mac's worktrees and projects followed from its box, once started.
     @ObservationIgnored private var boxFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
+    /// Your time zone and how you write dates, followed for this Mac's group chats.
+    @ObservationIgnored private var clockObservers: [any NSObjectProtocol] = []
     /// The engine's settings file, for Settings.
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(file: engineFolders.configFile)
     /// Machines taking settings changed here, a moment after the last change (`settingsSaved`).
@@ -194,14 +199,13 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
-        groups.app = self
         boxGroups.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
-        workspace.runsOnAgents(groups.agentSeatIDs.union(boxGroups.agentSeatIDs))
-        workspace.seats = groups.seatIDs.union(boxGroups.seatIDs)
+        workspace.runsOnAgents(boxGroups.agentSeatIDs)
+        workspace.seats = boxGroups.seatIDs
     }
 
     /// What a phone's request reaches on this Mac (`PhoneLink`): its stores, as they are now, and
@@ -215,7 +219,6 @@ final class AppModel {
         phoneLink.bots = bots
         phoneLink.wakeUps = wakeUps
         phoneLink.browserAsks = browserAsks
-        phoneLink.groups = chats
         phoneLink.workspace = workspace
         phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
         phoneLink.agents = agents
@@ -306,6 +309,9 @@ final class AppModel {
             var shell = await environment
             guard launch == self.launch else { return }
             shellEnvironment = shell
+            // The coding agents' bridge as soon as there's a Bun to run it: this Mac's group chats
+            // run there, and show (and meet) from now, while the engine starts.
+            startAgents(engine: binary)
             // Bots' wake-up command, by name, and where their folders are; and the launcher
             // integrations' servers run with.
             try? Launcher.install(in: Bots.command.deletingLastPathComponent(), engine: binary)
@@ -410,7 +416,6 @@ final class AppModel {
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)
             agents.engineEndpoint = server.endpoint
-            startAgents(engine: binary)
             Task { await usage.sync() }
             // In parallel: the catalog can wait on the engine's plugins (and they on a
             // macOS permission prompt); sessions shouldn't wait with it.
@@ -422,8 +427,6 @@ final class AppModel {
             guard launch == self.launch else { return }
             startMachines()
             bots.startWaking()
-            groups.startMeetings()
-            groups.resumeWork()
             await catalogLoaded
         } catch {
             // Stopped, or started over, meanwhile.
@@ -466,15 +469,22 @@ final class AppModel {
         catalog.outsideAgents = agents
         usage.follow(catalog)
         agents.onEvent = { [weak self] event in
+            // This Mac's group chats, as it runs them.
+            if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: nil); return }
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
         agents.onStopped = { [weak self] in
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()
+            self?.boxGroups.disconnected(nil)
         }
         agents.onConnected = { [weak self] in
             Task {
+                // This Mac's group chats first: they're what shows from the cache meanwhile.
+                await self?.boxGroups.connected(nil)
+                // A move of a group chat to or from this Mac cut short, now its bridge is there.
+                await self?.moves.recover()
                 await self?.catalog.refreshAgents()
                 await self?.workspace.refreshAgents()
             }
@@ -487,7 +497,24 @@ final class AppModel {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_BIN"] = bin
+        // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
+        // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
+        // `kuvo.group.trashed`), and a bot remembers them under the key it always has.
+        environment["KUVO_GROUPS"] = GroupMigration.root.path
+        environment["KUVO_TRASH"] = BoxGroups.macTrash.path
+        environment["KUVO_GROUPS_MEMORY_KEY"] = BotGroups.memoryKey
+        // Who can be named with & in a chat: this Mac's agents and its machines', as AgentMail lists them.
+        environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
+        AgentMail.shared.writeBoxDirectory()
         Task { await agents.start(engine: binary, environment: environment) }
+        // Your time zone or how you write dates changed: meetings go by the new ones.
+        if clockObservers.isEmpty {
+            for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+                clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.boxGroups.settingsChanged() }
+                })
+            }
+        }
         // Back in the app, you may have installed an agent or signed in to one in Terminal.
         if agentsActivation == nil {
             agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in

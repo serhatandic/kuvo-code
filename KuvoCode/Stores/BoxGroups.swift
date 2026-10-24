@@ -8,7 +8,7 @@ import os
 /// there, then started there and let go of where it was; or, cut short, taken back.
 @MainActor
 protocol GroupHome: AnyObject {
-    /// Whether it can be asked now (a machine connected).
+    /// Whether it can be asked now (a machine connected, this Mac's bridge up).
     var isReachable: Bool { get }
     /// Its talk stops and nothing more happens to it here; the chat as it is now.
     func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage])
@@ -23,146 +23,203 @@ protocol GroupHome: AnyObject {
     func takeBack(_ id: String) async -> Bool
 }
 
-/// A machine's group chats, as a move sees them (`GroupHome`), through `BoxGroups`.
+/// One computer's group chats, as a move sees them (`GroupHome`), through `BoxGroups`: a machine's,
+/// or this Mac's (`machine` nil). The same steps either way.
 @MainActor
-final class MachineGroupHome: GroupHome {
-    let machine: String
+final class BoxGroupHome: GroupHome {
+    let machine: String?
     let groups: BoxGroups
 
-    init(machine: String, groups: BoxGroups) {
+    init(machine: String?, groups: BoxGroups) {
         self.machine = machine
         self.groups = groups
     }
 
     var isReachable: Bool { groups.reachable(machine) }
-    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) { try await groups.hold(id) }
+    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) { try await groups.hold(id, on: machine) }
     func bring(_ group: BotGroup, messages: [GroupMessage]) async throws { try await groups.bring(group, messages: messages, to: machine) }
-    func activate(_ id: String) async throws { try await groups.activate(id) }
-    func letGo(_ id: String) async throws { try await groups.release(id) }
+    func activate(_ id: String) async throws { try await groups.activate(id, on: machine) }
+    func letGo(_ id: String) async throws { try await groups.release(id, on: machine) }
     func takeBack(_ id: String) async -> Bool { await groups.takeBack(id, on: machine) }
 }
 
-/// Group chats that live on your machines: each machine's agents bridge runs them
-/// (`Agents/src/groups`), so they talk, meet and hand out work while this Mac is off. This Mac
-/// shows them as it shows its own (`BotGroups`, which stays as it is), from what each machine says
-/// of them as they go (its bridge's event feed), and sends there what you do in them. What it last
-/// saw of each is kept here, so they show while their machine is away. It holds no rules of its
-/// own: what can be, and what comes of it, is the box's to say.
+/// Your group chats, wherever they live. Each computer's coding agents' bridge runs its own
+/// (`Agents/src/groups`): this Mac's as a machine's, so they talk, meet and hand out work with
+/// no window open, and a machine's with this Mac off. The window shows them from what each
+/// computer says of them as they go (its bridge's event feed), and sends there what you do in
+/// them. What it last saw of each is kept here, so they show while their computer is away or
+/// this Mac's bridge is starting. It holds no rules of its own: what can be, and what comes of
+/// it, is the box's to say.
 @MainActor @Observable
 final class BoxGroups {
-    /// A chat as its machine last said it.
+    /// A chat as its computer last said it.
     struct Chat: Codable, Hashable {
-        var machine: String
+        /// The machine it lives on; nil for this Mac.
+        var machine: String?
         var group: BotGroup
-        /// Brought there by a move, not started yet.
+        /// Brought there by a move, not started yet (or held there for a move away).
         var held: Bool
         var speaking: String?
         var discussing: Bool
         var paused: Bool
     }
 
+    /// What's kept of each computer's chats, one entry per chat on each (a chat moving is on two).
     private(set) var chats: [Chat] = []
     private var logs: [String: [GroupMessage]] = [:]
     /// Machines whose bridge runs group chats (an older one doesn't yet).
     private(set) var running: Set<String> = []
-    /// What the bot talking is doing, by chat, as its machine last said (see `GroupActivity`).
+    /// What the bot talking is doing, by chat, as its computer last said (see `GroupActivity`).
     private(set) var activity: [String: [GroupActivity]] = [:]
     @ObservationIgnored weak var app: AppModel?
-    /// The settings each machine was last given, so they go again only when they change.
+    /// The settings each computer was last given, so they go again only when they change.
     @ObservationIgnored private var settingsGiven: [String: Data] = [:]
-    /// Chats being read whole now, and what their machine said of them meanwhile, so the read
+    /// Chats being read whole now, and what their computer said of them meanwhile, so the read
     /// (from before) doesn't take it away.
     @ObservationIgnored private var arriving: [String: [GroupMessage]] = [:]
     /// Reads of a chat's messages under way, by ID: what arrives is kept until the last is through.
     @ObservationIgnored private var reloading: [String: Int] = [:]
-    /// Chats a machine said something of (changed or gone) while its list was being read, by machine.
+    /// Chats a computer said something of (changed or gone) while its list was being read.
     @ObservationIgnored private var touchedWhileListing: [String: Set<String>] = [:]
-    private let log = Logger(subsystem: "run.kuvo.code", category: "machine-groups")
+    private let log = Logger(subsystem: "run.kuvo.code", category: "box-groups")
 
-    private static var file: URL { AppInfo.supportDirectory.appending(path: "machine-groups.json") }
-    private static var folder: URL { AppInfo.supportDirectory.appending(path: "machine-groups") }
+    static var file: URL { AppInfo.supportDirectory.appending(path: "group-chats.json") }
+    static var folder: URL { AppInfo.supportDirectory.appending(path: "group-chats") }
+    /// Where 0.8.0-beta.1 kept what it saw of machines' chats.
+    private static var oldFile: URL { AppInfo.supportDirectory.appending(path: "machine-groups.json") }
+    private static var oldFolder: URL { AppInfo.supportDirectory.appending(path: "machine-groups") }
 
     init() {
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: Self.file.path), manager.fileExists(atPath: Self.oldFile.path) {
+            try? manager.moveItem(at: Self.oldFile, to: Self.file)
+            if manager.fileExists(atPath: Self.oldFolder.path), !manager.fileExists(atPath: Self.folder.path) { try? manager.moveItem(at: Self.oldFolder, to: Self.folder) }
+        }
         chats = JSONFile.read([Chat].self, from: Self.file, isoDates: true) ?? []
-        // As last seen: nothing's talking until its machine says so.
+        // As last seen: nothing's talking until its computer says so.
         for index in chats.indices {
             chats[index].discussing = false
             chats[index].speaking = nil
         }
-        for chat in chats { logs[chat.group.id] = JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(chat.group.id).json"), isoDates: true) ?? [] }
+        for id in Set(chats.map(\.group.id)) { logs[id] = JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(id).json"), isoDates: true) ?? [] }
     }
+
+    /// A computer as a key: "" for this Mac (a machine's ID is never empty).
+    private static func key(_ machine: String?) -> String { machine ?? "" }
 
     // MARK: Reading
 
     func has(_ id: String?) -> Bool { id.map { id in chats.contains { $0.group.id == id } } ?? false }
-    func chat(_ id: String?) -> Chat? { id.flatMap { id in chats.first { $0.group.id == id } } }
+    /// The chat by its ID, as the window shows it: of two copies (it's moving), the one started,
+    /// else the one it's leaving.
+    func chat(_ id: String?) -> Chat? {
+        guard let id else { return nil }
+        let all = chats.filter { $0.group.id == id }
+        return all.first { !$0.held } ?? all.first
+    }
+    /// Each chat once, as the window shows it.
+    var shown: [Chat] {
+        var seen = Set<String>()
+        return chats.compactMap { listed in
+            guard seen.insert(listed.group.id).inserted else { return nil }
+            return chat(listed.group.id)
+        }
+    }
     func group(_ id: String?) -> BotGroup? { chat(id)?.group }
+    /// The machine a chat lives on; nil for this Mac's (and for none).
     func machine(of id: String?) -> String? { chat(id)?.machine }
     func messages(in id: String) -> [GroupMessage] { logs[id] ?? [] }
     func group(seat: String) -> BotGroup? { chats.first { $0.group.seats.values.contains(seat) }?.group }
 
     var speaking: [String: String] {
-        Dictionary(chats.compactMap { chat in chat.speaking.map { (chat.group.id, $0) } }) { first, _ in first }
+        Dictionary(shown.compactMap { chat in chat.speaking.map { (chat.group.id, $0) } }) { first, _ in first }
     }
-    var discussing: Set<String> { Set(chats.filter(\.discussing).map(\.group.id)) }
-    var paused: Set<String> { Set(chats.filter(\.paused).map(\.group.id)) }
+    var discussing: Set<String> { Set(shown.filter(\.discussing).map(\.group.id)) }
+    var paused: Set<String> { Set(shown.filter(\.paused).map(\.group.id)) }
     var seatIDs: Set<String> { Set(chats.flatMap(\.group.seats.values)) }
     var agentSeatIDs: Set<String> { Set(chats.flatMap { $0.group.agentSeats ?? [] }) }
 
     /// Talk under way on a machine: its engine isn't started over meanwhile.
     func isTalking(on machine: String) -> Bool { chats.contains { $0.machine == machine && $0.discussing } }
 
-    /// The machine a chat lives on, while you can't reach it there (away, or its bridge too old
-    /// to run group chats): what you write waits.
-    func unreachable(_ id: String) -> String? {
-        guard let chat = chat(id) else { return nil }
-        return api(chat.machine) == nil ? chat.machine : nil
+    /// Whether you can reach a chat where it lives now, and if not, why: what you write waits.
+    enum Reach: Equatable {
+        case ready
+        /// This Mac's bridge is starting.
+        case starting
+        /// This Mac's bridge stopped, and why.
+        case stopped(String)
+        /// Its machine is away, or its bridge too old to run group chats.
+        case away(String)
     }
 
-    // MARK: Following a machine
+    func reach(_ id: String) -> Reach {
+        guard let chat = chat(id) else { return .ready }
+        if api(chat.machine) != nil { return .ready }
+        guard let machine = chat.machine else { return macReach }
+        return .away(machine)
+    }
+
+    /// This Mac's bridge: up, starting, or stopped.
+    var macReach: Reach {
+        if api(nil) != nil { return .ready }
+        if let failure = macFailure { return .stopped(failure) }
+        return .starting
+    }
+
+    /// The machine a chat lives on, while you can't reach it there: what you write waits.
+    func unreachable(_ id: String) -> String? {
+        if case .away(let machine) = reach(id) { return machine }
+        return nil
+    }
+
+    // MARK: Following a computer
 
     /// Its bridge is up: its chats as it has them, and the settings they go by.
-    func connected(_ machine: String) async {
+    func connected(_ machine: String?) async {
         guard let api = api(machine) else { return }
         await giveSettings(to: machine)
+        let key = Self.key(machine)
         let listed: [Listed]
-        touchedWhileListing[machine] = []
-        defer { touchedWhileListing[machine] = nil }
+        touchedWhileListing[key] = []
+        defer { touchedWhileListing[key] = nil }
         do {
             listed = try await api.boxGroups()
         } catch let error as ServerError where error.status == 404 {
             // An older bridge: none run there yet.
-            running.remove(machine)
+            if let machine { running.remove(machine) }
             return
         } catch {
-            log.error("\(machine, privacy: .public)'s group chats couldn't be read: \(error.localizedDescription, privacy: .public)")
+            log.error("\(machine ?? "This Mac", privacy: .public)'s group chats couldn't be read: \(error.localizedDescription, privacy: .public)")
             return
         }
-        running.insert(machine)
+        if let machine { running.insert(machine) }
         let ids = Set(listed.map(\.group.id))
         // What it said of a chat since the list was read is newer than the list (asked again for
         // each, as reading their messages takes a while).
-        let touched = { self.touchedWhileListing[machine]?.contains($0) == true }
+        let touched = { self.touchedWhileListing[key]?.contains($0) == true }
         // Gone there (deleted elsewhere, or moved away): gone here too; not one moving there now.
         for gone in chats.filter({ $0.machine == machine && !ids.contains($0.group.id) && !touched($0.group.id) && app?.moves.isMoving($0.group.id) != true }) {
-            forget(gone.group.id)
+            forget(gone.group.id, on: machine)
         }
         for chat in listed {
             if touched(chat.group.id) {
                 // Gone meanwhile: stays gone.
-                guard has(chat.group.id) else { continue }
+                guard chats.contains(where: { $0.group.id == chat.group.id && $0.machine == machine }) else { continue }
             } else {
-                // One held there for a move that isn't under way, which this Mac has (a move taken
-                // back that couldn't let it go there): let go now, its seats left.
-                if chat.status == "held", app?.groups.group(chat.group.id) != nil, app?.moves.isMoving(chat.group.id) != true, app?.moves.isPending(chat.group.id) != true {
+                // One held there for a move that isn't under way, which another of your computers
+                // has started (a move taken back that couldn't let it go there): let go now, its
+                // seats left.
+                if chat.status == "held", chats.contains(where: { $0.group.id == chat.group.id && $0.machine != machine && !$0.held }),
+                   app?.moves.isMoving(chat.group.id) != true, app?.moves.isPending(chat.group.id) != true {
                     _ = try? await api.boxGroupAction(chat.group.id, "release")
-                    forget(chat.group.id)
+                    forget(chat.group.id, on: machine)
                     continue
                 }
                 apply(chat.group, held: chat.status == "held", state: chat.state, on: machine)
             }
             // Its messages, unless the last one is the one here already.
-            if logs[chat.group.id]?.last?.id != chat.last?.id || chat.last == nil { await reload(chat.group.id) }
+            if logs[chat.group.id]?.last?.id != chat.last?.id || chat.last == nil { await reload(chat.group.id, on: machine) }
         }
         app?.workspace.seats.formUnion(seatIDs)
         app?.workspace.runsOnAgents(agentSeatIDs)
@@ -172,7 +229,7 @@ final class BoxGroups {
     func forget(machine: String) {
         running.remove(machine)
         settingsGiven[machine] = nil
-        for chat in chats where chat.machine == machine { forget(chat.group.id) }
+        for chat in chats where chat.machine == machine { forget(chat.group.id, on: machine) }
     }
 
     /// A machine found to be another one's address: its chats are the other's.
@@ -183,28 +240,31 @@ final class BoxGroups {
         save()
     }
 
-    /// Its machine went away: as last seen, nothing talking.
-    func disconnected(_ machine: String) {
+    /// Its computer went away (or this Mac's bridge stopped): as last seen, nothing talking.
+    func disconnected(_ machine: String?) {
         for index in chats.indices where chats[index].machine == machine {
             chats[index].discussing = false
             chats[index].speaking = nil
             activity[chats[index].group.id] = nil
         }
+        settingsGiven[Self.key(machine)] = nil
     }
 
     /// What its bridge says of its chats as they go.
-    func handle(_ event: ServerEvent, machine: String) {
+    func handle(_ event: ServerEvent, machine: String?) {
         guard event.type.hasPrefix("kuvo.group.") else { return }
         struct Updated: Decodable { var id: String; var group: BotGroup; var status: String; var state: State }
         struct Message: Decodable { var id: String; var message: GroupMessage }
         struct Named: Decodable { var id: String }
         struct Met: Decodable { var id: String; var name: String; var who: String?; var last: GroupMessage? }
         struct Done: Decodable { var id: String; var name: String; var who: String; var text: String }
+        struct Trashed: Decodable { var id: String; var path: String }
+        let key = Self.key(machine)
         do {
             switch event.type {
             case "kuvo.group.updated":
                 let updated = try decoded(event, as: Updated.self)
-                touchedWhileListing[machine]?.insert(updated.id)
+                touchedWhileListing[key]?.insert(updated.id)
                 apply(updated.group, held: updated.status == "held", state: updated.state, on: machine)
                 let now = updated.state.speaking == nil ? [] : updated.state.activity ?? []
                 if activity[updated.id] ?? [] != now { activity[updated.id] = now.isEmpty ? nil : now }
@@ -212,7 +272,7 @@ final class BoxGroups {
                 if let agentSeats = updated.group.agentSeats { app?.workspace.runsOnAgents(agentSeats) }
             case "kuvo.group.message":
                 let changed = try decoded(event, as: Message.self)
-                guard has(changed.id) else { return }
+                guard chats.contains(where: { $0.group.id == changed.id && $0.machine == machine }) else { return }
                 arriving[changed.id]?.append(changed.message)
                 var messages = logs[changed.id] ?? []
                 if let index = messages.firstIndex(where: { $0.id == changed.message.id }) { messages[index] = changed.message } else { messages.append(changed.message) }
@@ -222,13 +282,14 @@ final class BoxGroups {
                 let id = try decoded(event, as: Named.self).id
                 // What arrived before it was taken back isn't kept by a read under way.
                 if arriving[id] != nil { arriving[id] = [] }
-                Task { await reload(id) }
+                Task { await reload(id, on: machine) }
             case "kuvo.group.deleted":
                 let id = try decoded(event, as: Named.self).id
-                touchedWhileListing[machine]?.insert(id)
-                forget(id)
+                touchedWhileListing[key]?.insert(id)
+                forget(id, on: machine)
             case "kuvo.group.met":
                 let met = try decoded(event, as: Met.self)
+                Analytics.shared.track("group_met")
                 guard let last = met.last else {
                     Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, body: "The meeting came, but no one could take part.",
                                            push: .init(.message, group: met.id, machine: machine))
@@ -240,11 +301,33 @@ final class BoxGroups {
                 let done = try decoded(event, as: Done.self)
                 Notifier.shared.notify(session: BotGroups.tabKey(done.id), title: done.name, subtitle: "\(done.who) finished its part",
                                        body: ReplyPreview.line(done.text), replies: true, push: .init(.message, group: done.id, machine: machine))
+            case "kuvo.group.trashed":
+                // This Mac's: where you look for what you deleted, the Finder's Trash. (A machine's
+                // stays in its own trash folder.)
+                guard machine == nil else { return }
+                let trashed = try decoded(event, as: Trashed.self)
+                Self.toFinderTrash(trashed.path)
             default:
                 break
             }
         } catch {
             log.error("A group chat's event couldn't be read: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Where this Mac's bridge puts what it deletes and lets go of (`KUVO_TRASH`).
+    static var macTrash: URL { BoxProcess.home.appending(path: "trash") }
+
+    /// A chat's folder this Mac's bridge put in its trash, moved on to the Finder's Trash; only one
+    /// in that trash folder.
+    static func toFinderTrash(_ path: String) {
+        let folder = URL(filePath: path).standardizedFileURL
+        let trash = macTrash.standardizedFileURL.path + "/"
+        guard folder.path.hasPrefix(trash), FileManager.default.fileExists(atPath: folder.path) else { return }
+        do {
+            try FileManager.default.moveToTrash(folder)
+        } catch {
+            Logger(subsystem: "run.kuvo.code", category: "box-groups").error("A group chat's folder stayed in Kuvo Code's trash: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -263,7 +346,7 @@ final class BoxGroups {
         var last: GroupMessage?
     }
 
-    /// A time as a machine says it: whole seconds.
+    /// A time as a box says it: whole seconds.
     private static func seconds(_ date: Date) -> TimeInterval { date.timeIntervalSince1970.rounded(.down) }
 
     private func decoded<Value: Decodable>(_ event: ServerEvent, as type: Value.Type) throws -> Value {
@@ -272,11 +355,12 @@ final class BoxGroups {
         return try decoder.decode(type, from: JSONEncoder().encode(event.data))
     }
 
-    private func apply(_ group: BotGroup, held: Bool, state: State, on machine: String) {
+    private func apply(_ group: BotGroup, held: Bool, state: State, on machine: String?) {
         var group = group
-        // Looked at here while its machine was away: that stands, and it's said there.
+        let index = chats.firstIndex { $0.group.id == group.id && $0.machine == machine }
+        // Looked at here while its computer was away: that stands, and it's said there.
         // (In whole seconds, as it's said there.)
-        if let seen = chat(group.id)?.group.viewed, Self.seconds(seen) > Self.seconds(group.viewed ?? .distantPast) {
+        if let index, let seen = chats[index].group.viewed, Self.seconds(seen) > Self.seconds(group.viewed ?? .distantPast) {
             group.viewed = seen
             if let api = api(machine) {
                 let viewed = ISO8601DateFormatter().string(from: seen)
@@ -284,7 +368,7 @@ final class BoxGroups {
             }
         }
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
-        if let index = chats.firstIndex(where: { $0.group.id == group.id }) {
+        if let index {
             guard chats[index] != chat else { return }
             chats[index] = chat
         } else {
@@ -294,9 +378,14 @@ final class BoxGroups {
         save()
     }
 
-    /// A chat's messages, read again whole.
+    /// A chat's messages, read again whole, from where it lives (or `machine`).
     func reload(_ id: String) async {
-        guard let machine = machine(of: id), let api = api(machine) else { return }
+        guard let chat = chat(id) else { return }
+        await reload(id, on: chat.machine)
+    }
+
+    func reload(_ id: String, on machine: String?) async {
+        guard let api = api(machine) else { return }
         // (Another read of it under way keeps what arrives for both.)
         if reloading[id, default: 0] == 0 { arriving[id] = [] }
         reloading[id, default: 0] += 1
@@ -315,24 +404,51 @@ final class BoxGroups {
         saveLog(id)
     }
 
-    private func forget(_ id: String) {
-        chats.removeAll { $0.group.id == id }
+    /// Gone from one computer: what's kept of it there goes, and its messages once no computer has it.
+    private func forget(_ id: String, on machine: String?) {
+        chats.removeAll { $0.group.id == id && $0.machine == machine }
+        save()
+        guard !has(id) else { return }
         logs[id] = nil
         activity[id] = nil
-        save()
         try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).json"))
     }
 
     // MARK: Taking part
 
-    /// Your message to a chat there. `named`: the block naming the agents it names with &, worked
-    /// out here (the machine doesn't know them).
+    /// A new chat on this Mac, as New Group Chat makes it: this Mac's box says what can be (who
+    /// can join, its meeting, on its clock), and makes it.
+    func create(name: String, purpose: String?, members: [String], meeting: MeetingPlan?) async throws -> BotGroup {
+        guard let api = api(nil) else { throw Failure.macStarting }
+        var body: [String: JSONValue] = ["name": .string(name), "members": .array(members.map(JSONValue.string))]
+        if let purpose { body["purpose"] = .string(purpose) }
+        if let meeting { body["meeting"] = meeting.json }
+        let answer = try await api.client.send(try api.client.request("POST", "api/kuvo/link/groups", body: JSONValue.object(body)), as: JSONValue.self, patience: .zero)
+        guard let id = answer["group"]?["id"]?.string else { throw Failure.unreadable }
+        await reload(id, on: nil)
+        guard let group = chats.first(where: { $0.group.id == id && $0.machine == nil })?.group else { throw Failure.unreadable }
+        Analytics.shared.track("group_created", ["members": members.count])
+        return group
+    }
+
+    /// A meeting as you set it up: its time, how often, its topic. The computer the chat lives on
+    /// works out when it comes, on its clock.
+    struct MeetingPlan: Equatable {
+        var next: Date
+        var every: String?
+        var topic: String
+
+        var json: JSONValue {
+            .object(["next": .number(next.timeIntervalSince1970.rounded(.down)), "every": every.map(JSONValue.string) ?? .null, "topic": .string(topic)])
+        }
+    }
+
+    /// Your message to a chat, where it lives. Who it names with & is worked out there.
     func send(_ text: String, to id: String) async throws {
-        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
-        let members = Set((chat(id)?.group.members ?? []).compactMap { app?.bots.bot($0)?.sessionID })
-        let named = AgentReferences.note(naming: AgentReferences.named(in: [text], excluding: members), here: machine)
-        let message = try await api.boxGroupAction(id, "send", ["text": .string(text)].merging(named.map { ["named": .string($0)] } ?? [:]) { $1 })
-        Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": "machine"])
+        guard let chat = chat(id) else { throw Failure.gone }
+        guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
+        let message = try await api.boxGroupAction(id, "send", ["text": .string(text)])
+        Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": chat.machine == nil ? "mac" : "machine"])
         if let message = message.flatMap({ try? Self.message(from: $0) }), !(logs[id] ?? []).contains(where: { $0.id == message.id }) {
             logs[id, default: []].append(message)
             saveLog(id)
@@ -353,19 +469,21 @@ final class BoxGroups {
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
     func undo(from messageID: String, in id: String) async -> String? {
-        guard let machine = machine(of: id), let api = api(machine),
+        guard let machine = chat(id).map(\.machine), let api = api(machine),
               let answer = try? await api.boxGroupAction(id, "undo", ["message": .string(messageID)]) else { return nil }
-        await reload(id)
+        Analytics.shared.track("group_undo")
+        await reload(id, on: machine)
         return answer["text"]?.string
     }
 
     func markViewed(_ id: String) {
         Notifier.shared.clear(session: BotGroups.tabKey(id))
-        guard let index = chats.firstIndex(where: { $0.group.id == id }), isUnread(chats[index].group) else { return }
+        guard let chat = chat(id), isUnread(chat.group),
+              let index = chats.firstIndex(where: { $0.group.id == id && $0.machine == chat.machine }) else { return }
         let now = Date(timeIntervalSince1970: Self.seconds(.now))
         chats[index].group.viewed = now
         save()
-        guard let api = api(chats[index].machine) else { return }
+        guard let api = api(chat.machine) else { return }
         let viewed = ISO8601DateFormatter().string(from: now)
         Task { try? await api.editBoxGroup(id, ["viewed": .string(viewed)]) }
     }
@@ -375,33 +493,22 @@ final class BoxGroups {
         return last.time > (group.viewed ?? .distantPast)
     }
 
-    /// A new name, purpose, members (the lead first) or meeting, there. A meeting goes as you set
-    /// it up (its time, how often, its topic), and the box works out when it comes, on its clock.
-    func update(_ edited: BotGroup) async throws {
-        guard let machine = machine(of: edited.id), let api = api(machine) else { throw Failure.away(machine(of: edited.id) ?? "Its machine") }
-        var edits: [String: JSONValue] = [
-            "name": .string(edited.name), "purpose": edited.purpose.map(JSONValue.string) ?? .null,
-            "members": .array(edited.members.map(JSONValue.string)),
+    /// A new name, purpose, members (the lead first) or meeting, where it lives, as Edit Group Chat
+    /// changes them: that computer says what can be (who can join, a meeting on its clock), and
+    /// what it refuses throws its `ServerError`.
+    func update(_ id: String, name: String, purpose: String?, members: [String], meeting: MeetingPlan?) async throws {
+        guard let chat = chat(id) else { throw Failure.gone }
+        guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
+        let body: [String: JSONValue] = [
+            "name": .string(name), "purpose": .string(purpose ?? ""), "members": .array(members.map(JSONValue.string)), "meeting": meeting?.json ?? .null,
         ]
-        edits["meetingPlan"] = edited.meeting.map { meeting in
-            .object(["next": .number(meeting.next.timeIntervalSince1970), "every": meeting.every.map(JSONValue.string) ?? .null, "topic": .string(meeting.topic)])
-        } ?? .null
-        try await api.editBoxGroup(edited.id, edits)
-        await reload(edited.id)
+        _ = try await api.client.send(try api.client.request("PATCH", "api/kuvo/link/groups/\(id.groupPathEscaped)", body: JSONValue.object(body)), as: JSONValue.self, patience: .zero)
+        await reload(id, on: chat.machine)
     }
 
-    /// A change a client asks of a chat there (`PATCH kuvo/groups/<id>`, its fields as they came):
-    /// the machine answers it, with every rule of what it can be (who can join, a meeting on its
-    /// clock). What it refuses throws its `ServerError`.
-    func edit(_ id: String, _ fields: JSONValue) async throws {
-        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
-        _ = try await api.client.send(try api.client.request("PATCH", "api/kuvo/link/groups/\(id.groupPathEscaped)", body: fields), as: JSONValue.self, patience: .zero)
-        await reload(id)
-    }
-
-    /// Who can be in a chat there, as the machine says (its own bots, and those of your other
+    /// Who can be in a chat on a computer, as it says (its own bots, and those of your other
     /// computers that take a chat's turns), by id; nil when it can't say now (away, or older).
-    func joinable(_ machine: String) async -> [String]? {
+    func joinable(_ machine: String?) async -> [String]? {
         guard let api = api(machine) else { return nil }
         struct Answer: Decodable {
             struct Listed: Decodable { var id: String }
@@ -412,70 +519,80 @@ final class BoxGroups {
         return decoded.bots.map(\.id)
     }
 
-    /// Deleted there: its seats, its messages; its bots forget it.
+    /// Deleted where it lives: its seats, its messages; its bots forget it.
     func delete(_ group: BotGroup) async throws {
-        guard let machine = machine(of: group.id), let api = api(machine) else { throw Failure.away(machine(of: group.id) ?? "Its machine") }
+        guard let chat = chat(group.id) else { return }
+        guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
         do {
             try await api.deleteBoxGroup(group.id)
         } catch let refused as ServerError where refused.status == 404 && refused.message == "No such chat." {
             // Gone there already: as good as deleted.
         } catch let refused as ServerError where refused.status == 409 {
-            // Moving, from another Mac.
             throw Moves.Failure.moving
         }
-        forget(group.id)
+        forget(group.id, on: chat.machine)
+        Analytics.shared.track("group_deleted")
     }
 
-    /// A bot being deleted leaves its chats there.
+    /// A bot being deleted leaves its chats, wherever they live.
     func remove(_ bot: Bot) async {
-        for chat in chats where chat.group.members.contains(bot.id) {
-            var group = chat.group
-            group.members.removeAll { $0 == bot.id }
-            try? await update(group)
+        for chat in shown where chat.group.members.contains(bot.id) {
+            guard let api = api(chat.machine) else { continue }
+            let members = chat.group.members.filter { $0 != bot.id }
+            _ = try? await api.editBoxGroup(chat.group.id, ["members": .array(members.map(JSONValue.string))])
+            await reload(chat.group.id, on: chat.machine)
         }
     }
 
     private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) {
-        guard let machine = machine(of: id), let api = api(machine) else { return }
+        guard let chat = chat(id), let api = api(chat.machine) else { return }
         Task { _ = try? await api.boxGroupAction(id, action, body) }
     }
 
     // MARK: Moving one
 
-    /// A chat brought to a machine, with its messages (`Moves`): held there until `activate`.
-    func bring(_ group: BotGroup, messages: [GroupMessage], to machine: String) async throws {
-        guard let api = api(machine) else { throw Failure.away(machine) }
+    /// A chat brought to a computer, with its messages (`Moves`): held there until `activate`.
+    func bring(_ group: BotGroup, messages: [GroupMessage], to machine: String?) async throws {
+        guard let api = api(machine) else { throw failure(for: machine) }
         try await api.putBoxGroup(group, messages: messages, held: true)
         apply(group, held: true, state: State(discussing: false, paused: false), on: machine)
-        logs[group.id] = messages
-        saveLog(group.id)
+        if logs[group.id]?.isEmpty != false {
+            logs[group.id] = messages
+            saveLog(group.id)
+        }
     }
 
-    func activate(_ id: String) async throws {
-        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
+    func activate(_ id: String, on machine: String?) async throws {
+        guard let api = api(machine) else { throw failure(for: machine) }
         _ = try await api.boxGroupAction(id, "activate")
-        await reload(id)
+        await reload(id, on: machine)
     }
 
     /// Held there for a move away: its talk stops; the chat as it is now.
-    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) {
-        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
+    func hold(_ id: String, on machine: String?) async throws -> (group: BotGroup, messages: [GroupMessage]) {
+        guard let api = api(machine) else { throw failure(for: machine) }
         guard let held = try await api.boxGroupAction(id, "hold"),
               let group = held["group"].flatMap({ try? Self.decode(BotGroup.self, from: $0) }),
               let messages = held["messages"].flatMap({ try? Self.decode([GroupMessage].self, from: $0) }) else { throw Failure.unreadable }
+        if let index = chats.firstIndex(where: { $0.group.id == id && $0.machine == machine }) {
+            chats[index].held = true
+            chats[index].discussing = false
+            chats[index].speaking = nil
+            save()
+        }
         return (group, messages)
     }
 
     /// Let go there, its seats left (its bots stay there); gone from here.
-    func release(_ id: String) async throws {
-        guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
+    func release(_ id: String, on machine: String?) async throws {
+        guard let api = api(machine) else { throw failure(for: machine) }
         _ = try await api.boxGroupAction(id, "release")
-        forget(id)
+        forget(id, on: machine)
     }
 
     /// One brought there that didn't get to start (a move taken back): gone there, seats and all
     /// left as they are (the chat goes on where it was). Whether it is (not if it wasn't there).
-    func takeBack(_ id: String, on machine: String) async -> Bool {
+    func takeBack(_ id: String, on machine: String?) async -> Bool {
         guard let api = api(machine) else { return false }
         do {
             _ = try await api.boxGroupAction(id, "release")
@@ -484,26 +601,38 @@ final class BoxGroups {
         } catch {
             return false
         }
-        if self.machine(of: id) == machine { forget(id) }
+        forget(id, on: machine)
         return true
     }
 
     enum Failure: LocalizedError {
         case away(String)
+        case macStarting
+        case macStopped
+        case gone
         case unreadable
         var errorDescription: String? {
             switch self {
             case .away(let machine): "\(machine) isn’t connected. Connect to it, then try again."
-            case .unreadable: "The machine’s answer couldn’t be read."
+            case .macStarting: "Group chats on this Mac are still starting. Try again in a moment."
+            case .macStopped: "Group chats on this Mac stopped. Restart them, then try again."
+            case .gone: "That group chat isn’t there any more."
+            case .unreadable: "The answer couldn’t be read."
             }
         }
     }
 
+    private func failure(for machine: String?) -> Failure {
+        guard let machine else { return macFailure == nil ? .macStarting : .macStopped }
+        return .away(machine)
+    }
+
     // MARK: Settings
 
-    /// What every chat on a machine goes by, from this Mac: what each personality tells a bot,
-    /// who sets what about a bot, Ask First, what its Settings › Permissions deny, your time zone.
-    func giveSettings(to machine: String) async {
+    /// What every chat on a computer goes by, from this Mac: what each personality tells a bot,
+    /// who sets what about a bot, Ask First, what its Settings › Permissions deny, your time zone
+    /// and how you write dates.
+    func giveSettings(to machine: String?) async {
         guard let api = api(machine) else { return }
         let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
         let denies = EngineConfig.rules(on: machine).filter { $0.effect == .deny }
@@ -517,35 +646,46 @@ final class BoxGroups {
         ]
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(settings), settingsGiven[machine] != data else { return }
+        let key = Self.key(machine)
+        guard let data = try? encoder.encode(settings), settingsGiven[key] != data else { return }
         do {
             try await api.giveBoxGroupSettings(.object(settings))
-            settingsGiven[machine] = data
+            settingsGiven[key] = data
         } catch {
-            log.error("\(machine, privacy: .public)'s group chats didn't get this Mac's settings: \(error.localizedDescription, privacy: .public)")
+            log.error("\(machine ?? "This Mac", privacy: .public)'s group chats didn't get this Mac's settings: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    /// Settings changed here: each machine connected now gets them.
+    /// Settings changed here (or your time zone, or how you write dates): each computer that can be
+    /// reached now gets them, this Mac's bridge too.
     func settingsChanged() {
-        for machine in Set(app?.machines.engines.values.filter(\.isReady).map(\.machine.id) ?? []).union(running) where reachable(machine) {
+        let machines = Set(app?.machines.engines.values.filter(\.isReady).map(\.machine.id) ?? []).union(running)
+        for machine in [nil] + machines.map(Optional.some) where reachable(machine) {
             Task { await giveSettings(to: machine) }
         }
     }
 
     // MARK: Plumbing
 
-    /// A machine's bridge, while it's up (tests give their own).
-    @ObservationIgnored var bridge: ((String) -> OpenCodeAPI?)?
+    /// A computer's bridge, while it's up (tests give their own): this Mac's (nil), or a machine's.
+    @ObservationIgnored var bridge: ((String?) -> OpenCodeAPI?)?
+    /// Why this Mac's bridge stopped for good (tests give their own).
+    @ObservationIgnored var stoppedBecause: (() -> String?)?
 
-    private func api(_ machine: String) -> OpenCodeAPI? {
+    private func api(_ machine: String?) -> OpenCodeAPI? {
         if let bridge { return bridge(machine) }
+        guard let machine else { return app?.agents.api }
         guard let engine = app?.machines.engine(machine), engine.isReady else { return nil }
         return engine.agents.api
     }
 
-    /// Whether a machine's bridge can be reached now.
-    func reachable(_ machine: String) -> Bool { api(machine) != nil }
+    private var macFailure: String? {
+        if let stoppedBecause { return stoppedBecause() }
+        return app?.agents.failure
+    }
+
+    /// Whether a computer's bridge can be reached now.
+    func reachable(_ machine: String?) -> Bool { api(machine) != nil }
 
     private func save() {
         JSONFile.write(chats, to: Self.file, isoDates: true, readable: true)
@@ -575,7 +715,7 @@ final class BoxGroups {
 
 // MARK: The bridge's group chat routes
 
-private extension String {
+extension String {
     /// A chat's ID in a path (they're letters, digits and "_" anyway).
     var groupPathEscaped: String { addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "_-"))) ?? self }
 }

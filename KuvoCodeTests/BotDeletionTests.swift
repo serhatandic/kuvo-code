@@ -42,7 +42,7 @@ import Testing
         // As the app sets them up when it starts.
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
+        app.boxGroups.app = app
         app.workspace.api = engine.api
         engine.list([StubEngine.session("ses_bot_gone", title: "Ci", directory: folder.path(percentEncoded: false))])
         engine.on("DELETE", "/api/session/ses_bot_gone", json: [:])

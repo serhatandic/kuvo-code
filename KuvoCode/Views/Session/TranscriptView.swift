@@ -1711,7 +1711,7 @@ private struct GroupWorkRow: View {
             Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            if app.groups.group(chatID) != nil {
+            if app.chats.group(chatID) != nil {
                 Button("Open") { app.open(.session(BotGroups.tabKey(chatID))) }
                     .buttonStyle(TextButtonStyle())
                     .help("Open \(chat)")

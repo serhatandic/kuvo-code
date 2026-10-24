@@ -160,7 +160,7 @@ struct BotEditor: View {
             // The model it talks on: one picked for it whose account you've signed out of (none
             // to show) gives way to its conversation's, as in its group chats. A bot made before
             // bots had a model: the one its conversation uses.
-            if let bot, model == bot.model, let talking = app.groups.talkingModel(of: bot) { model = talking }
+            if let bot, model == bot.model, let talking = app.bots.talkingModel(of: bot) { model = talking }
             if model == nil { model = bot.flatMap { workspace.session($0.sessionID)?.model } ?? placeCatalog.startingModel(lastModel, scope: modelScope) }
         }
         .alert("Delete \(bot?.name ?? "This Bot")?", isPresented: $confirmsDelete) {
