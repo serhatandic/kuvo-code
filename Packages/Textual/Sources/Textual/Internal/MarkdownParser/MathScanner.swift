@@ -50,21 +50,22 @@ struct MathScanner {
   }
 
   /// Reads the Markdown with `read`, as the text will be read, for where each delimiter comes out;
-  /// false when there aren't stand-ins enough.
-  mutating func read(standIns: StandIns, with read: (String) throws -> AttributedString) rethrows -> Bool {
-    guard let tokens = standIns.make(delimiters.count) else { return false }
-    var marked = String.UnicodeScalarView()
-    var start = 0
-    for (n, i) in delimiters.enumerated() {
-      marked.append(contentsOf: s[start..<i])
-      marked.append(tokens[n])
-      start = i + (s[i] == "$" ? 1 : 2)
+  /// false when there aren't stand-ins enough. A `|` in one of `formulas` on one line (`$|x|$`)
+  /// is read as another character, so it doesn't split a table's cell there.
+  mutating func read(
+    standIns: StandIns,
+    keepingWhole formulas: [Found],
+    with read: (String) throws -> AttributedString
+  ) rethrows -> Bool {
+    guard let tokens = standIns.make(delimiters.count + 1) else { return false }
+    var swaps = delimiters.enumerated().map { n, i in (i..<(i + (s[i] == "$" ? 1 : 2)), tokens[n]) }
+    for formula in formulas where !s[formula.range].contains("\n") {
+      for i in formula.range where s[i] == "|" { swaps.append((i..<(i + 1), tokens[delimiters.count])) }
     }
-    marked.append(contentsOf: s[start...])
-    let parsed = try read(String(marked))
+    let parsed = try read(Self.string(s, swapping: swaps.sorted { $0.0.lowerBound < $1.0.lowerBound }))
 
     var delimiter: [UInt32: Int] = [:]
-    for (n, token) in tokens.enumerated() { delimiter[token.value] = delimiters[n] }
+    for (n, i) in delimiters.enumerated() { delimiter[tokens[n].value] = i }
     var places: [Int: Place] = [:]
     var segment = 0
     var link: URL?
@@ -87,6 +88,19 @@ struct MathScanner {
 
   private func place(_ i: Int) -> Place? {
     places.map { $0[i] } ?? .text(segment: 0, block: nil)
+  }
+
+  /// `s` with each range in `swaps` (in order, apart) swapped for its character.
+  static func string(_ s: [Unicode.Scalar], swapping swaps: [(Range<Int>, Unicode.Scalar)]) -> String {
+    var swapped = String.UnicodeScalarView()
+    var start = 0
+    for (range, scalar) in swaps {
+      swapped.append(contentsOf: s[start..<range.lowerBound])
+      swapped.append(scalar)
+      start = range.upperBound
+    }
+    swapped.append(contentsOf: s[start...])
+    return String(swapped)
   }
 
   /// The formulas, in order. Before the Markdown's read, every formula there could be: reading it
@@ -124,10 +138,13 @@ struct MathScanner {
 
   /// The `$…$` opened at `i`, as Pandoc reads them: text right after the opening `$` and right
   /// before the closing one, on one line, and no digit after it (so "$5 and $10" stay prices).
+  /// Never over a backtick or into an address, which the Markdown may not have read as code or a
+  /// link yet, while it streams in: "$10 and `$HOME", "$5 [docs](https://…?$top".
   private func inline(at i: Int) -> Found? {
     guard i + 1 < s.count, !s[i + 1].isSpace, s[i + 1] != "$" else { return nil }
     var j = i + 1
-    while j < s.count, s[j] != "\n" {
+    while j < s.count, s[j] != "\n", s[j] != "`" {
+      if opensAddress(at: j) { return nil }
       if s[j] == "\\" {
         j += j + 1 < s.count && s[j + 1] != "\n" ? 2 : 1
         continue
@@ -146,10 +163,10 @@ struct MathScanner {
     return nil
   }
 
-  /// The `\(…\)` opened at `i`, on one line.
+  /// The `\(…\)` opened at `i`, on one line, not over a backtick.
   private func bracketed(at i: Int) -> Found? {
     var j = i + 2
-    while j + 1 < s.count, s[j] != "\n" {
+    while j + 1 < s.count, s[j] != "\n", s[j] != "`" {
       if s[j] == "\\" {
         if s[j + 1] == ")" {
           let latex = string(s[(i + 2)..<j]).trimmingCharacters(in: .whitespaces)
@@ -168,27 +185,26 @@ struct MathScanner {
   }
 
   /// Whether the delimiter at `j` closes a formula in a line opened at `i`: in the same text,
-  /// with no code or link between; or in a table row's cell that didn't come out (a row with more
-  /// cells than its header, as a formula's `|` can make it).
+  /// with no code or link between.
   private func closes(_ i: Int, at j: Int) -> Bool {
-    guard case .text(let segment, let block) = place(i) else { return false }
-    switch place(j) {
-    case .text(let other, _)?: return other == segment
-    case .other?: return false
-    case nil: return block?.isTableCell == true
-    }
+    guard case .text(let segment, _) = place(i), case .text(segment, _) = place(j) else { return false }
+    return true
   }
 
   // MARK: Formulas of their own
 
   /// The `$$…$$` or `\[…\]` opened at `i`: closed in its paragraph, or on lines of its own, which
-  /// Markdown may have read as other blocks ("+ x" as a list item), up to a blank line.
+  /// Markdown may have read as other blocks ("+ x" as a list item), up to a blank line; never
+  /// over a backtick or into an address.
   private func display(at i: Int, dollars: Bool) -> Found? {
     if dollars, isPrice(at: i) { return nil }
     var j = i + 2
     var close: Int?
     while j < s.count, close == nil {
+      if opensAddress(at: j) { return nil }
       switch s[j] {
+      case "`":
+        return nil
       case "\n":
         if lineIsBlank(from: j + 1) { return nil }
         j += 1
@@ -268,6 +284,11 @@ struct MathScanner {
       s[i + 2].isSpace
       && (s[close - 1].isSpace || s[i..<close].contains("\n") && close == wordsStart(ofLineAt: close))
     return !(wordsBefore && wordsAfter && spacedInside) || latex.looksLikeMath
+  }
+
+  /// A link's address starts at `i` ("](…"), or a web address goes on ("://").
+  private func opensAddress(at i: Int) -> Bool {
+    i + 2 < s.count && (s[i] == "]" && s[i + 1] == "(" || s[i] == ":" && s[i + 1] == "/" && s[i + 2] == "/")
   }
 
   // MARK: Lines
@@ -405,10 +426,6 @@ extension PresentationIntent {
     return false
   }
 
-  var isTableCell: Bool {
-    if case .tableCell = components.first?.kind { return true }
-    return false
-  }
 }
 
 extension Array where Element: Equatable {

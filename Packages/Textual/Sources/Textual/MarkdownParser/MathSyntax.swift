@@ -58,24 +58,18 @@ public struct MathSyntax {
     let scalars = Array(text.unicodeScalars)
     var scanner = MathScanner(scalars)
     // Prices alone ("$5 and $10") are read once, as text without math is.
-    guard !scanner.formulas().isEmpty else { return try read(markdown) }
+    let maybe = scanner.formulas()
+    guard !maybe.isEmpty else { return try read(markdown) }
     let standIns = StandIns(avoiding: text)
     guard
-      try scanner.read(standIns: standIns, with: { try AttributedString(markdown: $0, options: options, baseURL: baseURL) }),
+      try scanner.read(
+        standIns: standIns, keepingWhole: maybe,
+        with: { try AttributedString(markdown: $0, options: options, baseURL: baseURL) }),
       case let found = scanner.formulas(), !found.isEmpty, let marks = standIns.make(found.count)
     else {
       return try read(markdown)
     }
-
-    var marked = String.UnicodeScalarView()
-    var start = 0
-    for (n, formula) in found.enumerated() {
-      marked.append(contentsOf: scalars[start..<formula.range.lowerBound])
-      marked.append(marks[n])
-      start = formula.range.upperBound
-    }
-    marked.append(contentsOf: scalars[start...])
-    var output = try read(String(marked))
+    var output = try read(MathScanner.string(scalars, swapping: zip(found.map(\.range), marks).map { ($0, $1) }))
     putBack(found.map(\.formula), marks: marks, in: &output)
     return output
   }
@@ -135,8 +129,9 @@ public struct MathSyntax {
     let after = text[mark.upperBound..<paragraph.range.upperBound]
     let first = before.characters.allSatisfy(\.isWhitespace)
     let containers = paragraph.intent.components.dropFirst()
-    if first, let item = containers.first, case .listItem = item.kind {
-      // The item's first paragraph: the first with the item in it.
+    for item in containers where first {
+      guard case .listItem = item.kind else { continue }
+      // The item's first paragraph (in a quote in it, too): the first block with the item in it.
       let firstOfItem = text.runs[\.presentationIntent].first {
         $0.0?.components.contains { $0.identity == item.identity } == true
       }
