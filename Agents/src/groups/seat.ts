@@ -134,6 +134,37 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", stop, { once: true })
   })
 
+/**
+ * A wait cut short when the engine says a run ended (its live events), so a bot's words reach the
+ * chat as soon as they're done, rather than at the next look; looks go on as they were, for what
+ * the events don't say.
+ */
+class Nudge {
+  private waiting?: () => void
+  private pending = false
+
+  poke() {
+    if (this.waiting) {
+      const wake = this.waiting
+      this.waiting = undefined
+      wake()
+    } else this.pending = true
+  }
+
+  async sleep(ms: number, signal?: AbortSignal) {
+    if (this.pending) {
+      this.pending = false
+      return
+    }
+    const woken = new Promise<void>((resolve) => (this.waiting = resolve))
+    try {
+      await Promise.race([sleep(ms, signal), woken])
+    } finally {
+      this.waiting = undefined
+    }
+  }
+}
+
 const reason = (error: any) => String(error?.message ?? error ?? "it failed").trim()
 export const runsWithAgents = (model?: ModelRef) => Boolean(model && (model.providerID === autoProvider || parseProvider(model.providerID)))
 
@@ -369,23 +400,13 @@ export class Seats implements SeatHome {
         }
       }
       going()
-      // Its message, by an id kept before it goes: after a restart, one already there is followed, not sent again.
-      let promptID = resume?.prompt
-      let sent = resume?.sent ?? Date.now()
-      const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false
-      going()
-      if (!promptID || !there) {
-        promptID ??= newID("msg")
-        sent = Date.now()
-        progress?.({ seat, agents, prompt: promptID, sent })
-        await api.prompt(seat, promptID, text, "queue")
-      }
-      report({ phase: "started" })
+      // Listened to before its message goes, so a run that ends at once is still heard of.
       // Its latest thought, from the engine's stream, in a line under its name, a few times a
       // second at most; a look at its messages, which can be a step behind, doesn't take it back
       // for a moment.
       let thinking = ""
       let streamedAt = 0
+      const nudge = new Nudge()
       let shown: Activity[] = []
       const show = (now: Activity[], quiet = 300) => {
         if (JSON.stringify(now) === JSON.stringify(shown)) return
@@ -395,23 +416,39 @@ export class Seats implements SeatHome {
         streamedAt = Date.now()
         report({ phase: "activity", activity: now })
       }
-      const unlisten = ownConversation
-        ? undefined
-        : this.context.listen?.(seat, {
+      // (Its run's end heard of in a conversation of its own too, where what it's doing isn't shown.)
+      const unlisten = this.context.listen?.(seat, {
             event: (event) => {
               const data = event?.data ?? {}
-              if (event?.type === "session.reasoning.started") thinking = ""
+              if (ownConversation) {
+                if (typeof event?.type === "string" && event.type.startsWith("session.execution.") && event.type !== "session.execution.started") nudge.poke()
+              } else if (event?.type === "session.reasoning.started") thinking = ""
               else if (event?.type === "session.reasoning.delta") {
                 thinking = (thinking + String(data.delta ?? "")).slice(-2000)
                 const line = thought(thinking)
                 if (line) show([{ kind: "thinking", text: line }])
               } else if (event?.type === "session.text.started" || event?.type === "session.text.delta") show([{ kind: "writing" }])
+              // Its run ended: looked at now.
+              else if (typeof event?.type === "string" && event.type.startsWith("session.execution.") && event.type !== "session.execution.started") nudge.poke()
             },
             reconnected() {},
           })
+      let promptID = resume?.prompt
+      let sent = resume?.sent ?? Date.now()
       try {
-        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, ownConversation ? undefined : (messages) => {
-          const now = activityOf(messages, promptID, sent)
+        // Its message, by an id kept before it goes: after a restart, one already there is followed, not sent again.
+        const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false
+        going()
+        if (!promptID || !there) {
+          promptID ??= newID("msg")
+          sent = Date.now()
+          progress?.({ seat, agents, prompt: promptID, sent })
+          await api.prompt(seat, promptID, text, "queue")
+        }
+        report({ phase: "started" })
+        const asked = promptID as string
+        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
+          const now = activityOf(messages, asked, sent)
           if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000) return
           shown = now
           report({ phase: "activity", activity: now })
@@ -579,7 +616,7 @@ export class Seats implements SeatHome {
    * (`directory`) while a tool of it runs there. `seen` hears its latest messages now and then,
    * for what it's doing. Stopped (`signal`): the seat stops too.
    */
-  private async waitForRun(seat: string, promptID: string, sent: number, api: SeatAPI, signal: AbortSignal, directory: string, seen?: (messages: any[]) => void) {
+  private async waitForRun(seat: string, promptID: string, sent: number, api: SeatAPI, signal: AbortSignal, directory: string, nudge: Nudge | undefined, seen?: (messages: any[]) => void) {
     const pace = this.context.pace ?? 1
     let looked = Date.now()
     let gone = 0
@@ -589,7 +626,7 @@ export class Seats implements SeatHome {
     let woken = false
     for (;;) {
       try {
-        await sleep(600 * pace, signal)
+        await (nudge ? nudge.sleep(600 * pace, signal) : sleep(600 * pace, signal))
       } catch (error) {
         // Not worth waiting for any more (stopped, or you wrote while the work list was asked).
         await api.interrupt(seat).catch(() => {})

@@ -12329,6 +12329,31 @@ var sleep = (ms, signal) => new Promise((done, fail) => {
   }, ms);
   signal?.addEventListener("abort", stop, { once: true });
 });
+
+class Nudge {
+  waiting;
+  pending = false;
+  poke() {
+    if (this.waiting) {
+      const wake = this.waiting;
+      this.waiting = undefined;
+      wake();
+    } else
+      this.pending = true;
+  }
+  async sleep(ms, signal) {
+    if (this.pending) {
+      this.pending = false;
+      return;
+    }
+    const woken = new Promise((resolve5) => this.waiting = resolve5);
+    try {
+      await Promise.race([sleep(ms, signal), woken]);
+    } finally {
+      this.waiting = undefined;
+    }
+  }
+}
 var reason2 = (error2) => String(error2?.message ?? error2 ?? "it failed").trim();
 var runsWithAgents = (model2) => Boolean(model2 && (model2.providerID === autoProvider || parseProvider(model2.providerID)));
 
@@ -12539,19 +12564,9 @@ class Seats {
         }
       }
       going();
-      let promptID = resume?.prompt;
-      let sent = resume?.sent ?? Date.now();
-      const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false;
-      going();
-      if (!promptID || !there) {
-        promptID ??= newID("msg");
-        sent = Date.now();
-        progress?.({ seat, agents, prompt: promptID, sent });
-        await api.prompt(seat, promptID, text2, "queue");
-      }
-      report({ phase: "started" });
       let thinking = "";
       let streamedAt = 0;
+      const nudge = new Nudge;
       let shown = [];
       const show = (now, quiet2 = 300) => {
         if (JSON.stringify(now) === JSON.stringify(shown))
@@ -12563,10 +12578,13 @@ class Seats {
         streamedAt = Date.now();
         report({ phase: "activity", activity: now });
       };
-      const unlisten = ownConversation ? undefined : this.context.listen?.(seat, {
+      const unlisten = this.context.listen?.(seat, {
         event: (event) => {
           const data = event?.data ?? {};
-          if (event?.type === "session.reasoning.started")
+          if (ownConversation) {
+            if (typeof event?.type === "string" && event.type.startsWith("session.execution.") && event.type !== "session.execution.started")
+              nudge.poke();
+          } else if (event?.type === "session.reasoning.started")
             thinking = "";
           else if (event?.type === "session.reasoning.delta") {
             thinking = (thinking + String(data.delta ?? "")).slice(-2000);
@@ -12575,12 +12593,26 @@ class Seats {
               show([{ kind: "thinking", text: line }]);
           } else if (event?.type === "session.text.started" || event?.type === "session.text.delta")
             show([{ kind: "writing" }]);
+          else if (typeof event?.type === "string" && event.type.startsWith("session.execution.") && event.type !== "session.execution.started")
+            nudge.poke();
         },
         reconnected() {}
       });
+      let promptID = resume?.prompt;
+      let sent = resume?.sent ?? Date.now();
       try {
-        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, ownConversation ? undefined : (messages) => {
-          const now = activity(messages, promptID, sent);
+        const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false;
+        going();
+        if (!promptID || !there) {
+          promptID ??= newID("msg");
+          sent = Date.now();
+          progress?.({ seat, agents, prompt: promptID, sent });
+          await api.prompt(seat, promptID, text2, "queue");
+        }
+        report({ phase: "started" });
+        const asked = promptID;
+        await this.waitForRun(seat, asked, sent, api, signal, bot.directory, nudge, ownConversation ? undefined : (messages) => {
+          const now = activity(messages, asked, sent);
           if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000)
             return;
           shown = now;
@@ -12748,7 +12780,7 @@ class Seats {
       return false;
     }
   }
-  async waitForRun(seat, promptID, sent, api, signal, directory, seen) {
+  async waitForRun(seat, promptID, sent, api, signal, directory, nudge, seen) {
     const pace = this.context.pace ?? 1;
     let looked = Date.now();
     let gone = 0;
@@ -12757,7 +12789,7 @@ class Seats {
     let woken = false;
     for (;; ) {
       try {
-        await sleep(600 * pace, signal);
+        await (nudge ? nudge.sleep(600 * pace, signal) : sleep(600 * pace, signal));
       } catch (error2) {
         await api.interrupt(seat).catch(() => {});
         throw error2;
@@ -15489,4 +15521,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src a87c4f7171f945c1ccf90eac30ff205893c75cb464383a0f621b34ee025003ac
+// Built from Agents/src 6f4ae0dd7bd80eb4636aa4012b1a0ab12d4db98171c74057f7eb885557f02fad

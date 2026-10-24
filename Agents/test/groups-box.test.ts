@@ -136,6 +136,39 @@ describe("who a message to a group chat names with &", () => {
   })
 })
 
+describe("a bot's words", () => {
+  test("reach the chat as soon as the engine says its run ended, not at the next look", async () => {
+    const listeners = new Map<string, { event(event: any): void }>()
+    // An engine whose seats' runs end at once, and say so on their live events; its looks so far
+    // apart (pace) that only that could end a turn in time.
+    const told = new Engine(() => {
+      const last = told.requests.at(-1)
+      if (last?.path.endsWith("/prompt")) {
+        const seat = last.path.split("/")[3]
+        queueMicrotask(() => listeners.get(seat)?.event({ type: "session.execution.succeeded", data: { sessionID: seat } }))
+      }
+      beat()
+    })
+    try {
+      told.lines = { Ada: ["Ship it."], Ben: [] }
+      const store = new GroupStore(join(root, "groups"), join(root, "bots"))
+      const groups = new GroupRunner({
+        store, engine: server(told.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 1000,
+        listen: (session, listener) => {
+          listeners.set(session, listener)
+          return () => listeners.delete(session)
+        },
+      })
+      groups.put(group(), [], "active", false)
+      groups.send(id, "Ready?")
+      await until(() => !groups.talk(id).discussing && groups.get(id)!.messages.some((message) => message.author === "bot_ada"))
+      expect(groups.get(id)!.messages.filter((message) => message.kind === "message").map((message) => message.text)).toEqual(["Ready?", "Ship it."])
+    } finally {
+      told.stop()
+    }
+  })
+})
+
 describe("a bot a move holds", () => {
   test("sits its turn out, saying why, and nothing goes to an engine for it; the others go on", async () => {
     writeFileSync(join(root, "bots", "bot_ada", "paused"), "moving")
