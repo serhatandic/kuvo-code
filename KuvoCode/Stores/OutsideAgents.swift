@@ -192,6 +192,8 @@ final class OutsideAgents {
             let api = OpenCodeAPI(endpoint: server.endpoint)
             self.api = api
             failure = nil
+            // This Mac's box finds it as a machine's does.
+            BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
             listen(to: api)
             tellEngine()
             tellTools()
@@ -207,6 +209,7 @@ final class OutsideAgents {
     func stop() {
         eventTask?.cancel()
         eventTask = nil
+        if server != nil { BoxProcess.agentsChanged(nil, pid: nil) }
         server?.stop()
         server = nil
         api = nil

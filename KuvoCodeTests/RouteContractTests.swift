@@ -123,6 +123,8 @@ nonisolated enum RouteScenarios {
 final class MacBox {
     let engine = StubEngine(port: 47_961)
     let state = EngineState()
+    /// This Mac's box (`kuvo-link.js serve`), run with Node.
+    let box = BoxProcess()
     let work: URL
     private(set) var app: AppModel?
     var vars: [String: Any] = [:]
@@ -152,7 +154,7 @@ final class MacBox {
     /// What the stores keep, gone: each scenario starts with an empty box, as the machine's does.
     private static func forgetStores() {
         let manager = FileManager.default
-        for name in ["bots.json", "bots", "machine-bots.json", "wakes", "groups.json", "groups", "opencode/config/opencode"] {
+        for name in ["bots.json", "bots", "machine-bots.json", "wakes", "groups.json", "groups", "opencode/config/opencode", "box"] {
             try? manager.removeItem(at: support.appending(path: name))
         }
         for key in ["worktrees", "projectSettings", "botEditsWaiting"] { UserDefaults.standard.removeObject(forKey: key) }
@@ -161,6 +163,9 @@ final class MacBox {
     }
 
     func finish() {
+        box.stop()
+        BoxProcess.engineChanged(nil, version: nil, pid: nil)
+        StubWeb.stopListening(port: 47_961)
         engine.stop()
         for bot in bots { for name in IntegrationKeys.variables(ofBot: bot) { _ = IntegrationKeys.set(nil, for: name) } }
         Self.forgetStores()
@@ -216,6 +221,15 @@ final class MacBox {
     /// The app, as it is once its engine is up: its stores wired as AppModel's start wires them,
     /// and what it reads as it goes (its sessions, and the wake-ups its rounds read) read now.
     private func start() async {
+        // This Mac's box, for the areas that have moved onto it, reaching the stand-in engine at
+        // its port as it reaches the engine.
+        if let node = MacBoxTests.node {
+            try? StubWeb.listen(port: 47_961)
+            await box.start(node: node)
+            if let port = box.endpoint?.url.port { StubWeb.letThrough(port: port) }
+            BoxProcess.engineChanged(engine.api.client.endpoint, version: "2.0.32", pid: getpid())
+        }
+        #expect(box.endpoint != nil, "this Mac's box started: \(box.failure ?? "no Node")")
         let app = AppModel()
         app.workspace.api = engine.api
         app.wireStores()

@@ -143,7 +143,8 @@ public enum EngineRoutes {
     /// Passes `request` to the engine at `base` (its password added here), and its response back
     /// in pieces as they come: an event stream's events one by one. What's sent is the path as
     /// `canonical` writes it, which is what `allowing` checks.
-    public static func forward(_ request: LinkRequest, to base: URL, password: String?, session: URLSession = .shared,
+    /// `adding`: headers of the Mac's own, after what the client sent was taken (which can't set them).
+    public static func forward(_ request: LinkRequest, to base: URL, password: String?, session: URLSession = .shared, adding: [String: String] = [:],
                                allowing: @Sendable (String, String) -> Bool = { allows($0, method: $1) }) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             guard let path = canonical(request.path), allowing(path, request.method) else {
@@ -161,6 +162,7 @@ public enum EngineRoutes {
                     outgoing.timeoutInterval = .infinity
                     let given = Dictionary(request.headers.map { ($0.key.lowercased(), $0.value) }) { first, _ in first }
                     for name in requestHeaders { if let value = given[name] { outgoing.setValue(value, forHTTPHeaderField: name) } }
+                    for (name, value) in adding { outgoing.setValue(value, forHTTPHeaderField: name) }
                     if let password { outgoing.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
                     if method != "GET", method != "HEAD" { outgoing.httpBody = request.body }
 
@@ -169,15 +171,17 @@ public enum EngineRoutes {
                     var headers: [String: String] = [:]
                     for name in responseHeaders { if let value = http.value(forHTTPHeaderField: name) { headers[name] = value } }
                     continuation.yield(.head(status: http.statusCode, headers: headers))
-                    // In pieces: at each event's end (a blank line), so an event goes as soon as
-                    // it's whole and each costs the relay one message, or every 32 KB of a long body.
+                    // In pieces: at each event's end (a blank line; a line, for a box's stream of
+                    // JSON lines), so an event goes as soon as it's whole and each costs the relay
+                    // one message, or every 32 KB of a long body.
+                    let lines = headers["content-type"]?.hasPrefix("application/x-ndjson") == true
                     var piece = Data()
                     piece.reserveCapacity(32 * 1024)
                     var previous: UInt8 = 0
                     for try await byte in bytes {
                         piece.append(byte)
                         defer { previous = byte }
-                        if (byte == UInt8(ascii: "\n") && previous == UInt8(ascii: "\n")) || piece.count >= 32 * 1024 {
+                        if (byte == UInt8(ascii: "\n") && (lines || previous == UInt8(ascii: "\n"))) || piece.count >= 32 * 1024 {
                             continuation.yield(.body(piece))
                             piece.removeAll(keepingCapacity: true)
                         }

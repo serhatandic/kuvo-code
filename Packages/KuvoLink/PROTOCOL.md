@@ -1064,6 +1064,51 @@ address. The bridge reads the file every 30 seconds: a phone taken off loses its
 and with no phones and no pairing waiting the bridge stops. The bridge notes when a phone last
 used the machine (`run/link.seen`).
 
+### This Mac's box
+
+A Mac runs the same box a machine does: the app starts `kuvo-link.js serve` (bridge 0.9.33 and
+later) beside its engine, with the engine's Bun and `KUVO_HOME` in the app's own folder
+(`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`. It answers the box's
+routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `{"url"}` on its
+first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
+the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
+time for `application/x-ndjson`), and goes when its stdin closes. It finds the engine and the
+coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the app
+writes (only you can read them) as they start and removes as they stop.
+
+Areas move onto it one at a time. A moved area's routes are answered there for every client: a
+phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
+own, which reach every box's routes the same way (`BoxClient`: this Mac's through the link's
+answer, a machine's through `kuvo-link.js box route` over SSH). Until an area moves, the Mac
+answers it itself, as below.
+
+### Projects
+
+Each box keeps its own projects, in `box/projects.json` under its folder (`~/.kuvo-code` on a
+machine; this Mac's box's own on a Mac), and any client reads and changes them there: the Mac
+app's sidebar and Edit Project as a phone does. A project's folder is in the query, as the box
+names it (a `/` can't be in a part of the path). A Mac answers from its box; a machine from bridge
+0.9.33 (`projects` in `features`). Before, a Mac kept a machine's projects itself, and moves them
+there, with the settings of those it removed, the first time the machine answers; what it changes
+while a box is away goes there when it's back.
+
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?}]}`,
+  newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
+  `removed`, one Remove Project took off the list, kept with its settings for when one of its
+  sessions is brought back (a client shows it then, and not before).
+- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
+  adds the project or changes what's given (an empty string is none), and brings a removed one
+  back unless `removed` is true (a client's copy of one it removed, with its settings):
+  `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
+  as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
+  that's away).
+- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
+  too, archived on the engine and the coding agents' bridge, older ones included, then it's
+  marked `removed`. `200 {archived}`; `409 {message, archived, kept}` when some couldn't be
+  archived (it stays listed); `503 {"message"}` without its engine.
+- `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
+  changes.
+
 ### Settings per box
 
 Each computer keeps its own engine settings and keys; nothing copies them between computers but

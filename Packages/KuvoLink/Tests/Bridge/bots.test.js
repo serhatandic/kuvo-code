@@ -331,6 +331,19 @@ async function makingEngine(ready = ["opencode"]) {
   return { asked, chats, port: server.address().port, password: "p", close: () => { server.closeAllConnections(); server.close(); } };
 }
 
+test("New Bot offers the box's own projects once it keeps them, not those a Mac once named", async t => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const app = path.join(home, "work", "app"), shop = path.join(home, "work", "shop");
+  for (const folder of [app, shop]) fs.mkdirSync(folder, { recursive: true });
+  t.after(() => fs.rmSync(path.join(home, "box", "projects.json"), { force: true }));
+  const handle = link.engineHandler(() => { throw new Error("no engine"); }, { name: "my-server" }, () => null);
+  await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(fs.realpathSync(app))}`, { name: "App" });
+  await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(fs.realpathSync(shop))}`, {});
+  link.changeProjects(projects => projects.map(each => (each.directory === fs.realpathSync(shop) ? { ...each, removed: true } : each)));
+  const offered = await ask(handle, "GET", "kuvo/bots/templates");
+  assert.deepEqual(offered.json.projects, [{ directory: fs.realpathSync(app), name: "App", machine: "my-server" }]);
+});
+
 test("with the Mac closed, a bot is made here as New Bot makes it: its folder, conversation and instructions, and it writes first", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const engine = await makingEngine();

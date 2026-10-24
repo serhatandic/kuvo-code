@@ -5,7 +5,8 @@ import Testing
 
 /// The sidebar's lists: each project with its sessions, the latest first, the project worked in
 /// last on top; chats apart; an archived session out of both, at once, and back when brought back.
-/// The engine is stubbed.
+/// Remove Project here is a box's that can't keep its projects yet (a machine on an older Kuvo
+/// Code), done here one session at a time; ProjectsOnBoxTests has a box's own. The engine is stubbed.
 @MainActor
 @Suite(.serialized) struct SidebarListsTests {
     static let engine = "http://127.0.0.1:47995"
@@ -112,7 +113,7 @@ import Testing
         let web = ["s_tree", "s_web_new", "s_web_old"]
         #expect(workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == web)
 
-        #expect(await workspace.removeProject("/tmp/kuvo-tests/web") == 0)
+        #expect(try await workspace.removeProject("/tmp/kuvo-tests/web") == 0)
         #expect(workspace.projects.map(\.directory).filter { $0.hasPrefix("/tmp/kuvo-tests/") } == ["/tmp/kuvo-tests/api"])
         await workspace.refresh()
         #expect(workspace.projects.map(\.directory).filter { $0.hasPrefix("/tmp/kuvo-tests/") } == ["/tmp/kuvo-tests/api"])
@@ -121,24 +122,24 @@ import Testing
     }
 
     /// A project with no sessions, one you added: it just leaves the sidebar.
-    @Test func removingAnEmptyProject() async {
+    @Test func removingAnEmptyProject() async throws {
         defer { StubWeb.stop() }
         workspace.addFolder("/tmp/kuvo-tests/empty")
         #expect(workspace.projects.contains { $0.directory == "/tmp/kuvo-tests/empty" })
-        #expect(await workspace.removeProject("/tmp/kuvo-tests/empty") == 0)
+        #expect(try await workspace.removeProject("/tmp/kuvo-tests/empty") == 0)
         #expect(!workspace.projects.contains { $0.directory == "/tmp/kuvo-tests/empty" })
     }
 
     /// A session the engine doesn't archive stays, and the project with it, so nothing goes out
     /// of sight unarchived; Remove Project… counts it.
-    @Test func aSessionNotArchivedKeepsItsProject() async {
+    @Test func aSessionNotArchivedKeepsItsProject() async throws {
         defer {
             StubWeb.stop()
             for key in ["projectFolders", "projectSettings"] { UserDefaults.standard.removeObject(forKey: key) }
         }
         workspace.saveProject("/tmp/kuvo-tests/web", settings: .init(name: "Web", folders: ["/tmp/kuvo-tests/api"]))
         sessions.refuse("s_web_old")
-        #expect(await workspace.removeProject("/tmp/kuvo-tests/web") == 1)
+        #expect(try await workspace.removeProject("/tmp/kuvo-tests/web") == 1)
         let kept = workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }
         #expect(kept?.sessions.map(\.id) == ["s_web_old"])
         #expect(kept?.name == "Web" && kept?.settings.folders == ["/tmp/kuvo-tests/api"], "as it was")
@@ -146,13 +147,13 @@ import Testing
 
     /// A session of a removed project brought back from Archived Sessions brings the project back
     /// as it was, with its name and folders.
-    @Test func aRemovedProjectComesBackAsItWas() async {
+    @Test func aRemovedProjectComesBackAsItWas() async throws {
         defer {
             StubWeb.stop()
             for key in ["projectFolders", "projectSettings"] { UserDefaults.standard.removeObject(forKey: key) }
         }
         workspace.saveProject("/tmp/kuvo-tests/web", settings: .init(name: "Web", folders: ["/tmp/kuvo-tests/api"]))
-        #expect(await workspace.removeProject("/tmp/kuvo-tests/web") == 0)
+        #expect(try await workspace.removeProject("/tmp/kuvo-tests/web") == 0)
         #expect(!workspace.projects.contains { $0.directory == "/tmp/kuvo-tests/web" })
         await workspace.setArchived("s_web_new", false)
         let back = workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }
