@@ -4,31 +4,39 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// B8: a session in a worktree, worked in and merged back. The session starts on a branch of its
-/// own, named after its title once it has one; its work merges into the branch the project was
-/// on; the worktree goes only with what you were told about; and the archived session stays
-/// with its project. Real git; the engine is stubbed, making and removing worktrees with git as
-/// it does.
+/// B8: a session in a worktree, worked in and merged back. Its box (this Mac's, the real one, run
+/// with Node) makes it on a branch of its own, named after the session's title once it has one;
+/// its work merges into the branch the project was on; the worktree goes only with what you were
+/// told about; and the archived session stays with its project. Real git; the engine is stubbed,
+/// making and removing worktrees with git as it does, at its port, where the box reaches it.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct WorktreeSessionTests {
     static let engine = "http://127.0.0.1:47994"
     let repository: TestRepository
     let workspace = Workspace()
     let engineState = EngineState()
+    let box: TestBox
 
     /// The sessions the stubbed engine has, as it would list them.
     nonisolated final class EngineState: @unchecked Sendable {
         private let lock = NSLock()
         private var sessions: [String: [String: Any]] = [:]
+        private var working: Set<String> = []
+        private var told: [String] = []
         func add(_ session: [String: Any]) { lock.withLock { sessions[session["id"] as! String] = session } }
+        func remove(_ id: String) { lock.withLock { _ = sessions.removeValue(forKey: id) } }
+        func work(_ id: String, _ at: Bool) { lock.withLock { if at { working.insert(id) } else { working.remove(id) } } }
+        var active: Set<String> { lock.withLock { working } }
+        func tell(_ path: String) { lock.withLock { told.append(path) } }
+        var instructed: [String] { lock.withLock { told } }
         func rename(_ id: String, _ title: String) { lock.withLock { sessions[id]?["title"] = title } }
         func session(_ id: String) -> [String: Any]? { lock.withLock { sessions[id] } }
         var all: [[String: Any]] { lock.withLock { Array(sessions.values) } }
     }
 
-    private static let defaultsKeys = ["worktrees", "removedWorktrees", "projectFolders", "projectSettings"]
+    private static let defaultsKeys = ["worktrees", "removedWorktrees", "projectFolders", "projectSettings", "projectsOnBox.mac", "projectsUnsent"]
 
-    init() throws {
+    init() async throws {
         TestEnvironment.prepare()
         for key in Self.defaultsKeys { UserDefaults.standard.removeObject(forKey: key) }
         repository = try TestRepository()
@@ -36,10 +44,15 @@ import Testing
         try repository.commitAll("First")
         StubWeb.start(hosts: ["127.0.0.1"])
         let state = engineState, engine = Self.engine
-        StubWeb.route(engine + "/api/session/active") { _ in StubWeb.json(["data": [:]]) }
-        StubWeb.route(engine + "/api/location") { request in
-            let directory = request.queryItems?.first { $0.name == "directory" }?.value ?? ""
+        StubWeb.route(engine + "/api/session/active") { _ in StubWeb.json(["data": Dictionary(uniqueKeysWithValues: state.active.map { ($0, ["type": "busy"]) })]) }
+        // The folder a request is about, as the engine reads it: from its header.
+        StubWeb.route(engine + "/api/location", sent: { request, _ in
+            let directory = request.value(forHTTPHeaderField: "x-opencode-directory")?.removingPercentEncoding ?? ""
             return StubWeb.json(["directory": directory, "project": ["id": "prj_shop", "directory": directory, "canonical": directory]])
+        })
+        StubWeb.handle(engine + "/api/experimental/session/") { request, _ in
+            state.tell(request.url?.path() ?? "")
+            return StubWeb.json([:])
         }
         // As the engine makes them: a detached worktree beside the project, named for it.
         let parent = URL(filePath: workspace.folderPath(repository.path)).deletingLastPathComponent()
@@ -73,6 +86,9 @@ import Testing
         }
         workspace.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine)!, password: "test"))
         Self.projectRoot = workspace.folderPath(repository.path)
+        let box = try await TestBox(engine: engine)
+        self.box = box
+        workspace.boxes = { id in id == BoxClient.mac ? box.client(engine: engine) : nil }
     }
 
     nonisolated(unsafe) private static var projectRoot = ""
@@ -90,6 +106,7 @@ import Testing
     }
 
     private func done() {
+        box.stop()
         StubWeb.stop()
         for key in Self.defaultsKeys { UserDefaults.standard.removeObject(forKey: key) }
         _ = Self.engineGit(["worktree", "prune"])
@@ -137,7 +154,8 @@ import Testing
         let named = try #require(workspace.worktrees[folder])
         guard case .failed(let notCommitted) = named.mergeBack(from: folder, environment: [:]) else { Issue.record("merged uncommitted work"); return }
         #expect(notCommitted.contains("Commit the changes first"))
-        await #expect(throws: GitFailure.self) { try await workspace.removeWorktree(folder, discardingChanges: false) }
+        let kept = await #expect(throws: BoxRefusal.self) { try await workspace.removeWorktree(folder, discardingChanges: false) }
+        #expect(kept?.status == 409 && kept?.message.contains("changes that aren’t committed") == true)
         #expect(FileManager.default.fileExists(atPath: folder))
 
         // Committed: it merges into main, in the project's folder.
@@ -195,15 +213,9 @@ import Testing
         defer { done() }
         let link = PhoneLink()
         link.workspace = workspace
-        let told = Sent()
-        StubWeb.handle(Self.engine + "/api/experimental/session/") { request, _ in
-            told.add(request.url?.path() ?? "")
-            return StubWeb.json([:])
-        }
         let made = try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": repository.path])
         #expect(made.status == 200)
         let folder = try #require(made.json["folder"] as? String)
-        #expect(made.json["branch"] as? String == workspace.worktrees[folder]?.branch)
         #expect(try git("symbolic-ref", "--short", "HEAD", in: folder) == made.json["branch"] as? String)
         // The phone's session, made there through the engine.
         engineState.add(["id": "ses_phone", "projectID": "prj_shop", "cost": 0, "agent": "build",
@@ -213,7 +225,9 @@ import Testing
         workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.created", "created": 1, "data": ["sessionID": "ses_phone"]])))
         await workspace.reloading["ses_phone"]?.value
         await workspace.tellingWorktree["ses_phone"]?.value
-        #expect(told.all == ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"])
+        #expect(engineState.instructed == ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"])
+        // Known here from its box's records, as the box made it.
+        #expect(workspace.worktrees[folder]?.branch == made.json["branch"] as? String)
         #expect(try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": "relative"]).status == 400)
 
         // Taken back as one whose session never started (`forget`): not while a session has it.
@@ -223,19 +237,16 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: root))
         // Its session gone (it never started after all): gone with its branch, and not kept as a
         // worktree you removed (its folder isn't the project's any more).
+        engineState.remove("ses_phone")
         workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.deleted", "created": 1, "data": ["sessionID": "ses_phone"]])))
         #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: forget).status == 200)
         #expect(!FileManager.default.fileExists(atPath: root))
         #expect(try git("branch", "--list", branch, in: repository.path).isEmpty)
+        // Gone here too, as this Mac follows its box: and not as one you removed.
+        let following = Task { await workspace.followWorktrees() }
+        defer { following.cancel() }
+        try await until { workspace.worktrees[folder] == nil }
         #expect(workspace.projectDirectory(folder) == folder, "not one you removed")
-    }
-
-    /// Paths an engine was asked for.
-    nonisolated final class Sent: @unchecked Sendable {
-        private let lock = NSLock()
-        private var paths: [String] = []
-        func add(_ path: String) { lock.withLock { paths.append(path) } }
-        var all: [String] { lock.withLock { paths } }
     }
 
     @Test func aPhoneListsAndRemovesWorktrees() async throws {
@@ -266,12 +277,13 @@ import Testing
         #expect((entry["size"] as? Int ?? 0) > 0)
         #expect(entry["machine"] == nil)
 
-        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.execution.started", "created": 1, "data": ["sessionID": session.id]])))
+        // At work, as its engine says.
+        engineState.work(session.id, true)
         #expect((try await ask("kuvo/worktrees").json["worktrees"] as? [[String: Any]])?.first?["working"] as? Bool == true)
         let refused = try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root])
         #expect(refused.status == 409)
         #expect((refused.json["message"] as? String)?.contains("An agent is still working") == true)
-        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.execution.interrupted", "created": 2, "data": ["sessionID": session.id]])))
+        engineState.work(session.id, false)
 
         #expect(try await ask("kuvo/worktrees/remove", method: "POST", body: ["path": tree.root]).status == 200)
         #expect(!FileManager.default.fileExists(atPath: folder), "its changes go with it, as the page says")
@@ -303,7 +315,7 @@ import Testing
 
     /// A machine's worktree, while the machine isn't connected: removing it says so, and it stays.
     @Test func aMachinesWorktreeWaitsForItsMachine() async throws {
-        defer { UserDefaults.standard.removeObject(forKey: "worktrees") }
+        defer { done() }
         let folder = RemoteFolder.folder("/home/me/worktrees/brave-otter", on: "lab")
         let tree = Workspace.Worktree(project: RemoteFolder.folder("/home/me/shop", on: "lab"), root: folder, branch: "kuvo/brave-otter", base: "main")
         UserDefaults.standard.set(try JSONEncoder().encode([folder: tree]), forKey: "worktrees")

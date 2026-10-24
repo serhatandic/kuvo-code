@@ -10,15 +10,6 @@ import Testing
 /// Node, which runs the same script as the engine's Bun.
 @MainActor
 @Suite(.serialized) struct MacBoxTests {
-    /// Node, where it usually is (CI's, Homebrew's, nvm's).
-    static var node: URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let nvm = home.appending(path: ".nvm/versions/node")
-        let versions = ((try? FileManager.default.contentsOfDirectory(atPath: nvm.path)) ?? []).sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-        let candidates = ["/usr/local/bin/node", "/opt/homebrew/bin/node"] + versions.map { nvm.appending(path: "\($0)/bin/node").path }
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(filePath: $0) }
-    }
-
     private func info(_ endpoint: ServerEndpoint) async throws -> [String: Any] {
         var request = URLRequest(url: endpoint.url.appending(path: "kuvo/info"))
         request.setValue("Basic " + Data("opencode:\(endpoint.password ?? "")".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
@@ -28,7 +19,7 @@ import Testing
     }
 
     @Test func theBoxFindsTheEngineTheAppStarted() async throws {
-        let node = try #require(Self.node, "Node runs this Mac's box in the tests")
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let box = BoxProcess()
         defer {
             box.stop()

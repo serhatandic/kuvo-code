@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.33";
+export const BRIDGE_VERSION = "0.9.35";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -1167,10 +1167,16 @@ function freeBranch(folder, name) {
   return null;
 }
 
-/** A branch name made from a title, as the Mac's Git.slug makes it: "Trim note titles" is
- * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi. */
+// Cyrillic letters in Latin ones, as ICU writes them without their marks: "Исправить вход" is
+// ispravit-vhod.
+const CYRILLIC = Object.fromEntries([..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) =>
+  [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]));
+
+/** A branch name made from a title, in Latin letters without their marks: "Trim note titles" is
+ * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi, "Исправить вход" ispravit-vhod. */
 export function branchSlug(title, limit = 40) {
-  const latin = String(title).normalize("NFKD").replace(/\p{M}/gu, "").replace(/ı/g, "i").toLowerCase();
+  const latin = [...String(title).toLowerCase()].map(letter => CYRILLIC[letter] ?? letter).join("")
+    .normalize("NFKD").replace(/\p{M}/gu, "").replace(/ı/g, "i");
   let name = "";
   for (const word of latin.split(/[^\p{L}\p{N}]+/u)) {
     const ascii = [...word].filter(character => character.charCodeAt(0) < 128).join("");
@@ -1887,6 +1893,22 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
     if (route === "kuvo/projects" || route === "kuvo/projects/events") return yield* answerProjects(request, readEngine, readBridge, signal);
+    // Its worktrees' records followed: a line now, and again each time they change (one made for
+    // a phone, renamed, removed), as a Mac shows them.
+    if (route === "kuvo/worktrees/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      let last = "";
+      while (!signal?.aborted) {
+        const line = JSON.stringify({ worktrees: readWorktrees() });
+        if (line !== last) {
+          yield { body: Buffer.from(line + "\n") };
+          last = line;
+        }
+        await new Promise(done => setTimeout(done, 1000));
+      }
+      return;
+    }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
     if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
       let engine = null;

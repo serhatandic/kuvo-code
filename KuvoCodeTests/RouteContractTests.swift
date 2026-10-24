@@ -123,8 +123,8 @@ nonisolated enum RouteScenarios {
 final class MacBox {
     let engine = StubEngine(port: 47_961)
     let state = EngineState()
-    /// This Mac's box (`kuvo-link.js serve`), run with Node.
-    let box = BoxProcess()
+    /// This Mac's box (`kuvo-link.js serve`), run with Node, once the app is.
+    private var box: TestBox?
     let work: URL
     private(set) var app: AppModel?
     var vars: [String: Any] = [:]
@@ -163,9 +163,7 @@ final class MacBox {
     }
 
     func finish() {
-        box.stop()
-        BoxProcess.engineChanged(nil, version: nil, pid: nil)
-        StubWeb.stopListening(port: 47_961)
+        box?.stop()
         engine.stop()
         for bot in bots { for name in IntegrationKeys.variables(ofBot: bot) { _ = IntegrationKeys.set(nil, for: name) } }
         Self.forgetStores()
@@ -223,13 +221,7 @@ final class MacBox {
     private func start() async {
         // This Mac's box, for the areas that have moved onto it, reaching the stand-in engine at
         // its port as it reaches the engine.
-        if let node = MacBoxTests.node {
-            try? StubWeb.listen(port: 47_961)
-            await box.start(node: node)
-            if let port = box.endpoint?.url.port { StubWeb.letThrough(port: port) }
-            BoxProcess.engineChanged(engine.api.client.endpoint, version: "2.0.32", pid: getpid())
-        }
-        #expect(box.endpoint != nil, "this Mac's box started: \(box.failure ?? "no Node")")
+        do { box = try await TestBox(engine: engine.url) } catch { Issue.record("\(error)") }
         let app = AppModel()
         app.workspace.api = engine.api
         app.wireStores()
