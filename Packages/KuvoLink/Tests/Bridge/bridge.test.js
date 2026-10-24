@@ -1166,6 +1166,7 @@ test("a machine's settings become its own once: what it runs with now, its Mac's
     assert.equal(own.websearch.provider, "tavily", "the Mac's own settings win, as they did");
     assert.deepEqual(Object.keys(own.mcp.servers).sort(), ["context7", "linear"], "both files' servers");
     assert.equal(own.mcp.servers.linear.headers.Authorization, `{file:${home}/box/keys/KUVO_KEY_LINEAR_TOKEN}`, "its key where the box keeps it");
+    assert.deepEqual(own.permissions, [{ action: "shell", resource: "*", effect: "ask" }, link.BOT_MEMORY_RULE], "its rules, and bots' memory theirs to write");
     assert.equal(fs.readFileSync(path.join(home, "box", "keys", "KUVO_KEY_LINEAR_TOKEN"), "utf8"), "lin-secret");
     assert.equal(fs.existsSync(path.join(home, "box", "keys", "KUVO_KEY_NOTION_TOKEN__bot_1")), false, "a bot's own stays with the bot");
     // What runs now reads what it started with, untouched; the next start clears it.
@@ -1239,5 +1240,20 @@ test("a phone makes, changes and removes personalities in a machine's library; a
     assert.equal(link.answerPersonalities("PATCH", "preset.calm", { name: "x" }, file, lock)[0], 404);
   } finally {
     fs.rmSync(file, { force: true });
+  }
+});
+
+test("a machine's settings get bots' memory rule once: one you took out stays out", () => {
+  fs.mkdirSync(path.join(home, "box"), { recursive: true });
+  const file = path.join(home, "box", "opencode.json");
+  fs.writeFileSync(file, JSON.stringify({ model: "x/y" }));
+  try {
+    assert.equal(link.adoptBox(null).status, "own");
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).permissions, [link.BOT_MEMORY_RULE]);
+    fs.writeFileSync(file, JSON.stringify({ model: "x/y", permissions: [] }));
+    link.adoptBox(null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).permissions, []);
+  } finally {
+    fs.rmSync(path.join(home, "box"), { recursive: true, force: true });
   }
 });

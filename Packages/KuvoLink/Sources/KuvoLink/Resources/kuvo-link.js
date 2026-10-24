@@ -3984,7 +3984,10 @@ function writePrivate(file, text) {
 // {status: "own" | "adopted", seeded, settings}.
 export function adoptBox(seed) {
   return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
-    if (fs.existsSync(CONFIG_FILE)) return { status: "own", settings: readSettings().settings ?? {} };
+    if (fs.existsSync(CONFIG_FILE)) {
+      addDefaultRules();
+      return { status: "own", settings: readSettings().settings ?? {} };
+    }
     const global = readSettings(GLOBAL_FILE);
     const mac = readSettings(MAC_SETTINGS);
     const before = deepMerged(global.settings ?? {}, mac.settings ?? {});
@@ -4012,6 +4015,7 @@ export function adoptBox(seed) {
       try { writePrivate(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
     }
     writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys(settings), null, 2) + "\n");
+    addDefaultRules();
     // The global file came in whole: the next start empties it (one you edited by hand, with
     // comments, it leaves as it is).
     if (!global.problem) writePrivate(path.join(BOX, "global-adopted"), "");
@@ -4020,8 +4024,23 @@ export function adoptBox(seed) {
       const lines = fs.readFileSync(launchEnv, "utf8").split("\n").filter(line => !/^KUVO_(PRIVATE_)?SETTINGS=/.test(line));
       writePrivate(launchEnv, lines.join("\n"));
     } catch {}
-    return { status: "adopted", seeded, settings };
+    return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
   }, { stale: 300_000, wait: 120_000 }));
+}
+
+// Bots' memory, theirs to write in any mode (Plan changes no files), as on a Mac: a rule in
+// Settings › Permissions you see and can take out. Once (`defaults-added` says so), so one you
+// took out stays out. Under the settings' lock.
+export const BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
+function addDefaultRules() {
+  const added = path.join(BOX, "defaults-added");
+  if (fs.existsSync(added)) return;
+  const { settings, problem } = readSettings();
+  if (problem) return;
+  const rules = Array.isArray(settings?.permissions) ? settings.permissions : [];
+  const has = rules.some(rule => rule?.action === BOT_MEMORY_RULE.action && rule?.resource === BOT_MEMORY_RULE.resource && rule?.effect === BOT_MEMORY_RULE.effect);
+  if (!has) writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys({ ...(settings ?? {}), permissions: [...rules, BOT_MEMORY_RULE] }), null, 2) + "\n");
+  writePrivate(added, "bot-memory\n");
 }
 
 // The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).

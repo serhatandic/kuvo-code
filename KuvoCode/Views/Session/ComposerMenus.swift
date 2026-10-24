@@ -40,15 +40,17 @@ enum ToolApproval: String, CaseIterable {
 
     /// The session rules that give this behaviour beside Settings › Permissions' rules
     /// (`settings`). A session's rules come after those, and the last one that matches wins, so
-    /// they're folded in: Approve All runs what Settings asks first about, without asking, and
-    /// both keep what Settings doesn't allow, which nothing overrides.
+    /// they're folded in: Approve All runs what Settings asks first about, without asking; Ask
+    /// First still lets through what Settings allows (a command like "npm test *", a bot's
+    /// memory), asking about the rest; and both keep what Settings doesn't allow, which nothing
+    /// overrides.
     func rules(settings: [PermissionRule]) -> [PermissionRule] {
         let denied = settings.filter { $0.effect == .deny }
         switch self {
         case .approveAll:
             return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
         case .askFirst:
-            return rules + denied
+            return rules + settings.filter { $0.effect == .allow && $0.resource != "*" } + denied
         }
     }
 

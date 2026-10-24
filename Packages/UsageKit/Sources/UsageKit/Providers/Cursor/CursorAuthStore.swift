@@ -4,6 +4,9 @@ struct CursorAuthState: Hashable, Sendable {
     enum Source: Hashable, Sendable {
         case sqlite
         case keychain
+        /// The host's: a coding agent's sign-in to Cursor (`HostAccounts`), an API key exchanged
+        /// for an access token as it's needed, and never written to Cursor's own places.
+        case host
     }
 
     var accessToken: String?
@@ -11,12 +14,16 @@ struct CursorAuthState: Hashable, Sendable {
     /// Lowercased `cursorAuth/stripeMembershipType` from the Cursor state DB when present.
     var membershipType: String?
     var source: Source
+    /// The host's Cursor API key (`source == .host`).
+    var apiKey: String? = nil
 }
 
 enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case sessionExpired
     case tokenExpired
+    /// The host's coding agent's sign-in to Cursor no longer works.
+    case agentSignInEnded
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +33,8 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
             return "Session expired. Sign in via Cursor app or run `agent login`."
         case .tokenExpired:
             return "Token expired. Sign in via Cursor app or run `agent login`."
+        case .agentSignInEnded:
+            return "Sign in to Cursor again in Kuvo Code’s Accounts."
         }
     }
 }
@@ -100,8 +109,14 @@ struct CursorAuthStore: Sendable {
             )
         }
 
+        // No Cursor app signed in here: a coding agent's sign-in, the host's.
+        if let apiKey = HostAccounts.secret(for: [HostCredential.cursorAgent]) {
+            return CursorAuthState(accessToken: nil, refreshToken: nil, membershipType: nil, source: .host, apiKey: apiKey)
+        }
+
         return nil
     }
+
 
     func needsRefresh(_ accessToken: String?) -> Bool {
         guard let accessToken,
@@ -118,6 +133,9 @@ struct CursorAuthStore: Sendable {
             try writeStateValue(Self.accessTokenKey, accessToken)
         case .keychain:
             try keychain.writeGenericPassword(service: Self.keychainAccessTokenService, value: accessToken)
+        case .host:
+            // The host keeps its key; the token it's exchanged for lives as long as this read.
+            return
         }
     }
 

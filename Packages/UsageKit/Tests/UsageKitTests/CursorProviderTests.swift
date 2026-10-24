@@ -515,3 +515,61 @@ private func dollarValue(_ lines: [MetricLine], _ label: String) -> Double? {
 }
 
 // makeCursorJWT, KeyValueSQLite, and RoutingHTTPClient live in TestSupport.swift.
+
+/// A Mac where only a coding agent is signed in to Cursor (the host's API key), not the Cursor
+/// app: its key is exchanged for an access token, and the usage reads with it; a key that no
+/// longer works says to sign in again in the host. Nothing is written to Cursor's own places.
+@MainActor
+final class CursorAgentSignInTests: XCTestCase {
+    override func tearDown() {
+        HostAccounts.update([])
+        super.tearDown()
+    }
+
+    private func provider(sqlite: KeyValueSQLite, keychain: FakeKeychain, _ handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse) -> CursorProvider {
+        CursorProvider(
+            authStore: CursorAuthStore(sqlite: sqlite, keychain: keychain),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: handler)),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            pricing: { TestPricing.bundled },
+            usageHistoryStore: CursorUsageHistoryStore(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("cursor-agent-tests-\(UUID().uuidString)", isDirectory: true))
+        )
+    }
+
+    func testAnAgentsSignInReadsUsage() async throws {
+        HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
+        let token = makeCursorJWT()
+        let sqlite = KeyValueSQLite()
+        let keychain = FakeKeychain()
+        let provider = provider(sqlite: sqlite, keychain: keychain) { request in
+            switch request.url {
+            case CursorUsageClient.exchangeURL:
+                XCTAssertEqual(request.headers["Authorization"], "Bearer agent-key")
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"accessToken":"\#(token)"}"#.utf8))
+            case CursorUsageClient.usageURL:
+                XCTAssertEqual(request.headers["Authorization"], "Bearer \(token)")
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"enabled":true,"billingCycleEnd":1772592000000,"planUsage":{"limit":40000,"remaining":32000,"totalPercentUsed":20}}"#.utf8))
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let hasCredentials = await provider.hasLocalCredentials()
+        XCTAssertTrue(hasCredentials)
+        let snapshot = await provider.refresh()
+        XCTAssertNil(snapshot.errorCategory)
+        XCTAssertEqual(progress(snapshot.lines, "Total usage")?.used, 20)
+        XCTAssertTrue(sqlite.writtenValues.isEmpty, "nothing written to Cursor's own places")
+    }
+
+    func testAnAgentsSignInThatEndedSaysWhereToSignIn() async throws {
+        HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "old-key", signedIn: true)])
+        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+            HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let snapshot = await provider.refresh()
+        XCTAssertEqual(snapshot.errorCategory, .authExpired)
+        let said = snapshot.lines.map { "\($0)" }.joined()
+        XCTAssertTrue(said.contains("Sign in to Cursor again in Kuvo Code"), said)
+    }
+}

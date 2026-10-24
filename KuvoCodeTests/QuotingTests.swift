@@ -17,6 +17,25 @@ import Testing
         #expect(back.text == "")
     }
 
+    /// Your answers to quotes, then words of your own after them (a few paragraphs): the last
+    /// answer and your words are each shown as they were written, apart, and come back so.
+    @Test func yourWordsAfterTheAnswersStayApart() {
+        let quotes = [Drafts.Quote(text: "the terminal didn't die.", response: "there are lots of people still using the terminal."),
+                      Drafts.Quote(text: "they were coping mechanisms.", response: "this doesn't even make sense")]
+        let main = "I only liked this one and posted it:\n\ncode review didn't die."
+        let message = Quoting.message(quotes: quotes, text: main)
+        let shown = Quoting.segments(message)
+        #expect(shown.map(\.quote) == ["the terminal didn't die.", "they were coping mechanisms.", nil])
+        #expect(shown.map(\.text) == ["there are lots of people still using the terminal.", "this doesn't even make sense", main])
+        let back = Quoting.draft(of: message)
+        #expect(back.quotes.map(\.response) == quotes.map(\.response))
+        #expect(back.text == main)
+        // A last quote with no answer: your words are its answer, as written.
+        let unanswered = Quoting.message(quotes: [Drafts.Quote(text: "the cache", response: "")], text: "Drop it.")
+        #expect(unanswered == "> the cache\n\nDrop it.")
+        #expect(Quoting.segments(unanswered).map(\.text) == ["Drop it."])
+    }
+
     /// Words before the first quote are the message's own; a message with no quote is all words.
     @Test func wordsBeforeAQuote() {
         let back = Quoting.draft(of: "Two things:\n\n> the cache\n\nDrop it.")

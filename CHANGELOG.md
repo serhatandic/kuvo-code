@@ -6,6 +6,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Bots can write to their memory in Plan mode and Ask First too: Settings › Permissions starts with a rule that allows it, which you can see and take out. In Ask First, what Settings › Permissions allows in particular, like a command such as "npm test *", now goes without asking, as its footer says.
+- A bot's conversation no longer has New Session From Here, which made a session you couldn't find.
+- Answers to quotes and the words you write after them show in bubbles of their own, rather than the last answer and your words in one.
+- The usage panel reads Cursor's usage with the sign-in of Kuvo Code's Cursor agent when the Cursor app isn't signed in on this Mac, rather than saying it isn't.
 - Your machines keep each other up to date on which computers are yours and on your personalities with your Mac closed, signed by the computer each change came from, so none can pass on one it made up, and a computer whose clock is wrong no longer decides which change wins. A personality you delete stays deleted everywhere, and a change that would make your personalities too big to share is turned down with a message, in the bot editor and from your phone.
 - Each computer keeps its own projects, with their names and folders: your Mac's in Kuvo Code's own box beside its engine, and a machine's on the machine, so another Mac connected to it sees the same ones. The projects you have now move there the first time; the sidebar looks as it did.
 - A search with + in it, like c++, typed in the panel browser's address field searches for what you typed rather than for c.

@@ -10,6 +10,8 @@ struct CursorUsageClient: Sendable {
     static let grokBotUsageURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus")!
     static let planURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo")!
     static let refreshURL = URL(string: "https://api2.cursor.sh/oauth/token")!
+    /// An API key (a coding agent's sign-in) for an access token, as Cursor's own SDK does.
+    static let exchangeURL = URL(string: "https://api2.cursor.sh/auth/exchange_user_api_key")!
     static let creditsURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCreditGrantsBalance")!
     static let restUsageURL = URL(string: "https://cursor.com/api/usage")!
     static let usageSummaryURL = URL(string: "https://cursor.com/api/usage-summary")!
@@ -35,6 +37,16 @@ struct CursorUsageClient: Sendable {
             headers: ["Content-Type": "application/json"],
             body: try JSONSerialization.data(withJSONObject: body),
             timeout: 15
+        ))
+    }
+
+    func exchangeAPIKey(_ apiKey: String) async throws -> HTTPResponse {
+        try await http.send(HTTPRequest(
+            method: "POST",
+            url: Self.exchangeURL,
+            headers: ["Authorization": "Bearer \(apiKey)", "Content-Type": "application/json"],
+            body: Data("{}".utf8),
+            timeout: 10
         ))
     }
 

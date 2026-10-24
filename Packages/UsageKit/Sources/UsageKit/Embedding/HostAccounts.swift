@@ -13,6 +13,10 @@ public struct HostCredential: Sendable, Hashable {
     /// The account a sign-in is for, where the provider names one: ChatGPT's account ID.
     public var accountID: String?
 
+    /// The integration ID of a coding agent's Cursor API key, which the Cursor provider reads
+    /// usage with when the Cursor app isn't signed in.
+    public static let cursorAgent = "cursor-agent"
+
     public init(integrationID: String, secret: String, signedIn: Bool = false, accountID: String? = nil) {
         self.integrationID = integrationID
         self.secret = secret
