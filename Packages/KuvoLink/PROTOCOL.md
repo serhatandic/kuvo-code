@@ -287,6 +287,9 @@ connection.
     given `fresh`; asked without it, the home answers `{phase: "anew"}` and forgets the turn, the host
     asks again at once with `fresh` (if it had it), and a home asked without it again says `anew`
     once more, then takes it as it is.
+  - A home whose bot a move holds (its folder's `paused` says `moving`) answers a turn at once
+    with `{ok: false, why, moving: true}`, and fails a part given to it the same way: the chat says
+    the bot is moving and sat this out.
   - **`state`** (home → host): `{id, state}`, `state` one of `{phase: "taken"}` (at once),
     `{phase: "seated", seat, agents, replaced?}`, `{phase: "started"}` (its words are with its
     seat), `{phase: "activity", activity}` (at most every 1.5 s, the latest), `{phase: "steered",
@@ -1386,12 +1389,17 @@ app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this
 them into its coding agents' bridge at launch, before the bridge starts (`GroupMigration`), and
 can be cut short and run again: each chat's messages first, its record (`groups/<id>/group.json`,
 written whole and renamed) last, a chat with a record left as it is, one moving as the app last
-quit `held` for the move's recovery; what a bot whose machine was away was still to be told goes to
-`groups/pending-memory.json` (the bridge tells it once that bot is known there); every bot here
-gets `bot.json` and `session` in its folder; and the old files go to `Backups/groups-<version>`. A
-`groups.json` an older version writes later (after going back to it) is taken in by each chat's ID.
-Going back to 0.8.0-beta.1 shows no group chats on the Mac: its copies are in Backups. It can go
-three months after 0.8.0 ships.
+quit `held` for the move's recovery. A seat it made on a machine for a bot there (one the machine
+doesn't know as a seat, with no `kuvo.seat` metadata) is taken out of the chat, so the bot's next
+turn makes one there, and listed in `groups/orphan-seats.json` (by machine), which the app keeps out
+of the lists and deletes on that machine's engine once it connects. What a bot whose machine was
+away was still to be told goes to `groups/pending-memory.json` (the bridge tells it once that bot
+is known there); every bot here gets `bot.json` and `session` in its folder. Once every chat is
+there, the old files are copied to `Backups/groups-<version>-<the list's hash>` and left where they
+are, and what was taken is noted (`groups/imported.json`: the list's hash and every chat's ID); one
+that couldn't move is tried again at the next launch. A `groups.json` an older version writes later
+(after going back to it, where its chats are as it left them) is taken in by each chat's ID, and
+a chat deleted since it was taken stays deleted. It can go three months after 0.8.0 ships.
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
