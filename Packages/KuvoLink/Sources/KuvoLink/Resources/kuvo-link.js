@@ -24,14 +24,14 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.32";
+export const BRIDGE_VERSION = "0.9.33";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
-  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "integrations", "keys",
+  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "update", "wakes", "wakes.edit", "worktrees",
 ];
@@ -4654,9 +4654,13 @@ const RELAY_GONE_AFTER = 5 * 60_000;
 
 const fitsAgent = agent => isObject(agent) && typeof agent.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(agent.session)
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
-const keptAgent = ({ session, name, kind, project, about, machine }) => ({ session, name: plainName(name).slice(0, 200), kind,
+// A bot's `id` too (`bot_…`, as group chats name their members), so a chat on another computer can have it.
+const keptAgent = ({ session, name, kind, project, about, machine, id }) => ({ session, name: plainName(name).slice(0, 200), kind,
+  ...(kind === "bot" && typeof id === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(id) ? { id } : {}),
   ...(typeof project === "string" && project ? { project: project.slice(0, 200) } : {}), ...(typeof about === "string" && about ? { about: about.slice(0, 500) } : {}),
   ...(typeof machine === "string" && machine ? { machine: machine.slice(0, 200) } : {}) });
+// What a peer says it answers (`features`, as kuvo/info's), kept with its agents.
+const keptFeatures = features => (Array.isArray(features) ? features.filter(each => typeof each === "string" && each.length <= 60).slice(0, 80) : []);
 
 // What a peer said its agents are, the newest it said: false for an older list.
 export function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
@@ -4665,7 +4669,8 @@ export function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_L
     let all = {};
     try { all = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
     if (given.at <= (all[sender.key]?.at ?? 0)) return false;
-    all[sender.key] = { at: given.at, kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent) };
+    all[sender.key] = { at: given.at, kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
+      ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
     writePrivate(file, JSON.stringify(all));
     return true;
   });
@@ -4740,7 +4745,7 @@ const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Bo
 // own: one without a title is "New session", and a chat's project is "Chats". Null when its engine
 // can't say (then what it last said stands).
 export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile) {
-  const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", ...(bot.job ? { about: bot.job } : {}) }));
+  const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", id: bot.id, ...(bot.job ? { about: bot.job } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
   const sessionsOf = async target => {
     const response = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=100&order=desc`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
@@ -4916,6 +4921,8 @@ export function peerMail(sender, payload, host, targets = () => []) {
   // told again at the next round.
   if (payload.ask === "agents") toldPeers.delete(sender.key);
   if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer }).catch(() => {});
+  // Group chats across your computers: to the coding agents' bridge here.
+  if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered);
 }
 
@@ -4930,6 +4937,137 @@ export function writeAgents(link = readLink()) {
     const text = JSON.stringify(composed);
     if (textOf(AGENTS_FILE) !== text) writePrivate(AGENTS_FILE, text);
   } catch {}
+  // Who can be in its group chats from your other computers, as they told it.
+  tellSeatPeers(link).catch(() => {});
+}
+
+// ---- Group chats across your computers (PROTOCOL.md, "Peers": `seat`) ----
+// The coding agents' bridge here runs this box's group chats, and its bots' turns in chats on your
+// other computers (Agents/src/groups/peer.ts). This link carries what goes between them: what the
+// bridge sends, now (a turn, how it goes) or until it's there (a part of the work, its report, what
+// a bot remembers, a seat gone: as letters go, resent each minute until `delivered`); in parts
+// when it's big, as documents go; and what comes, to the bridge. Who your other computers are and
+// their bots, the bridge hears from here.
+
+// A mail's whole seat at most this big; bigger, in parts of DOC_PART.
+const SEAT_WHOLE = 48_000;
+const seatParts = new Map();
+
+const bridgeAsk = async (method, route, body, signal) => {
+  const target = readBridgeFile();
+  if (!target?.port || !target?.password) throw new Error("The coding agents' bridge isn't running.");
+  const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
+    method,
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: signal ?? AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`The coding agents' bridge answered ${response.status}.`);
+  return response;
+};
+
+// What goes for one seat mail: whole, or in parts that are put together where it goes. `id`: one
+// that mustn't be lost, as its letter is named (said back, `delivered`, once it's whole there).
+export function seatPayloads(mail, id) {
+  const json = JSON.stringify(mail);
+  if (json.length <= SEAT_WHOLE) return [{ seat: mail, ...(id ? { seatID: id } : {}) }];
+  const whole = crypto.createHash("sha256").update(json).digest("base64url");
+  const of = Math.ceil(json.length / DOC_PART);
+  return Array.from({ length: of }, (_, i) => ({ seatPart: { whole, i, of, d: json.slice(i * DOC_PART, (i + 1) * DOC_PART), s: id ?? "" } }));
+}
+
+// The bridge's mail for `to`, sent now, each part as a mail of its own; whether it all went.
+function sendSeat(host, to, mail, id, link = readLink()) {
+  const peer = peersOf(link).find(each => each.key === to);
+  if (!peer || !host) return false;
+  for (const payload of seatPayloads(mail, id)) {
+    const bytes = mailFor(peer, { ...payload, at: Date.now() }, link);
+    if (!bytes) return false;
+    try { host.send(bytes); } catch { return false; }
+  }
+  return true;
+}
+
+// A seat mail that came (whole, or once its parts are all here), to the bridge; one that mustn't be
+// lost said to have come, once the bridge has it, or to be sent again when it couldn't be given.
+export async function takeSeat(sender, payload, send, ask = bridgeAsk) {
+  let mail = null, id = null;
+  if (isObject(payload.seat)) {
+    mail = payload.seat;
+    id = typeof payload.seatID === "string" ? payload.seatID : null;
+  } else if (isObject(payload.seatPart)) {
+    const whole = assemble(seatParts, sender.key, payload.seatPart);
+    if (!whole) return;
+    try { mail = JSON.parse(whole.d); } catch { return; }
+    id = whole.s || null;
+  }
+  if (!isObject(mail) || (id !== null && !LETTER_ID.test(id))) return;
+  try {
+    await ask("POST", "/mail", { from: sender.key, mail });
+  } catch {
+    if (id) send(sender, { delivered: { id, ok: false, why: "Not now.", retry: true } });
+    return;
+  }
+  if (id) send(sender, { delivered: { id, ok: true } });
+}
+
+// Who can be in this box's group chats from your other computers: each peer (taking a chat's turns
+// when its `features` say `groups.seats`), and the bots it told of, by their id.
+export function seatPeers(link = readLink(), told = readPeerAgents(undefined, undefined, link)) {
+  const peers = peersOf(link);
+  return {
+    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
+    bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id).map(agent => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session }))),
+  };
+}
+
+let toldSeatPeers = "";
+export async function tellSeatPeers(link = readLink(), force = false, ask = bridgeAsk) {
+  const peers = seatPeers(link);
+  const text = JSON.stringify(peers);
+  if (!force && text === toldSeatPeers) return;
+  await ask("PUT", "", peers);
+  toldSeatPeers = text;
+}
+
+// Follows what the bridge sends, while it runs: what goes now, sent; what mustn't be lost, left as
+// a letter (`run/outbox/sending`, which `sendOutbox` sends each minute until it's there), then
+// said to be taken. Each time it follows anew, it tells the bridge who your computers are.
+export async function watchSeats(host, signal) {
+  let attempt = 0;
+  while (!signal?.aborted) {
+    try {
+      const response = await bridgeAsk("GET", "/mail", undefined, signal);
+      attempt = 0;
+      await tellSeatPeers(readLink(), true).catch(() => {});
+      let buffer = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let end;
+        while ((end = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 1);
+          let given;
+          try { given = JSON.parse(line); } catch { continue; }
+          if (!isObject(given) || typeof given.to !== "string" || !isObject(given.mail) || typeof given.id !== "string") continue;
+          if (given.durable === true) {
+            const id = given.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
+            if (!LETTER_ID.test(id)) continue;
+            try {
+              fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+              writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ peer: given.to, seat: given.mail, at: Date.now() }));
+            } catch { continue; }
+            bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
+          } else {
+            sendSeat(host(), given.to, given.mail);
+          }
+        }
+      }
+    } catch {}
+    attempt += 1;
+    await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
+  }
 }
 
 // This box's own agents, worked out again, and `run/agents.json` with them, relay or not.
@@ -4963,7 +5101,7 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: FEATURES }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;
@@ -5182,6 +5320,20 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     try { letter = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
     listed.add(id);
     const made = typeof letter.at === "number" ? letter.at : now;
+    // A group chat's mail that mustn't be lost: to its computer only (never through a Mac), each
+    // minute until it says it has it, for as long as a letter.
+    if (isObject(letter.seat)) {
+      if (now - made > LETTER_MEMORY) {
+        fs.rmSync(file, { force: true });
+        continue;
+      }
+      const to = peers.find(each => each.key === letter.peer);
+      if (!to || offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
+      letterTries.set(id, now);
+      if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
+      sendSeat(host, to.key, letter.seat, id, link);
+      continue;
+    }
     const peer = typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > LETTER_MEMORY) {
       fs.rmSync(file, { force: true });
@@ -5967,6 +6119,8 @@ async function run() {
   watchEvents(readEngineFile, tell, undefined, answered);
   // The coding agents here (their sessions, and group chats that live here), through their bridge.
   watchEvents(readBridgeFile, tell, undefined, answered);
+  // What its group chats send your other computers, carried on the relay connection that's up.
+  watchSeats(() => current);
   watchAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those

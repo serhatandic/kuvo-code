@@ -24,13 +24,13 @@
             "mac": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
                 "accounts.ended", "claude-code", "hosts", "mac", "machines"],
-              "<excludes>": ["engine.start", "update", "groups.joinable"]
+              "<excludes>": ["engine.start", "update", "groups.joinable", "groups.seats"]
             } } },
             "machine": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
-                "engine.start", "update", "groups.joinable"],
+                "engine.start", "update", "groups.joinable", "groups.seats"],
               "<excludes>": ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 32
+              "<length>": 33
             } } }
           }
         }
