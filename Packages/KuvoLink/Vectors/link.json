@@ -1400,7 +1400,7 @@
   ],
   "phoneBooks": [
     {
-      "name": "a paired phone removes a lost one, which can't change anything after, nor come back with an old list",
+      "name": "a paired phone removes a lost one, which can't change anything after, nor come back in a Mac's document",
       "macs": [
         "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
         "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk"
@@ -1473,7 +1473,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -1776,7 +1776,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -1887,7 +1887,7 @@
       ]
     },
     {
-      "name": "the Mac removes a phone by leaving it off its list, and passes on removals it heard of",
+      "name": "a phone a Mac's document no longer lists goes, not for good, and its removals are noted here",
       "macs": [
         "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
         "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk"
@@ -1913,7 +1913,7 @@
       ],
       "steps": [
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -1940,10 +1940,6 @@
               {
                 "key": "n5hTs_E0RBl70cju2whbTAMKAu0otfYfOmobonvRrnM",
                 "pairing": "c"
-              },
-              {
-                "key": "rLu3QsdSTOzex1V9YOShmvBiNGMJzlcxyISFx9r0iYI",
-                "pairing": "b"
               }
             ]
           }
@@ -2011,7 +2007,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -2054,7 +2050,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -2192,7 +2188,7 @@
       ]
     },
     {
-      "name": "two Macs set up the same machine: each lists its own phones, and neither removes the other's",
+      "name": "two Macs set up the same machine: each lists its own phones, and neither takes off the other's",
       "macs": [
         "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
         "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk"
@@ -2213,7 +2209,7 @@
       ],
       "steps": [
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -2239,7 +2235,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk",
           "phones": [
             {
@@ -2265,7 +2261,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [],
           "ok": true,
@@ -2277,12 +2273,7 @@
                 "from": "mac"
               }
             ],
-            "removed": [
-              {
-                "key": "--rnwYZntph1GPOuYe2LGQOOWWHo5zaFl0KO_3bkhCo",
-                "pairing": "a"
-              }
-            ]
+            "removed": []
           }
         },
         {
@@ -2303,18 +2294,13 @@
                 "from": "mac"
               }
             ],
-            "removed": [
-              {
-                "key": "--rnwYZntph1GPOuYe2LGQOOWWHo5zaFl0KO_3bkhCo",
-                "pairing": "a"
-              }
-            ]
+            "removed": []
           }
         }
       ]
     },
     {
-      "name": "ones from before Macs were named go off the list of the first Mac that doesn't list them, not for good",
+      "name": "ones from before Macs were named stay until a Mac signs its phones, and go then, not for good",
       "macs": [
         "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
         "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk"
@@ -2333,7 +2319,7 @@
       ],
       "steps": [
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "H2No5uzAqmJvKaxOgffQNOVBfQvtLcpVjdyb4OzZ0IE",
           "phones": [
             {
@@ -2354,7 +2340,7 @@
           }
         },
         {
-          "op": "macList",
+          "op": "macDoc",
           "by": "_-KfaS0m38_-YzhyRvgGQhSLPVpU0_rFrl2kifbquvk",
           "phones": [
             {

@@ -1,5 +1,5 @@
 {
- "about": "Personalities' libraries met (mergePersonalities in kuvo-link.js, Personalities.merged on the Mac): per personality the newest change wins, a removal over a change at the same moment, then the words that sort last; removals stay noted, newest first.",
+ "about": "Personalities' libraries met (mergePersonalities in kuvo-link.js, Personalities.merged on the Mac): per personality a removal wins over any change, and stays noted, newest first; otherwise the newest change by its count (`updated`, which each change moves on from the one before it), and at the same count the words that sort last; a count past 2^52 isn't taken.",
  "cases": [
   {
    "name": "the newest change wins",
@@ -107,7 +107,7 @@
    }
   },
   {
-   "name": "a change made after the removal brings it back",
+   "name": "a removal wins, even over a change counted after it",
    "libraries": [
     {
      "removed": [
@@ -130,16 +130,13 @@
     }
    ],
    "expected": {
-    "personalities": [
+    "personalities": [],
+    "removed": [
      {
       "id": "custom.a",
-      "name": "Calm",
-      "description": "Changed since.",
-      "symbol": "person.crop.circle",
-      "updated": 40
+      "removed": 30
      }
-    ],
-    "removed": []
+    ]
    }
   },
   {
@@ -407,6 +404,51 @@
       "description": "Words.",
       "symbol": "person.crop.circle",
       "updated": 2
+     }
+    ],
+    "removed": []
+   }
+  },
+  {
+   "name": "a count past 2^52 isn't taken, so a change after it can always count higher",
+   "libraries": [
+    {
+     "personalities": [
+      {
+       "id": "custom.a",
+       "name": "Calm",
+       "description": "Words.",
+       "symbol": "person.crop.circle",
+       "updated": 10
+      }
+     ]
+    },
+    {
+     "personalities": [
+      {
+       "id": "custom.a",
+       "name": "Calm",
+       "description": "Far ahead.",
+       "symbol": "person.crop.circle",
+       "updated": 4503599627370497
+      }
+     ],
+     "removed": [
+      {
+       "id": "custom.b",
+       "removed": 9007199254740992
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "personalities": [
+     {
+      "id": "custom.a",
+      "name": "Calm",
+      "description": "Words.",
+      "symbol": "person.crop.circle",
+      "updated": 10
      }
     ],
     "removed": []

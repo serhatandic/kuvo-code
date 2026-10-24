@@ -319,28 +319,42 @@ def book_remove(book, step):
         take_off(book, e["key"], e.get("pairing"))
     return True
 
-def book_mac_list(book, step):
-    by = step["by"]
-    listed = []
-    for p in step["phones"]:
-        if not fits(p, book["macs"]) or any(l["key"] == p["key"] for l in listed) or removed_already(book, p["key"], p.get("pairing") or ""):
-            continue
-        listed.append({"key": p["key"], "pairing": p.get("pairing") or "", "from": "mac", "mac": by})
-    keys = {p["key"] for p in listed}
-    kept = []
-    for p in book["phones"]:
-        if p["key"] in keys:
-            continue
-        if p["from"] == "pair" or p.get("mac") not in (by, None):
-            kept.append(p)  # paired here, or listed by another Mac
-        elif p.get("mac") == by:
-            note_removed(book, p["key"], p["pairing"])  # this Mac's, no longer listed
-        # One from before Macs were named: off, but not for good (another Mac may list it).
-    book["phones"] = listed + kept
-    for r in step.get("removed", []):
-        if fits(r, book["macs"]):
-            take_off(book, r["key"], r.get("pairing") or "")
+def book_mac_doc(book, step):
+    # A Mac's phones document, newer than the one before (PROTOCOL.md, "Documents"): its phones, and
+    # the removals it knows of, which this box notes as its own.
+    book.setdefault("docs", {})[step["by"]] = {"phones": step["phones"], "removed": step.get("removed", [])}
+    fold_phones(book)
     return True
+
+def fold_phones(book):
+    macs = book["macs"]
+    for doc in book["docs"].values():
+        for r in doc["removed"]:
+            if fits(r, macs) and isinstance(r.get("pairing"), str):
+                note_removed(book, r["key"], r["pairing"])
+    listed = []
+    def add(p):
+        if fits(p, macs) and not removed_already(book, p["key"], p.get("pairing") or "") and all(q["key"] != p["key"] for q in listed):
+            listed.append(p)
+    for mac in macs:
+        doc = book["docs"].get(mac)
+        if doc is None:
+            # A Mac that signs none yet: its phones as it listed them before.
+            for p in book["phones"]:
+                if p["from"] == "mac" and p.get("mac") == mac:
+                    add(p)
+        else:
+            for p in doc["phones"]:
+                add({"key": p["key"], "pairing": p.get("pairing") or "", "from": "mac", "mac": mac})
+    if not book["docs"]:
+        # One from before Macs were named: kept until a Mac signs its phones.
+        for p in book["phones"]:
+            if p["from"] == "mac" and p.get("mac") is None:
+                add(p)
+    for p in book["phones"]:
+        if p["from"] == "pair":
+            add(p)
+    book["phones"] = listed
 
 def phone(key, pairing, came="mac", mac=k("MAC")):
     entry = {"key": k(key), "pairing": pairing, "from": came}
@@ -352,11 +366,11 @@ def e(key, pairing=None):
     return {"key": k(key)} if pairing is None else {"key": k(key), "pairing": pairing}
 
 book_cases = [
-    ("a paired phone removes a lost one, which can't change anything after, nor come back with an old list",
+    ("a paired phone removes a lost one, which can't change anything after, nor come back in a Mac's document",
      [phone("P1", "a"), phone("P2", "b")],
      [{"op": "remove", "by": k("P1"), "phones": [e("P2", "b")]},
       {"op": "remove", "by": k("P2"), "phones": [e("P1", "a")]},
-      {"op": "macList", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "b")]}]),
+      {"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "b")]}]),
     ("nobody removes a Mac, nor does a stranger remove anyone, nor an empty removal, too many at once, or ones that aren't keys",
      [phone("P1", "a"), phone("P2", "b")],
      [{"op": "remove", "by": k("P1"), "phones": [{"key": k("MAC2"), "pairing": ""}, e("P2", "b")]},
@@ -368,39 +382,39 @@ book_cases = [
     ("pairing it again on the Mac lets a removed phone back in",
      [phone("P1", "a"), phone("P2", "b")],
      [{"op": "remove", "by": k("P1"), "phones": [e("P2", "b")]},
-      {"op": "macList", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "c")]}]),
+      {"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "c")]}]),
     ("pairing it here lets a removed phone back in",
      [phone("P1", "a", "pair"), phone("P2", "b", "pair")],
      [{"op": "remove", "by": k("P2"), "phones": [e("P1", "a")]},
       {"op": "pair", "key": k("P1"), "pairing": "d"}]),
-    ("the Mac removes a phone by leaving it off its list, and passes on removals it heard of",
+    ("a phone a Mac's document no longer lists goes, not for good, and its removals are noted here",
      [phone("P1", "a"), phone("P2", "b"), phone("P3", "c", "pair")],
-     [{"op": "macList", "by": k("MAC"), "phones": [e("P1", "a")], "removed": [e("P3", "c")]}]),
+     [{"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a")], "removed": [e("P3", "c")]}]),
     ("a removal of an older pairing leaves the newer one; one of a phone not heard of yet keeps it out",
      [phone("P1", "a"), phone("P2", "y")],
      [{"op": "remove", "by": k("P1"), "phones": [e("P2", "x"), e("P9", "z")]},
-      {"op": "macList", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "y"), e("P9", "z")]},
-      {"op": "macList", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "y"), e("P9", "w")]}]),
+      {"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "y"), e("P9", "z")]},
+      {"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a"), e("P2", "y"), e("P9", "w")]}]),
     ("a Mac removes any phone, and a phone itself; a removal without a pairing takes the one there",
      [phone("P1", "a"), phone("P2", "b", "pair"), phone("P3", "c")],
      [{"op": "remove", "by": k("MAC"), "phones": [e("P2")]},
       {"op": "remove", "by": k("P3"), "phones": [e("P3", "c")]}]),
-    ("two Macs set up the same machine: each lists its own phones, and neither removes the other's",
+    ("two Macs set up the same machine: each lists its own phones, and neither takes off the other's",
      [phone("P1", "a"), phone("P2", "b", mac=k("MAC2"))],
-     [{"op": "macList", "by": k("MAC"), "phones": [e("P1", "a")]},
-      {"op": "macList", "by": k("MAC2"), "phones": [e("P2", "b")]},
-      {"op": "macList", "by": k("MAC"), "phones": []},
+     [{"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "a")]},
+      {"op": "macDoc", "by": k("MAC2"), "phones": [e("P2", "b")]},
+      {"op": "macDoc", "by": k("MAC"), "phones": []},
       {"op": "remove", "by": k("MAC2"), "phones": [{"key": k("MAC"), "pairing": ""}]}]),
-    ("ones from before Macs were named go off the list of the first Mac that doesn't list them, not for good",
+    ("ones from before Macs were named stay until a Mac signs its phones, and go then, not for good",
      [phone("P1", "", mac=None), phone("P2", "", mac=None)],
-     [{"op": "macList", "by": k("MAC"), "phones": [e("P1", "")]},
-      {"op": "macList", "by": k("MAC2"), "phones": [e("P2", "")]}]),
+     [{"op": "macDoc", "by": k("MAC"), "phones": [e("P1", "")]},
+      {"op": "macDoc", "by": k("MAC2"), "phones": [e("P2", "")]}]),
 ]
 books = []
 for name, phones, steps in book_cases:
-    book = {"macs": [k("MAC"), k("MAC2")], "phones": [dict(p) for p in phones], "removed": []}
+    book = {"macs": [k("MAC"), k("MAC2")], "phones": [dict(p) for p in phones], "removed": [], "docs": {}}
     for step in steps:
-        step["ok"] = {"pair": book_pair, "remove": book_remove, "macList": book_mac_list}[step["op"]](book, step)
+        step["ok"] = {"pair": book_pair, "remove": book_remove, "macDoc": book_mac_doc}[step["op"]](book, step)
         step["phones"] = step.get("phones", [])
         step["after"] = {"phones": sorted(({"key": p["key"], "pairing": p["pairing"], "from": p["from"]} for p in book["phones"]), key=lambda p: p["key"]),
                          "removed": sorted((dict(r) for r in book["removed"]), key=lambda r: (r["key"], r["pairing"]))}
