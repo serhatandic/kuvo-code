@@ -47,6 +47,7 @@ const isDate = (value: unknown): value is string => typeof value === "string" &&
 export function isGroup(value: any, id: string): value is Group {
   if (!value || value.id !== id || typeof value.name !== "string" || !strings(value.members) || !isDate(value.created)) return false
   if (!stringMap(value.seats) || !stringMap(value.heard)) return false
+  if (value.seatBoxes !== undefined && !stringMap(value.seatBoxes)) return false
   if (value.purpose !== undefined && value.purpose !== null && typeof value.purpose !== "string") return false
   if (value.agentSeats !== undefined && !strings(value.agentSeats)) return false
   if (value.retracted !== undefined && value.retracted !== null && !stringMap(value.retracted)) return false
@@ -80,6 +81,31 @@ export function isMessages(value: unknown): value is GroupMessage[] {
             message.tasks.every((task: any) => task && typeof task.id === "string" && typeof task.bot === "string" && typeof task.task === "string" && states.has(task.state)))),
     )
   )
+}
+
+/** A chat on another computer, as a bot here remembers it. */
+export interface PeerMemory {
+  name: string
+  with: string[]
+  recap: string
+  /** Its transcript, in the bot's folder. */
+  file: string
+  /** When it last moved on. */
+  time: string
+}
+
+/** A part of a chat on another computer, given to a bot here. */
+export interface PeerWork {
+  /** The chat's computer, by key. */
+  host: string
+  chat: string
+  wrapUp: string
+  bot: string
+  /** Its message in the bot's own conversation, once it went there. */
+  prompt?: string
+  started: string
+  /** How it went, once it did: told again until the chat's computer has it. */
+  done?: boolean
 }
 
 /** One of the machine's bots, as its folder has it. */
@@ -230,6 +256,42 @@ export class GroupStore {
       ...(described.look !== undefined ? { look: described.look } : {}),
       ...(typeof described.created === "string" ? { created: described.created } : {}),
     }
+  }
+
+  // MARK: Chats on your other computers
+
+  /** What chats on other computers said a bot here remembers of them, by `<computer>/<chat>`. */
+  peerMemory(bot: string): Record<string, PeerMemory> {
+    const all = read(join(this.root, "peer-memory.json"))
+    const entries = all && typeof all === "object" ? all[bot] : undefined
+    return entries && typeof entries === "object" ? entries : {}
+  }
+
+  keepPeerMemory(bot: string, key: string, memory: PeerMemory) {
+    const all = read(join(this.root, "peer-memory.json")) ?? {}
+    all[bot] = { ...(all[bot] ?? {}), [key]: memory }
+    write(join(this.root, "peer-memory.json"), all)
+  }
+
+  forgetPeerMemory(bot: string, key: string) {
+    const all = read(join(this.root, "peer-memory.json")) ?? {}
+    if (!all[bot]?.[key]) return
+    delete all[bot][key]
+    if (Object.keys(all[bot]).length === 0) delete all[bot]
+    write(join(this.root, "peer-memory.json"), all)
+  }
+
+  /** Parts of chats on other computers that bots here are doing, followed until they report (across restarts), by the part's id. */
+  peerWork(): Record<string, PeerWork> {
+    const all = read(join(this.root, "peer-work.json"))
+    return all && typeof all === "object" ? all : {}
+  }
+
+  keepPeerWork(task: string, work: PeerWork | undefined) {
+    const all = this.peerWork()
+    if (work) all[task] = work
+    else delete all[task]
+    write(join(this.root, "peer-work.json"), all)
   }
 
   /** A chat's transcript in a bot's folder, for it to read (written whole, only this user can read it). */

@@ -12,6 +12,8 @@ export interface Group {
   /** Its bots, in order; the first leads. */
   members: string[]
   seats: Record<string, string>
+  /** The computer each seat that isn't here is on, by its bot (a peer's key). */
+  seatBoxes?: Record<string, string>
   heard: Record<string, string>
   agentSeats?: string[]
   created: string

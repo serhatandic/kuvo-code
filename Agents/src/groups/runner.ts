@@ -34,7 +34,8 @@ import {
   type GroupTask,
   type Meeting,
 } from "./rules"
-import { Cancelled, Seats, type ChatContext, type SeatState } from "./seat"
+import type { PeerDirectory } from "./peer"
+import { Cancelled, Seats, type ChatContext, type SeatHome, type SeatResult, type SeatState } from "./seat"
 import type { GroupStore, Kept, MachineBot, Status } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
 
@@ -60,6 +61,16 @@ export interface RunnerContext {
   memoryKey?: string
   /** A coding agent's account, by its provider: its name, and whether it needs a sign-in it hasn't got. */
   agentAccount?: (provider: string) => Promise<{ name: string; signedOut: boolean } | undefined>
+  /** Your other computers and their bots, which take their turns in chats here on their own computer. */
+  peers?: PeerDirectory
+}
+
+/** A bot in a chat: one of this computer's, or another's (`box`). */
+interface Member {
+  id: string
+  name: string
+  job: string
+  box?: string
 }
 
 /** What the Mac and phone see of a chat's talk. */
@@ -223,8 +234,29 @@ export class GroupRunner {
     return id ? this.context.store.bot(id) : undefined
   }
 
+  /** A bot of a chat here, wherever it lives: this computer's own, else one a peer says is its. */
+  private member(id: string | undefined): Member | undefined {
+    if (!id) return undefined
+    const here = this.bot(id)
+    if (here) return { id: here.id, name: here.name, job: here.job }
+    const there = this.context.peers?.bots().find((bot) => bot.id === id)
+    return there && { id: there.id, name: there.name, job: there.job, box: there.box }
+  }
+
+  /** Every bot there is to name: this computer's, and its peers'. */
+  private everyone(): Member[] {
+    const here = this.context.store.allBots().map((bot): Member => ({ id: bot.id, name: bot.name, job: bot.job }))
+    const ids = new Set(here.map((bot) => bot.id))
+    return [...here, ...(this.context.peers?.bots() ?? []).filter((bot) => !ids.has(bot.id))]
+  }
+
+  /** Where a bot takes its turns: here, or on its own computer. */
+  private home(box: string | undefined): SeatHome {
+    return box && this.context.peers ? this.context.peers.home(box) : this.seats
+  }
+
   name(author?: string): string {
-    return author === undefined ? "User" : (this.bot(author)?.name ?? "A bot that left")
+    return author === undefined ? "User" : (this.member(author)?.name ?? "A bot that left")
   }
 
   private changed(id: string) {
@@ -517,12 +549,12 @@ export class GroupRunner {
       }
       const names = new Map<string, string>()
       for (const member of kept.group.members) {
-        const bot = this.bot(member)
+        const bot = this.member(member)
         if (bot) names.set(member, bot.name)
       }
       const members = kept.group.members.filter((member) => names.has(member) && !absent.has(member))
       // A bot outside the chat that a message since the discussion began names with & answers it first, as a guest, once.
-      const bots = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }))
+      const bots = this.everyone().map((bot) => ({ id: bot.id, name: bot.name }))
       let named: { message: GroupMessage; guest: string } | undefined
       for (let index = begun; index < kept.messages.length && !named; index++) {
         const message = kept.messages[index]
@@ -565,10 +597,11 @@ export class GroupRunner {
         absent.add(speaker)
       }
     }
-    // The lead sums up a discussion that went back and forth, or a meeting where more than one spoke, unless you've written since.
+    // The lead sums up a discussion that went back and forth, or a meeting where more than one spoke, unless you've written since
+    // or the lead couldn't take part (its note is in the chat already).
     const kept = this.chat(id)
     const lead = kept?.group.members[0]
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.bot(lead)) return epoch
+    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept || !lead || !this.member(lead) || absent.has(lead)) return epoch
     if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept.group.members.length >= 2) {
       const before = kept.messages.at(-1)?.id
       await this.turn(lead, id, signal, true)
@@ -590,7 +623,7 @@ export class GroupRunner {
    */
   private async turn(botID: string, id: string, signal: AbortSignal, wrapUp = false, namedIn?: GroupMessage): Promise<Outcome> {
     const guest = namedIn !== undefined
-    const bot = this.bot(botID)
+    const bot = this.member(botID)
     if (!bot) return "absent"
     const live = this.state(id)
     live.speaking = botID
@@ -613,11 +646,28 @@ export class GroupRunner {
       const unheard = all.slice(start).filter((message) => message.author !== botID && message.kind !== "note")
       const retracted = guest ? undefined : kept.group.retracted?.[botID]
       const name = (author?: string) => this.name(author)
-      const seat = guest ? undefined : kept.group.seats[botID]
+      // Its computer can't take a turn from here: said, rather than asked and never answered.
+      const peers = this.context.peers
+      if (bot.box && peers && !peers.takesSeats(bot.box)) {
+        this.note(`${bot.name} is on ${peers.name(bot.box)}, which needs an update to take part.`, id)
+        return "absent"
+      }
+      // Its seat, unless the bot lives on another computer than its seat now (it moved): that one
+      // goes, and its next seat hears the whole chat.
+      let seat = guest ? undefined : kept.group.seats[botID]
+      if (seat && (kept.group.seatBoxes?.[botID] ?? undefined) !== bot.box) {
+        void this.home(kept.group.seatBoxes?.[botID]).drop(seat, kept.group.agentSeats?.includes(seat) ?? false)
+        delete kept.group.seats[botID]
+        delete kept.group.heard[botID]
+        if (kept.group.seatBoxes) delete kept.group.seatBoxes[botID]
+        if (kept.group.agentSeats?.includes(seat)) kept.group.agentSeats = kept.group.agentSeats.filter((each) => each !== seat)
+        this.changed(id)
+        seat = undefined
+      }
       const fresh = guest ? undefined : seatStartText(botID, kept.group, all, wrapUp, name, named(all))
       const text = guest ? guestText(botID, kept.group, all, namedIn?.author, name) : seat ? turnText(botID, kept.group, unheard, wrapUp, name, named(unheard)) : fresh!
       const last = all.at(-1)
-      const home = this.seats
+      const home = this.home(bot.box)
       const result = await home.turn(
         {
           id: turnID(),
@@ -628,12 +678,12 @@ export class GroupRunner {
           text,
           ...(guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept.group, all, name)).length }),
         },
-        (state) => this.heardOf(state, { id, botID, guest, run, last: last?.id, retracted, own }),
+        (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }),
         stopped.signal,
       )
       if (left()) return "absent"
       if (!result.ok) {
-        this.note(`${bot.name} couldn’t answer: ${result.why}`, id)
+        this.note(result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can’t be reached now, so it sat this out.` : `${bot.name} couldn’t answer: ${result.why}`, id)
         return "absent"
       }
       // Grown well past the chat it's in: its seat went, and its next turn starts anew.
@@ -653,7 +703,7 @@ export class GroupRunner {
         {
           id: groupMessageID(),
           author: botID,
-          text: ampersands(result.text, this.context.store.allBots().map((each) => each.name)),
+          text: ampersands(result.text, this.everyone().map((each) => each.name)),
           time: stamp(),
           kind: wrapUp ? "wrapUp" : "message",
           ...(result.steps.length ? { steps: result.steps.map(trimmed) } : {}),
@@ -683,14 +733,15 @@ export class GroupRunner {
       name: group.name,
       ...(group.purpose ? { purpose: group.purpose } : {}),
       members: group.members.flatMap((member) => {
-        const bot = this.bot(member)
+        const bot = this.member(member)
         return bot ? [{ id: bot.id, name: bot.name, job: bot.job }] : []
       }),
     }
   }
 
   /** What a bot's turn says of how it goes, kept in the chat: its seat, what it's heard, what it's doing. */
-  private heardOf(state: SeatState, turn: { id: string; botID: string; guest: boolean; run?: number; last?: string; retracted?: string; own: AbortController }) {
+  private heardOf(state: SeatState, turn: { id: string; botID: string; box?: string; guest: boolean; run?: number; last?: string; retracted?: string; own: AbortController }) {
+    if (state.phase === "taken") return
     const { id, botID } = turn
     const live = this.state(id)
     if (state.phase === "activity") {
@@ -708,7 +759,7 @@ export class GroupRunner {
       // A seat made now: the chat deleted meanwhile, or the bot taken out of it, and it goes with it.
       const now = this.chat(id)
       if (!now || !now.group.members.includes(botID)) {
-        void this.seats.drop(state.seat, state.agents)
+        void this.home(turn.box).drop(state.seat, state.agents)
         turn.own.abort()
         return
       }
@@ -717,6 +768,11 @@ export class GroupRunner {
         delete now.group.heard[botID]
       }
       now.group.seats[botID] = state.seat
+      if (turn.box) now.group.seatBoxes = { ...(now.group.seatBoxes ?? {}), [botID]: turn.box }
+      else if (now.group.seatBoxes?.[botID]) {
+        delete now.group.seatBoxes[botID]
+        if (Object.keys(now.group.seatBoxes).length === 0) delete now.group.seatBoxes
+      }
       if (state.agents) now.group.agentSeats = [...new Set([...(now.group.agentSeats ?? []), state.seat])]
       this.changed(id)
       return
@@ -735,9 +791,10 @@ export class GroupRunner {
   private async steer(botID: string, id: string, message: GroupMessage) {
     const kept = this.chat(id)
     const seat = kept?.group.seats[botID]
-    if (!kept || !this.bot(botID) || !seat) return
+    const bot = this.member(botID)
+    if (!kept || !bot || !seat) return
     const text = "The user, just now: " + message.text + (message.named ? "\n\n" + message.named : "")
-    if (await this.seats.steer(seat, kept.group.agentSeats?.includes(seat) ?? false, text)) this.setHeard(message.id, botID, id)
+    if (await this.home(bot.box).steer(seat, kept.group.agentSeats?.includes(seat) ?? false, text, message.id)) this.setHeard(message.id, botID, id)
   }
 
   // MARK: Splitting the work
@@ -745,10 +802,11 @@ export class GroupRunner {
   /** After a wrap-up: the lead lists who does what; if you'd already said to go ahead, each bot starts on its part at once. */
   private async splitWork(wrapUpID: string, id: string, lead: string, signal: AbortSignal) {
     const kept = this.chat(id)
-    const bot = this.bot(lead)
-    if (!kept || !bot) return
+    const bot = this.member(lead)
+    // A lead whose computer can't take a turn from here (the chat said so already) lists nothing.
+    if (!kept || !bot || (bot.box && this.context.peers && !this.context.peers.takesSeats(bot.box))) return
     const members = kept.group.members.flatMap((member) => {
-      const found = this.bot(member)
+      const found = this.member(member)
       return found ? [{ id: member, name: found.name }] : []
     })
     // Yours since the wrap-up before this one: the discussion it sums up.
@@ -782,7 +840,7 @@ export class GroupRunner {
       // every turn after: in a conversation of its own, given the chat up to the wrap-up, which
       // goes once it's answered.
       const chat = chatText(lead, kept.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author))
-      const result = await this.seats.turn(
+      const result = await this.home(bot.box).turn(
         { id: turnID(), chat: this.context_(kept.group), bot: lead, kind: "split", text: chat + "\n" + splitText(members.map((member) => member.name), yours) },
         () => {},
         stopped.signal,
@@ -837,7 +895,7 @@ export class GroupRunner {
         const first = tasks.filter((other) => other.id !== task.id && (task.after ?? []).includes(other.bot))
         const failed = first.find((other) => other.state === "failed")
         if (failed) {
-          this.fail(task.id, wrapUpID, id, `${this.bot(failed.bot)?.name ?? "the bot before it"} couldn’t finish its part first`, false)
+          this.fail(task.id, wrapUpID, id, `${this.member(failed.bot)?.name ?? "the bot before it"} couldn’t finish its part first`, false)
         } else if (first.every((other) => other.state === "done")) {
           this.changeTask(task.id, wrapUpID, id, (part) => (part.state = "working"))
           this.handSoon(task.id, wrapUpID, id)
@@ -873,26 +931,36 @@ export class GroupRunner {
     return this.seats.ownAPI(bot)
   }
 
-  /** One part, to its bot's conversation; then it's followed until the bot reports. */
+  /**
+   * One part, to its bot's own conversation, wherever it lives; then it's followed until the bot
+   * reports (on another computer, that computer follows it and says how it went: `reported`).
+   */
   private async hand(taskID: string, wrapUpID: string, id: string) {
     const kept = this.chat(id)
     const wrapUp = kept?.messages.find((message) => message.id === wrapUpID)
     const task = wrapUp?.tasks?.find((part) => part.id === taskID)
     if (!kept || !wrapUp || !task) return
-    const bot = this.bot(task.bot)
+    const bot = this.member(task.bot)
     if (!bot) return this.fail(taskID, wrapUpID, id, "the bot is gone")
-    const api = this.ownAPI(bot)
-    if (!api) return this.fail(taskID, wrapUpID, id, "the coding agents aren’t running")
     const before = (wrapUp.tasks ?? [])
       .filter((part) => (task.after ?? []).includes(part.bot))
       .flatMap((part) => {
         const report = [...kept.messages].reverse().find((message) => message.report === part.id)
         return report ? [{ name: this.name(part.bot), report: report.text }] : []
       })
-    const promptID = newID("msg")
+    const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message")
+    const text = compose(task, kept.group, wrapUp, from, before)
+    const peers = this.context.peers
+    if (bot.box && peers) {
+      if (!peers.takesSeats(bot.box)) return this.fail(taskID, wrapUpID, id, `${peers.name(bot.box)} needs an update to take part`)
+      peers.home(bot.box).work({ task: taskID, wrapUp: wrapUpID, chat: id, bot: bot.id, text, started: task.started ?? stamp() })
+      this.changeTask(taskID, wrapUpID, id, (part) => (part.prompt = `peer:${bot.box}`))
+      return
+    }
+    const own = this.bot(task.bot)
+    if (!own) return this.fail(taskID, wrapUpID, id, "the bot is gone")
     try {
-      const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message")
-      await api.prompt(bot.sessionID, promptID, compose(task, kept.group, wrapUp, from, before), "queue")
+      const promptID = await this.seats.give(own, text)
       this.changeTask(taskID, wrapUpID, id, (part) => (part.prompt = promptID))
       await this.awaitReport(taskID, wrapUpID, id)
     } catch (error) {
@@ -906,90 +974,32 @@ export class GroupRunner {
 
   /** Until the bot's run on its part ends (however long, waiting on you meanwhile if it asks something); then its report, back in the chat. */
   private async awaitReport(taskID: string, wrapUpID: string, id: string) {
-    let misses = 0
-    let stoppedChecks = 0
-    for (;;) {
-      await sleep(3000 * (this.context.pace ?? 1))
-      const task = this.taskState(taskID, wrapUpID, id)
-      if (!task || task.state !== "working") return
-      const bot = this.bot(task.bot)
-      if (!bot || !task.prompt) return this.fail(taskID, wrapUpID, id, "the bot is gone")
-      const api = this.ownAPI(bot)
-      if (!api) continue
-      const active = await api.active().catch(() => undefined)
-      if (!active || active.has(bot.sessionID)) continue
-      // The queue first, then the conversation: a message delivered between the two reads is in the second.
-      const queued = await api.inbox(bot.sessionID).catch(() => undefined)
-      if (!queued) continue
-      const read = await this.messagesFrom(task.prompt, bot.sessionID, task.started, api)
-      if (read.kind !== "found") {
-        // Its message taken back before it was read: the part ends, rather than working forever; twice in a row, both read.
-        if (read.kind === "missing" && !queued.some((item) => item.id === task.prompt)) {
-          if (++misses >= 2) return this.fail(taskID, wrapUpID, id, `its message was taken back before ${bot.name} read it`)
-        } else {
-          misses = 0
-        }
-        continue
-      }
-      misses = 0
-      const run = read.messages.slice(1)
-      // Its run, up to its end: not a stop it carried on from, only one you followed with a message of yours, or the end at last.
-      let end = run.findIndex((message, index) => {
-        if (message?.type !== "idle") return false
-        if (message.outcome !== "interrupted") return true
-        return run[index + 1]?.type === "user"
-      })
-      const lastIndex = run.length - 1
-      if (end < 0 && lastIndex >= 0 && run[lastIndex]?.type === "idle" && run[lastIndex].outcome === "interrupted") {
-        if (++stoppedChecks >= 2) end = lastIndex
-      } else {
-        stoppedChecks = 0
-      }
-      const answered = end >= 0 || run.some((message) => message?.type === "assistant" && message.time?.completed !== undefined)
-      if (!answered) continue
-      const stillActive = await api.active().catch(() => undefined)
-      if (!stillActive || stillActive.has(bot.sessionID)) continue
-      const found = said(end >= 0 ? run.slice(0, end) : run)
-      let error = found.error
-      if (error === undefined && end >= 0 && run[end]?.outcome === "failed") error = run[end].error?.message
-      // Reported meanwhile (or stopped), from elsewhere: not again.
-      if (this.taskState(taskID, wrapUpID, id)?.state !== "working") return
-      if (!found.text) return this.fail(taskID, wrapUpID, id, error ?? "it stopped without saying what it did")
-      this.changeTask(taskID, wrapUpID, id, (part) => {
-        part.state = "done"
-        part.finished = stamp()
-      })
-      this.append({ id: groupMessageID(), author: bot.id, text: found.text, time: stamp(), kind: "message", report: taskID }, id)
-      this.startReady(wrapUpID, id)
-      const kept = this.chats.get(id)
-      if (kept) emit("kuvo.group.done", { id, name: kept.group.name, bot: bot.id, who: bot.name, text: found.text })
-      return
-    }
+    const task = this.taskState(taskID, wrapUpID, id)
+    if (!task || task.state !== "working") return
+    if (!task.prompt || !this.bot(task.bot)) return this.fail(taskID, wrapUpID, id, "the bot is gone")
+    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working")
+    if (result) this.finish(taskID, wrapUpID, id, task.bot, result)
   }
 
-  /** The bot's conversation from `promptID` on, read further back while it's longer than a page, but not past the part's start. */
-  private async messagesFrom(promptID: string, session: string, started: string | undefined, api: SeatAPI): Promise<{ kind: "found"; messages: any[] } | { kind: "missing" } | { kind: "unreadable" }> {
-    let page: { data: any[]; cursor?: string }
-    try {
-      page = await api.messages(session, 80)
-    } catch {
-      return { kind: "unreadable" }
-    }
-    let messages = page.data
-    const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000
-    while (!messages.some((message) => message?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page.cursor) {
-      let older: { data: any[]; cursor?: string }
-      try {
-        older = await api.messages(session, 200, page.cursor)
-      } catch {
-        break
-      }
-      if (older.data.length === 0 || messages.some((message) => message?.id === older.data.at(-1)?.id)) break
-      messages = [...older.data, ...messages]
-      page = older
-    }
-    const index = messages.findIndex((message) => message?.id === promptID)
-    return index >= 0 ? { kind: "found", messages: messages.slice(index) } : { kind: "missing" }
+  /** A part's report (or why it couldn't be done), back in the chat; reported meanwhile (or stopped), not again. */
+  private finish(taskID: string, wrapUpID: string, id: string, botID: string, result: SeatResult) {
+    if (this.taskState(taskID, wrapUpID, id)?.state !== "working") return
+    if (!result.ok) return this.fail(taskID, wrapUpID, id, result.why)
+    this.changeTask(taskID, wrapUpID, id, (part) => {
+      part.state = "done"
+      part.finished = stamp()
+    })
+    this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp(), kind: "message", report: taskID }, id)
+    this.startReady(wrapUpID, id)
+    const kept = this.chats.get(id)
+    if (kept) emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text })
+  }
+
+  /** What another computer says of a part its bot did (`from`: only the computer that bot lives on now). */
+  reported(from: string, report: { task: string; wrapUp: string; chat: string; result: SeatResult }) {
+    const task = this.taskState(report.task, report.wrapUp, report.chat)
+    if (!task || this.member(task.bot)?.box !== from) return
+    this.finish(report.task, report.wrapUp, report.chat, task.bot, report.result)
   }
 
   /** `thenOthers`: parts that waited on it fail too. */
@@ -998,7 +1008,7 @@ export class GroupRunner {
       part.state = "failed"
       part.finished = stamp()
     })
-    const who = this.bot(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot"
+    const who = this.member(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot"
     const reasonText = trim(why).replace(/^\.+|\.+$/g, "")
     this.note(`${who} couldn’t do its part: ${reasonText}.`, id)
     if (thenOthers) this.startReady(wrapUpID, id)
@@ -1010,7 +1020,7 @@ export class GroupRunner {
       if (kept.status !== "active" || (only && id !== only)) continue
       for (const message of kept.messages) {
         for (const task of message.tasks ?? []) {
-          if (task.state !== "working" || this.following.has(task.id)) continue
+          if (task.state !== "working" || this.following.has(task.id) || task.prompt?.startsWith("peer:")) continue
           if (!task.prompt) {
             this.fail(task.id, message.id, id, "Kuvo Code stopped before it reached the bot")
           } else {
@@ -1079,20 +1089,34 @@ export class GroupRunner {
 
   // MARK: Seats
 
+  /** A bot's seat in a chat gone, on the computer it's on (never lost on the way there). */
   private async deleteSeat(seat: string, group: Group, botID: string) {
-    void botID
-    await this.seats.drop(seat, group.agentSeats?.includes(seat) ?? false)
+    await this.home(group.seatBoxes?.[botID]).drop(seat, group.agentSeats?.includes(seat) ?? false)
     const kept = this.chats.get(group.id)
-    if (kept?.group.agentSeats?.includes(seat)) {
+    if (!kept) return
+    let changed = false
+    if (kept.group.agentSeats?.includes(seat)) {
       kept.group.agentSeats = kept.group.agentSeats.filter((each) => each !== seat)
-      this.changed(group.id)
+      changed = true
     }
+    if (kept.group.seatBoxes?.[botID] && kept.group.seats[botID] !== seat) {
+      delete kept.group.seatBoxes[botID]
+      changed = true
+    }
+    if (changed) this.changed(group.id)
   }
 
   // MARK: Remembering
 
-  /** A bot's own conversation remembers its chats here, as you'd remember a meeting: a recap of each in its instructions, and the whole of each in a file in its folder. */
+  /**
+   * A bot's own conversation remembers its chats, as you'd remember a meeting: a recap of each in
+   * its instructions, and the whole of each in a file in its folder. One instruction, whichever
+   * computers its chats live on: those here, and those on your other computers, which tell this
+   * one (`remembered`). A bot that lives on another computer is told there.
+   */
   private async remember(botID: string, options: { changed?: string; forgetting?: string } = {}) {
+    const member = this.member(botID)
+    if (member?.box && this.context.peers) return this.rememberThere(botID, member.box, options)
     const bot = this.bot(botID)
     if (!bot) return
     const api = this.ownAPI(bot)
@@ -1101,8 +1125,19 @@ export class GroupRunner {
     if (options.forgetting) this.context.store.removeFile(`${folder}/${options.forgetting}.md`)
     const chats = [...this.chats.values()]
       .filter((kept) => kept.status === "active" && kept.group.members.includes(botID) && kept.messages.length > 0)
-      .sort((a, b) => Date.parse(b.messages.at(-1)?.time ?? b.group.created) - Date.parse(a.messages.at(-1)?.time ?? a.group.created))
-    if (chats.length === 0) {
+      .map((kept) => {
+        const file = `${folder}/${kept.group.id}.md`
+        if (!options.changed || options.changed === kept.group.id) {
+          try {
+            this.context.store.writeFile(file, this.transcript(kept))
+          } catch {}
+        }
+        const others = kept.group.members.filter((member) => member !== botID).flatMap((member) => this.member(member)?.name ?? [])
+        return { name: kept.group.name, others, file, recap: () => this.recap(kept), time: Date.parse(kept.messages.at(-1)?.time ?? kept.group.created) }
+      })
+    const elsewhere = Object.values(this.context.store.peerMemory(botID)).map((entry) => ({ name: entry.name, others: entry.with, file: entry.file, recap: () => entry.recap, time: Date.parse(entry.time) }))
+    const all = [...chats, ...elsewhere].sort((a, b) => b.time - a.time)
+    if (all.length === 0) {
       await api.removeInstruction(bot.sessionID, this.memoryKey).catch(() => {})
       return
     }
@@ -1111,19 +1146,47 @@ export class GroupRunner {
       `a recap of each is below, newest first, and the whole of each is in a file in "${folder}". When the user mentions one of ` +
       `these chats, or something talked about there, go by this, and read the file when you need more. What's marked ` +
       `"${bot.name}" is what you said.`
-    for (const [index, kept] of chats.entries()) {
-      const file = `${folder}/${kept.group.id}.md`
-      if (!options.changed || options.changed === kept.group.id) {
-        try {
-          this.context.store.writeFile(file, this.transcript(kept))
-        } catch {}
-      }
-      if (index >= 4) continue
-      const others = kept.group.members.filter((member) => member !== botID).flatMap((member) => this.bot(member)?.name ?? [])
-      text += `\n\n## "${kept.group.name}"${others.length ? " with " + others.join(", ") : ""}, in ${file}\n`
-      text += this.recap(kept)
+    for (const chat of all.slice(0, 4)) {
+      text += `\n\n## "${chat.name}"${chat.others.length ? " with " + chat.others.join(", ") : ""}, in ${chat.file}\n`
+      text += chat.recap()
     }
     await api.setInstruction(bot.sessionID, this.memoryKey, text).catch(() => {})
+  }
+
+  /** A chat here, as a bot on another computer remembers it: told to that computer (never lost on the way). */
+  private rememberThere(botID: string, box: string, options: { changed?: string; forgetting?: string }) {
+    const home = this.context.peers!.home(box)
+    if (options.forgetting) home.remember({ chat: options.forgetting, bot: botID, forget: true })
+    for (const kept of this.chats.values()) {
+      if (kept.status !== "active" || !kept.group.members.includes(botID) || kept.messages.length === 0) continue
+      if (options.changed && options.changed !== kept.group.id) continue
+      home.remember({
+        chat: kept.group.id,
+        bot: botID,
+        name: kept.group.name,
+        with: kept.group.members.filter((member) => member !== botID).flatMap((member) => this.member(member)?.name ?? []),
+        recap: this.recap(kept),
+        transcript: this.transcript(kept),
+        time: kept.messages.at(-1)?.time ?? kept.group.created,
+      })
+    }
+  }
+
+  /** What a chat on another computer (`from`) said its bot here remembers of it: kept, and the bot told. */
+  async remembered(from: string, memory: { chat: string; bot: string; forget?: boolean; name?: string; with?: string[]; recap?: string; transcript?: string; time?: string }) {
+    const bot = this.bot(memory.bot)
+    if (!bot || !/^grp_[a-z0-9]+$/.test(memory.chat)) return
+    const file = `${bot.folder}/groups/${peerPrefix(from)}-${memory.chat}.md`
+    if (memory.forget) {
+      this.context.store.removeFile(file)
+      this.context.store.forgetPeerMemory(bot.id, `${from}/${memory.chat}`)
+    } else {
+      try {
+        this.context.store.writeFile(file, memory.transcript ?? "")
+      } catch {}
+      this.context.store.keepPeerMemory(bot.id, `${from}/${memory.chat}`, { name: memory.name ?? "", with: memory.with ?? [], recap: memory.recap ?? "", file, time: memory.time ?? stamp() })
+    }
+    await this.remember(bot.id)
   }
 
   private when(time: string): string {
@@ -1163,7 +1226,7 @@ export class GroupRunner {
 
   /** The whole chat, as Markdown. */
   private transcript(kept: Kept): string {
-    const names = kept.group.members.flatMap((member) => this.bot(member)?.name ?? [])
+    const names = kept.group.members.flatMap((member) => this.member(member)?.name ?? [])
     let text = `# ${kept.group.name}\n\nA group chat in Kuvo Code between the user and ${names.join(", ")}.\n`
     for (const message of kept.messages) {
       if (message.kind === "note") text += `\n_${message.text}_\n`
@@ -1235,6 +1298,9 @@ export class GroupRunner {
     this.context.store.saveGroup(kept)
   }
 }
+
+/** A computer's key, short, as the files of its chats in a bot's folder start. */
+export const peerPrefix = (key: string) => key.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8)
 
 /** The blocks naming the agents your messages named with &, as one. */
 function named(unheard: GroupMessage[]): string | undefined {

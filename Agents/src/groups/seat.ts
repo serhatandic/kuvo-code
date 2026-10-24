@@ -44,6 +44,8 @@ export interface SeatTurn {
 
 /** How a turn goes, as the bot's computer says it. */
 export type SeatState =
+  /** Its computer has the turn (from another computer, said at once, so it isn't asked again). */
+  | { phase: "taken" }
   /** A seat made for it now (in place of one on another model, `replaced`). */
   | { phase: "seated"; seat: string; agents: boolean; replaced?: string }
   /** Its words are with its seat: what it hasn't heard, it has now. */
@@ -57,8 +59,16 @@ export type SeatState =
 export type SeatResult =
   /** What it said (nothing: it passed), with its steps; `outgrown`: its seat went, too big, and its next turn starts anew. */
   | { ok: true; text: string; steps: ToolCall[]; outgrown?: boolean }
-  /** It couldn't answer, and why, as the chat says it. */
-  | { ok: false; why: string }
+  /** It couldn't answer, and why, as the chat says it; `away`: its computer couldn't be reached. */
+  | { ok: false; why: string; away?: true }
+
+/** Where a bot takes its turns: its seats on this computer (`Seats`), or on another (`RemoteHome`). */
+export interface SeatHome {
+  turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal): Promise<SeatResult>
+  /** A message of yours to its seat at work. Whether it reached it now (from another computer, it's said later: `steered`). */
+  steer(seat: string, agents: boolean, text: string, message: string): Promise<boolean>
+  drop(seat: string, agents: boolean): Promise<void>
+}
 
 export interface SeatContext {
   store: GroupStore
@@ -93,7 +103,7 @@ const reason = (error: any) => String(error?.message ?? error ?? "it failed").tr
 export const runsWithAgents = (model?: ModelRef) => Boolean(model && (model.providerID === autoProvider || parseProvider(model.providerID)))
 
 /** A bot's seats, on the computer it lives on. */
-export class Seats {
+export class Seats implements SeatHome {
   /** Each seat's context at its first turn since this started: its growth past that makes it start over. */
   private seatBase = new Map<string, number>()
   /** Requests from seats already turned down. */
@@ -337,13 +347,104 @@ export class Seats {
     }
   }
 
+  /** A part of a chat's work, to its bot's own conversation: the message it went as. */
+  async give(bot: MachineBot, text: string): Promise<string> {
+    const api = this.ownAPI(bot)
+    if (!api) throw new Error("the coding agents aren’t running")
+    const promptID = newID("msg")
+    await api.prompt(bot.sessionID, promptID, text, "queue")
+    return promptID
+  }
+
+  /**
+   * Until the bot's run on a part (its message `promptID`, given at `started`) ends, however long
+   * it takes, waiting on you meanwhile if it asks something; then what it said, its report.
+   * Undefined once it's no longer `wanted` (reported meanwhile, or stopped, from elsewhere).
+   */
+  async follow(botID: string, promptID: string, started: string | undefined, wanted: () => boolean): Promise<SeatResult | undefined> {
+    let misses = 0
+    let stoppedChecks = 0
+    for (;;) {
+      await sleep(3000 * (this.context.pace ?? 1))
+      if (!wanted()) return undefined
+      const bot = this.bot(botID)
+      if (!bot) return { ok: false, why: "the bot is gone" }
+      const api = this.ownAPI(bot)
+      if (!api) continue
+      const active = await api.active().catch(() => undefined)
+      if (!active || active.has(bot.sessionID)) continue
+      // The queue first, then the conversation: a message delivered between the two reads is in the second.
+      const queued = await api.inbox(bot.sessionID).catch(() => undefined)
+      if (!queued) continue
+      const read = await this.messagesFrom(promptID, bot.sessionID, started, api)
+      if (read.kind !== "found") {
+        // Its message taken back before it was read: the part ends, rather than working forever; twice in a row, both read.
+        if (read.kind === "missing" && !queued.some((item) => item.id === promptID)) {
+          if (++misses >= 2) return { ok: false, why: `its message was taken back before ${bot.name} read it` }
+        } else {
+          misses = 0
+        }
+        continue
+      }
+      misses = 0
+      const run = read.messages.slice(1)
+      // Its run, up to its end: not a stop it carried on from, only one you followed with a message of yours, or the end at last.
+      let end = run.findIndex((message, index) => {
+        if (message?.type !== "idle") return false
+        if (message.outcome !== "interrupted") return true
+        return run[index + 1]?.type === "user"
+      })
+      const lastIndex = run.length - 1
+      if (end < 0 && lastIndex >= 0 && run[lastIndex]?.type === "idle" && run[lastIndex].outcome === "interrupted") {
+        if (++stoppedChecks >= 2) end = lastIndex
+      } else {
+        stoppedChecks = 0
+      }
+      const answered = end >= 0 || run.some((message) => message?.type === "assistant" && message.time?.completed !== undefined)
+      if (!answered) continue
+      const stillActive = await api.active().catch(() => undefined)
+      if (!stillActive || stillActive.has(bot.sessionID)) continue
+      const found = said(end >= 0 ? run.slice(0, end) : run)
+      let error = found.error
+      if (error === undefined && end >= 0 && run[end]?.outcome === "failed") error = run[end].error?.message
+      if (!wanted()) return undefined
+      if (!found.text) return { ok: false, why: error ?? "it stopped without saying what it did" }
+      return { ok: true, text: found.text, steps: [] }
+    }
+  }
+
+  /** The bot's conversation from `promptID` on, read further back while it's longer than a page, but not past the part's start. */
+  private async messagesFrom(promptID: string, session: string, started: string | undefined, api: SeatAPI): Promise<{ kind: "found"; messages: any[] } | { kind: "missing" } | { kind: "unreadable" }> {
+    let page: { data: any[]; cursor?: string }
+    try {
+      page = await api.messages(session, 80)
+    } catch {
+      return { kind: "unreadable" }
+    }
+    let messages = page.data
+    const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000
+    while (!messages.some((message) => message?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page.cursor) {
+      let older: { data: any[]; cursor?: string }
+      try {
+        older = await api.messages(session, 200, page.cursor)
+      } catch {
+        break
+      }
+      if (older.data.length === 0 || messages.some((message) => message?.id === older.data.at(-1)?.id)) break
+      messages = [...older.data, ...messages]
+      page = older
+    }
+    const index = messages.findIndex((message) => message?.id === promptID)
+    return index >= 0 ? { kind: "found", messages: messages.slice(index) } : { kind: "missing" }
+  }
+
   /** Stops a seat mid-sentence. */
   async interrupt(seat: string, agents: boolean) {
     await this.apiFor(agents)?.interrupt(seat).catch(() => {})
   }
 
   /** A message of yours, to a seat at work: it hears it at its next step. Whether it reached it (only into a run). */
-  async steer(seat: string, agents: boolean, text: string): Promise<boolean> {
+  async steer(seat: string, agents: boolean, text: string, _message?: string): Promise<boolean> {
     const api = this.apiFor(agents)
     if (!api || !(await api.active().catch(() => new Set<string>())).has(seat)) return false
     try {
