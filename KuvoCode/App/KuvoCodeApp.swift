@@ -30,6 +30,8 @@ enum Launch {
                 FileHandle.standardError.write(Data("Run the app's tests with scripts/test-app.sh, which builds a copy of the app of their own (\(AppInfo.bundleID) is the app itself).\n".utf8))
                 exit(78)
             }
+            // Its Keychain is one in memory (see `Keychain`); nothing else gets to ask you.
+            Keychain.neverAsk()
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.run()
         } else {

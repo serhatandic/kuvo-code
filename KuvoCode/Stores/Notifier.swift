@@ -415,6 +415,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// without starting Kuvo Code again.
     private func authorize() async -> Bool {
         if isAuthorized == true { return true }
+        // The tests' copy never asks, nor posts: macOS would show its prompt for it, then the
+        // tests' notifications.
+        if AppInfo.isHostingTests { return false }
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
         isAuthorized = granted
         return granted
