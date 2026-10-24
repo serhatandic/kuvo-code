@@ -17,6 +17,8 @@ relay = [
     {"name": "deliver", "from": "relay", "address": a.hex(), "payload": "68656c6c6f", "bytes": (b"\x02" + a + b"hello").hex()},
     {"name": "unreachable", "from": "relay", "address": b.hex(), "bytes": (b"\x03" + b).hex()},
     {"name": "pushed", "from": "relay", "address": b.hex(), "status": 2, "bytes": (b"\x06" + b + b"\x02").hex()},
+    {"name": "gone", "from": "relay", "address": b.hex(), "reason": 0, "bytes": (b"\x07" + b + b"\x00").hex()},
+    {"name": "gone", "from": "relay", "address": a.hex(), "reason": 1, "bytes": (b"\x07" + a + b"\x01").hex()},
 ]
 
 frames = [

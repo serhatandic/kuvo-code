@@ -32,6 +32,10 @@ import Testing
                 #expect(try RelayMessage(fromRelay: data) == .unreachable(LinkAddress(bytes: bytes(item, "address"))!))
             case "pushed":
                 #expect(try RelayMessage(fromRelay: data) == .pushed(to: LinkAddress(bytes: bytes(item, "address"))!, status: .notAllowed))
+            case "gone":
+                let gone = RelayMessage.gone(LinkAddress(bytes: bytes(item, "address"))!, RelayMessage.Gone(rawValue: UInt8(item["reason"] as! Int))!)
+                #expect(try RelayMessage(fromRelay: data) == gone)
+                #expect(gone.data == data)
             default:
                 Issue.record("Unknown vector \(item["name"]!)")
             }
