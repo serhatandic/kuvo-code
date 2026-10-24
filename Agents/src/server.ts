@@ -13,6 +13,7 @@ import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
+import { linkRoutes } from "./groups/link"
 import { groupRoutes } from "./groups/routes"
 import type { GroupRunner } from "./groups/runner"
 import type { GroupStore } from "./groups/store"
@@ -439,6 +440,8 @@ export function handler(context: Context) {
       // Where Kuvo Code's own tools are (the app says each time they start), for every agent here.
       // The group chats that live on this machine.
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
+      // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
+      if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)
 
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body()
