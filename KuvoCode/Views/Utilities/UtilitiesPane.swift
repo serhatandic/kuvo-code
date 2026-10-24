@@ -203,7 +203,11 @@ struct UtilitiesPane: View {
                     placeholder("Page Closed", symbol: "globe", detail: "Close this tab, or open a new one.")
                 }
             case .machinePage(let machine, let page):
-                if let browser = app.machines.engine(machine)?.browser {
+                if let engine = app.machines.engine(machine), engine.connection != .connected {
+                    // Its pages are on the machine: until it's back, what's happening there and a
+                    // way to try again, rather than a browser that can't start.
+                    MachineWaitingView(engine: engine)
+                } else if let browser = app.machines.engine(machine)?.browser {
                     MachineBrowserPane(browser: browser, page: page, attach: attachToMessage) {
                         NewTabPage(utilities: utilities, tabID: tab.id, directory: directory, environment: environment) { address in
                             // A new tab opens its page; a blank page goes there.

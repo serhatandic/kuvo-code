@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A browser tab in the panel for a machine that can't be reached says so, with the reason and Try Again, rather than staying blank.
 - Each computer keeps its own worktrees, your Mac's too, and shows one made or removed from your phone at once. A worktree's branch on a machine is named from a title in Cyrillic or Greek too ("Исправить вход" is ispravit-vhod); on your Mac, a title in Chinese, Japanese or Arabic no longer names one, which keeps the name it was made with.
 - Your machines keep each other up to date on which computers are yours and on your personalities with your Mac closed, signed by the computer each change came from, so none can pass on one it made up, and a computer whose clock is wrong no longer decides which change wins. A personality you delete stays deleted everywhere, and a change that would make your personalities too big to share is turned down with a message, in the bot editor and from your phone.
 - Each computer keeps its own projects, with their names and folders: your Mac's in Kuvo Code's own box beside its engine, and a machine's on the machine, so another Mac connected to it sees the same ones. The projects you have now move there the first time; the sidebar looks as it did.
