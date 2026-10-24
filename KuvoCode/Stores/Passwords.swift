@@ -100,7 +100,7 @@ nonisolated enum Passwords {
         query[kSecReturnAttributes as String] = true
         if let host { query[kSecAttrServer as String] = host }
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = Keychain.copyMatching(query, &result)
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess, let items = result as? [[String: Any]] else { return nil }
         return items.compactMap { item in
@@ -117,7 +117,7 @@ nonisolated enum Passwords {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        guard Keychain.copyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -128,19 +128,19 @@ nonisolated enum Passwords {
         query[kSecAttrServer as String] = host
         query[kSecAttrAccount as String] = account
         let data = Data(password.utf8)
-        if SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecSuccess { return true }
+        if Keychain.update(query, [kSecValueData as String: data]) == errSecSuccess { return true }
         query[kSecValueData as String] = data
         query[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
         query[kSecAttrLabel as String] = host
         query[kSecAttrDescription as String] = "Kuvo Code browser password"
-        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+        return Keychain.add(query) == errSecSuccess
     }
 
     static func delete(_ login: Login) {
         var query = base
         query[kSecAttrServer as String] = login.host
         query[kSecAttrAccount as String] = login.account
-        SecItemDelete(query as CFDictionary)
+        Keychain.delete(query)
         // Agents no longer sign in with it on their own: a password saved later for the site isn't
         // theirs without asking.
         if agentSites.contains(login.host), agentAccounts[login.host] == login.account {
@@ -150,6 +150,7 @@ nonisolated enum Passwords {
 
     /// Asks for Touch ID or your Mac's password before showing or copying a password.
     static func authenticate(reason: String) async -> Bool {
+        AppInfo.neverInTests("Touch ID")
         let context = LAContext()
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return true }
         return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false

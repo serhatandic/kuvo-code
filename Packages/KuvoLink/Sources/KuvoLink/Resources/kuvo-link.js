@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.33";
+export const BRIDGE_VERSION = "0.9.37";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "worktrees",
+  "skills", "update", "wakes", "wakes.edit", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -258,6 +258,8 @@ export function readRelay(bytes) {
   if (kind === 2 && bytes.length >= 17) return { kind: "deliver", address, payload: bytes.subarray(17) };
   if (kind === 3 && bytes.length === 17) return { kind: "unreachable", address };
   if (kind === 6 && bytes.length === 18) return { kind: "pushed", address, status: bytes[17] };
+  // A reason it doesn't know yet counts as left: the sessions are over either way.
+  if (kind === 7 && bytes.length === 18) return { kind: "gone", address, reason: bytes[17] === 0 ? "replaced" : "left" };
   return null;
 }
 
@@ -337,7 +339,11 @@ export class LinkHost {
 
   get active() { return this.sessions.size; }
 
-  // A phone the relay can't reach any more (asleep, gone): what it asked for has nobody to go to.
+  // A phone the relay can't reach any more (asleep, gone), or whose relay connection the relay says
+  // went or was replaced (it ended its sessions with it): what it asked for has nobody to go to.
+  // While this host's own relay connection stays up, a session ends only with the phone told, or
+  // by the phone's own doing: phones count on that rather than checking before each request
+  // (PROTOCOL.md, "The relay").
   forget(address) {
     for (const session of this.sessions.values()) if (session.from.equals(address)) this.end(session, false);
   }
@@ -971,6 +977,16 @@ export async function answerBotKeys(method, requestPath, body, engine, file = IN
 // listed and removed here, from a Mac (through `box route`) or a phone, with the Mac closed too.
 
 const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
+// The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
+const BRANCH_PREFIX_FILE = path.join(K, "box", "git.json");
+const branchPrefix = () => {
+  try {
+    const kept = JSON.parse(fs.readFileSync(BRANCH_PREFIX_FILE, "utf8")).branchPrefix;
+    return typeof kept === "string" ? kept : "kuvo/";
+  } catch {
+    return "kuvo/";
+  }
+};
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
 /** git in `folder`: what it printed (trimmed), or null when it failed. */
@@ -1021,11 +1037,13 @@ export function boxProjects(kit, file = PROJECTS_FILE) {
 
 /** The list as `change` makes it, read again just before, under its lock. */
 export function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
-  return locked(lock, () => {
+  const projects = locked(lock, () => {
     const projects = change(readProjects(file));
     writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
     return projects;
   });
+  for (const tell of projectFollowers) tell();
+  return projects;
 }
 
 /** A project as it's kept: its name only when it's not the folder's, a command only when there
@@ -1099,16 +1117,7 @@ export async function* answerProjects(request, readEngine = readEngineFile, read
   if (route === "kuvo/projects/events") {
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    let last = "";
-    while (!signal?.aborted) {
-      const line = JSON.stringify(listed());
-      if (line !== last) {
-        yield { body: Buffer.from(line + "\n") };
-        last = line;
-      }
-      await new Promise(done => setTimeout(done, 1000));
-    }
-    return;
+    return yield* followed(listed, projectFollowers, signal);
   }
   if (route !== "kuvo/projects") return yield* json(404, {});
   if (method === "GET") return yield* json(200, listed());
@@ -1156,6 +1165,44 @@ export function readWorktrees() {
  * beside each other, each in a process of its own. */
 function updateWorktrees(change) {
   writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()) }, null, 2));
+  for (const tell of worktreeFollowers) tell();
+}
+
+// Those following this box's worktrees (`kuvo/worktrees/events`), told of each change made here.
+const worktreeFollowers = new Set();
+// Those following its projects (`kuvo/projects/events`).
+const projectFollowers = new Set();
+
+/** What `read` says, a line now and one for each change after, in order: each change this process
+ * makes as it's made (`followers` are told), and what another made, looked for each second. */
+async function* followed(read, followers, signal) {
+  const queue = [JSON.stringify(read())];
+  let wake = null;
+  const told = () => {
+    queue.push(JSON.stringify(read()));
+    wake?.();
+  };
+  followers.add(told);
+  try {
+    let last = "";
+    while (!signal?.aborted) {
+      while (queue.length) {
+        const line = queue.shift();
+        if (line !== last) {
+          yield { body: Buffer.from(line + "\n") };
+          last = line;
+        }
+      }
+      await new Promise(done => {
+        wake = done;
+        setTimeout(done, 1000);
+      });
+      wake = null;
+      queue.push(JSON.stringify(read()));
+    }
+  } finally {
+    followers.delete(told);
+  }
 }
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
@@ -1167,10 +1214,22 @@ function freeBranch(folder, name) {
   return null;
 }
 
-/** A branch name made from a title, as the Mac's Git.slug makes it: "Trim note titles" is
- * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi. */
+// Cyrillic and Greek letters in Latin ones, as ICU writes them without their marks: "Исправить
+// вход" is ispravit-vhod, "Διόρθωση σύνδεσης" diorthose-syndeses.
+const LATIN = Object.fromEntries([
+  ...[..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) =>
+    [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]),
+  ...[..."αβγδεζηθικλμνξοπρσςτυφχψω"].map((letter, at) =>
+    [letter, ["a", "b", "g", "d", "e", "z", "e", "th", "i", "k", "l", "m", "n", "x", "o", "p", "r", "s", "s", "t", "y", "ph", "ch", "ps", "o"][at]]),
+]);
+const inLatin = text => [...text].map(letter => LATIN[letter] ?? letter).join("");
+
+/** A branch name made from a title, in Latin letters without their marks: "Trim note titles" is
+ * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi, "Исправить вход" ispravit-vhod. A title
+ * in other letters (Chinese, Arabic) names none: its branch keeps the name it was made with. */
 export function branchSlug(title, limit = 40) {
-  const latin = String(title).normalize("NFKD").replace(/\p{M}/gu, "").replace(/ı/g, "i").toLowerCase();
+  // Whole letters first (й is j, not i), then those that came apart from their marks (ό).
+  const latin = inLatin(inLatin(String(title).toLowerCase()).normalize("NFKD")).replace(/\p{M}/gu, "").replace(/ı/g, "i");
   let name = "";
   for (const word of latin.split(/[^\p{L}\p{N}]+/u)) {
     const ascii = [...word].filter(character => character.charCodeAt(0) < 128).join("");
@@ -1300,7 +1359,10 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const project = body?.project;
     if (typeof project !== "string" || !path.isAbsolute(project) || !fs.existsSync(project)) return { status: 400, value: message("Send the project's folder on this machine as {\"project\"}.") };
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
-    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : "kuvo/";
+    // What its branch's name starts with: as given, and kept for a client that doesn't say (a
+    // phone), so one made from there starts as yours do.
+    const kept = branchPrefix();
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : kept;
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
@@ -1319,6 +1381,8 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message("Its branch couldn't be made.") };
     }
+    // The prefix it was made with, kept for a client that gives none, once a branch with it was made.
+    if (prefix !== kept) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
     const tree = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...(base ? { base } : {}), made: branch, prefix };
     updateWorktrees(list => [...list.filter(each => each.root !== root), tree]);
     return { status: 200, value: tree };
@@ -1330,7 +1394,8 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const absolute = folder => typeof folder === "string" && path.isAbsolute(folder);
     if (!absolute(given.project) || !absolute(given.root) || !absolute(given.folder) || typeof given.branch !== "string" || !given.branch) return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
     if (!fs.existsSync(given.root)) return { status: 404, value: message("That worktree isn't on this machine any more.") };
-    updateWorktrees(list => [...list.filter(each => each.root !== given.root), given]);
+    // One it has already stays as it keeps it (its branch to be named, say).
+    updateWorktrees(list => (list.some(each => each.root === given.root) ? list : [...list, given]));
     return { status: 200, value: {} };
   }
   const tree = list.find(each => each.root === body?.path);
@@ -1887,6 +1952,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
     if (route === "kuvo/projects" || route === "kuvo/projects/events") return yield* answerProjects(request, readEngine, readBridge, signal);
+    // Its worktrees' records followed: a line now, and again each time they change (one made for
+    // a phone, renamed, removed), as a Mac shows them.
+    if (route === "kuvo/worktrees/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
+    }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
     if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
       let engine = null;
@@ -5946,6 +6018,15 @@ export function startUpdate(options = {}) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
+// gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
+// sent. What this connection sends itself, to check it's alive, is only that.
+export function fromRelay(host, message, self) {
+  if (message.address.equals(self)) return;
+  if (message.kind === "deliver") host.receive(message.address, message.payload);
+  if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
+}
+
 // Connects once, serves until the connection ends. Resolves whether it got as far as welcome.
 export function connectOnce(relay, secret, host) {
   return new Promise(resolve => {
@@ -5992,8 +6073,7 @@ export function connectOnce(relay, secret, host) {
         try { confirmUpdate(); } catch {}
         return;
       }
-      if (message.kind === "deliver" && !message.address.equals(self)) host.receive(message.address, message.payload);
-      if (message.kind === "unreachable" && !message.address.equals(self)) host.forget(message.address);
+      fromRelay(host, message, self);
     };
     socket.onerror = finish;
     socket.onclose = finish;

@@ -7,19 +7,11 @@ public enum Link {
     static let mailPrologue = Data("kuvo-link mail v1".utf8)
     /// How long a handshake may take before the host counts as unreachable.
     static let handshakeTimeout: Duration = .seconds(15)
-    /// How long a session may go without a word from its host before the phone checks the host
-    /// still has it, before sending a read: longer than the engine's event stream heartbeat
-    /// (15 s), so reads on a session following events are never held up. A read that fails all
-    /// the same (sent just after the host started again) is one its caller asks again.
-    static let quietBeforeRead: Duration = .seconds(20)
-    /// The same before anything that changes something (a message, an answer, a setting), which
-    /// mustn't fail because the host started again a moment ago: checked unless the host spoke
-    /// just now, at the cost of a round trip on a quiet session.
-    static let quietBeforeChange: Duration = .seconds(3)
     /// How long a request may wait for its answer with nothing at all from the host before the
-    /// phone checks the host's still there: a frame lost on the way (to a host starting again,
-    /// whose old relay connection was still taking them) is never answered, and nothing else
-    /// would end the wait. A host that's there answers the check, and the request waits on.
+    /// phone checks the host's still there. A host that started again or left is told by the
+    /// relay (`gone`), but one whose connection died without closing (a Mac put to sleep, a path
+    /// gone dead) still takes frames until the relay notices, up to a minute later, and never
+    /// answers them. A host that's there answers the check, and the request waits on.
     static let answerWithin: Duration = .seconds(5)
     /// How long a check may take: a host that has the session answers at once.
     static let checkTimeout: Duration = .seconds(5)
@@ -132,6 +124,14 @@ public enum Mail {
     }
 }
 
+/// What the link tells the time by and waits with: the real clock, or one a test moves by hand.
+struct LinkClock: Sendable {
+    var now: @Sendable () -> ContinuousClock.Instant
+    var sleep: @Sendable (Duration) async -> Void
+
+    static let real = LinkClock(now: { .now }, sleep: { try? await Task.sleep(for: $0) })
+}
+
 /// The phone's side: sessions with the hosts it's paired with, over one relay connection.
 public actor LinkClient {
     public typealias Connect = @Sendable (URL, RelaySecret) async throws -> any RelayTransport
@@ -146,29 +146,23 @@ public actor LinkClient {
     private var connecting: Task<any RelayTransport, Error>?
     private var sessions: [LinkAddress: Session] = [:]
     private var registration: PushRegistration?
-    private var timing = Timing()
-
-    /// How long a session may stay quiet before it's checked (see `Link`), and how long a check
-    /// may take: shorter in tests.
-    struct Timing {
-        var beforeRead = Link.quietBeforeRead
-        var beforeChange = Link.quietBeforeChange
-        var answer = Link.answerWithin
-        var check = Link.checkTimeout
-    }
+    private var clock = LinkClock.real
 
     private final class Session {
-        let id = UInt32.random(in: 1...UInt32.max)
+        /// A new one if its handshake starts over (see `startOver`).
+        var id = UInt32.random(in: 1...UInt32.max)
         var host: PairedHost
+        /// The pairing token its handshake carries, while pairing.
+        let pairing: Data?
         var initiator: IKInitiator?
         var transport: Transport?
         var hostHello: HostHello?
         var waiting: [CheckedContinuation<Void, Error>] = []
         /// When the host last said anything on it.
-        var lastHeard = ContinuousClock.now
-        /// Who waits on a check that the host still has it (see `checkStillThere`), while one's
-        /// under way; which check it is, for its timeout.
-        var checking: [CheckedContinuation<Void, Error>]?
+        var lastHeard: ContinuousClock.Instant
+        /// Whether a check that the host's still there (see `checkAnswer`) is under way; which check
+        /// it is, for its timeout.
+        var checking = false
         var check = 0
         /// Requests sent that have no answer yet.
         var unanswered: Set<Int> = []
@@ -176,7 +170,11 @@ public actor LinkClient {
         var streams: [Int: AsyncThrowingStream<LinkResponsePart, Error>.Continuation] = [:]
         var sockets: [Int: AsyncThrowingStream<LinkSocketEvent, Error>.Continuation] = [:]
 
-        init(host: PairedHost) { self.host = host }
+        init(host: PairedHost, pairing: Data?, now: ContinuousClock.Instant) {
+            self.host = host
+            self.pairing = pairing
+            lastHeard = now
+        }
     }
 
     public init(relay: URL, key: LinkKey, secret: RelaySecret, name: String, app: String, connect: @escaping Connect = WebSocketRelay.connect) {
@@ -256,10 +254,19 @@ public actor LinkClient {
         relay?.close()
     }
 
-    /// Sessions count as quiet sooner, and checks give up sooner, so a test needn't wait.
-    func setTimingForTesting(_ timing: Timing) {
-        self.timing = timing
+    /// Time that passes only when a test moves it.
+    func setClockForTesting(_ clock: LinkClock) {
+        self.clock = clock
     }
+
+    /// Each time the host is heard on a session, from now on.
+    func heardForTesting() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+        heardWatchers.append(continuation)
+        return stream
+    }
+
+    private var heardWatchers: [AsyncStream<Void>.Continuation] = []
     #endif
 
     /// Ends every session and the relay connection.
@@ -279,20 +286,16 @@ public actor LinkClient {
             try await withCheckedThrowingContinuation { session.waiting.append($0) }
             return session.hostHello!
         }
-        let session = Session(host: host)
+        let session = Session(host: host, pairing: token, now: clock.now())
         sessions[address] = session
         do {
             let relay = try await relayConnection()
             // Ended while connecting (a pairing started over, the relay dropped): nothing will answer it.
             guard sessions[address] === session else { throw LinkError.closed }
-            var initiator = IKInitiator(staticKey: key, remoteStatic: host.key, prologue: Link.prologue)
-            var hello = self.hello
-            hello.pair = token?.base64URL
-            let message = try initiator.writeMessage1(payload: JSONEncoder().encode(hello))
-            session.initiator = initiator
-            relay.send(.send(to: address, payload: LinkFrame(.handshake1, session: session.id, body: message).data))
+            try sendHandshake(session, on: relay)
+            let clock = clock
             Task {
-                try? await Task.sleep(for: Link.handshakeTimeout)
+                await clock.sleep(Link.handshakeTimeout)
                 self.timeOut(session)
             }
             try await withCheckedThrowingContinuation { session.waiting.append($0) }
@@ -303,24 +306,44 @@ public actor LinkClient {
         }
     }
 
+    /// The handshake's first message, under the session's number.
+    private func sendHandshake(_ session: Session, on relay: any RelayTransport) throws {
+        var initiator = IKInitiator(staticKey: key, remoteStatic: session.host.key, prologue: Link.prologue)
+        var hello = self.hello
+        hello.pair = session.pairing?.base64URL
+        let message = try initiator.writeMessage1(payload: JSONEncoder().encode(hello))
+        session.initiator = initiator
+        relay.send(.send(to: session.host.linkAddress, payload: LinkFrame(.handshake1, session: session.id, body: message).data))
+    }
+
+    /// The host was replaced or left while this session's handshake was on its way: it may have
+    /// reached the old host, which won't answer, or the new one, which will. Sent again under a
+    /// new number, the new host answers that one (and drops the first); a host that's gone is
+    /// unreachable, as for any handshake.
+    private func startOver(_ session: Session) {
+        guard let relay, session.transport == nil, session.initiator != nil else { return }
+        session.id = UInt32.random(in: 1...UInt32.max)
+        do { try sendHandshake(session, on: relay) } catch { end(session, with: .closed, tellingHost: false) }
+    }
+
     /// No answer in time: whoever waits on it hears so, whether or not it's still the current one.
     private func timeOut(_ session: Session) {
         if session.transport == nil { end(session, with: .timedOut) }
     }
 
-    private func end(_ session: Session, with error: LinkError) {
+    /// Ends `session`, telling the host unless it no longer has it (the relay said it's gone).
+    private func end(_ session: Session, with error: LinkError, tellingHost: Bool = true) {
         let address = session.host.linkAddress
         if sessions[address] === session { sessions[address] = nil }
         for waiter in session.waiting { waiter.resume(throwing: error) }
         session.waiting = []
-        for waiter in session.checking ?? [] { waiter.resume(throwing: error) }
-        session.checking = nil
+        session.checking = false
         session.unanswered = []
         for stream in session.streams.values { stream.finish(throwing: error) }
         session.streams = [:]
         for socket in session.sockets.values { socket.finish(throwing: error) }
         session.sockets = [:]
-        if session.transport != nil { relay?.send(.send(to: address, payload: LinkFrame(.close, session: session.id).data)) }
+        if tellingHost, session.transport != nil { relay?.send(.send(to: address, payload: LinkFrame(.close, session: session.id).data)) }
         session.transport = nil
     }
 
@@ -346,7 +369,6 @@ public actor LinkClient {
     private func start(_ request: LinkRequest, to host: PairedHost, ticket: Ticket, for listener: Listener) async {
         do {
             try await open(host, pairing: nil)
-            try await checkStillThere(host, before: request)
             guard let session = sessions[host.linkAddress], session.transport != nil else { throw LinkError.closed }
             try Task.checkCancellation()
             let id = session.nextID
@@ -367,35 +389,12 @@ public actor LinkClient {
         }
     }
 
-    /// Before sending on a session that's been quiet a while, whether the host still has it. A
-    /// host started again since (a Mac that quit and opened again) has forgotten its sessions and
-    /// closes one when something comes on it, failing a request it never ran: a ping finds that
-    /// out first, and a new session takes its place. One heard from lately goes straight on.
-    private func checkStillThere(_ host: PairedHost, before request: LinkRequest) async throws {
-        let address = host.linkAddress
-        let reads = ["GET", "HEAD", "OPTIONS"].contains(request.method.uppercased())
-        guard let session = sessions[address], session.transport != nil,
-              ContinuousClock.now - session.lastHeard > (reads ? timing.beforeRead : timing.beforeChange)
-        else { return }
-        do {
-            try startCheck(session)
-            try await withCheckedThrowingContinuation { session.checking?.append($0) }
-        } catch {
-            // Gone with the check (closed by the host, no answer, or no way to ask): opened again,
-            // as for a first request, which says so if the host isn't there.
-            end(session, with: .closed)
-        }
-        if sessions[address] !== session || session.transport == nil {
-            try await open(host, pairing: nil)
-        }
-    }
-
     /// Pings the host on a session, unless a ping's already on its way: its answer, or the host
     /// closing a session it doesn't have, says whether it's still there; no answer in time ends it.
     private func startCheck(_ session: Session) throws {
-        guard session.checking == nil else { return }
+        guard !session.checking else { return }
         try seal(LinkMessage(.init(t: .ping)), in: session)
-        session.checking = []
+        session.checking = true
         session.check += 1
         timeCheck(session.check, on: session)
     }
@@ -403,21 +402,19 @@ public actor LinkClient {
     /// Gives a check its time from when the ping has left: it may be behind this phone's own
     /// frames on their way out (a big body on a slow connection).
     private func timeCheck(_ check: Int, on session: Session) {
-        let timeout = timing.check
+        let (relay, clock) = (relay, clock)
         Task {
-            while self.relay?.isSending == true, session.checking != nil, session.check == check {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            try? await Task.sleep(for: timeout)
+            await relay?.allSent()
+            await clock.sleep(Link.checkTimeout)
             self.checkTimedOut(session, check: check)
         }
     }
 
     /// Checks on a request a while after it went, and again while it waits.
     private func watchAnswer(_ id: Int, in session: Session) {
-        let wait = timing.answer
+        let clock = clock
         Task {
-            try? await Task.sleep(for: wait)
+            await clock.sleep(Link.answerWithin)
             self.checkAnswer(id, in: session)
         }
     }
@@ -428,7 +425,7 @@ public actor LinkClient {
         guard sessions[session.host.linkAddress] === session, session.unanswered.contains(id) else { return }
         // Not while this phone's own frames are still going out (a big body on a slow
         // connection): the host can't answer what hasn't reached it, and a ping would wait behind it.
-        if relay?.isSending != true, ContinuousClock.now - session.lastHeard >= timing.answer {
+        if relay?.isSending != true, clock.now() - session.lastHeard >= Link.answerWithin {
             do { try startCheck(session) } catch { return end(session, with: .closed) }
         }
         watchAnswer(id, in: session)
@@ -436,15 +433,16 @@ public actor LinkClient {
 
     /// The host said something on it: it's still there.
     private func heard(_ session: Session) {
-        session.lastHeard = .now
-        guard let waiters = session.checking else { return }
-        session.checking = nil
-        for waiter in waiters { waiter.resume() }
+        session.lastHeard = clock.now()
+        #if DEBUG
+        for watcher in heardWatchers { watcher.yield() }
+        #endif
+        session.checking = false
     }
 
     /// No answer to a check in time: the session's gone, whatever was on it with it.
     private func checkTimedOut(_ session: Session, check: Int) {
-        guard session.checking != nil, session.check == check else { return }
+        guard session.checking, session.check == check else { return }
         end(session, with: .timedOut)
     }
 
@@ -511,6 +509,13 @@ public actor LinkClient {
             receive(frame, in: session)
         case .unreachable(let address):
             if let session = sessions[address] { end(session, with: .hostOffline) }
+        case .gone(let address, let gone):
+            // The host started again (or came back) or left: it has none of this phone's sessions,
+            // so streams that only listen end now rather than waiting on it forever. One that
+            // started again is there for a new session at once; one that left is offline.
+            guard let session = sessions[address] else { return }
+            if session.transport == nil { return startOver(session) }
+            end(session, with: gone == .replaced ? .closed : .hostOffline, tellingHost: false)
         default:
             break
         }
@@ -525,7 +530,7 @@ public actor LinkClient {
                 let hello = try JSONDecoder().decode(HostHello.self, from: payload)
                 session.initiator = nil
                 session.transport = transport
-                session.lastHeard = .now
+                session.lastHeard = clock.now()
                 guard hello.v == Link.version else { return end(session, with: .unsupportedVersion) }
                 session.hostHello = hello
                 for waiter in session.waiting { waiter.resume() }

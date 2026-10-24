@@ -30,6 +30,8 @@ const folderOf = request => decodeURIComponent(request.headers["x-opencode-direc
 const sessions = [];
 const active = new Set();
 const told = [];
+// Worktrees made so far, for each a folder of its own.
+let made = 0;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -41,7 +43,7 @@ const engine = http.createServer((request, response) => {
     if (url.pathname === "/api/location") return send({ directory: folderOf(request), project: { id: real === project || real.startsWith(project + "/") ? "prj_shop" : "prj_workspace" } });
     if (url.pathname.startsWith("/api/worktree") && JSON.parse(body || "{}").projectID !== "prj_shop") return send({ message: "Not a git project" }, 400);
     if (url.pathname === "/api/worktree" && request.method === "POST") {
-      const folder = path.join(home, "worktrees", `brave-otter-${sessions.length}`);
+      const folder = path.join(home, "worktrees", `brave-otter-${++made}`);
       git(project, "worktree", "add", "--detach", folder);
       return send({ directory: folder });
     }
@@ -201,4 +203,89 @@ test("a Mac reading the machine's worktrees as their session gets its title find
   assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout");
   sessions.splice(sessions.findIndex(each => each.id === "ses_titled"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
+test("a branch is named after its session's title, in any language, and gets a number when the name is taken", async () => {
+  for (const [title, slug] of [
+    ["Trim note titles", "trim-note-titles"],
+    ["Giriş düzeltmesi", "giris-duzeltmesi"],
+    ["Café: crème brûlée!", "cafe-creme-brulee"],
+    ["Исправить вход", "ispravit-vhod"],
+    ["Йога", "joga"],
+    ["Διόρθωση σύνδεσης", "diorthose-syndeses"],
+    ["修复登录", ""],
+    ["Fix #42 — login (again)", "fix-42-login-again"],
+    ["A very long title that keeps going well past the limit of forty", "a-very-long-title-that-keeps-going-well"],
+  ]) assert.equal(link.branchSlug(title), slug, title);
+
+  git(project, "branch", "kuvo/fix-the-cart");
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_cart", title: "Fix the cart", location: { directory: made.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_cart");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-cart-2");
+  sessions.splice(sessions.findIndex(each => each.id === "ses_cart"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  git(project, "branch", "-D", "kuvo/fix-the-cart");
+});
+
+test("a branch already pushed keeps its name: its pull request would lose track of it", async () => {
+  const remote = path.join(home, "remote.git");
+  git(home, "init", "-q", "--bare", remote);
+  git(project, "remote", "add", "origin", remote);
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  git(made.root, "push", "-q", "-u", "origin", made.branch);
+  sessions.push({ id: "ses_pushed", title: "Fix login", location: { directory: made.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_pushed");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), made.branch);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_pushed"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  git(project, "remote", "remove", "origin");
+});
+
+test("its records followed: a line now, and another when one is made or removed", async () => {
+  const handle = link.engineHandler(() => atEngine, { name: "box" }, () => null);
+  const abort = new AbortController();
+  const lines = [];
+  let made;
+  for await (const part of handle({ method: "GET", path: "kuvo/worktrees/events", headers: {}, body: Buffer.alloc(0) }, {}, abort.signal)) {
+    if (part.head) assert.equal(part.head.headers["content-type"], "application/x-ndjson");
+    if (!part.body) continue;
+    lines.push(JSON.parse(part.body.toString()));
+    if (lines.length === 1) made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+    if (lines.length === 2) {
+      assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+    }
+    if (lines.length === 3) abort.abort();
+  }
+  // (Others' from the tests before stay as they were.)
+  assert.deepEqual(lines.map(line => line.worktrees.some(tree => tree.root === made.root)), [false, true, false]);
+});
+
+test("one a phone asks for starts with the prefix a Mac last gave, and a Mac's old record doesn't undo how the box keeps one", async () => {
+  const mine = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "sa/" })).value;
+  const phones = (await ask("POST", "kuvo/worktrees", { project })).value;
+  assert.ok(phones.branch.startsWith("sa/"), phones.branch);
+  // A Mac handing over what it kept of one the box has: the box's stays, still to be named.
+  assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root: phones.root, folder: phones.folder, branch: phones.branch })).status, 200);
+  const kept = link.readWorktrees().find(each => each.root === phones.root);
+  assert.equal(kept.made, phones.branch);
+  for (const made of [mine, phones]) assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" }).then(made => ask("POST", "kuvo/worktrees/remove", { path: made.value.root, forget: true }));
+});
+
+test("one made and removed at once: a follower is told of both, in order", { timeout: 10_000 }, async () => {
+  const handle = link.engineHandler(() => atEngine, { name: "box" }, () => null);
+  const abort = new AbortController();
+  const seen = [];
+  let made;
+  for await (const part of handle({ method: "GET", path: "kuvo/worktrees/events", headers: {}, body: Buffer.alloc(0) }, {}, abort.signal)) {
+    if (!part.body) continue;
+    seen.push(JSON.parse(part.body.toString()).worktrees.some(tree => tree.root === made?.root));
+    if (seen.length === 1) {
+      made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+      assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+    }
+    if (seen.length === 3) abort.abort();
+  }
+  assert.deepEqual(seen, [false, true, false]);
 });
