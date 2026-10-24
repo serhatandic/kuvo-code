@@ -26,6 +26,9 @@ struct GroupEditor: View {
     @State private var meetsAt: Date
     @State private var meetsEvery: Wakes.Repeat?
     @State private var topic: String
+    /// Who can be in it, as the computer it lives on says (a machine's: its own bots, and those of
+    /// your other computers that take a chat's turns); nil until it's said, or for this Mac's.
+    @State private var joinable: [String]?
     @FocusState private var focus: Field?
 
     private enum Field { case name, purpose, topic }
@@ -69,10 +72,24 @@ struct GroupEditor: View {
     private var isNew: Bool { group == nil }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var picked: [Bot] { members.compactMap { bots.bot($0) } }
-    /// The bots it can have: one that lives on a machine has those that live there too.
+    /// The bots it can have: those the computer it lives on says can join; until it's said, a
+    /// machine's own (this Mac's chats can have any).
     private var choices: [Bot] {
         guard let machine = group.flatMap({ groups.machine(of: $0.id) }) else { return bots.list }
+        if let joinable { return bots.list.filter { joinable.contains($0.id) || members.contains($0.id) } }
         return bots.list.filter { $0.machine == machine }
+    }
+
+    /// What the bots section says: a machine's chat that can have bots of your other computers says
+    /// where each takes its turn.
+    private var botsNote: String {
+        guard let machine = group.flatMap({ groups.machine(of: $0.id) }) else {
+            return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
+        }
+        if choices.contains(where: { $0.machine != machine }) {
+            return "Pick two or more. They answer one at a time, each on its own computer, and each remembers the chat in its own conversation."
+        }
+        return "Pick two or more of the bots on \(machine), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation."
     }
     private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && (meeting.map { $0.next > .now } ?? true) }
 
@@ -96,6 +113,10 @@ struct GroupEditor: View {
                 .frame(maxWidth: .infinity)
         }
         .onAppear { if isNew { focus = .name } }
+        .task(id: group?.id) {
+            guard let group else { return }
+            joinable = await groups.joinable(for: group.id)
+        }
         .alert("Delete \(group?.name ?? "This Group Chat")?", isPresented: $confirmsDelete) {
             Button("Delete", role: .destructive) {
                 guard let group else { return }
@@ -158,8 +179,7 @@ struct GroupEditor: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
-            section("Bots", note: group.flatMap({ groups.machine(of: $0.id) }).map { "Pick two or more of the bots on \($0), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation." }
-                    ?? "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation.") {
+            section("Bots", note: botsNote) {
                 WellGroup {
                     ForEach(Array(choices.enumerated()), id: \.element.id) { index, bot in
                         if index > 0 { WellDivider() }

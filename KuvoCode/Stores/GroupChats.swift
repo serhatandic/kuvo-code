@@ -93,6 +93,13 @@ final class GroupChats {
         return onMachine(id) ? await machines.undo(from: messageID, in: id) : mac.undo(from: messageID, in: id)
     }
 
+    /// Who can be in a chat, as the computer it lives on says; nil for this Mac's (any bot), or
+    /// when its machine can't say now.
+    func joinable(for id: String) async -> [String]? {
+        guard let machine = machine(of: id) else { return nil }
+        return await machines.joinable(machine)
+    }
+
     /// A new chat, on this Mac.
     func create(name: String, purpose: String? = nil, members: [String], meeting: BotGroup.Meeting? = nil) -> BotGroup {
         mac.create(name: name, purpose: purpose, members: members, meeting: meeting)

@@ -2090,10 +2090,14 @@ final class PhoneLink {
             for member in list where !members.contains(member) { members.append(member) }
             guard members.count >= 2 else { return (400, Self.message("A group chat needs at least two bots.")) }
             if let missing = members.first(where: { bots.bot($0) == nil }) { return (404, Self.message("There’s no bot “\(missing)”.")) }
-            // One that lives on a machine has only bots that live there; one on this Mac, any bot,
-            // as Edit Group Chat allows.
-            if let machine = groups.machine(of: id), let stranger = members.first(where: { bots.bot($0)?.machine != machine }) {
-                return (400, Self.message("\(bots.bot(stranger)?.name ?? "That bot") doesn’t live where this chat does."))
+            // One that lives on a machine has the bots that machine says can join (its own, and
+            // those of your other computers that take a chat's turns); one on this Mac, any bot, as
+            // Edit Group Chat allows.
+            if let machine = groups.machine(of: id) {
+                let joinable = await groups.joinable(for: id)
+                if let stranger = members.first(where: { member in joinable.map { !$0.contains(member) } ?? (bots.bot(member)?.machine != machine) }) {
+                    return (400, Self.message("\(bots.bot(stranger)?.name ?? "That bot") can’t be in this chat."))
+                }
             }
             group.members = members
         }

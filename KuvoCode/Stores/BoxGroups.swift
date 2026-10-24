@@ -390,6 +390,19 @@ final class BoxGroups {
         await reload(edited.id)
     }
 
+    /// Who can be in a chat there, as the machine says (its own bots, and those of your other
+    /// computers that take a chat's turns), by id; nil when it can't say now (away, or older).
+    func joinable(_ machine: String) async -> [String]? {
+        guard let api = api(machine) else { return nil }
+        struct Answer: Decodable {
+            struct Listed: Decodable { var id: String }
+            var bots: [Listed]
+        }
+        guard let answer = try? await api.client.send(try api.client.request("GET", "api/kuvo/link/groups/joinable"), as: JSONValue.self),
+              let data = try? JSONEncoder().encode(answer), let decoded = try? JSONDecoder().decode(Answer.self, from: data) else { return nil }
+        return decoded.bots.map(\.id)
+    }
+
     /// Deleted there: its seats, its messages; its bots forget it.
     func delete(_ group: BotGroup) async throws {
         guard let machine = machine(of: group.id), let api = api(machine) else { throw Failure.away(machine(of: group.id) ?? "Its machine") }

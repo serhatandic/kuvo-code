@@ -163,4 +163,33 @@ import Testing
         try await until { groups.messages(in: made.id).contains { $0.text == "Morning." } && !groups.discussing.contains(made.id) }
         #expect(!groups.messages(in: made.id).contains { $0.kind == .meeting }, "it didn't meet at once")
     }
+
+    /// Who can be in a machine's chat is what the machine says: its own bots, and those of your
+    /// other computers that take a chat's turns there, not one of a computer that doesn't yet.
+    @Test func whoCanBeInAMachinesChatIsWhatTheMachineSays() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        try bots()
+        serve(Seats(lines: [:]))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder, environment: [
+            "KUVO_GROUPS": folder.appending(path: "groups").path, "KUVO_BOTS": folder.appending(path: "bots").path, "KUVO_TRASH": folder.appending(path: "trash").path,
+        ])
+        defer { bridge.stop() }
+        let api = try #require(bridge.api)
+        let groups = BoxGroups()
+        groups.bridge = { [machine] in $0 == machine ? api : nil }
+        // Who its link says your other computers and their bots are.
+        let peers: JSONValue = .object([
+            "boxes": .array([.object(["key": .string("key_spare"), "name": .string("spare.invalid"), "seats": .bool(true)]),
+                             .object(["key": .string("key_old"), "name": .string("old.invalid"), "seats": .bool(false)])]),
+            "bots": .array([.object(["id": .string("bot_far"), "name": .string("Far"), "job": .string(""), "box": .string("key_spare")]),
+                            .object(["id": .string("bot_older"), "name": .string("Older"), "job": .string(""), "box": .string("key_old")])]),
+        ])
+        _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/peers", body: peers), as: JSONValue.self)
+
+        #expect(await groups.joinable(machine) == ["bot_ada", "bot_ben", "bot_far"])
+        #expect(await groups.joinable("away.invalid") == nil, "a machine that isn't there says nothing")
+    }
 }
