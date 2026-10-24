@@ -433,6 +433,32 @@ enum DemoDirector {
             for session in project.sessions.prefix(count).reversed() where !open.contains(.session(session.id)) { app.tabs.open(.session(session.id)) }
             if let current { app.tabs.open(current) }
         }
+        // KUVO_DEMO_BESIDE=<session ID or title>: that session beside the tab in view, as Open Beside
+        // does; KUVO_DEMO_SWAP_BESIDE=<seconds>: the two trade places that long after.
+        if let wanted = environment["KUVO_DEMO_BESIDE"], let session = workspace.sessions.first(where: { $0.id == wanted || $0.title == wanted }) {
+            app.tabs.openBeside(session.id)
+            if let wait = environment["KUVO_DEMO_SWAP_BESIDE"].flatMap(Double.init) {
+                Task {
+                    await DemoWait.pause(.asked(wait))
+                    app.tabs.swapSplit()
+                }
+            }
+        }
+        // KUVO_DEMO_MOVE_TO_AGENTS=<provider>/<model>|<seconds>: the session in view carries on with
+        // the coding agents that long after launch, as picking their model does.
+        if let spec = environment["KUVO_DEMO_MOVE_TO_AGENTS"] {
+            let parts = spec.split(separator: "|").map(String.init)
+            let model = parts[0].split(separator: "/", maxSplits: 1).map(String.init)
+            Task {
+                await DemoWait.pause(.asked(parts.count > 1 ? Double(parts[1]) ?? 5 : 5))
+                guard model.count == 2, let id = app.tabs.sessionID else { return }
+                do {
+                    try await workspace.moveToAgents(id, model: ModelRef(id: model[1], providerID: model[0]))
+                } catch {
+                    log.error("KUVO_DEMO_MOVE_TO_AGENTS failed: \(String(describing: error), privacy: .public)")
+                }
+            }
+        }
         // KUVO_DEMO_COMMENT=<path in the project>:<line>:<text> adds a review comment to the
         // session in view, on that line of the changes.
         if let spec = environment["KUVO_DEMO_COMMENT"], let directory = app.tabs.activeDirectory {
