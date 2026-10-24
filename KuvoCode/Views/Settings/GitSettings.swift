@@ -88,7 +88,7 @@ struct WorktreesSettings: View {
                 if trees.isEmpty && reading {
                     Spinner(size: 16).frame(maxWidth: .infinity)
                 } else if trees.isEmpty && unreached {
-                    Text("\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
+                    Text(box.machine == nil ? "This Mac’s worktrees show once its engine is running." : "\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
                         .foregroundStyle(.secondary)
                 } else if trees.isEmpty {
                     Text("None yet. Choose Worktree in a new session’s composer to give it one.")
@@ -125,7 +125,7 @@ struct WorktreesSettings: View {
                 if let failure {
                     Text(failure).foregroundStyle(.red)
                 } else if unreached && !trees.isEmpty {
-                    Text("\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
+                    Text(box.machine == nil ? "This Mac’s engine isn’t running, so these are its worktrees as they were last read." : "\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Removing one deletes its folder and anything in it that isn’t committed. Its branch stays if it isn’t merged yet.")
@@ -133,22 +133,15 @@ struct WorktreesSettings: View {
                 }
             }
         }
-        // A machine's as it keeps them now (one made there from a phone, say), with the room
-        // each takes there.
-        .task(id: box.machine) {
-            guard let machine = box.machine else { return }
+        // This computer's as its box keeps them now (one made there from a phone, say), with the
+        // room each takes there.
+        // Again once this Mac's box is up, if it wasn't when the page opened.
+        .task(id: "\(box.machine ?? BoxClient.mac) \(app.box.endpoint != nil)") {
             reading = true
-            let read = await workspace.takeWorktrees(from: machine, sizes: true)
+            let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, sizes: true)
             reading = false
             unreached = read == nil
             sizes = read ?? [:]
-        }
-        .task(id: trees.map(\.tree.root)) {
-            guard box.machine == nil else { return }
-            let roots = trees.map(\.tree.root)
-            sizes = await Task.detached {
-                Dictionary(uniqueKeysWithValues: roots.map { ($0, StorageReport.size(of: URL(filePath: $0))) })
-            }.value
         }
         .confirmationDialog("Remove the worktree for \(removing?.branch ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { tree in
             Button("Remove", role: .destructive) {

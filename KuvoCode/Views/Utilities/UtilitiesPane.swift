@@ -203,18 +203,27 @@ struct UtilitiesPane: View {
                     placeholder("Page Closed", symbol: "globe", detail: "Close this tab, or open a new one.")
                 }
             case .machinePage(let machine, let page):
-                if let browser = app.machines.engine(machine)?.browser {
-                    MachineBrowserPane(browser: browser, page: page, attach: attachToMessage) {
-                        NewTabPage(utilities: utilities, tabID: tab.id, directory: directory, environment: environment) { address in
-                            // A new tab opens its page; a blank page goes there.
-                            if page == nil { utilities.open(address, inTab: tab.id) } else { browser.load(address) }
-                        } openInNewTab: { address in
-                            utilities.newMachinePage(machine, address: address)
+                if let engine = app.machines.engine(machine) {
+                    let browser = engine.browser
+                    // A machine that can't be reached, and nothing live from its browser (which
+                    // keeps its own link through a restart or a moment without the engine's
+                    // events): what's happening there and a way to try again, rather than a
+                    // browser that can't start.
+                    if !engine.isReady, browser.state != .live {
+                        MachineWaitingView(engine: engine, note: "Its pages show here once it’s back.")
+                    } else {
+                        MachineBrowserPane(browser: browser, page: page, attach: attachToMessage) {
+                            NewTabPage(utilities: utilities, tabID: tab.id, directory: directory, environment: environment) { address in
+                                // A new tab opens its page; a blank page goes there.
+                                if page == nil { utilities.open(address, inTab: tab.id) } else { browser.load(address) }
+                            } openInNewTab: { address in
+                                utilities.newMachinePage(machine, address: address)
+                            }
+                        } onSubmit: { address in
+                            utilities.open(address, inTab: tab.id)
                         }
-                    } onSubmit: { address in
-                        utilities.open(address, inTab: tab.id)
+                        .id(tab.id)
                     }
-                    .id(tab.id)
                 } else {
                     placeholder("Machine Removed", symbol: "server.rack", detail: "\(machine) isn’t one of your machines anymore. Close this tab.")
                 }
