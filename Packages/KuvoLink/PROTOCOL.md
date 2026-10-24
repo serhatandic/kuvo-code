@@ -145,6 +145,11 @@ connection.
     `machine`, and takes their letters on over SSH.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
     the bridge takes when it's newer than the Mac's mail.
+- **Personalities**: `{"personalities": {personalities, removed}}`, the library as
+  `kuvo/personalities` keeps it (from 0.9.23). A machine sends its copy to its other machines when
+  it changes and every ten minutes (with `"ask"`, at once), and meets each it gets with its own:
+  per personality the newest change wins, a removal too. Its bots whose personality changed are
+  told what they are now. A Mac meets a machine's copy as it connects, over SSH.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
   `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids

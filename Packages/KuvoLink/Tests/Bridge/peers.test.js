@@ -352,3 +352,58 @@ test("a machine a Mac removed no longer counts that Mac: its peers and lists go,
   assert.equal(after.phones[0].mac, undefined, "its phones are as ones from before Macs were named");
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(run, "peer-agents.json"), "utf8"))), [other.pub]);
 });
+
+test("your personalities go box to box with no Mac: each machine tells the others its copy, the newest change to each wins, and bots there with one that changed are told", async () => {
+  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const library = path.join(home, "bots", "personalities.json");
+  fs.rmSync(path.join(home, "bots"), { recursive: true, force: true });
+  link.changePersonalities(() => ({ personalities: [{ id: "custom.calm", name: "Calm", description: "Calm and brief.", updated: 10 }], removed: [] }));
+  // A bot here with it, and the engine its conversation runs on.
+  const folder = path.join(home, "bots", "bot_scout00001");
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: {}, personality: "custom.calm", created: "2026-10-01T09:00:00Z" }));
+  fs.writeFileSync(path.join(folder, "session"), "ses_scout");
+  fs.writeFileSync(path.join(home, "bots", "kit.json"), JSON.stringify({ kuvo: 1, templates: [], personalities: [], looks: {}, projects: [], rules: [],
+    instructions: "You are ⟦name⟧.\n⟦personality⟧\nMemory: ⟦folder⟧.", projectNote: "", identityNote: "", memory: "", greeting: "", timeZone: "UTC" }));
+  const told = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => body += chunk);
+    request.on("end", () => {
+      if (request.method === "PUT") told.push({ url: request.url, value: JSON.parse(body).value });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const target = { port: server.address().port, password: "pw" };
+    // Told to the other machine, not to the Mac (which meets this copy as it connects).
+    const sent = [];
+    const host = { send: bytes => sent.push(bytes) };
+    await link.announce(host, () => ({ ...target }), link.readLink(), Date.now());
+    const toSecond = sent.filter(bytes => k(bytes.subarray(1, 17)) === second.address).map(bytes => opened(bytes, second).payload);
+    assert.deepEqual(toSecond.find(payload => payload.personalities)?.personalities.personalities.map(each => each.name), ["Calm"]);
+    assert.equal(sent.filter(bytes => k(bytes.subarray(1, 17)) === mac.address).some(bytes => opened(bytes, mac).payload.personalities), false);
+
+    // The other machine changed it later, and made another: taken here, the bot told.
+    const changed = await link.takePersonalities({ personalities: [
+      { id: "custom.calm", name: "Calm", description: "Calm, brief and kind.", updated: 20 },
+      { id: "custom.bold", name: "Bold", description: "Bold.", updated: 5 },
+    ] }, () => target, () => null);
+    assert.deepEqual(changed.sort(), ["custom.bold", "custom.calm"]);
+    assert.deepEqual(link.readPersonalities(library).personalities.map(each => each.description).sort(), ["Bold.", "Calm, brief and kind."]);
+    assert.equal(told.length, 1);
+    assert.equal(told[0].url, "/api/experimental/session/ses_scout/instructions/entries/kuvo.bot");
+    assert.match(told[0].value, /Calm, brief and kind\./);
+    // An older copy changes nothing; a removal wins over an older change, and the bot is told it's gone.
+    assert.deepEqual(await link.takePersonalities({ personalities: [{ id: "custom.calm", name: "Calm", description: "Old.", updated: 1 }] }, () => target, () => null), []);
+    await link.takePersonalities({ removed: [{ id: "custom.calm", removed: 30 }] }, () => target, () => null);
+    assert.equal(told.length, 2);
+    assert.doesNotMatch(told[1].value, /Calm/);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    fs.rmSync(path.join(home, "bots"), { recursive: true, force: true });
+  }
+});

@@ -1667,6 +1667,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       let id;
       try { id = personality[1] === undefined ? undefined : decodeURIComponent(personality[1]); } catch { return yield* json(404, {}); }
       const [status, value] = answerPersonalities(request.method.toUpperCase(), id, parsed(request.body));
+      // Its bots with it are told what it is now, or that it's gone.
+      if (status === 200 && id !== undefined) retellBots([id], readEngine, readBridge).catch(() => {});
       return yield* json(status, value);
     }
     if (route === "kuvo/bots/templates") {
@@ -3539,6 +3541,36 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
   });
 }
 
+// A peer's copy met with this one's (each box tells the others its own, box to box, with no Mac
+// needed): the personalities that changed here, whose bots here are told what they are now.
+export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
+  const before = readPersonalities(file);
+  const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
+  const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
+  const changed = [...after.personalities, ...after.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
+  if (changed.length) await retellBots(changed, readEngine, readBridge).catch(() => {});
+  return changed;
+}
+
+// Bots here whose personality is among `ids` (changed, or gone), told what they are now, as a
+// Mac tells its own (Bots.personalityChanged).
+export async function retellBots(ids, readEngine = readEngineFile, readBridge = readBridgeFile) {
+  const kit = readKit();
+  if (!kit) return;
+  const personalities = botPersonalities(kit);
+  for (const here of listOf(BOTS).map(botHere)) {
+    if (!here || !ids.includes(here.described.personality) || isMoving(here.folder)) continue;
+    let target = null;
+    try { target = here.agents ? readBridge() : readEngine(); } catch {}
+    if (!target?.port) continue;
+    const personality = personalities.find(each => each.id === here.described.personality)?.instruction;
+    const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? ""));
+    if (told === null) continue;
+    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(here.session)}/instructions/entries/kuvo.bot`, { value: told })
+      .then(() => toldBots.set(here.session, told), () => {});
+  }
+}
+
 // What a phone asks of the library (`kuvo/personalities`): `[status, value]`.
 export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
   const now = Date.now();
@@ -4399,6 +4431,7 @@ export function peerMail(sender, payload, host, targets = () => []) {
   if (isObject(payload.agents)) {
     if (takeAgents(sender, payload.agents)) writeAgents();
   }
+  if (isObject(payload.personalities)) takePersonalities(payload.personalities).catch(() => {});
   // It's just connected, and may have missed what this box told it (the relay keeps nothing):
   // told again at the next round.
   if (payload.ask === "agents") toldPeers.delete(sender.key);
@@ -4432,6 +4465,8 @@ export async function refreshOwn(readEngine, link = readLink()) {
 // Tells each peer this box's agents: when they change, and every ten minutes. `told` remembers
 // what went to whom, and when. `ask`: just connected, so each is told, and asked for theirs.
 const toldPeers = new Map();
+// What each machine was last told of your personalities, and when.
+const toldPersonalities = new Map();
 export async function announce(host, readEngine, link = readLink(), now = Date.now(), ask = false) {
   if (!link?.key) return;
   await refreshOwn(readEngine, link);
@@ -4451,6 +4486,21 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
     try {
       host.send(bytes);
       toldPeers.set(peer.key, { json, at: now, sessions: new Set(sent.map(agent => agent.session)) });
+    } catch {}
+  }
+  // Your personalities, to your other machines (a Mac meets a box's copy as it connects): when
+  // this copy changes, and every ten minutes, so one that was away catches up.
+  const library = readPersonalities();
+  const words = JSON.stringify(library);
+  if (!library.personalities.length && !library.removed.length) return;
+  for (const peer of peersOf(link).filter(peer => peer.kind === "machine")) {
+    const last = toldPersonalities.get(peer.key);
+    if (!ask && last && last.words === words && now - last.at < 600_000) continue;
+    const bytes = mailFor(peer, { personalities: library, at: now }, link);
+    if (!bytes) continue;
+    try {
+      host.send(bytes);
+      toldPersonalities.set(peer.key, { words, at: now });
     } catch {}
   }
 }
