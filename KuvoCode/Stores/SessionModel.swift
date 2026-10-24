@@ -1165,10 +1165,14 @@ final class SessionModel {
             // conversation say, so the text isn't lost.
             if outgoing[item.id]?.state == .takingBack {
                 let queued = try? await api.inbox(session: id), recent = try? await api.messages(session: id, limit: 40).data
-                // Unless its word came meanwhile.
-                guard outgoing[item.id]?.state == .takingBack else { return }
-                guard let queued, let recent else { return move(item.id, to: .waiting) }
-                move(item.id, to: queued.contains { $0.id == item.id } ? .waiting : recent.contains { $0.id == item.id } ? .delivered : .cancelled)
+                // Unless its word came meanwhile, which says.
+                if outgoing[item.id]?.state == .takingBack {
+                    if let queued, let recent {
+                        move(item.id, to: queued.contains { $0.id == item.id } ? .waiting : recent.contains { $0.id == item.id } ? .delivered : .cancelled)
+                    } else {
+                        move(item.id, to: .waiting)
+                    }
+                }
             }
             guard outgoing[item.id]?.state == .cancelled else { return }
             restoreDraft(item.text, files: item.files)
