@@ -414,9 +414,9 @@ extension AppModel {
         // Your personalities, its copy and this Mac's met, before its kit says what they are.
         if live(engine) { await syncPersonalities(with: engine) }
         if live(engine) { await bots.writeKit(on: engine.machine.id) }
-        // Its bots' jobs as their memories there have them now (written with this Mac away, and
-        // told there by the machine itself), so what this Mac writes of them is current.
-        for bot in bots.list where bot.machine == engine.machine.id && live(engine) { await bots.syncJob(of: bot.id) }
+        // Its bots' jobs as their memories there have them now (kept there by the machine
+        // itself), so what this Mac writes of them is current.
+        if live(engine) { await bots.takeJobs(on: engine.machine.id) }
         // What its bots are, in their folders there, for what runs there without this Mac.
         if live(engine) { await bots.describeAll(on: engine.machine.id) }
         // A move to or from it cut short (the app quit, it went away) is finished or taken back.

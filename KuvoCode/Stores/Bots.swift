@@ -668,31 +668,14 @@ final class Bots {
         return lines.joined(separator: "\n").trimmingCharacters(in: .newlines) + "\n"
     }
 
-    /// Its memory file's text; nil when it can't be read (its machine isn't connected, say).
-    private func memory(of bot: Bot) async -> String? {
-        guard let machine = bot.machine else { return try? String(contentsOfFile: bot.memoryFile, encoding: .utf8) }
-        let file = SSHConnection.quoted(bot.memoryFile)
-        return await Task.detached { RemoteShell.run("cat \(file)", on: machine) }.value.map { String(decoding: $0, as: UTF8.self) }
-    }
-
-    private func write(memory text: String, of bot: Bot) async -> Bool {
-        guard let machine = bot.machine else { return (try? Data(text.utf8).write(to: URL(filePath: bot.memoryFile), options: .atomic)) != nil }
-        // On its input, not its command line (which has a size limit a long memory can pass).
-        let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-memory-\(UUID().uuidString).md")
-        defer { try? FileManager.default.removeItem(at: file) }
-        guard (try? Data(text.utf8).write(to: file)) != nil else { return false }
-        let quoted = SSHConnection.quoted(bot.memoryFile)
-        return (try? await SSHConnection(destination: machine).run("cat >\(quoted).new && mv -f \(quoted).new \(quoted)", input: file)) != nil
-    }
-
     /// When each Mac bot's memory was last read, so it's read again only once it changes.
     @ObservationIgnored private var memoryRead: [String: Date] = [:]
 
-    /// Reads its job from its memory, as the bot keeps it, and gives a changed one to its
-    /// conversation and its group chats. A bot whose job was written in Edit Bot first has it
-    /// moved into its memory, once.
+    /// Reads a bot on this Mac's job from its memory, as the bot keeps it, and gives a changed one
+    /// to its conversation and its group chats. A bot whose job was written in Edit Bot first has
+    /// it moved into its memory, once. (A machine keeps its own bots' jobs: `takeJobs(on:)`.)
     func syncJob(of id: String) async {
-        guard let bot = bot(id), var text = await memory(of: bot) else { return }
+        guard let bot = bot(id), bot.machine == nil, var text = try? String(contentsOfFile: bot.memoryFile, encoding: .utf8) else { return }
         var updated = bot
         if bot.jobInMemory != true {
             let old = [bot.job, bot.instructions].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -704,16 +687,15 @@ final class Bots {
                 } else {
                     text = Self.addingJob(old[0], details: old[1], to: text)
                 }
-                guard await write(memory: text, of: bot) else { return }
+                guard (try? Data(text.utf8).write(to: URL(filePath: bot.memoryFile), options: .atomic)) != nil else { return }
             }
             updated.jobInMemory = true
         }
         let kept = Self.job(inMemory: text)
         updated.job = kept?.line ?? ""
         updated.instructions = kept?.section ?? ""
-        // (Not an edit of its description's: a job the bot wrote itself doesn't make this Mac's
-        // copy newer than a rename from a phone on its machine, which this Mac takes in.)
-        if bot.machine == nil { memoryRead[id] = (try? FileManager.default.attributesOfItem(atPath: bot.memoryFile)[.modificationDate]) as? Date }
+        // (Not an edit of its description's.)
+        memoryRead[id] = (try? FileManager.default.attributesOfItem(atPath: bot.memoryFile)[.modificationDate]) as? Date
         guard updated != bot, let index = list.firstIndex(where: { $0.id == id }) else { return }
         list[index] = updated
         save()
@@ -737,10 +719,38 @@ final class Bots {
     }
 
     /// A bot's run ended: its job may have changed in its memory (on a machine, where it can't be
-    /// seen changing).
+    /// seen changing). The machine reads it and tells the bot itself; this Mac takes it from there.
     func runEnded(session: String) {
-        guard let bot = bot(forSession: session), bot.machine != nil else { return }
-        Task { await syncJob(of: bot.id) }
+        guard let machine = bot(forSession: session)?.machine else { return }
+        Task { await takeJobs(on: machine) }
+    }
+
+    /// `machine`'s bots' jobs, as their memories there have them now, taken from the machine's
+    /// list of its bots (`kuvo/bots?memory=1`): the machine keeps them current itself, in their
+    /// descriptions and what they're told, so this Mac only takes them in, and its group chats
+    /// hear of a changed one.
+    func takeJobs(on machine: String) async {
+        guard let connection = app?.machines.engine(machine)?.machine.connection,
+              let (status, data) = try? await MachineBox.route("GET", "kuvo/bots?memory=1", on: connection), status == 200 else { return }
+        struct Listed: Decodable {
+            struct Job: Decodable { var line: String; var section: String }
+            struct Entry: Decodable { var id: String; var memoryJob: Job? }
+            var bots: [Entry]
+        }
+        guard let listed = try? JSONDecoder().decode(Listed.self, from: data) else { return }
+        for entry in listed.bots {
+            guard let job = entry.memoryJob, let index = list.firstIndex(where: { $0.id == entry.id }), list[index].machine == machine,
+                  !Moves.isFrozen(entry.id) else { continue }
+            let old = list[index]
+            var bot = old
+            bot.job = job.line
+            bot.instructions = job.section
+            bot.jobInMemory = true
+            guard bot != old else { continue }
+            list[index] = bot
+            save()
+            if bot.job != old.job || bot.instructions != old.instructions { await app?.groups.botChanged(bot) }
+        }
     }
 
     /// Whether a path is a bot's memory file.
@@ -889,12 +899,12 @@ final class Bots {
             if api(for: bot) != nil { await tell(id) }
         }
         await app?.groups.catchUp()
+        // Machines' bots: their jobs as their memories there have them now, before they're told.
+        let machines = Set(list.filter { !synced.contains($0.id) && api(for: $0) != nil }.compactMap(\.machine))
+        for machine in machines.sorted() { await takeJobs(on: machine) }
         let sent = UserDefaults.standard.dictionary(forKey: Self.sentKey) as? [String: String] ?? [:]
         for listed in list where !synced.contains(listed.id) {
-            guard let api = api(for: listed) else { continue }
-            // A machine's bot: its job as its memory there has it now.
-            if listed.machine != nil { await syncJob(of: listed.id) }
-            guard let bot = bot(listed.id) else { continue }
+            guard let bot = bot(listed.id), let api = api(for: bot) else { continue }
             if sent[bot.sessionID] != Self.digest(Self.instructions(for: bot)) {
                 do {
                     try await sendInstructions(of: bot, api: api)
@@ -1268,8 +1278,7 @@ extension Bots {
             guard parts.count == 4, let descriptor = Data(base64Encoded: parts[1]) else { return nil }
             return Found(folder: parts[0], descriptor: descriptor, session: parts[2], via: parts[3])
         }
-        let adopted = adopt(found, on: machine)
-        for bot in adopted { await syncJob(of: bot.id) }
+        if !adopt(found, on: machine).isEmpty { await takeJobs(on: machine) }
         await takeIn(found, deleted: deleted, on: machine)
     }
 
