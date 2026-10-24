@@ -207,16 +207,17 @@ extension AppModel {
     }
 
     /// Connects again now, rather than waiting for the connection to come back by itself.
-    func reconnectNow(_ engine: MachineEngine) {
+    @discardableResult
+    func reconnectNow(_ engine: MachineEngine) -> Task<Void, Never>? {
         // Already connecting.
         switch engine.state {
-        case .starting, .downloading: return
+        case .starting, .downloading: return nil
         default: break
         }
         engine.disconnect()
         workspace.forget(engine.machine.id)
         if engine.isStopped { engine.startWanted = true }
-        connect(engine)
+        return connect(engine)
     }
 
     /// Starts engines again, so they take what they read only as they start (accounts brought over
@@ -283,12 +284,13 @@ extension AppModel {
     }
 
     /// Starts a machine's engine over (its Settings › Engine), and connects to it again.
-    func restartEngine(_ engine: MachineEngine) {
+    @discardableResult
+    func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
         workspace.forget(engine.machine.id)
-        Task {
+        return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
-            connect(engine)
+            await connect(engine).value
         }
     }
 
@@ -297,7 +299,9 @@ extension AppModel {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
     }
 
-    func connect(_ engine: MachineEngine) {
+    /// Connects to `engine`'s machine: the start, and what follows it there, which a test waits for.
+    @discardableResult
+    func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
@@ -342,8 +346,9 @@ extension AppModel {
                 await self.moves.recover()
             }
         }
+        // (Its watch ends with Disconnect and Remove.)
         engine.onStartedElsewhere = { [weak self, weak engine] in
-            guard let self, let engine, self.machines.engine(machine) === engine else { return }
+            guard let self, let engine else { return }
             self.connect(engine)
         }
         engine.onExit = { [weak self] in
@@ -354,7 +359,7 @@ extension AppModel {
             engine.isRetrying = true
             Task { await self?.reconnect(engine) }
         }
-        Task { await start(engine) }
+        return Task { await start(engine) }
     }
 
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
@@ -362,12 +367,11 @@ extension AppModel {
     private func reconnect(_ engine: MachineEngine) async {
         engine.isRetrying = true
         defer { engine.isRetrying = false }
-        for delay in [3, 10, 30, 60, 120, 120, 300, 300, 300, 300, 300] {
-            try? await Task.sleep(for: .seconds(delay))
-            // Removed, or connected again some other way (Try Again).
-            guard machines.engine(engine.machine.id) === engine, case .failed = engine.state else { return }
+        await MachineClock.retry(after: [3, 10, 30, 60, 120, 120, 300, 300, 300, 300, 300]) {
+            // Connected again some other way (Try Again), or removed (which disconnects it).
+            guard case .failed = engine.state else { return true }
             await start(engine)
-            if engine.isReady { return }
+            return engine.isReady
         }
     }
 
@@ -385,84 +389,67 @@ extension AppModel {
         for _ in 0..<240 where api == nil { try? await Task.sleep(for: .milliseconds(250)) }
         // Removed a moment ago and added again: after the removal there has finished.
         await machines.waitForRemoval(of: engine.machine.id)
-        await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux"))
-        // Removed while it started: nothing of yours goes there. It keeps running as Remove leaves
-        // it (an Uninstall's stop waits in the queue), but for a test or demo copy's.
-        // Checked again before each step that sends it something, as removing can come any time.
-        guard machines.engine(engine.machine.id) === engine else {
-            if engine.isReady { if leavesMachinesRunning { engine.disconnect() } else { await engine.shutDown() } }
-            return
-        }
-        // What waits for it (a bot deleted, an integration removed while it was away), now.
-        if live(engine) { await machines.runWaiting(only: engine.machine.id) }
-        // Its sessions, once it's up: tried again a few times, as they're what makes them live.
-        for wait in [0, 2, 5, 10, 20] where live(engine) {
-            try? await Task.sleep(for: .seconds(wait))
-            guard live(engine) else { break }
-            if await workspace.refresh(engine) { break }
-        }
-        // Phones you've paired reach it directly, through its own bridge.
-        if live(engine) { await phoneLink.sync(engine) }
-        // Bots it made, changed or deleted while this Mac was away, taken in (first, so a deleted
-        // one's keys don't go back); and what it needs to make them itself.
-        if live(engine) { await bots.adoptMade(on: engine.machine.id) }
-        // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
-        if live(engine) { await workspace.takeWorktrees(from: engine.machine.id) }
-        // Its bots' keys of their own are its own: any this Mac kept from before go to it, and its
-        // bots' folders' settings follow its integrations as they are now.
-        if live(engine) { await BotKeys.applyAll(on: engine.machine.id, app: self) }
-        // Your personalities, its copy and this Mac's met, before its kit says what they are.
-        if live(engine) { await syncPersonalities(with: engine) }
-        if live(engine) { await bots.writeKit(on: engine.machine.id) }
-        // Its bots' jobs as their memories there have them now (kept there by the machine
-        // itself), so what this Mac writes of them is current.
-        if live(engine) { await bots.takeJobs(on: engine.machine.id) }
-        // What its bots are, in their folders there, for what runs there without this Mac.
-        if live(engine) { await bots.describeAll(on: engine.machine.id) }
-        // A move to or from it cut short (the app quit, it went away) is finished or taken back.
-        if live(engine) { await moves.recover() }
-        // What you signed in to here works there too, kept in step while it's connected.
-        engine.signInSync?.cancel()
-        if live(engine) {
-            await syncSignIns(with: engine)
-            await syncSignInFiles(with: engine)
-            await AgentMail.shared.share(with: engine)
-            await AgentMail.shared.collect(from: engine)
-            await AgentMail.shared.deliverWaiting(to: engine)
-            await wakeUps.share(with: engine)
-            await Utilities.shareTabTidying(on: engine.machine.id)
-            engine.signInSync = Task { [weak self, weak engine] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(600))
-                    guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
-                    await self?.syncSignIns(with: engine)
-                    await self?.syncSignInFiles(with: engine)
-                }
-            }
-            engine.agentSync?.cancel()
-            engine.agentSync = Task { [weak self, weak engine] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(60))
-                    guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
-                    await AgentMail.shared.share(with: engine)
-                    await AgentMail.shared.collect(from: engine)
-                    // What waited for it and couldn't go as it connected (its coding agents'
-                    // bridge was still starting): now, not at its next connection.
-                    await AgentMail.shared.deliverWaiting(to: engine)
-                    await self?.wakeUps.share(with: engine)
-                    // Your personalities as the machine has them now (one changed on another
-                    // machine reaches it box to box), so this Mac never tells a bot older words.
-                    await self?.syncPersonalities(with: engine)
-                }
-            }
-            // Settings changed here while it connected, after it took the ones it has.
-            keepSettingsCurrent(engine)
-        }
+        // Removed, or disconnected, while it started (or since): its connection ended, and nothing
+        // of yours goes there.
+        guard let connection = await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux")) else { return }
+        await connection.run("connected") { [weak self] in await self?.connected(engine, connection) }.value
     }
 
-    /// A machine's engine that's up and still added: one removed meanwhile gets nothing more.
-    func live(_ engine: MachineEngine) -> Bool {
-        engine.isReady && machines.engine(engine.machine.id) === engine
+    /// What a machine gets once it's connected, and the syncs that keep it current: each for as
+    /// long as its connection lasts.
+    private func connected(_ engine: MachineEngine, _ connection: MachineConnection) async {
+        let machine = engine.machine.id
+        // What waits for it (a bot deleted, an integration removed while it was away), now.
+        guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
+        // Its sessions, once it's up: tried again a few times, as they're what makes them live.
+        await MachineClock.retry(after: [0, 2, 5, 10, 20]) { await workspace.refresh(engine) }
+        guard await MachineConnection.inTurn([
+            // Phones you've paired reach it directly, through its own bridge.
+            { await self.phoneLink.sync(engine) },
+            // Bots it made, changed or deleted while this Mac was away, taken in (first, so a
+            // deleted one's keys don't go back); and what it needs to make them itself.
+            { await self.bots.adoptMade(on: machine) },
+            // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
+            { await self.workspace.takeWorktrees(from: machine) },
+            // Its bots' keys of their own are its own: any this Mac kept from before go to it, and
+            // its bots' folders' settings follow its integrations as they are now.
+            { await BotKeys.applyAll(on: machine, app: self) },
+            // Your personalities, its copy and this Mac's met, before its kit says what they are.
+            { await self.syncPersonalities(with: engine) },
+            { await self.bots.writeKit(on: machine) },
+            // Its bots' jobs as their memories there have them now (kept there by the machine
+            // itself), so what this Mac writes of them is current.
+            { await self.bots.takeJobs(on: machine) },
+            // What its bots are, in their folders there, for what runs there without this Mac.
+            { await self.bots.describeAll(on: machine) },
+            // A move to or from it cut short (the app quit, it went away) is finished or taken back.
+            { await self.moves.recover() },
+            // What you signed in to here works there too, kept in step while it's connected.
+            { await self.syncSignIns(with: engine) },
+            { await self.syncSignInFiles(with: engine) },
+            { await AgentMail.shared.share(with: engine) },
+            { await AgentMail.shared.collect(from: engine) },
+            { await AgentMail.shared.deliverWaiting(to: engine) },
+            { await self.wakeUps.share(with: engine) },
+            { await Utilities.shareTabTidying(on: machine) },
+        ]) else { return }
+        connection.every(600, "sign-ins", [
+            { await self.syncSignIns(with: engine) },
+            { await self.syncSignInFiles(with: engine) },
+        ])
+        connection.every(60, "agents", [
+            { await AgentMail.shared.share(with: engine) },
+            { await AgentMail.shared.collect(from: engine) },
+            // What waited for it and couldn't go as it connected (its coding agents' bridge was
+            // still starting): now, not at its next connection.
+            { await AgentMail.shared.deliverWaiting(to: engine) },
+            { await self.wakeUps.share(with: engine) },
+            // Your personalities as the machine has them now (one changed on another machine
+            // reaches it box to box), so this Mac never tells a bot older words.
+            { await self.syncPersonalities(with: engine) },
+        ])
+        // Settings changed here while it connected, after it took the ones it has.
+        connection.run("settings") { [weak self] in await self?.keepSettingsCurrent(engine) }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
@@ -472,7 +459,8 @@ extension AppModel {
         engine.startWanted = false
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
-        engine.agentSync?.cancel()
+        // What runs for its connection ends now, a test copy's too, whose engine stops after.
+        engine.endConnection()
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         workspace.forget(engine.machine.id)
     }
@@ -581,26 +569,23 @@ extension AppModel {
     /// it has older ones, as soon as nothing runs there: checked again while something does, less
     /// often the longer it takes, for as long as it stays connected. (Disconnected, it's checked
     /// again when it connects.)
-    func keepSettingsCurrent(_ engine: MachineEngine) {
-        engine.settingsUpdate?.cancel()
-        engine.settingsUpdate = Task { [weak self, weak engine] in
-            var wait = 30
-            while !Task.isCancelled {
-                guard let self, let engine, engine.isReady else { return }
-                guard engine.isBehind(await self.machineLaunch(engine)) else { return }
-                if !self.workspace.isRunning(on: engine.machine.id), !self.machineGroups.isTalking(on: engine.machine.id),
-                   (try? await engine.api?.activeSessions())?.isEmpty == true {
-                    // Said in the log, so one that keeps starting over is seen there.
-                    Logger(subsystem: "run.kuvo.code", category: "machine").info("\(engine.machine.id, privacy: .public)'s engine starts over with this Mac's newer settings")
-                    // Connecting again starts it over with them, in one start (`MachineEngine.start`).
-                    engine.disconnect()
-                    // Apart from this task, which connecting replaces.
-                    Task { await self.start(engine) }
-                    return
-                }
-                try? await Task.sleep(for: .seconds(wait))
-                wait = min(wait * 2, 120)
+    private func keepSettingsCurrent(_ engine: MachineEngine) async {
+        var wait = 30
+        while !Task.isCancelled, engine.isBehind(await machineLaunch(engine)) {
+            if !workspace.isRunning(on: engine.machine.id), !machineGroups.isTalking(on: engine.machine.id),
+               (try? await engine.api?.activeSessions())?.isEmpty == true {
+                // What it answered is this connection's: one closed meanwhile isn't started over.
+                guard !Task.isCancelled else { return }
+                // Said in the log, so one that keeps starting over is seen there.
+                Logger(subsystem: "run.kuvo.code", category: "machine").info("\(engine.machine.id, privacy: .public)'s engine starts over with this Mac's newer settings")
+                // Connecting again starts it over with them, in one start (`MachineEngine.start`),
+                // its connection, and this with it, ended first.
+                engine.disconnect()
+                Task { await self.start(engine) }
+                return
             }
+            await MachineClock.wait(wait)
+            wait = min(wait * 2, 120)
         }
     }
 
@@ -623,7 +608,7 @@ extension AppModel {
     /// (see `Personalities`). One that changed here goes to the other machines too, and bots with
     /// it hear its new words.
     func syncPersonalities(with engine: MachineEngine) async {
-        guard live(engine), let met = try? await MachineBox.personalities(Personalities.shared.library, on: engine.machine.connection) else { return }
+        guard let met = try? await MachineBox.personalities(Personalities.shared.library, on: engine.machine.connection) else { return }
         let changed = Personalities.shared.take(met)
         guard !changed.isEmpty else { return }
         personalitiesChanged(except: engine.machine.id)
@@ -633,14 +618,16 @@ extension AppModel {
     /// Your personalities changed here (made, changed or removed, or taken from one machine): the
     /// machines connected now take them, with what their bots and group chats are told.
     func personalitiesChanged(except machine: String? = nil) {
-        for engine in machines.engines.values where engine.machine.id != machine && engine.isReady {
-            engine.personalitiesSync?.cancel()
-            engine.personalitiesSync = Task { [weak self, weak engine] in
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, let engine, !Task.isCancelled, self.live(engine) else { return }
-                await self.syncPersonalities(with: engine)
-                await self.bots.writeKit(on: engine.machine.id)
-                await self.machineGroups.giveSettings(to: engine.machine.id)
+        for engine in machines.engines.values where engine.machine.id != machine {
+            // A moment on, the last change's round only.
+            engine.activeConnection?.run("personalities") { [weak self] in
+                await MachineClock.wait(1)
+                guard let self else { return }
+                await MachineConnection.inTurn([
+                    { await self.syncPersonalities(with: engine) },
+                    { await self.bots.writeKit(on: engine.machine.id) },
+                    { await self.machineGroups.giveSettings(to: engine.machine.id) },
+                ])
             }
         }
     }

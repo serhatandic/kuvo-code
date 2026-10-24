@@ -82,9 +82,22 @@ public struct SSHConnection: Sendable, Hashable, Codable {
         "exec sh -c 'kuvo_script=$(printf %s " + Data(script.utf8).base64EncodedString() + " | base64 -d) || exit 127; eval \"$kuvo_script\"'"
     }
 
+    #if DEBUG
+    /// For the app's tests: what a machine at an address answers to a script (nil: it failed, as
+    /// SSH to an unreachable one does), in place of `ssh`. Only `run` and the app's short
+    /// commands (`RemoteShell`) go to it.
+    nonisolated(unsafe) public static var standIn: (@Sendable (_ address: String, _ script: String) -> String?)?
+    #endif
+
     /// Runs `script` on the machine and returns what it printed. `input` is sent to it.
     @discardableResult
     public func run(_ script: String, input: URL? = nil) async throws -> String {
+        #if DEBUG
+        if let standIn = Self.standIn {
+            guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
+            return output
+        }
+        #endif
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ssh")
         process.arguments = arguments(running: script)
