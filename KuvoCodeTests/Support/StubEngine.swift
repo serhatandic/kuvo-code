@@ -129,17 +129,25 @@ nonisolated final class StubEngine: @unchecked Sendable {
 /// Once open, it lets every answer through, those waiting and any after.
 nonisolated final class Gate: @unchecked Sendable {
     private let condition = NSCondition()
-    private var isOpen = false
+    private var opened = false
 
     func wait() {
         condition.lock()
-        while !isOpen { condition.wait() }
+        while !opened { condition.wait() }
         condition.unlock()
+    }
+
+    /// Whether it's open yet, without waiting: for an answer that says "not yet" until it is,
+    /// leaving other requests to go on meanwhile (`wait` holds every request behind it).
+    var isOpen: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return opened
     }
 
     func open() {
         condition.lock()
-        isOpen = true
+        opened = true
         condition.broadcast()
         condition.unlock()
     }

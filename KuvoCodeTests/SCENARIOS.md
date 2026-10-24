@@ -26,7 +26,7 @@ for Linux's tools).
 | B9 Plan first, then Build It | AgentAsksTests | |
 | B10 Ask First: allow once, always, deny | ComposerReturnsTests, ProjectFoldersTests, PermissionCardsTests, AlwaysAllowedTests | |
 | B11, L38 The agent asks questions, answered in the card or skipped | AgentAsksTests | |
-| B12 Queue while it works, Stop, Resume | ComposerReturnsTests, QueueTests | |
+| B12 Queue while it works, Stop, Resume; a message removed or edited on its way | ComposerReturnsTests, QueueTests, MessagesOnTheirWayTests | |
 | B13 Two sessions at once, each with its own asks | AgentAsksTests | |
 | B14 Switch model mid-conversation, or elsewhere, to a coding agent too | SessionsTests, MoveToAgentsTests | |
 | The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Agents/test: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
