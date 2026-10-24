@@ -383,7 +383,9 @@ final class BoxGroups {
             "name": .string(edited.name), "purpose": edited.purpose.map(JSONValue.string) ?? .null,
             "members": .array(edited.members.map(JSONValue.string)),
         ]
-        if let meeting = edited.meeting, let value = Self.json(meeting) { edits["meeting"] = value } else { edits["meeting"] = .null }
+        edits["meetingPlan"] = edited.meeting.map { meeting in
+            .object(["next": .number(meeting.next.timeIntervalSince1970), "every": meeting.every.map(JSONValue.string) ?? .null, "topic": .string(meeting.topic)])
+        } ?? .null
         try await api.editBoxGroup(edited.id, edits)
         await reload(edited.id)
     }
