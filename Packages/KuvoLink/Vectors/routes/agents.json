@@ -85,7 +85,10 @@
         { "send": "GET kuvo/groups", "expect": { "status": 200, "json": { "groups": [ { "id": "{{group}}", "name": "Standup" } ] } } },
         { "send": "PATCH kuvo/groups/{{group}}", "body": { "name": "Daily", "purpose": "" }, "expect": { "status": 200, "json": { "group": { "id": "{{group}}", "name": "Daily", "purpose": null } } } },
         { "send": "PATCH kuvo/groups/{{group}}", "body": { "members": [ "bot_ada" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs at least two bots." } } },
-        { "send": "PATCH kuvo/groups/grp_nothing", "body": { "name": "Ghost" }, "expect": { "status": 404, "json": { "message": "<string>" } } }
+        { "send": "PATCH kuvo/groups/grp_nothing", "body": { "name": "Ghost" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "DELETE kuvo/groups/{{group}}", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/groups", "expect": { "status": 200, "json": { "groups": [] } } },
+        { "send": "DELETE kuvo/groups/{{group}}", "why": "Gone already is as good as deleted: a phone reads a 404 as a computer from before this route.", "expect": { "status": 200, "json": {} } }
       ]
     },
     {
@@ -96,6 +99,14 @@
           "why": "A Mac runs its group chats itself; a machine's run in its coding agents' bridge, so it answers 503 while that isn't up (PROTOCOL.md, kuvo/groups).",
           "expect": {
             "mac": { "status": 200, "json": { "groups": [] } },
+            "machine": { "status": 503, "json": { "message": "<string>" } }
+          }
+        },
+        {
+          "send": "DELETE kuvo/groups/grp_nothing",
+          "why": "As for the list: a Mac has no such chat, which is as good as deleted; a machine can't ask its coding agents' bridge.",
+          "expect": {
+            "mac": { "status": 200, "json": {} },
             "machine": { "status": 503, "json": { "message": "<string>" } }
           }
         }

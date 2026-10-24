@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.27";
+export const BRIDGE_VERSION = "0.9.28";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -2259,6 +2259,14 @@ async function* answerGroups(target, id, action, request, signal) {
     if (asked.status !== 200) return yield* json(asked.status === 400 || asked.status === 404 || asked.status === 409 ? asked.status : 503, { message: asked.value?.message ?? "The group chat couldn’t be changed." });
     const listed = await groupsList(target, signal).catch(() => null);
     return yield* json(200, { group: listed?.groups.find(each => each.id === id) ?? null });
+  }
+  // Deleted, as Delete Group Chat deletes it: its messages and seats go, and its bots forget it.
+  // Not one moving, which the bridge refuses; one gone already is as good as deleted.
+  if (method === "DELETE" && id && !action) {
+    const { status, value } = await askGroups(target, "DELETE", `/${id}`, undefined, signal).catch(() => ({ status: 503 }));
+    if (status === 200 || (status === 404 && value?.message === "No such chat.")) return yield* json(200, {});
+    if (status === 409) return yield* json(409, { message: "That chat is moving. Try again once it’s there." });
+    return yield* json(503, { message: value?.message ?? "The coding agents’ bridge here isn’t answering. Try again in a moment." });
   }
   if (method !== "POST" || !id || action === "events") return yield* json(405, {});
   let given = {};

@@ -603,4 +603,21 @@ describe("a group chat on a machine", () => {
     expect((await call("PUT", ["grp_other00001"], { group: group(), messages: [] })).status).toBe(400)
     expect((await call("GET", ["../x"])).status).toBe(404)
   })
+
+  test("deleted through its route: not while it moves; once it's here it goes, and then there's no such chat", async () => {
+    const { groups, store } = runner()
+    const call = (method: string, parts: string[], body: unknown = {}) => groupRoutes(groups, store, method, parts, async () => body)
+    groups.put(group(), [], "held", false)
+    const moving = await call("DELETE", ["grp_team000001"])
+    expect(moving.status).toBe(409)
+    expect(((await moving.json()) as any).message).toBe("That chat is moving.")
+    expect(groups.get("grp_team000001")?.status).toBe("held")
+
+    groups.activate("grp_team000001")
+    expect((await call("DELETE", ["grp_team000001"])).status).toBe(200)
+    expect(groups.get("grp_team000001")).toBeUndefined()
+    const gone = await call("DELETE", ["grp_team000001"])
+    expect(gone.status).toBe(404)
+    expect(((await gone.json()) as any).message).toBe("No such chat.")
+  })
 })

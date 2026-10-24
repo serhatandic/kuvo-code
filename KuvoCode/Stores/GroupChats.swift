@@ -111,8 +111,13 @@ final class GroupChats {
     }
 
     func delete(_ group: BotGroup) async {
-        guard !Moves.isFrozen(group.id) else { return Modal.show(Moves.Failure.moving) }
+        do { try await deleteNow(group) } catch { Modal.show(error) }
+    }
+
+    /// As `delete`, for one deleted from elsewhere (a phone): what stops it is said there, not here.
+    func deleteNow(_ group: BotGroup) async throws {
+        guard !Moves.isFrozen(group.id) else { throw Moves.Failure.moving }
         guard onMachine(group.id) else { return await mac.delete(group) }
-        do { try await machines.delete(group) } catch { Modal.show(error) }
+        try await machines.delete(group)
     }
 }
