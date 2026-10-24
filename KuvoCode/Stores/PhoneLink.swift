@@ -1025,6 +1025,18 @@ final class PhoneLink {
         }
     }
 
+    /// What this Mac answers, one name per route or group of routes a client might check
+    /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
+    /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
+    static let features = [
+        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
+        "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog",
+        "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "wakes", "wakes.edit", "worktrees",
+        // The Mac's own.
+        "accounts.ended", "claude-code", "hosts", "mac", "machines",
+    ]
+
     /// Kuvo's own routes, beside the engine's.
     private func answer(_ request: LinkRequest) -> (Int, Data) {
         /// `chats`: the folder of conversations of no project, which the phone lists as Chats.
@@ -1036,6 +1048,8 @@ final class PhoneLink {
             var started: Double?
             /// Integrations' names by their MCP server's, for what a server asks.
             var integrations = Dictionary(uniqueKeysWithValues: Integrations.all.map { ($0.id, $0.title) })
+            /// What this Mac answers (PROTOCOL.md, "Features"), which a client checks rather than versions.
+            var features: [String]
         }
         struct Hosts: Encodable {
             /// `machine`: its id, as bots name theirs. `anotherMac`: its engine is another Mac's,
@@ -1055,7 +1069,8 @@ final class PhoneLink {
         }
         switch request.path {
         case "kuvo/info":
-            var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder)
+            var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder,
+                            features: (Self.features + (usageJSON() == nil ? [] : ["usage"])).sorted())
             info.agents = agents?.api != nil
             info.started = engineStarted()?.timeIntervalSince1970
             return (200, (try? encoder.encode(info)) ?? Data())

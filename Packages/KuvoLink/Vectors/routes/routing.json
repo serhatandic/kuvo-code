@@ -15,6 +15,28 @@
       ]
     },
     {
+      "name": "kuvo/info: what the box answers, by name, not by version",
+      "steps": [
+        {
+          "send": "GET kuvo/info",
+          "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself and starts an engine an older Mac's Stop left down; only a Mac has Settings › Machines, its phones' hosts, While Agents Work, Claude Code's agents and commands, and ended sign-ins.",
+          "expect": {
+            "mac": { "status": 200, "json": { "features": {
+              "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
+                "accounts.ended", "claude-code", "hosts", "mac", "machines"],
+              "<excludes>": ["engine.start", "update"]
+            } } },
+            "machine": { "status": 200, "json": { "features": {
+              "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
+                "engine.start", "update"],
+              "<excludes>": ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"],
+              "<length>": 31
+            } } }
+          }
+        }
+      ]
+    },
+    {
       "name": "a query string never changes which route answers",
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },

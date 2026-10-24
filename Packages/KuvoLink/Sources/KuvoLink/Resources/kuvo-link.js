@@ -22,8 +22,19 @@ import path from "node:path";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-// Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.29";
+// Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
+// compare it: they check `FEATURES`.
+export const BRIDGE_VERSION = "0.9.30";
+// What this box answers, one name per route or group of routes a client might check, as
+// `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
+// meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
+// and the Mac's own routes besides.
+export const FEATURES = [
+  "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
+  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys",
+  "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return",
+  "skills", "update", "wakes", "wakes.edit", "worktrees",
+];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -1493,7 +1504,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const chats = path.join(K, "chats");
       try { fs.mkdirSync(chats, { recursive: true }); } catch {}
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, ...info })) };
+      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info })) };
       return;
     }
     const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];

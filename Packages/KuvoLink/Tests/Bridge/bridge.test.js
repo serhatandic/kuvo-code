@@ -778,6 +778,33 @@ test("Start goes through the box's tool, for an engine an older Mac stopped, the
   for (const name of ["bin/kuvo-start", "bin/kuvo-launch", "run/launch.env", "run/box-said", "run/stopped"]) fs.rmSync(path.join(home, name), { force: true });
 });
 
+test("each feature kuvo/info names is a route the machine answers, and one it doesn't name isn't", async () => {
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => { throw new Error("none"); });
+  const status = async (method, route, body = {}) => {
+    for await (const part of handle({ method, path: route, headers: {}, body: Buffer.from(JSON.stringify(body)) }, {}, undefined)) if (part.head) return part.head.status;
+  };
+  // Where each one is reached: a route a client would ask first, answered with whatever this box
+  // has now, never as one it doesn't have (403).
+  const routes = {
+    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], agents: ["GET", "kuvo/agents/api/session"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
+    bots: ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
+    "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "engine.restart": ["GET", "kuvo/engine/restart"],
+    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], groups: ["GET", "kuvo/groups"],
+    "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.make": ["POST", "kuvo/groups"],
+    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"],
+    personalities: ["GET", "kuvo/personalities"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"],
+    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
+    "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
+    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], worktrees: ["GET", "kuvo/worktrees"],
+  };
+  const named = (await answer(handle, "GET", "kuvo/info")).json.features;
+  assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
+  for (const [feature, [method, route]] of Object.entries(routes)) assert.notEqual(await status(method, route), 403, `${feature}: ${method} ${route}`);
+  // The Mac's own aren't here.
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/accounts/ended", "kuvo/usage"]) assert.equal(await status("GET", route), 403, route);
+  fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
+});
+
 test("the box's keeper keeps the phone link up while a phone is paired, and the link starts the keeper again if it went", async () => {
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   const flag = path.join(home, "run", "link.needed");
