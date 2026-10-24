@@ -5226,16 +5226,29 @@ export function carrySeat(host, given, link = readLink(), now = Date.now()) {
 
 // A letter of a group chat's mail that mustn't be lost, sent to its computer now: noted as tried
 // (sent again in a minute), or, too big ever to go, given up (the log says so).
-function sendSeatLetter(host, to, id, letter, link, now) {
+function sendSeatLetter(host, to, id, letter, link, now, ask = bridgeAsk) {
   const file = path.join(SENDING, `${id}.json`);
   if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
   const went = sendSeat(host, to.key, letter.seat, id, link);
-  if (went === "too big") {
-    fs.rmSync(file, { force: true });
-    letterTries.delete(id);
-  } else if (went) {
-    letterTries.set(id, now);
-  }
+  if (went === "too big") return giveUpSeat(id, letter, ask);
+  if (went) letterTries.set(id, now);
+  return null;
+}
+
+// A letter of a group chat's mail given up (two days without its computer saying it has it, or too
+// big ever to go): the bridge is told (`POST /gaveup`), so a part it carried fails where you see it
+// or a part's report goes again, and the letter goes once the bridge has heard. Until then it's
+// kept, marked, and not sent. The telling, or null while one is under way.
+const tellingGaveUp = new Set();
+function giveUpSeat(id, letter, ask = bridgeAsk) {
+  const file = path.join(SENDING, `${id}.json`);
+  letterTries.delete(id);
+  if (letter.gaveUp !== true) try { writePrivate(file, JSON.stringify({ ...letter, gaveUp: true })); } catch {}
+  if (tellingGaveUp.has(id)) return null;
+  tellingGaveUp.add(id);
+  return ask("POST", "/gaveup", { to: letter.peer, mail: letter.seat, at: letter.at })
+    .then(() => fs.rmSync(file, { force: true }), () => {})
+    .finally(() => tellingGaveUp.delete(id));
 }
 
 // Follows what the bridge sends, while it runs (`carrySeat`), saying what mustn't be lost is taken
@@ -5432,6 +5445,8 @@ export function letterWent(sender, { id, ok, why, retry, answer }) {
   try { letter = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
   if (letter?.sentTo !== sender.key) return;
   if (!ok && retry === true && Date.now() - (letter.at ?? 0) < LETTER_MEMORY) return;
+  // A group chat's that can't be delivered is given up, and the bridge told, never just dropped.
+  if (!ok && isObject(letter.seat)) return void giveUpSeat(id, letter);
   letterTries.delete(id);
   const words = typeof why === "string" ? why.slice(0, 500) : null;
   if (ok && letter.wait === true && answer !== false) {
@@ -5480,9 +5495,11 @@ export function letterMail(peer, letter, link, now = Date.now()) {
 // each minute until that box says it has it (or why not), for two days. A tool that gave up
 // waiting (`replies/<id>.gaveup`) has its letter go on without waiting, and an answer that comes
 // later reaches its conversation as a message. Without the relay for a while (`offline`), letters
-// not yet sent go to the Mac instead.
-export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0) {
-  if (!link?.key) return;
+// not yet sent go to the Mac instead. A group chat's letters given up are told to the coding
+// agents' bridge (`ask`); the tellings are what it returns.
+export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask = bridgeAsk) {
+  const telling = [];
+  if (!link?.key) return Promise.all(telling);
   const peers = peersOf(link);
   const told = readPeerAgents(undefined, undefined, link);
   const moved = movedOf(link);
@@ -5519,14 +5536,16 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     // A group chat's mail that mustn't be lost: to its computer only (never through a Mac), each
     // minute until it says it has it, for as long as a letter.
     if (isObject(letter.seat)) {
-      if (now - made > LETTER_MEMORY) {
-        fs.rmSync(file, { force: true });
+      if (letter.gaveUp === true || now - made > LETTER_MEMORY) {
+        const told = giveUpSeat(id, letter, ask);
+        if (told) telling.push(told);
         continue;
       }
       const to = peers.find(each => each.key === letter.peer);
       if (!to || offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
       letterTries.set(id, now);
-      sendSeatLetter(host, to, id, letter, link, now);
+      const told = sendSeatLetter(host, to, id, letter, link, now, ask);
+      if (told) telling.push(told);
       continue;
     }
     const peer = typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
@@ -5574,6 +5593,7 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
       if (now - fs.statSync(path.join(REPLIES, name)).mtimeMs > LETTER_LIFE) fs.rmSync(path.join(REPLIES, name), { force: true });
     } catch {}
   }
+  return Promise.all(telling);
 }
 
 // What came by mail, from a Mac or a peer: a Mac's lists, or what peers tell each other
