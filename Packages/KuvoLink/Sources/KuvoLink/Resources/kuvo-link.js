@@ -1503,7 +1503,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/update") {
       const method = request.method.toUpperCase();
       if (method === "GET") return yield* json(200, updateStatus());
-      if (method === "PATCH") return yield* json(400, { message: ALWAYS_UPDATES });
       if (method === "POST") {
         if (parsed(request.body)?.now !== true) return yield* json(400, { message: "Say to update now (now)." });
         if (!UPDATE_KEYS.length) return yield* json(409, { message: "Updates aren't set up for this machine yet." });
@@ -5057,8 +5056,6 @@ export function confirmPhone(phone) {
 // box updates itself.
 export const UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 const UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
-// Where an earlier bridge kept its update switch (`{auto}`), which there isn't any more.
-const UPDATE_SETTINGS = path.join(BOX, "update.json");
 const UPDATE_STATE = path.join(RUN, "update.json");
 const UPDATE_TRIAL = path.join(RUN, "update-trial");
 const UPDATE_LOCK = path.join(RUN, ".updating");
@@ -5110,9 +5107,6 @@ export const boxVersion = () => {
   const version = textOf(path.join(K, "bin", "box-version"))?.trim();
   return versionOrder(version) ? version : null;
 };
-
-/** Why a machine's updates can't be turned off: it keeps up with the Macs and phones that use it. */
-const ALWAYS_UPDATES = "A machine always keeps itself up to date.";
 
 const updateState = () => { try { return JSON.parse(fs.readFileSync(UPDATE_STATE, "utf8")) ?? {}; } catch { return {}; } };
 function noteUpdate(change) {
@@ -5521,15 +5515,14 @@ export function updateNight(date = new Date(), zone = process.env.KUVO_TZ) {
   return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
 }
 
-// What `kuvo/update` says: whether updates are set up, the switch, this version and the newest
-// heard of, how the last went, whether one runs now, and why not, when it can't.
+// What `kuvo/update` says: whether updates are set up, this version and the newest heard of, how
+// the last went, whether one runs now, and why not, when it can't.
 export function updateStatus() {
   const state = updateState();
   let engine = null;
   try { engine = readEngineFile()?.version ?? null; } catch {}
   return {
     setUp: UPDATE_KEYS.length > 0,
-    auto: true,
     version: boxVersion(),
     engine,
     latest: state.latest ?? null,
@@ -5744,7 +5737,7 @@ async function run() {
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
   // Updates: the new bridge, once one put it here, says it's well (after the relay's welcome, or
-  // three minutes); each night's window, one, when it's on and nothing runs (PROTOCOL.md, "Updates").
+  // three minutes); each night's window, one, when nothing runs (PROTOCOL.md, "Updates").
   setTimeout(() => { try { confirmUpdate(); } catch {} }, 180_000);
   const nightly = () => {
     noteLauncher();
@@ -5754,7 +5747,6 @@ async function run() {
     if (!night || updateState().night === night || !UPDATE_KEYS.length) return;
     startUpdate({})?.then(outcome => { if (outcome && outcome.result !== "busy") noteUpdate({ night }); });
   };
-  try { fs.rmSync(UPDATE_SETTINGS, { force: true }); } catch {}
   setTimeout(nightly, 60_000);
   setInterval(nightly, 600_000);
   setInterval(() => {
@@ -5852,9 +5844,6 @@ async function box(command) {
     }
     case "update-status":
       return say({ status: 200, ...updateStatus() });
-    case "update-auto":
-      // (An older Mac's switch.)
-      return say({ status: 400, message: ALWAYS_UPDATES });
     case "update-now": {
       // On its own, outliving this command: what it does shows in update-status.
       if (!UPDATE_KEYS.length) return say({ status: 409, message: "Updates aren't set up for this machine yet." });
@@ -5890,7 +5879,7 @@ async function box(command) {
       return say({ status: 200, ...changePersonalities(library => mergePersonalities(library, timelyPersonalities(given))) });
     }
     default:
-      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-auto | update-now");
+      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-now");
       process.exit(2);
   }
 }

@@ -323,7 +323,7 @@ test("a release that isn't what it says, an older one, or one too new for the ni
   assert.equal(fs.existsSync(path.join(home, "updates", "rollback")), false);
 });
 
-test("kuvo/update says how the box stands; updating by itself can't be turned off", async () => {
+test("kuvo/update says how the box stands, and only reads and starts one", async () => {
   await machine();
   const handler = link.engineHandler(() => read(engineFile), {}, () => ({}));
   const ask = async (method, body) => {
@@ -333,11 +333,8 @@ test("kuvo/update says how the box stands; updating by itself can't be turned of
   };
   const status = await ask("GET");
   assert.equal(status.status, 200);
-  assert.deepEqual([status.json.setUp, status.json.auto, status.json.version, status.json.engine], [true, true, "0.9.0", "1.0.0"]);
-  const off = await ask("PATCH", { auto: false });
-  assert.equal(off.status, 400);
-  assert.match(off.json.message, /always keeps itself up to date/);
-  assert.equal((await ask("GET")).json.auto, true);
+  assert.deepEqual([status.json.setUp, status.json.version, status.json.engine], [true, "0.9.0", "1.0.0"]);
+  assert.equal((await ask("PATCH", { auto: false })).status, 405, "there's nothing to change: a machine always updates by itself");
   const now = await ask("POST", { now: true });
   assert.equal(now.status, 409, "a test's folder, not a machine's own");
   assert.match(now.json.message, /own Kuvo Code folder/);

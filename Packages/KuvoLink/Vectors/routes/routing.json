@@ -131,8 +131,8 @@
       "only": "machine",
       "why": "Only a machine's box updates itself (kuvo/update) and has an engine an older Mac's Stop leaves down (kuvo/engine/start); a Mac updates through its own app.",
       "steps": [
-        { "send": "GET kuvo/update", "expect": { "status": 200, "json": { "auto": true, "updating": null } } },
-        { "send": "PATCH kuvo/update", "body": { "auto": false }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/update", "expect": { "status": 200, "json": { "setUp": "<bool>", "updating": null } } },
+        { "send": "PATCH kuvo/update", "body": { "auto": false }, "expect": { "status": 405 } },
         { "send": "POST kuvo/update", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/engine/start", "expect": { "status": 409, "json": { "message": "<string>" } } },
         { "send": "GET kuvo/engine/start", "expect": { "status": 405 } }
