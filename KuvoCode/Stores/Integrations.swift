@@ -239,6 +239,11 @@ nonisolated enum Integrations {
         config.value(at: MCPSettings.path + [service.id, "disabled"])?.bool == true
     }
 
+    /// On again, as its switch in MCP Servers turns it on.
+    @MainActor static func turnOn(_ service: Service, in config: EngineConfig) {
+        config.set(nil, at: MCPSettings.path + [service.id, "disabled"])
+    }
+
     /// Microsoft 365, without its sign-in yet, on this Mac (a machine's isn't looked at): its
     /// server signs in by itself, with a code, when the agent first uses it.
     static func waitsForCode(_ service: Service) -> Bool {

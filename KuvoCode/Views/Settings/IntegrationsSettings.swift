@@ -149,15 +149,17 @@ struct IntegrationsSettings: View {
                         }
                     } else {
                         let server = live.first { $0.name == service.id }
+                        let isOff = places.first?.state == .off
                         // What needs you, first.
                         if places.first?.state == .needsSignIn, let integrationID = server?.integrationID {
                             Button("Sign In…") { signingIn = IntegrationRef(id: integrationID, service: service) }
                         } else if places.contains(where: { $0.state == .failed }) {
                             Button("Try Again") { reconnect(service, where: places.filter { $0.state == .failed }) }
-                        } else if places.first?.state == .off {
+                        } else if isOff {
                             // Turned off in MCP Servers: on again, as its switch there does.
-                            Button("Turn On") { config.set(nil, at: MCPSettings.path + [service.id, "disabled"]) }
+                            Button("Turn On") { Integrations.turnOn(service, in: config) }
                                 .help("The agent and your bots can use \(service.title) again")
+                                .accessibilityLabel("Turn on \(service.title)")
                         } else {
                             // Nothing needs you: say it's set up, beside its menu.
                             Label("Added", systemImage: "checkmark")
@@ -165,13 +167,14 @@ struct IntegrationsSettings: View {
                                 .foregroundStyle(.secondary)
                         }
                         Menu {
-                            if let integrationID = server?.integrationID {
+                            // Nothing to sign in to or connect while it's off.
+                            if !isOff, let integrationID = server?.integrationID {
                                 Button("Sign In Again…") { signingIn = IntegrationRef(id: integrationID, service: service) }
                             }
                             if !Integrations.keys(of: service.way).isEmpty {
                                 Button(isApp(service) ? "Change App…" : "Change Key…") { addingKey = KeyRequest(service: service) }
                             }
-                            Button("Reconnect") { reconnect(service, where: places) }
+                            if !isOff { Button("Reconnect") { reconnect(service, where: places) } }
                             Divider()
                             Button("Remove…", role: .destructive) { removing = service }
                         } label: {

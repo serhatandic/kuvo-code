@@ -55,6 +55,7 @@ test("one turned off in MCP Servers says so (disabled), not that it's starting, 
     if (off) written.mcp.servers.todoist.disabled = true; else delete written.mcp.servers.todoist.disabled;
     fs.writeFileSync(path.join(home, "box", "opencode.json"), JSON.stringify(written));
   };
+  assert.equal((await ask("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_123" } })).status, 200);
   t.after(() => turn(false));
   assert.equal(await health(null), "starting", "on, with no engine to say more");
   turn(true);
