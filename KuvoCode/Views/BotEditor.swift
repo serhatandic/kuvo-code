@@ -147,9 +147,14 @@ struct BotEditor: View {
             // A shared bot's personality, found here (or added) once, not at every redraw.
             if isNew, !adoptedRecipe, let recipe {
                 adoptedRecipe = true
-                if personality == nil, let found = recipe.personalityHere() {
-                    personality = found.id
-                    if found.added { addedPersonality = found.id }
+                do {
+                    if personality == nil, let found = try recipe.personalityHere() {
+                        personality = found.id
+                        if found.added { addedPersonality = found.id }
+                    }
+                } catch {
+                    // Yours are full: it starts without one, and says why.
+                    failure = "Its personality, “\(recipe.personality?.name ?? "")”, didn’t fit in yours. Shorten or remove one of yours, then pick one for it."
                 }
             }
             // The model it talks on: one picked for it whose account you've signed out of (none
@@ -709,7 +714,11 @@ private struct PersonalityPicker: View {
     @Binding var selection: String?
     @Environment(Bots.self) private var bots
     /// A personality of yours being made (no ID yet) or changed.
-    @State private var draft: Draft?
+    @State private var draft: Draft? {
+        didSet { if draft?.id != oldValue?.id || draft == nil { refusal = nil } }
+    }
+    /// Why the draft couldn't be saved (your personalities are full), above its buttons.
+    @State private var refusal: String?
     @FocusState private var draftFocus: DraftField?
 
     private struct Draft {
@@ -776,17 +785,25 @@ private struct PersonalityPicker: View {
                 WellRow(isActive: draftFocus == .name) {
                     Image(systemName: "person.crop.circle")
                 } content: {
-                    TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0 }), prompt: Text("Name, like Night Owl"))
+                    TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0; refusal = nil }), prompt: Text("Name, like Night Owl"))
                         .textFieldStyle(.plain)
                         .focused($draftFocus, equals: .name)
                 }
                 WellDivider()
-                TextField("How it talks", text: Binding(get: { draft?.description ?? "" }, set: { draft?.description = $0 }),
+                TextField("How it talks", text: Binding(get: { draft?.description ?? "" }, set: { draft?.description = $0; refusal = nil }),
                           prompt: Text("How it talks, like Quiet and precise. Explains with examples, and asks before assuming."), axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(2...10)
                     .focused($draftFocus, equals: .description)
                     .padding(12)
+            }
+            if let refusal {
+                Text(refusal)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
                 Spacer()
@@ -820,13 +837,19 @@ private struct PersonalityPicker: View {
         guard canSave, let draft else { return }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let id = draft.id, var personality = store.personality(id) {
-            personality.name = name
-            personality.description = description
-            store.update(personality)
-            Task { await bots.personalityChanged(id) }
-        } else {
-            selection = store.add(name: name, description: description).id
+        do {
+            if let id = draft.id, var personality = store.personality(id) {
+                personality.name = name
+                personality.description = description
+                try store.update(personality)
+                Task { await bots.personalityChanged(id) }
+            } else {
+                selection = try store.add(name: name, description: description).id
+            }
+        } catch {
+            refusal = error.localizedDescription
+            AccessibilityNotification.Announcement(error.localizedDescription).post()
+            return
         }
         self.draft = nil
     }

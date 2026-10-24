@@ -1,9 +1,11 @@
 import Foundation
 
 /// The personalities you make are one library on every computer: each keeps its copy, and copies
-/// meet as a Mac connects to a machine, or as one changes them (PROTOCOL.md, "Personalities"). Per
-/// personality, the newest change wins; a removal over a change at the same moment, then the words
-/// that sort last, so every copy picks the same; a removal stays noted, so no copy brings it back.
+/// meet box to box and as a Mac connects to a machine (PROTOCOL.md, "Personalities"). Per
+/// personality a removal wins over any change, and stays noted, so no copy brings it back;
+/// otherwise the newest change, by a count each change moves on from the one before it (`updated`),
+/// whatever any clock says, and at the same count the words that sort last, so every copy picks the
+/// same.
 /// The same rules as the bridge's `mergePersonalities`, held to `Vectors/personalities.json`.
 public enum PersonalityLibraries {
     /// One you made, as a copy keeps it.
@@ -47,6 +49,8 @@ public enum PersonalityLibraries {
 
     /// Removals noted, the newest kept.
     public static let mostRemovals = 500
+    /// A change's count no higher than this, so the next one is always higher; one past it isn't taken.
+    public static let mostCount: Double = 4_503_599_627_370_496
 
     /// One as every copy keeps it, as the bridge's `keptPersonality` does: an ID of one you made,
     /// a name on one line (80 characters at most), words trimmed (2,000 at most), a symbol; nil
@@ -86,11 +90,12 @@ public enum PersonalityLibraries {
             }
         }
         func newer(_ a: Take, _ b: Take) -> Take {
-            if time(a) != time(b) { return time(a) > time(b) ? a : b }
             switch (a, b) {
-            case (.gone, _): return a
-            case (_, .gone): return b
+            case (.gone, .kept): return a
+            case (.kept, .gone): return b
+            case (.gone, .gone): return time(a) >= time(b) ? a : b
             case (.kept(let x), .kept(let y)):
+                if x.updated != y.updated { return x.updated > y.updated ? a : b }
                 // As the bridge compares them: by UTF-16 code unit.
                 return (x.name + "\n" + x.description).utf16.lexicographicallyPrecedes((y.name + "\n" + y.description).utf16) ? b : a
             }
@@ -107,8 +112,8 @@ public enum PersonalityLibraries {
             }
         }
         for library in libraries {
-            for kept in library.personalities.compactMap(cleaned) { meet(.kept(kept), id: kept.id) }
-            for removal in library.removed { meet(.gone(removal), id: removal.id) }
+            for kept in library.personalities.compactMap(cleaned) where kept.updated <= mostCount { meet(.kept(kept), id: kept.id) }
+            for removal in library.removed where removal.removed <= mostCount { meet(.gone(removal), id: removal.id) }
         }
         var met = Library()
         for id in order {

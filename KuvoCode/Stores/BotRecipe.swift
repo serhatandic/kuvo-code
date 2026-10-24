@@ -60,13 +60,13 @@ struct BotRecipe: Codable, Equatable {
     }
 
     /// Its personality on this Mac: a preset by its ID; one of someone's own by its name and
-    /// words, added to yours if you don't have it (`added`).
-    func personalityHere() -> (id: String, added: Bool)? {
+    /// words, added to yours if you don't have it (`added`). Throws when yours have no room for it.
+    func personalityHere() throws -> (id: String, added: Bool)? {
         guard let shared = personality else { return nil }
         let personalities = Personalities.shared
         if let known = personalities.all.first(where: { $0.id == shared.id && !$0.isCustom }) { return (known.id, false) }
         if let same = personalities.all.first(where: { $0.name == shared.name && $0.description == shared.description }) { return (same.id, false) }
-        return (personalities.add(name: shared.name, description: shared.description).id, true)
+        return (try personalities.add(name: shared.name, description: shared.description).id, true)
     }
 
     /// Saves a bot's recipe where you choose.

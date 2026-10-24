@@ -555,21 +555,29 @@ test("the self-test passes here", () => {
   assert.ok(link.selftest());
 });
 
-test("setup keeps the machine's keys and its own phones, starts the bridge, and stops it with no phones left", async () => {
+test("setup keeps the machine's keys and its own phones, takes the Mac's documents and gives back its own, starts the bridge, and stops it with no phones left", async () => {
   const { spawnSync } = await import("node:child_process");
   const [A, B, C, MAC] = ["A", "B", "C", "Mac"].map(shaped);
+  const seed = link.newSigningSeed();
+  let count = 0;
+  const phones = list => link.signDoc(seed, "phones", ++count, { phones: list.map(key => ({ key, name: key.slice(0, 4), pairing: "" })), removed: [] });
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-setup-"));
   fs.mkdirSync(path.join(folder, "workspace"));
   const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   const setup = input => {
-    const result = spawnSync(process.execPath, [script, "setup"], { input: JSON.stringify(input), env: { ...process.env, KUVO_HOME: folder }, encoding: "utf8" });
+    const result = spawnSync(process.execPath, [script, "setup"], { input: JSON.stringify({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, macSign: link.signingKeyOf(seed), ...input }), env: { ...process.env, KUVO_HOME: folder }, encoding: "utf8" });
     return JSON.parse(result.stdout);
   };
   const pidFile = path.join(folder, "run", "link.pid");
+  const linkFile = path.join(folder, "run", "link.json");
   try {
     // A relay nobody listens on: the bridge keeps trying, which is all this needs.
-    const first = setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 1, phones: [{ key: A, name: "A" }] });
+    const first = setup({ docs: [phones([A])] });
     assert.match(first.address, /^[A-Za-z0-9_-]{22}$/);
+    assert.match(first.sign, /^[A-Za-z0-9_-]{43}$/, "its signing key, for the Mac to name it by");
+    // Its own documents, signed with that key: its phones, and its view of your personalities.
+    const own = first.docs.map(link.readDoc).filter(doc => doc?.origin === first.sign);
+    assert.deepEqual(own.map(doc => doc.kind).sort(), ["personalities", "phones"]);
     // The file exists briefly before its PID is written; setup also needs its version file.
     let pid = 0;
     let ready = false;
@@ -584,27 +592,31 @@ test("setup keeps the machine's keys and its own phones, starts the bridge, and 
     assert.ok(ready, "the bridge writes its PID and version before setup runs again");
     process.kill(pid, 0);
 
-    // Its keys stay; the phones are what the Mac says now; the same bridge carries on.
-    const second = setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 2, phones: [{ key: A, name: "A" }, { key: B, name: "B" }] });
-    assert.deepEqual(second, first);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(folder, "run", "link.json"), "utf8")).phones.map(p => p.key), [A, B]);
+    // Its keys stay; the phones are what the Mac's newest document says; the same bridge carries on.
+    const second = setup({ docs: [phones([A, B])] });
+    assert.deepEqual([second.address, second.key, second.sign], [first.address, first.key, first.sign]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(linkFile, "utf8")).phones.map(p => p.key), [A, B]);
     assert.equal(Number(fs.readFileSync(pidFile, "utf8")), pid);
+    // An older document of the Mac's, given again, changes nothing.
+    setup({ docs: [link.signDoc(seed, "phones", 1, { phones: [{ key: A, name: "A", pairing: "" }], removed: [] })] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(linkFile, "utf8")).phones.map(p => p.key), [A, B]);
 
-    // A phone paired with the machine itself stays when the Mac's list changes.
-    const linkFile = path.join(folder, "run", "link.json");
+    // A phone paired with the machine itself stays when the Mac's phones change.
     const saved = JSON.parse(fs.readFileSync(linkFile, "utf8"));
-    fs.writeFileSync(linkFile, JSON.stringify({ ...saved, phones: [...saved.phones, { key: C, name: "C", added: 1, from: "pair" }] }));
-    setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 3, phones: [{ key: B, name: "B" }] });
+    fs.writeFileSync(linkFile, JSON.stringify({ ...saved, phones: [...saved.phones, { key: C, name: "C", added: 1, from: "pair", pairing: "" }] }));
+    setup({ docs: [phones([B])] });
     assert.deepEqual(JSON.parse(fs.readFileSync(linkFile, "utf8")).phones.map(p => p.key), [B, C]);
 
     // Nothing left to answer: the bridge stops, and the machine keeps its keys; no phone keeps
     // the engine up any more.
     const seen = path.join(folder, "run", "link.seen");
     fs.writeFileSync(seen, "");
-    fs.writeFileSync(linkFile, JSON.stringify({ ...saved, phones: [] }));
-    assert.deepEqual(setup({ relay: "ws://127.0.0.1:9", mac: MAC, at: 4, phones: [] }), {});
+    const now = JSON.parse(fs.readFileSync(linkFile, "utf8"));
+    fs.writeFileSync(linkFile, JSON.stringify({ ...now, phones: now.phones.filter(p => p.from !== "pair") }));
+    assert.deepEqual(setup({ docs: [phones([])] }), {});
     const kept = JSON.parse(fs.readFileSync(linkFile, "utf8"));
     assert.equal(kept.secret, saved.secret);
+    assert.equal(kept.sign, saved.sign);
     assert.deepEqual(kept.phones, []);
     assert.equal(fs.existsSync(seen), false);
     let stopped = false;
@@ -708,43 +720,46 @@ test("engine events become notifications, as the Mac words them", async () => {
   assert.equal(await link.noticeFor({ type: "session.text.delta", data: { sessionID: "ses_main" } }, get), null);
 });
 
-test("a phone list a Mac mails through the relay is taken from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", () => {
+test("a Mac's phones document, by mail, counts from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", async () => {
   const machine = link.newKey(), mac = link.newKey(), other = link.newKey(), stranger = link.newKey();
+  const seeds = { mac: link.newSigningSeed(), other: link.newSigningSeed(), stranger: link.newSigningSeed() };
   const [lost, fresh, own, others] = [0, 1, 2, 3].map(() => crypto.randomBytes(32));
   const k = key => key.toString("base64url");
+  const macKey = k(link.publicOf(mac)), otherKey = k(link.publicOf(other));
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const first = link.signDoc(seeds.mac, "phones", 1, { phones: [{ key: k(lost), name: "Lost iPhone", pairing: "" }], removed: [] });
   link.writeLink({
-    secret: crypto.randomBytes(32).toString("base64url"), key: machine.toString("base64url"), relay: "wss://relay.test", name: "m",
-    mac: k(link.publicOf(mac)), macs: [k(link.publicOf(mac)), k(link.publicOf(other))], macAts: { [k(link.publicOf(mac))]: 1000 },
-    phones: [{ key: k(lost), name: "Lost iPhone", added: 1, from: "mac", mac: k(link.publicOf(mac)) }, { key: k(own), name: "Paired here", added: 2, from: "pair" }],
+    secret: crypto.randomBytes(32).toString("base64url"), key: machine.toString("base64url"), sign: link.newSigningSeed(), relay: "wss://relay.test", name: "m",
+    mac: macKey, macs: [macKey, otherKey], macSigns: { [macKey]: link.signingKeyOf(seeds.mac), [otherKey]: link.signingKeyOf(seeds.other) },
+    docs: { [`${link.signingKeyOf(seeds.mac)} phones`]: first },
+    phones: [{ key: k(lost), name: "Lost iPhone", added: 1, from: "mac", mac: macKey, pairing: "" }, { key: k(own), name: "Paired here", added: 2, from: "pair", pairing: "" }],
   });
-  const mail = (from, phones, at) => link.sealOneWay(Buffer.from(JSON.stringify({ phones, at })), from, link.publicOf(machine)).message;
   const ended = [];
-  const host = { keepOnly: keys => ended.push(keys.size) };
+  const host = { keepOnly: keys => ended.push(keys.size), send() {} };
   const names = () => link.readLink().phones.map(phone => `${phone.from}:${phone.name}`);
+  const give = (from, envelope) => link.receiveDocs({ key: k(link.publicOf(from)) }, { give: [envelope] }, host);
 
-  link.phonesFromMac(mail(stranger, [], 2000), host);
-  link.phonesFromMac(mail(mac, [{ key: k(fresh), name: "New iPhone" }], 900), host);
-  assert.deepEqual(names(), ["mac:Lost iPhone", "pair:Paired here"], "not from a Mac of its own, or older: nothing changes");
-  assert.deepEqual(ended, []);
+  // From a stranger, or signed by a stranger as if by the Mac, or older: nothing changes.
+  await give(stranger, link.signDoc(seeds.stranger, "phones", 5, { phones: [{ key: k(fresh), name: "New iPhone", pairing: "" }], removed: [] }));
+  await give(mac, link.signDoc(seeds.stranger, "phones", 5, { phones: [{ key: k(fresh), name: "New iPhone", pairing: "" }], removed: [] }));
+  await give(mac, first);
+  assert.deepEqual(names(), ["mac:Lost iPhone", "pair:Paired here"]);
 
-  link.phonesFromMac(mail(mac, [{ key: k(fresh), name: "New iPhone" }], 2000), host);
-  assert.deepEqual(names(), ["mac:New iPhone", "pair:Paired here"], "the Mac's list now, and the machine's own pairing kept");
-  assert.deepEqual(ended, [2], "the removed phone's sessions end");
+  await give(mac, link.signDoc(seeds.mac, "phones", 2, { phones: [{ key: k(fresh), name: "New iPhone", pairing: "" }], removed: [{ key: k(lost), pairing: "" }] }));
+  assert.deepEqual(names(), ["mac:New iPhone", "pair:Paired here"], "the Mac's phones now, and the machine's own pairing kept");
+  assert.equal(ended.at(-1), 2, "the removed phone's sessions end");
   assert.equal(link.authorizePhone(lost, {}, undefined), false);
-  // The same mail again changes nothing.
-  link.phonesFromMac(mail(mac, [], 2000), host);
-  assert.deepEqual(names(), ["mac:New iPhone", "pair:Paired here"]);
-  // The other Mac's list, by its own clock: its phones beside the first Mac's, which it leaves.
-  link.phonesFromMac(mail(other, [{ key: k(others), name: "Other iPhone" }], 500), host);
-  assert.deepEqual(names(), ["mac:Other iPhone", "mac:New iPhone", "pair:Paired here"]);
+  // The other Mac's: its phones beside the first Mac's, which it leaves.
+  await give(other, link.signDoc(seeds.other, "phones", 1, { phones: [{ key: k(others), name: "Other iPhone", pairing: "" }], removed: [] }));
+  assert.deepEqual(names(), ["mac:New iPhone", "mac:Other iPhone", "pair:Paired here"]);
 
-  // A Mac not heard from in 30 days: its phones go off the next list of another, not for good.
+  // A Mac not heard from in 30 days no longer counts: its phones go, not for good.
   const later = link.readLink();
-  link.forgetOldMacs(later, k(link.publicOf(mac)), Date.now() + 31 * 24 * 3600 * 1000);
-  link.takeMacList(later, [{ key: k(fresh), name: "New iPhone" }], [], k(link.publicOf(mac)));
+  link.forgetOldMacs(later, otherKey);
+  link.forgetOldMacs(later, macKey, Date.now() + 31 * 24 * 3600 * 1000);
+  link.foldPhones(later);
   assert.deepEqual(later.phones.map(phone => phone.name), ["New iPhone", "Paired here"]);
-  assert.deepEqual(link.macsOf(later), [k(link.publicOf(mac))]);
+  assert.deepEqual(link.macsOf(later), [macKey]);
   assert.equal(later.removed.some(entry => entry.key === k(others)), false);
   fs.rmSync(path.join(home, "run", "link.json"));
 });
@@ -848,12 +863,21 @@ test("paired phones, as the Mac has them too: removals stick, only a new pairing
     removed: (book.removed ?? []).map(entry => ({ key: entry.key, pairing: entry.pairing })).sort(byKey),
   });
   for (const book of vectors("link.json").phoneBooks) {
-    const state = { macs: book.macs, phones: book.phones.map(phone => ({ ...phone })), removed: [] };
+    const state = { macs: book.macs, phones: book.phones.map(phone => ({ ...phone })), removed: [], macSigns: {}, docs: {} };
+    const seeds = new Map(book.macs.map(mac => [mac, link.newSigningSeed()]));
+    const counts = new Map();
     for (const step of book.steps) {
       let ok = true;
       if (step.op === "pair") link.pairPhone(state, { key: step.key, pairing: step.pairing, from: "pair" });
       else if (step.op === "remove") ok = link.removePhones(state, step.by, step.phones);
-      else link.takeMacList(state, step.phones, step.removed, step.by);
+      else {
+        // A Mac's newer phones document, as this box takes it.
+        const seed = seeds.get(step.by);
+        counts.set(step.by, (counts.get(step.by) ?? 0) + 1);
+        state.macSigns[step.by] = link.signingKeyOf(seed);
+        state.docs[`${link.signingKeyOf(seed)} phones`] = link.signDoc(seed, "phones", counts.get(step.by), { phones: step.phones, removed: step.removed ?? [] });
+        link.foldPhones(state);
+      }
       assert.equal(ok, step.ok, `${book.name}: ${step.op}`);
       assert.deepEqual(view(state), step.after, `${book.name}: ${step.op}`);
     }
@@ -887,9 +911,12 @@ test("a phone lists the phones paired with a machine and removes a lost one ther
   assert.equal(link.authorizePhone(lost, {}, undefined), false, "and it can't come in");
   assert.equal((await as(lost, "POST", "kuvo/phones/remove", JSON.stringify({ phones: [{ key: mine.toString("base64url") }] }))).status, 400, "nor remove anyone");
 
-  // The Mac's list, mailed before it heard of the removal, doesn't bring it back.
-  const before = link.readLink();
-  link.takeMacList(before, [{ key: mine.toString("base64url"), name: "Mine", pairing: "a" }, { key: lost.toString("base64url"), name: "Lost", pairing: "b" }], []);
+  // The Mac's phones document, signed before it heard of the removal, doesn't bring it back.
+  const before = link.readLink(), seed = link.newSigningSeed();
+  before.macs = [before.mac];
+  before.macSigns = { [before.mac]: link.signingKeyOf(seed) };
+  before.docs = { [`${link.signingKeyOf(seed)} phones`]: link.signDoc(seed, "phones", 1, { phones: [{ key: mine.toString("base64url"), name: "Mine", pairing: "a" }, { key: lost.toString("base64url"), name: "Lost", pairing: "b" }], removed: [] }) };
+  link.foldPhones(before);
   assert.deepEqual(before.phones.map(phone => phone.name), ["Mine"]);
 
   // Pairing it again lets it back in, though its key is one the machine has.

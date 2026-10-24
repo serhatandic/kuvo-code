@@ -97,12 +97,13 @@ import Testing
         await app.reconnectNow(engine)?.value
         try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600], "one set of syncs, not two")
-        // A minute on: one round, which meets your personalities with its copy once.
+        // A minute on: one round, which collects what its agents left for others once.
         let sent = ssh.scripts(to: id).count
+        let collected = { self.ssh.scripts(to: id).dropFirst(sent).filter { $0.contains("/run/outbox") }.count }
         clock.pass(60)
-        try await until { clock.waits == [60, 600] }
+        try await until { clock.waits == [60, 600] && collected() >= 1 }
         #expect(clock.waits == [60, 600])
-        #expect(ssh.scripts(to: id).dropFirst(sent).filter { $0.contains("box personalities") }.count == 1)
+        #expect(collected() == 1)
     }
 
     /// Your personalities changed, so each connected machine's round begins a moment later:

@@ -8,8 +8,8 @@ struct Personality: Codable, Identifiable, Hashable {
     var description: String
     /// An SF Symbol for its tile.
     var symbol: String
-    /// When it was made or last changed, in milliseconds since 1970, for the library's copies to
-    /// meet by (one you made: Kuvo Code's own have none).
+    /// For the library's copies to meet by: when it was made (milliseconds since 1970), counted on by
+    /// one with each change (one you made: Kuvo Code's own have none).
     var updated: Double?
 
     var isCustom: Bool { !id.hasPrefix("preset.") }
@@ -26,10 +26,10 @@ struct Personality: Codable, Identifiable, Hashable {
 
 /// The personalities to pick from: Kuvo Code's own, then ones you made, kept in
 /// `personalities.json`. The ones you make are one library on every computer: each keeps its copy
-/// (a machine's in `~/.kuvo-code/bots`), and copies meet as this Mac connects to a machine, or as
-/// one changes here: per personality, the newest change wins, a removal too, which stays noted
-/// (`personalities-removed.json`) so no copy brings it back (`PersonalityLibraries`, the same
-/// rules as a machine's).
+/// (a machine's in `~/.kuvo-code/bots`), and copies meet box to box (each one's view is a document
+/// of its own, PROTOCOL.md "Documents") and as this Mac connects to a machine: per personality a
+/// removal wins, and stays noted (`personalities-removed.json`) so no copy brings it back;
+/// otherwise the change counted highest (`PersonalityLibraries`, the same rules as a machine's).
 @Observable
 final class Personalities {
     static let shared = Personalities()
@@ -90,24 +90,42 @@ final class Personalities {
 
     private static var now: Double { (Date.now.timeIntervalSince1970 * 1000).rounded() }
 
-    func add(name: String, description: String) -> Personality {
+    /// Your personalities are one document on every computer, which holds so much: a change past that
+    /// is refused, here as on a machine.
+    struct NoRoom: LocalizedError {
+        var errorDescription: String? { "There’s no room for more in your personalities. Shorten or remove one, then try again." }
+    }
+
+    /// Whether `library` fits in the document every computer copies.
+    private static func fits(_ library: Library) -> Bool {
+        let met = merged([library])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return ((try? encoder.encode(met))?.count ?? .max) <= Documents.mostBody
+    }
+
+    func add(name: String, description: String) throws -> Personality {
         // As every copy keeps it (one shared without words, from a bot's file, says its name).
         let id = "custom." + UUID().uuidString.lowercased()
         let words = description.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = PersonalityLibraries.cleaned(.init(id: id, name: name, description: words.isEmpty ? name : words, symbol: "person.crop.circle", updated: Self.now))
         let personality = Personality(id: id, name: cleaned?.name ?? name, description: cleaned?.description ?? description, symbol: "person.crop.circle", updated: Self.now)
+        guard Self.fits(Library(personalities: custom + [personality], removed: removed)) else { throw NoRoom() }
         custom.append(personality)
         save()
         onChange()
         return personality
     }
 
-    func update(_ personality: Personality) {
+    func update(_ personality: Personality) throws {
         guard let index = custom.firstIndex(where: { $0.id == personality.id }) else { return }
         var changed = personality
-        // Newer than the one it replaces, whatever this Mac's clock says.
-        changed.updated = max(Self.now, (custom[index].updated ?? 0) + 1)
-        custom[index] = changed
+        // Counted on from the one it replaces, whatever this Mac's clock says.
+        changed.updated = (custom[index].updated ?? 0) + 1
+        var after = custom
+        after[index] = changed
+        guard Self.fits(Library(personalities: after, removed: removed)) else { throw NoRoom() }
+        custom = after
         save()
         onChange()
     }
@@ -115,7 +133,8 @@ final class Personalities {
     func delete(_ personality: Personality) {
         guard let kept = custom.first(where: { $0.id == personality.id }) else { return }
         custom.removeAll { $0.id == personality.id }
-        // Newest first, as every copy keeps them.
+        // Newest first, as every copy keeps them: counted past its last change, and among removals,
+        // the newest are the ones kept.
         removed.insert(Removal(id: personality.id, removed: max(Self.now, (kept.updated ?? 0) + 1)), at: 0)
         save()
         onChange()
