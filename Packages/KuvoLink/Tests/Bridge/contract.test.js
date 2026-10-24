@@ -21,6 +21,8 @@ import { pathToFileURL } from "node:url";
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-contract-")));
 const home = path.join(root, "box");
 process.env.KUVO_HOME = home;
+// git without your settings, the bridge's own too (it reads them as it loads).
+Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Tests", GIT_AUTHOR_EMAIL: "tests@example.com", GIT_COMMITTER_NAME: "Tests", GIT_COMMITTER_EMAIL: "tests@example.com" });
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
@@ -36,7 +38,7 @@ const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 const kuvoWake = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n") + "\n";
 
-const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Tests", GIT_AUTHOR_EMAIL: "tests@example.com", GIT_COMMITTER_NAME: "Tests", GIT_COMMITTER_EMAIL: "tests@example.com" } }).trim();
+const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -75,7 +77,9 @@ const server = http.createServer((request, response) => {
       return found ? send({ data: found }) : send({ message: "No such session." }, 404);
     }
     if (route === "GET /api/credential") return send({ data: engine.credentials });
-    if (["GET /api/skill", "GET /api/mcp", "GET /api/provider"].includes(route) || /^GET \/api\/session\/[^/]+\/(message|inbox)$/.test(route)) return send({ data: [] });
+    // Its tools connected (Kuvo Code's own browser's, no integration's), so nothing waits for them.
+    if (route === "GET /api/mcp") return send({ data: [{ name: "kuvo-browser", status: { status: "connected" } }] });
+    if (["GET /api/skill", "GET /api/provider"].includes(route) || /^GET \/api\/session\/[^/]+\/(message|inbox)$/.test(route)) return send({ data: [] });
     // Worktrees, made and removed with git as the engine does, beside the scenario's repositories:
     // a folder's project is its repository's, by an id of its own, and a worktree is made of the
     // project its id names.
@@ -371,12 +375,43 @@ for (const file of fs.readdirSync(vectors).filter(name => name.endsWith(".json")
   }
 }
 
-test("every scenario says why where the boxes differ on purpose", () => {
+// So a scenario can't pass by checking nothing: each has a name of its own, each step does one
+// thing, each request says what it expects of both boxes, and each difference says why.
+test("every scenario is written so both runners check it, and says why where the boxes differ on purpose", () => {
+  const names = new Set();
+  const boxes = ["mac", "machine"];
+  const only = (keys, allowed, where) => keys.forEach(key => assert.ok(allowed.includes(key), `${where}: “${key}” isn't something a runner reads`));
   for (const file of fs.readdirSync(vectors).filter(name => name.endsWith(".json"))) {
     for (const scenario of JSON.parse(read(vectors, file)).scenarios) {
-      if (scenario.only) assert.ok(scenario.why, `${file}: ${scenario.name} is one box's only, without why`);
-      for (const step of scenario.steps) {
-        if (step.only || (step.expect && ("mac" in step.expect || "machine" in step.expect))) assert.ok(step.why, `${file}: ${scenario.name}: ${step.send ?? "a step"} differs by box without why`);
+      const named = `${file}: ${scenario.name}`;
+      assert.ok(scenario.name && !names.has(named), `${named}: a scenario needs a name of its own`);
+      names.add(named);
+      only(Object.keys(scenario), ["name", "only", "why", "steps"], named);
+      if (scenario.only) assert.ok(boxes.includes(scenario.only) && scenario.why, `${named} is one box's only, without why`);
+      assert.ok(scenario.steps?.length, `${named} has no steps`);
+      for (const [index, step] of scenario.steps.entries()) {
+        const where = `${named}, step ${index + 1}`;
+        assert.equal(["given", "send", "engineGot"].filter(key => key in step).length, 1, `${where}: a step gives, sends or checks what the engine got`);
+        if (step.only) assert.ok(boxes.includes(step.only) && step.why, `${where} is one box's only, without why`);
+        if (step.given) {
+          only(Object.keys(step), ["given", "only", "why"], where);
+          assert.equal(Object.keys(step.given).length, 1, `${where}: one fixture a step, so both runners give them in the same order`);
+          assert.ok(fixtures[Object.keys(step.given)[0]], `${where}: no fixture “${Object.keys(step.given)[0]}”`);
+        }
+        if (step.engineGot) only(Object.keys(step), ["engineGot", "only", "why"], where);
+        if (step.send) {
+          only(Object.keys(step), ["send", "body", "expect", "save", "only", "why"], where);
+          assert.match(step.send, /^[A-Za-z]+ \S+$/, `${where}: send is "METHOD path"`);
+          const perBox = step.expect && boxes.some(box => box in step.expect);
+          if (perBox) {
+            only(Object.keys(step.expect), boxes, where);
+            assert.ok(step.why, `${where} differs by box without why`);
+          }
+          for (const expect of perBox ? boxes.map(box => step.expect[box]) : [step.expect]) {
+            assert.ok(Number.isInteger(expect?.status), `${where}: says what status it expects${perBox ? " of each box" : ""}`);
+            only(Object.keys(expect), ["status", "json", "type", "text"], where);
+          }
+        }
       }
     }
   }

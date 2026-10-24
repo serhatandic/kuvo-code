@@ -25,6 +25,7 @@ import Testing
         let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".json") }
         #expect(files.count >= 8)
         #expect(RouteScenarios.names.count >= 40)
+        #expect(Set(RouteScenarios.all.map(\.name)).count == RouteScenarios.all.count, "each scenario has a name of its own")
         #expect(RouteScenarios.problems.isEmpty, "\(RouteScenarios.problems)")
     }
 
@@ -57,7 +58,9 @@ nonisolated enum RouteScenarios {
     nonisolated(unsafe) static let all: [(name: String, scenario: [String: Any])] = load().scenarios
     /// What couldn't be read.
     nonisolated(unsafe) static let problems: [String] = load().problems
-    static let names: [String] = all.map(\.name)
+    /// Those this Mac answers: a machine's alone (`"only": "machine"`) aren't run here (the
+    /// bridge's runner lists them as skipped there).
+    static let names: [String] = all.filter { $0.scenario["only"] as? String != "machine" }.map(\.name)
 
     private static func load() -> (scenarios: [(name: String, scenario: [String: Any])], problems: [String]) {
         guard let folder, let files = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return ([], ["no routes folder"]) }
@@ -159,6 +162,8 @@ final class MacBox {
             let send = step["send"] as? String
             let at = "step \(index + 1)" + (send.map { " (\($0))" } ?? "")
             if let given = step["given"] as? [String: Any] {
+                // (One a step, so both runners give them in the order written: the bridge's runner checks it.)
+                #expect(given.count == 1, "\(at): one fixture a step")
                 for (kind, value) in given { try await give(kind, RouteMatch.filled(value, vars) as? [String: Any] ?? [:], at: at) }
                 if app != nil { await settle() }
             } else if let send {
@@ -197,13 +202,7 @@ final class MacBox {
     private func start() async {
         let app = AppModel()
         app.workspace.api = engine.api
-        app.bots.app = app
-        app.wakeUps.app = app
-        app.groups.app = app
-        app.machineGroups.app = app
-        app.moves.app = app
-        app.workspace.botSessions = app.bots.sessionIDs
-        app.workspace.seats = app.groups.seatIDs
+        app.wireStores()
         app.wirePhoneLink()
         // (AppModel's machines start sets it, for the agents' mail and `&` names.)
         AgentMail.shared.app = app
@@ -417,7 +416,10 @@ nonisolated final class EngineState: @unchecked Sendable {
             return StubWeb.json(["data": session])
         case ("GET", "/api/credential"):
             return StubWeb.json(["data": credentials])
-        case ("GET", "/api/skill"), ("GET", "/api/mcp"), ("GET", "/api/provider"):
+        // Its tools connected (Kuvo Code's own browser's, no integration's), so nothing waits for them.
+        case ("GET", "/api/mcp"):
+            return StubWeb.json(["data": [["name": "kuvo-browser", "status": ["status": "connected"]]]])
+        case ("GET", "/api/skill"), ("GET", "/api/provider"):
             return StubWeb.json(["data": [Any]()])
         // A folder's project is its repository's, by an id of its own, and a worktree is made of
         // the project its id names.
@@ -498,9 +500,8 @@ nonisolated enum RouteMatch {
     }
 
     private static func lookup(_ name: String, _ vars: [String: Any]) -> Any {
-        if name.hasPrefix("now") {
-            let offset = Int(name.dropFirst(3)) ?? 0
-            return Int(Date.now.timeIntervalSince1970) + offset
+        if name.wholeMatch(of: /now([+-][0-9]+)?/) != nil {
+            return Int(Date.now.timeIntervalSince1970) + (Int(name.dropFirst(3)) ?? 0)
         }
         guard let value = vars[name] else {
             Issue.record("{{\(name)}} isn't set")

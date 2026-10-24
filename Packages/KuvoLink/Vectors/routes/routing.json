@@ -61,6 +61,8 @@
     {
       "name": "a list answers only the methods it takes",
       "steps": [
+        { "given": { "agentsBridge": {} } },
+        { "send": "PUT kuvo/groups", "body": {}, "expect": { "status": 405 } },
         { "send": "PUT kuvo/bots", "body": {}, "expect": { "status": 405 } },
         { "send": "DELETE kuvo/wakes", "expect": { "status": 405 } },
         { "send": "POST kuvo/named", "body": {}, "expect": { "status": 405 } },
