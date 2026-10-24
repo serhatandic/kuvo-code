@@ -364,8 +364,70 @@ final class SessionModel {
     /// The last message on its way out; each waits for the one before, so the engine gets
     /// (and queues) them in the order they were written.
     private var sending: Task<Void, Never>?
-    /// Messages sent from here, so a command's message can be told from them.
-    private var sentIDs: Set<String> = []
+    /// Messages on their way to the agent, by ID: each sent from here, and one from elsewhere that
+    /// Stop held or that you're taking back to edit. What the queue shows is made from these and
+    /// the engine's inbox (see `waiting`). Their states change in `send` and `retry`, as the
+    /// engine's word comes (`apply`, `load`), in `holdWaiting`, `cancelPending` and `edit`.
+    private var outgoing: [String: Outgoing] = [:]
+
+    private struct Outgoing {
+        enum State: Equatable {
+            /// On its way to the engine: being made ready (its files, its folder's tools), then
+            /// asked for (see `request`).
+            case sending
+            /// The engine has it, in its inbox, as `transcript.pending` shows it (its word of it
+            /// may still be on its way).
+            case waiting
+            /// Being taken back for editing: the cancel asked, the engine's word of which won not
+            /// here yet.
+            case takingBack
+            /// The agent has it.
+            case delivered
+            /// It doesn't go: removed, taken back, or it couldn't be sent.
+            case cancelled
+        }
+
+        var state: State
+        /// How it asked to go, while its request is on its way to the engine: until `requestDone`,
+        /// whatever happens to it meanwhile (it's removed, the engine's word of it comes).
+        var request: InboxItem.Delivery?
+        /// Sent from here: a command's message, or one from elsewhere, is told from it.
+        var isOurs: Bool
+        /// Sent while nothing ran, until the agent has it: it starts a run, and the run begins a
+        /// moment before the agent takes it, which isn't waiting.
+        var startsRun = false
+        /// Meant for the agent's next step, and held in the queue by Stop: held ones wait ahead of
+        /// what was queued, the lowest first (the latest Stop's).
+        var heldAt: Int?
+    }
+
+    /// Those waiting for a message's record to change (see `wait`), by message.
+    @ObservationIgnored private var waiters: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+
+    /// Changes a message's record, and what waits on it hears.
+    private func update(_ message: String, _ change: (inout Outgoing) -> Void) {
+        guard outgoing[message] != nil else { return }
+        change(&outgoing[message]!)
+        waiters.removeValue(forKey: message)?.values.forEach { $0.resume() }
+    }
+
+    private func move(_ message: String, to state: Outgoing.State) {
+        update(message) { $0.state = state }
+    }
+
+    /// While `ongoing` holds for a message's record, until `deadline` at most: woken as it changes.
+    private func wait(for message: String, until deadline: ContinuousClock.Instant, while ongoing: (Outgoing) -> Bool) async {
+        let token = UUID()
+        let timer = Task {
+            try? await Task.sleep(until: deadline)
+            waiters[message]?.removeValue(forKey: token)?.resume()
+        }
+        defer { timer.cancel() }
+        while let record = outgoing[message], ongoing(record), ContinuousClock.now < deadline {
+            await withCheckedContinuation { waiters[message, default: [:]][token] = $0 }
+        }
+    }
+
     /// Commands run from here whose messages haven't arrived yet, oldest first.
     private var runningCommands: [RunningCommand] = []
 
@@ -397,34 +459,19 @@ final class SessionModel {
     /// the queue. A message sent while it's idle goes straight to the transcript instead, and
     /// stays there while the run it starts gets going.
     var waiting: [Transcript.Pending] {
-        let pending = pending.filter { !starters.contains($0.id) }
+        let pending = pending.filter { outgoing[$0.id]?.startsRun != true }
         // What Stop held back was meant for the work under way: it stays ahead of the queue, and
         // shows while it's still on its way there too.
-        let held = heldBack.compactMap { id in pending.first { $0.id == id } }
-        let heldIDs = Set(held.map(\.id))
-        let queued = pending.filter { $0.delivery == .queue && !heldIDs.contains($0.id) }
-        return (isRunning ? pending.filter { $0.delivery == .steer && !heldIDs.contains($0.id) } : []) + held + queued
+        let held = pending.filter { outgoing[$0.id]?.heldAt != nil }.sorted { (outgoing[$0.id]?.heldAt ?? 0) < (outgoing[$1.id]?.heldAt ?? 0) }
+        let others = pending.filter { outgoing[$0.id]?.heldAt == nil }
+        return (isRunning ? others.filter { $0.delivery == .steer } : []) + held + others.filter { $0.delivery == .queue }
     }
-
-    /// Messages for the agent's next step that Stop moved to the queue, in their order.
-    @ObservationIgnored private var heldBack: [String] = []
-
-    /// Messages sent while the agent was idle, until it has them: each starts a run, and the run
-    /// begins a moment before the agent takes it, which isn't waiting.
-    private var starters: Set<String> = []
-    /// Messages cancelled while still on their way to the engine: they don't go, or are taken
-    /// back if they went meanwhile.
-    @ObservationIgnored private var cancelledLocal: Set<String> = []
 
     private var hasQueue: Bool { transcript.pending.contains { $0.delivery == .queue } }
 
     /// Running, or about to: a message for the next step starts a run as soon as it lands.
     private var isBusy: Bool { transcript.isRunning || transcript.pending.contains { $0.delivery == .steer } }
 
-    /// Waiting messages being taken back for editing, and what the engine said about each:
-    /// true when the cancel won, false when the agent got it first.
-    private var editing: Set<String> = []
-    private var settledEdits: [String: Bool] = [:]
     private var isRetrying = false
 
     /// Shows the conversation as last seen while `load` reads the engine's, unless it's read
@@ -461,7 +508,9 @@ final class SessionModel {
     #endif
     /// Where the messages not read yet end, while there are earlier ones.
     private(set) var earlierCursor: String?
-    private(set) var isLoadingEarlier = false
+    /// The read of earlier messages on its way, if there is one.
+    private var earlierRead: Task<Void, Never>?
+    var isLoadingEarlier: Bool { earlierRead != nil }
     var hasEarlier: Bool { earlierCursor != nil }
 
     /// The page's way back to earlier messages, when it was full (so there may be more).
@@ -473,28 +522,33 @@ final class SessionModel {
     func loadAllEarlier() async {
         while hasEarlier, transcript.messages.count < 20_000 {
             // After one already on its way (scrolling up).
-            while isLoadingEarlier { try? await Task.sleep(for: .milliseconds(100)) }
+            await earlierRead?.value
             let before = transcript.messages.count
             await loadEarlier()
-            if transcript.messages.count == before, !isLoadingEarlier { return }
+            if transcript.messages.count == before { return }
         }
     }
 
-    /// Reads the messages before those on screen, and puts them ahead of them.
+    /// Reads the messages before those on screen, and puts them ahead of them; with one on its
+    /// way already, once it's in.
     func loadEarlier() async {
-        guard let cursor = earlierCursor, !isLoadingEarlier, !waitsForEngine else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        guard let page = try? await api.messages(session: id, limit: Self.pageSize, before: cursor) else { return }
-        let known = Set(transcript.messages.map(\.id))
-        let older = page.data.filter { !known.contains($0.id) }
-        guard !older.isEmpty else {
-            earlierCursor = nil
-            return
+        if let read = earlierRead { return await read.value }
+        guard let cursor = earlierCursor, !waitsForEngine else { return }
+        let read = Task {
+            defer { earlierRead = nil }
+            guard let page = try? await api.messages(session: id, limit: Self.pageSize, before: cursor) else { return }
+            let known = Set(transcript.messages.map(\.id))
+            let older = page.data.filter { !known.contains($0.id) }
+            guard !older.isEmpty else {
+                earlierCursor = nil
+                return
+            }
+            editTranscript { $0.messages = older + $0.messages }
+            earlierCursor = Self.cursor(before: page)
+            prepareCode(in: older)
         }
-        editTranscript { $0.messages = older + $0.messages }
-        earlierCursor = Self.cursor(before: page)
-        prepareCode(in: older)
+        earlierRead = read
+        await read.value
     }
 
     /// The code in replies read, colored ahead of time, so it shows colored as it's scrolled to
@@ -593,6 +647,11 @@ final class SessionModel {
             // It has what streamed in so far.
             discardLive()
             transcript = fresh
+            // What the read no longer has waiting went meanwhile, without a word of it here: the
+            // agent has it, or it was taken back.
+            for (message, record) in outgoing where [.waiting, .takingBack].contains(record.state) && !transcript.pending.contains(where: { $0.id == message }) {
+                move(message, to: transcript.messages.contains { $0.id == message } ? .delivered : .cancelled)
+            }
             prepareCode(in: page.data)
             if transcript.isStale { scheduleReload() }
             // A queue left waiting (the app quit mid-run, say) waits for Resume rather than
@@ -601,7 +660,7 @@ final class SessionModel {
             // queue, as Stop holds one: it showed nowhere, and Resume went past it. Not one you've
             // just sent from here (as the session was read), nor while it's unknown whether the
             // engine runs it, mid-run on a machine say: the agent would miss it at its next step.
-            let leftForNextStep = running != nil && transcript.pending.contains { $0.delivery == .steer && !$0.isLocal && !sentIDs.contains($0.id) }
+            let leftForNextStep = running != nil && transcript.pending.contains { $0.delivery == .steer && !$0.isLocal && outgoing[$0.id]?.isOurs != true }
             if !isLoaded, !isRunning, hasQueue || leftForNextStep {
                 isQueuePaused = true
                 if leftForNextStep { await holdWaiting() }
@@ -670,8 +729,7 @@ final class SessionModel {
             if !transcript.isRunning, !isQueuePaused, hasQueue { scheduleDrain() }
         case "session.inbox.cancelled", "session.inbox.delivered":
             if let id = try? event.payload(as: EventPayload.InboxChanged.self).inboxID {
-                starters.remove(id)
-                if editing.contains(id) { settledEdits[id] = event.type == "session.inbox.cancelled" }
+                move(id, to: event.type == "session.inbox.delivered" ? .delivered : .cancelled)
             }
         case "session.revert.committed":
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
@@ -782,11 +840,10 @@ final class SessionModel {
         guard !text.isEmpty || !files.isEmpty else { return }
         if withComments { reviewComments = [] }
         let id = Identifier.message()
-        sentIDs.insert(id)
         // With nothing running (or about to) and nothing queued, there's nothing to wait for.
         let delivery: InboxItem.Delivery = queue && (isBusy || hasQueue) ? .queue : .steer
         if delivery == .steer { isQueuePaused = false }
-        if delivery == .steer, !isBusy { starters.insert(id) }
+        outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
         commitUndo()
         editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
         var props = Analytics.model(provider: model?.providerID ?? session.model?.providerID, model: model?.id ?? session.model?.id)
@@ -807,28 +864,21 @@ final class SessionModel {
                 let prepared = await Task.detached { machine.map { Attachments.prepare(files, for: model, machine: $0) } ?? Attachments.prepare(files, for: model) }.value
                 let message = Attachments.text(text, for: prepared)
                 await waitForTools()
-                guard !wasCancelled(id) else {
-                    holdOnArrival.remove(id)
-                    return
-                }
+                // Removed meanwhile: it doesn't go.
+                guard outgoing[id]?.state == .sending else { return }
                 // Moving to another computer: back in the composer, to send once it's there.
                 if Moves.isFrozen(self.id) { throw Moves.Failure.moving }
                 // Held while it was on its way: to the queue, not the next step.
-                let held = holdOnArrival.remove(id) != nil
-                let steering = !held && delivery == .steer
-                if steering { steerInFlight.insert(id) }
-                defer { steerInFlight.remove(id) }
-                try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: held ? .queue : delivery)
+                let asked: InboxItem.Delivery = outgoing[id]?.heldAt != nil ? .queue : delivery
+                update(id) { $0.request = asked }
+                try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
                 restoredFailed = ""
-                if steering { sentSteer.insert(id) }
-                if wasCancelled(id) { try? await api.cancelInbox(session: self.id, item: id) }
-                // Or held as it went: moved before Stop's wait ends (it waits on this).
-                if !held, holdOnArrival.contains(id) {
-                    try? await api.setDelivery(session: self.id, item: id, delivery: .queue)
-                    holdOnArrival.remove(id)
-                    sentSteer.remove(id)
-                }
+                await requestDone(id)
             } catch {
+                update(id) {
+                    $0.state = .cancelled
+                    $0.request = nil
+                }
                 editTranscript { $0.removeLocal(id: id) }
                 // It didn't go: back in the composer as it was, ahead of anything written since
                 // (after one sent before it that didn't go either, in the order they were sent).
@@ -836,6 +886,21 @@ final class SessionModel {
                 restoreFailed(text: text, files: files, quotes: quotes, comments: comments)
                 fail(error)
             }
+        }
+    }
+
+    /// A message's request went: the engine has it. Moved to the queue if Stop held it as it went,
+    /// and taken back if it was removed meanwhile, before Stop's wait for it ends.
+    private func requestDone(_ message: String) async {
+        guard let asked = outgoing[message]?.request else { return }
+        let state = outgoing[message]?.state
+        if asked == .steer, outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled {
+            try? await api.setDelivery(session: id, item: message, delivery: .queue)
+        }
+        if outgoing[message]?.state == .cancelled { try? await api.cancelInbox(session: id, item: message) }
+        update(message) {
+            $0.request = nil
+            if $0.state == .sending { $0.state = .waiting }
         }
     }
 
@@ -961,7 +1026,7 @@ final class SessionModel {
             // By the engine's clock, as the messages' times are (a machine's can differ from this Mac's).
             let since = running.started.timeIntervalSince1970 * 1000 - storedTranscript.clockOffset - 2000
             let message = transcript.messages.lazy.compactMap { if case .user(let user) = $0 { user } else { nil } }.first {
-                !running.before.contains($0.id) && !sentIDs.contains($0.id) && CommandMessages.shared[$0.id] == nil && $0.time.created >= since
+                !running.before.contains($0.id) && outgoing[$0.id]?.isOurs != true && CommandMessages.shared[$0.id] == nil && $0.time.created >= since
             }
             guard let message else { return }
             CommandMessages.shared.note(message.id, command: running.command)
@@ -972,12 +1037,13 @@ final class SessionModel {
     /// Stops the agent. Waiting messages stay, queued and paused until Resume.
     func stop() {
         Task {
-            await holdWaiting()
-            // A held message whose request for the next step is already on its way: in before the
-            // stop (ten seconds at most), so it can't land after it on an idle session and start
-            // the agent again. One not sent yet goes to the queue anyway (see `send`).
-            for _ in 0..<100 where !holdOnArrival.isDisjoint(with: steerInFlight) {
-                try? await Task.sleep(for: .milliseconds(100))
+            let inFlight = await holdWaiting()
+            // A held message whose request for the next step is already on its way: in the queue
+            // before the stop (ten seconds at most), so it can't land after it on an idle session
+            // and start the agent again. One not sent yet goes to the queue anyway (see `send`).
+            let deadline = ContinuousClock.now + .seconds(10)
+            for message in inFlight {
+                await wait(for: message, until: deadline) { $0.request != nil }
             }
             try? await api.interrupt(session: id)
         }
@@ -990,50 +1056,48 @@ final class SessionModel {
     }
 
     /// Before an interrupt: what's waiting stays where it is, paused, instead of being handed
-    /// over as the step ends or started by the nudge after it.
-    private func holdWaiting() async {
+    /// over as the step ends or started by the nudge after it. What was for the agent's next step
+    /// goes to the queue, ahead of what was queued: moved there now if the engine has it, sent
+    /// there if it hasn't gone yet (see `send`). Those whose request for the next step is on its
+    /// way are moved as it ends (see `requestDone`): what it gives back.
+    @discardableResult
+    private func holdWaiting() async -> [String] {
         drainTask?.cancel()
-        let steering = transcript.pending.filter { $0.delivery == .steer && !$0.isLocal }
-        // Ones still on their way go to the queue as they arrive (see `send`); one already there,
-        // not yet shown as there, is moved here.
-        let arriving = transcript.pending.filter { $0.delivery == .steer && $0.isLocal && !starters.contains($0.id) }
-        let arrived = arriving.filter { sentSteer.contains($0.id) }
-        holdOnArrival.formUnion(arriving.filter { !sentSteer.contains($0.id) }.map(\.id))
-        for item in arrived {
-            sentSteer.remove(item.id)
-            try? await api.setDelivery(session: id, item: item.id, delivery: .queue)
+        // Not one sent from here to start a run, still on its way: it goes as it is.
+        let held = transcript.pending.filter { $0.delivery == .steer && !($0.isLocal && outgoing[$0.id]?.startsRun == true) }
+        if hasQueue || !held.isEmpty { isQueuePaused = true }
+        // Ahead of those held before.
+        let first = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - held.count
+        var moved: [String] = [], inFlight: [String] = []
+        for (index, item) in held.enumerated() {
+            var record = outgoing[item.id] ?? Outgoing(state: .waiting, isOurs: false)
+            record.heldAt = first + index
+            // It waits for Resume now, shown with the rest.
+            record.startsRun = false
+            outgoing[item.id] = record
+            switch (record.state, record.request) {
+            case (_, .steer?): inFlight.append(item.id)
+            // Not asked for yet (it's asked for as queued: see `send`), or asked for as queued.
+            case (.sending, _), (_, .queue?): break
+            default: moved.append(item.id)
+            }
         }
-        sentSteer.formIntersection(transcript.pending.filter(\.isLocal).map(\.id))
-        if hasQueue || !steering.isEmpty || !arriving.isEmpty { isQueuePaused = true }
-        let newlyHeld = (steering + arriving).map(\.id)
-        heldBack = newlyHeld + heldBack.filter { id in !newlyHeld.contains(id) && transcript.pending.contains { $0.id == id } }
-        for item in steering { try? await api.setDelivery(session: id, item: item.id, delivery: .queue) }
-    }
-
-    /// Messages for the agent's next step still on their way when Stop (or Undo) held the others:
-    /// they go to the queue too, rather than starting it again.
-    @ObservationIgnored private var holdOnArrival: Set<String> = []
-    /// Messages for the next step whose request is on its way to the engine now, and those whose
-    /// request went but that aren't shown as the engine's yet.
-    @ObservationIgnored private var steerInFlight: Set<String> = []
-    @ObservationIgnored private var sentSteer: Set<String> = []
-
-    /// Whether a message on its way was cancelled meanwhile (and forgets it).
-    private func wasCancelled(_ id: String) -> Bool {
-        guard cancelledLocal.contains(id) else { return false }
-        cancelledLocal.remove(id)
-        starters.remove(id)
-        return true
+        for message in moved { try? await api.setDelivery(session: id, item: message, delivery: .queue) }
+        return inFlight
     }
 
     func cancelPending(_ item: Transcript.Pending) {
         guard canReach else { return }
-        if item.isLocal {
-            cancelledLocal.insert(item.id)
-            editTranscript { $0.removeLocal(id: item.id) }
+        guard item.isLocal else {
+            Task { try? await api.cancelInbox(session: id, item: item.id) }
             return
         }
-        Task { try? await api.cancelInbox(session: id, item: item.id) }
+        // On its way: it doesn't go (see `send`), or it's taken back as the engine has it (see
+        // `requestDone`); one the engine has already, before its word of it came, now.
+        let isThere = outgoing[item.id]?.state == .waiting
+        move(item.id, to: .cancelled)
+        editTranscript { $0.removeLocal(id: item.id) }
+        if isThere { Task { try? await api.cancelInbox(session: id, item: item.id) } }
     }
 
     #if DEBUG
@@ -1080,16 +1144,15 @@ final class SessionModel {
     /// anything already there.
     func edit(_ item: Transcript.Pending) {
         guard canReach else { return }
-        guard !item.isLocal, !editing.contains(item.id) else { return }
-        editing.insert(item.id)
+        guard !item.isLocal, outgoing[item.id]?.state != .takingBack else { return }
+        if outgoing[item.id] == nil { outgoing[item.id] = Outgoing(state: .waiting, isOurs: false) }
+        move(item.id, to: .takingBack)
         Task {
-            defer {
-                editing.remove(item.id)
-                settledEdits[item.id] = nil
-            }
             do {
                 try await api.cancelInbox(session: id, item: item.id)
             } catch {
+                // Still waiting, unless its word came meanwhile.
+                if outgoing[item.id]?.state == .takingBack { move(item.id, to: .waiting) }
                 fail(error)
                 return
             }
@@ -1097,17 +1160,21 @@ final class SessionModel {
             // that comes too late changes nothing, and says nothing).
             // Waited for while it's still waiting (thirty seconds at most): a slow answer isn't a lost
             // message.
-            for _ in 0..<600 where settledEdits[item.id] == nil && transcript.pending.contains(where: { $0.id == item.id }) {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            var cancelled = settledEdits[item.id] ?? (!transcript.pending.contains { $0.id == item.id } && !transcript.messages.contains { $0.id == item.id })
+            await wait(for: item.id, until: .now + .seconds(30)) { $0.state == .takingBack }
             // No word at all (its events lost, a machine's feed dropped): the engine's queue and
             // conversation say, so the text isn't lost.
-            if settledEdits[item.id] == nil, !cancelled, let queued = try? await api.inbox(session: id),
-               let recent = try? await api.messages(session: id, limit: 40).data {
-                cancelled = !queued.contains { $0.id == item.id } && !recent.contains { $0.id == item.id }
+            if outgoing[item.id]?.state == .takingBack {
+                let queued = try? await api.inbox(session: id), recent = try? await api.messages(session: id, limit: 40).data
+                // Unless its word came meanwhile, which says.
+                if outgoing[item.id]?.state == .takingBack {
+                    if let queued, let recent {
+                        move(item.id, to: queued.contains { $0.id == item.id } ? .waiting : recent.contains { $0.id == item.id } ? .delivered : .cancelled)
+                    } else {
+                        move(item.id, to: .waiting)
+                    }
+                }
             }
-            guard cancelled else { return }
+            guard outgoing[item.id]?.state == .cancelled else { return }
             restoreDraft(item.text, files: item.files)
         }
     }
@@ -1258,16 +1325,19 @@ final class SessionModel {
                 }
                 let id = Identifier.message()
                 sentID = id
-                sentIDs.insert(id)
-                starters.insert(id)
+                outgoing[id] = Outgoing(state: .sending, request: .steer, isOurs: true, startsRun: true)
                 editTranscript { $0.addLocal(id: id, text: user.text, delivery: .steer) }
                 try await api.prompt(session: self.id, id: id, text: user.text, files: files)
+                await requestDone(id)
             } catch {
                 // Its turn was taken back, and it didn't go again: back in the composer, as a
                 // message that couldn't be sent is.
                 if let id = sentID {
+                    update(id) {
+                        $0.state = .cancelled
+                        $0.request = nil
+                    }
                     editTranscript { $0.removeLocal(id: id) }
-                    starters.remove(id)
                     restoreDraft(user.text, files: Self.files(of: user))
                 }
                 fail(error)
@@ -1312,7 +1382,7 @@ final class SessionModel {
     @discardableResult
     func editLast() -> Bool {
         guard canReach else { return false }
-        guard let item = waiting.last(where: { !$0.isLocal && !editing.contains($0.id) }) else { return false }
+        guard let item = waiting.last(where: { !$0.isLocal && outgoing[$0.id]?.state != .takingBack }) else { return false }
         edit(item)
         return true
     }
