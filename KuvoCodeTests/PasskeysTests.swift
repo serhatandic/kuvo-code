@@ -8,7 +8,7 @@ import WebKit
 /// offers its other ways rather than waiting on a passkey prompt. A machine's Chrome draws that
 /// prompt where no one sees it, and it held the sign-in page still.
 @MainActor
-@Suite struct PasskeysTests {
+@Suite(.timeLimit(.minutes(1))) struct PasskeysTests {
     /// What a page's request for a passkey ends with: its error's message.
     private func asked(_ how: String) async throws -> String? {
         let configuration = WKWebViewConfiguration()
@@ -46,10 +46,12 @@ import WebKit
 @MainActor
 private final class Loaded: NSObject, WKNavigationDelegate {
     private var done = false
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        done = true
+        TestPulse.beat()
+    }
 
     func wait() async throws {
-        for _ in 0..<500 where !done { try await Task.sleep(for: .milliseconds(10)) }
-        if !done { throw TestFailure("the page didn't load") }
+        try await until { done }
     }
 }

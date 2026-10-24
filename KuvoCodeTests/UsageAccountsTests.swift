@@ -10,7 +10,7 @@ import Testing
 /// their bridge starts again and across launches. The panel isn't started here, so nothing asks
 /// the providers' services. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct UsageAccountsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct UsageAccountsTests {
     let engine = StubEngine(port: 47984)
     let catalog = Catalog(isMac: true)
     let location = ["directory": "/"]
@@ -82,7 +82,7 @@ import Testing
         #expect(usage.followed == ["copilot", "claude"])
         // Signed in to Codex too.
         await integrations(["claude-code": true, "codex-cli": true])
-        try await eventually { usage.followed.contains("codex") }
+        try await until { usage.followed.contains("codex") }
         #expect(usage.followed == ["copilot", "claude", "codex"])
 
         // The next launch: there before the bridge has said.

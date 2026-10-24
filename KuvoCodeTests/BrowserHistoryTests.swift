@@ -7,7 +7,7 @@ import Testing
 /// visited again, and Clear leaves nothing of it on this Mac, not even a site's icon still on its
 /// way. Sites' icons come from a stub.
 @MainActor
-@Suite(.serialized) struct BrowserHistoryTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BrowserHistoryTests {
     let folder = AppInfo.testRoot.appending(path: "Browser-\(UUID().uuidString.prefix(8))")
 
     init() {
@@ -48,7 +48,7 @@ import Testing
         }
         let history = BrowserHistory(folder: folder)
         history.record(URL(string: "https://example.com/")!, title: "Example", iconURL: nil)
-        try await eventually { asked.count > 0 }
+        try await until { asked.count > 0 }
         history.clear()
         gate.open()
         // Until the icon's request has had its answer, and a moment for what follows it.
@@ -72,12 +72,12 @@ import Testing
         }
         let history = BrowserHistory(folder: folder)
         history.record(URL(string: "https://example.com/")!, title: "Example", iconURL: nil)
-        try await eventually { asked.count > 0 }
+        try await until { asked.count > 0 }
         history.clear()
         history.record(URL(string: "https://example.com/")!, title: "Example", iconURL: nil)
         gate.open()
         let site = try #require(history.sites.first { $0.host == "example.com" })
-        try await eventually { history.icon(for: site) != nil }
+        try await until { history.icon(for: site) != nil }
         #expect(asked.count == 2, "asked again for the new visit")
         #expect(history.icon(for: site) != nil)
     }
@@ -85,7 +85,10 @@ import Testing
     nonisolated final class Asked: @unchecked Sendable {
         private let lock = NSLock()
         private var times = 0
-        func note() { lock.withLock { times += 1 } }
+        func note() {
+            lock.withLock { times += 1 }
+            TestPulse.beat()
+        }
         var count: Int { lock.withLock { times } }
     }
 

@@ -10,7 +10,7 @@ import Testing
 /// with its project. Real git; the engine is stubbed, making and removing worktrees with git as
 /// it does.
 @MainActor
-@Suite(.serialized) struct WorktreeSessionTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct WorktreeSessionTests {
     static let engine = "http://127.0.0.1:47994"
     let repository: TestRepository
     let workspace = Workspace()
@@ -99,10 +99,6 @@ import Testing
     private func renamed(_ id: String, _ title: String) throws {
         engineState.rename(id, title)
         workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.renamed", "created": 1, "data": ["sessionID": id, "title": title]])))
-    }
-
-    private func until(_ condition: () -> Bool) async throws {
-        for _ in 0..<300 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
     }
 
     private func git(_ arguments: String..., in folder: String) throws -> String {

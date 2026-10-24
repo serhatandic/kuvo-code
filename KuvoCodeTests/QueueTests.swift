@@ -7,7 +7,7 @@ import Testing
 /// the agent, or when its run fails waits under Paused rather than starting on its own, and Resume
 /// gives the agent the first of it. The engine is stubbed; what the app asked of it is recorded.
 @MainActor
-@Suite(.serialized) struct QueueTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct QueueTests {
     let engine = StubEngine(port: 47993)
     let workspace = Workspace()
     let id = "ses_queue"
@@ -46,7 +46,7 @@ import Testing
         #expect(deliveries.isEmpty, "nothing should be handed to the agent before Resume")
 
         model.resumeQueue()
-        try await eventually { !deliveries.isEmpty }
+        try await until { !deliveries.isEmpty }
         #expect(deliveries == ["steer"], "Resume should hand the first queued message to the agent")
         #expect(!model.isQueuePaused)
     }
@@ -60,7 +60,7 @@ import Testing
         #expect(!model.isQueuePaused, "a queue behind a run isn't paused")
 
         model.stop()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         #expect(engine.requests("POST", "/interrupt").first?.query["resume"] == nil, "Stop shouldn't ask the engine to carry on")
         model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
         #expect(!model.isRunning)
@@ -68,7 +68,7 @@ import Testing
         #expect(model.waiting.map(\.text) == ["Then update the docs"])
 
         model.resumeQueue()
-        try await eventually { !deliveries.isEmpty }
+        try await until { !deliveries.isEmpty }
         #expect(deliveries == ["steer"])
     }
 
@@ -89,7 +89,7 @@ import Testing
         let model = try await open(running: true, inbox: [queued])
         model.apply(try engine.event("session.execution.succeeded", session: id))
         #expect(!model.isQueuePaused)
-        try await eventually { !deliveries.isEmpty }
+        try await until { !deliveries.isEmpty }
         #expect(deliveries == ["steer"], "the next queued message should be handed to the agent")
     }
 
@@ -100,7 +100,7 @@ import Testing
         defer { engine.stop() }
         let model = try await open(running: true, inbox: [queued])
         model.send("Also run the linter", for: nil)
-        try await eventually { !engine.requests("POST", "/prompt").isEmpty }
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/prompt").first)
         #expect(sent.body["delivery"] as? String == "steer")
         let steering = try #require(sent.body["id"] as? String)
@@ -111,7 +111,7 @@ import Testing
         #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"])
 
         model.stop()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         let held = engine.requests("PATCH", "/inbox/\(steering)").compactMap { $0.body["delivery"] as? String }
         #expect(held == ["queue"], "Stop should move the message for the next step to the queue, so it doesn't start a run")
         model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": steering, "delivery": "queue"]))
@@ -120,7 +120,7 @@ import Testing
         #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"], "the held message stays ahead of the queue")
 
         model.resumeQueue()
-        try await eventually { engine.requests("PATCH", "/inbox/\(steering)").count == 2 }
+        try await until { engine.requests("PATCH", "/inbox/\(steering)").count == 2 }
         #expect(engine.requests("PATCH", "/inbox/\(steering)").last?.body["delivery"] as? String == "steer", "Resume should give the agent the held message first")
         #expect(deliveries.isEmpty, "what was queued after it waits its turn")
     }
@@ -138,13 +138,13 @@ import Testing
             return StubWeb.json([:])
         }
         model.send("Also run the linter", for: nil)
-        try await eventually { !engine.requests("POST", "/prompt").isEmpty }
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
         let steering = try #require(engine.requests("POST", "/prompt").first?.body["id"] as? String)
         model.stop()
-        try await eventually { model.isQueuePaused }
+        try await until { model.isQueuePaused }
         #expect(engine.requests("POST", "/interrupt").isEmpty, "the agent is stopped only once the message is in")
         gate.open()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         let order = engine.asked.filter { $0.contains("/inbox/\(steering)") || $0.hasSuffix("/interrupt") }
         #expect(order == ["PATCH /api/session/\(id)/inbox/\(steering)", "POST /api/session/\(id)/interrupt"])
         #expect(engine.requests("PATCH", "/inbox/\(steering)").first?.body["delivery"] as? String == "queue")
@@ -164,7 +164,7 @@ import Testing
         #expect(engine.requests("PATCH", "/inbox/msg_03").map { $0.body["delivery"] as? String } == ["queue"])
         model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": "msg_03", "delivery": "queue"]))
         model.resumeQueue()
-        try await eventually { engine.requests("PATCH", "/inbox/msg_03").count > 1 }
+        try await until { engine.requests("PATCH", "/inbox/msg_03").count > 1 }
         #expect(engine.requests("PATCH", "/inbox/msg_03").last?.body["delivery"] as? String == "steer", "Resume gives it to the agent first")
         #expect(deliveries.isEmpty, "what was queued waits its turn")
     }

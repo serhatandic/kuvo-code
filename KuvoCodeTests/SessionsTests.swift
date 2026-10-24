@@ -8,7 +8,7 @@ import Testing
 /// it worked stops counting as working. The
 /// engine is stubbed; what the app sent it is recorded.
 @MainActor
-@Suite(.serialized) struct SessionsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct SessionsTests {
     static let engine = "http://127.0.0.1:47997"
     let workspace = Workspace()
     let sent = Sent()
@@ -70,8 +70,8 @@ import Testing
         let user = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: message))
         guard case .user(let failed) = user else { Issue.record("not a user message"); return }
         open.retry(failed)
-        // Until it's gone (a moment, off the main thread), at most a few seconds.
-        for _ in 0..<500 where sent.prompts.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        // Until it's gone (a moment, off the main thread).
+        try await until { !sent.prompts.isEmpty }
         let files = try #require(sent.prompts.last?["files"] as? [[String: Any]])
         #expect(files.count == 1)
         #expect((files.first?["uri"] as? String)?.hasPrefix("data:image/png;base64,") == true)

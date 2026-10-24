@@ -7,7 +7,7 @@ import Testing
 /// last seen, and a conversation opens as it was, to read; once the engine answers, its own takes
 /// the copy's place in the same view, with what came since. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct LastSeenTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct LastSeenTests {
     let engine = StubEngine(port: 47985)
     let id = "ses_lastseen"
     let you: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Fix the flaky test"]
@@ -32,7 +32,7 @@ import Testing
         let session = try decoded(StubEngine.session(id, title: "Flaky test", directory: "/tmp/kuvo-tests-lastseen"), as: Session.self)
         SessionCopies.saveLocalSessions([session])
         SessionCopies.save(.init(session: session, messages: try decoded([you, reply], as: [Message].self)))
-        try await eventually { SessionCopies.load(id) != nil && SessionCopies.localSessions().count == 1 }
+        await SessionCopies.written()
 
         // Opened again, the engine still starting.
         let workspace = Workspace()
@@ -45,7 +45,7 @@ import Testing
         engine.conversation(id, [you, reply, since])
         workspace.api = engine.api
         await workspace.refresh()
-        try await eventually { model.transcript.messages.count == 3 }
+        try await until { model.transcript.messages.count == 3 }
         #expect(workspace.model(for: id) === model, "the same conversation, read in place")
         #expect(model.transcript.messages.map(\.id) == ["msg_01", "msg_02", "msg_03"])
     }

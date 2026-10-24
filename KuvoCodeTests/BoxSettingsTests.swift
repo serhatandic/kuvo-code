@@ -9,9 +9,9 @@ import Testing
 /// goes by that machine's rules, never this Mac's. The machine's settings tool is stood in for;
 /// its engine is stubbed.
 @MainActor
-@Suite(.serialized) struct BoxSettingsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BoxSettingsTests {
     /// A machine's settings file, as its own tool keeps it (`kuvo-link.js box`).
-    @MainActor final class Box: RemoteSettings {
+    @MainActor @Observable final class Box: RemoteSettings {
         var settings: [String: JSONValue]
         var refusesChanges = false
         var refusesReads = false
@@ -23,6 +23,7 @@ import Testing
         /// Reads wait here until let go, answering with the file as it was when they were asked.
         var holdsReads = false
         private var held: [CheckedContinuation<Void, Never>] = []
+        var waitingReads: Int { held.count }
 
         init(_ settings: [String: JSONValue]) { self.settings = settings }
 
@@ -70,7 +71,7 @@ import Testing
         // Nothing to show until it's read (as the machine is started, or its tab opened).
         #expect(!config.isLoaded)
         config.reload()
-        try await eventually { config.isLoaded }
+        try await until { config.isLoaded }
         #expect(config.value(at: ["model"]) == .string("openai/luna"))
         #expect(config.permissionRules.map(\.resource) == ["git push *"])
 
@@ -78,9 +79,9 @@ import Testing
         box.settings["small_model"] = .string("openai/luna-mini")
         config.set(.string("anthropic/sonnet"), at: ["model"])
         #expect(config.value(at: ["model"]) == .string("anthropic/sonnet"))
-        try await eventually { !box.changes.isEmpty }
+        try await until { !box.changes.isEmpty }
         #expect(box.changes == [[["model"]]])
-        try await eventually { config.value(at: ["small_model"]) != nil }
+        try await until { config.value(at: ["small_model"]) != nil }
         // Both: the phone's change stays, and this one's is there.
         #expect(box.settings["model"] == .string("anthropic/sonnet"))
         #expect(config.value(at: ["small_model"]) == .string("openai/luna-mini"))
@@ -94,15 +95,15 @@ import Testing
         config.took(box.settings)
         box.refusesChanges = true
         config.set(.string("anthropic/sonnet"), at: ["model"])
-        try await eventually { config.notSaved != nil }
+        try await until { config.notSaved != nil }
         #expect(config.notSaved?.contains("Connection refused") == true)
-        try await eventually { config.value(at: ["model"]) == .string("openai/luna") }
+        try await until { config.value(at: ["model"]) == .string("openai/luna") }
         #expect(config.value(at: ["model"]) == .string("openai/luna"))
         // Still yours to change: the next one that gets there clears it.
         #expect(config.problem == nil)
         box.refusesChanges = false
         config.set(.string("anthropic/sonnet"), at: ["model"])
-        try await eventually { config.notSaved == nil }
+        try await until { config.notSaved == nil }
         #expect(box.settings["model"] == .string("anthropic/sonnet"))
     }
 
@@ -113,9 +114,9 @@ import Testing
         // A read on its way (the engine said its settings changed), slow to come back.
         box.holdsReads = true
         config.reload()
-        try await Task.sleep(for: .milliseconds(50))
+        try await until { box.waitingReads == 1 }
         config.set(.string("anthropic/sonnet"), at: ["model"])
-        try await eventually { box.settings["model"] == .string("anthropic/sonnet") }
+        try await until { box.settings["model"] == .string("anthropic/sonnet") }
         box.letReadsGo()
         try await Task.sleep(for: .milliseconds(100))
         #expect(config.value(at: ["model"]) == .string("anthropic/sonnet"))
@@ -129,14 +130,14 @@ import Testing
         config.took(box.settings)
         box.holdsChanges = true
         config.set(.array([Self.rule("a *")]), at: ["permissions"])
-        try await eventually { box.waitingChanges == 1 }
+        try await until { box.waitingChanges == 1 }
         config.set(.array([Self.rule("b *")]), at: ["permissions"])
         // The read comes back before either change is answered.
         config.took(box.settings)
         #expect(config.permissionRules.map(\.resource) == ["b *"])
         box.letChangesGo()
-        try await eventually { box.changes.count == 2 }
-        try await eventually { config.permissionRules.map(\.resource) == ["b *"] && box.settings["permissions"] == .array([Self.rule("b *")]) }
+        try await until { box.changes.count == 2 }
+        try await until { config.permissionRules.map(\.resource) == ["b *"] && box.settings["permissions"] == .array([Self.rule("b *")]) }
         #expect(config.permissionRules.map(\.resource) == ["b *"])
     }
 
@@ -149,14 +150,14 @@ import Testing
         box.refusesChanges = true
         box.refusesReads = true
         config.set(.string("anthropic/sonnet"), at: ["model"])
-        try await eventually { config.notSaved != nil }
+        try await until { config.notSaved != nil }
         #expect(config.value(at: ["model"]) == .string("openai/luna"))
         #expect(config.problem == nil, "still read, still yours to change")
         box.refusesChanges = false
         box.refusesReads = false
         config.set(.string("anthropic/haiku"), at: ["small_model"])
-        try await eventually { box.settings["small_model"] == .string("anthropic/haiku") }
-        try await eventually { config.notSaved == nil }
+        try await until { box.settings["small_model"] == .string("anthropic/haiku") }
+        try await until { config.notSaved == nil }
         #expect(config.value(at: ["model"]) == .string("openai/luna"))
     }
 
@@ -167,7 +168,7 @@ import Testing
         }
         let config = EngineConfig(remote: Away())
         config.reload()
-        try await eventually { config.problem != nil }
+        try await until { config.problem != nil }
         #expect(config.problem?.contains("next time Kuvo Code starts it") == true)
         #expect(!config.isLoaded)
         // Nothing's changed while it can't be read.

@@ -35,8 +35,29 @@ nonisolated enum SessionCopies {
         folder.appending(path: "this-mac").appending(path: "sessions.json")
     }
 
+    /// The last write given, which each new one waits for: they land in the order they were
+    /// given, so an older list never ends up over a newer one.
+    nonisolated(unsafe) private static var lastWrite: Task<Void, Never>?
+    private static let writes = NSLock()
+
+    /// Writes in the background, after the writes given before it.
+    private static func write(_ work: @escaping @Sendable () -> Void) {
+        writes.withLock {
+            let before = lastWrite
+            lastWrite = Task.detached(priority: .utility) {
+                await before?.value
+                work()
+            }
+        }
+    }
+
+    /// Once what's been given to write so far is written (for tests, which read it back).
+    static func written() async {
+        await writes.withLock { lastWrite }?.value
+    }
+
     static func saveLocalSessions(_ sessions: [Session]) {
-        Task.detached(priority: .utility) {
+        write {
             guard let data = try? JSONEncoder().encode(sessions) else { return }
             try? FileManager.default.createDirectory(at: localList.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: localList, options: .atomic)
@@ -50,7 +71,7 @@ nonisolated enum SessionCopies {
 
     /// Writes it in the background: a long conversation takes a moment to encode.
     static func save(_ copy: Copy) {
-        Task.detached(priority: .utility) {
+        write {
             guard let data = try? JSONEncoder().encode(copy) else { return }
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try? data.write(to: file(copy.session.id), options: .atomic)
@@ -62,20 +83,23 @@ nonisolated enum SessionCopies {
         return try? JSONDecoder().decode(Copy.self, from: data)
     }
 
+    /// Removed after the writes given before, so one of those doesn't bring it back.
     static func remove(_ id: String) {
-        try? FileManager.default.removeItem(at: file(id))
+        write { try? FileManager.default.removeItem(at: file(id)) }
     }
 
     /// Removes the copies of sessions no longer known.
     static func keep(_ ids: Set<String>) {
         let names = Set(ids.map { file($0).lastPathComponent })
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".json") && !names.contains(name) {
-            try? FileManager.default.removeItem(at: folder.appending(path: name))
+        write {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".json") && !names.contains(name) {
+                try? FileManager.default.removeItem(at: folder.appending(path: name))
+            }
         }
     }
 
     static func saveSessions(_ sessions: [Session], of machine: String) {
-        Task.detached(priority: .utility) {
+        write {
             guard let data = try? JSONEncoder().encode(sessions) else { return }
             try? FileManager.default.createDirectory(at: list(machine).deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: list(machine), options: .atomic)
@@ -88,6 +112,6 @@ nonisolated enum SessionCopies {
     }
 
     static func removeSessions(of machine: String) {
-        try? FileManager.default.removeItem(at: list(machine))
+        write { try? FileManager.default.removeItem(at: list(machine)) }
     }
 }

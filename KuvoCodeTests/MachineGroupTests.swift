@@ -10,7 +10,7 @@ import Testing
 /// and a bot in a machine's chat stays with it. A move cut short is taken back. The machine's
 /// bridge is stubbed, holding its chats as the runner there does (`Agents/src/groups`).
 @MainActor
-@Suite(.serialized) struct MachineGroupTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct MachineGroupTests {
     let mac = StubEngine(port: 47986)
     let bridge = StubEngine(port: 47985, alongside: true)
     let held = Held()
@@ -32,7 +32,8 @@ import Testing
     nonisolated final class Held: @unchecked Sendable {
         private let lock = NSLock()
         private var chats: [String: (group: [String: Any], status: String, messages: [[String: Any]])] = [:]
-        private(set) var actions: [String] = []
+        private var asked: [String] = []
+        var actions: [String] { lock.withLock { asked } }
 
         func add(_ group: [String: Any], status: String = "active", messages: [[String: Any]] = []) {
             lock.withLock { chats[group["id"] as! String] = (group, status, messages) }
@@ -46,7 +47,7 @@ import Testing
                 let parts = request.path.split(separator: "/").map(String.init).dropFirst(3)
                 let id = parts.first
                 let action = parts.dropFirst().first
-                actions.append("\(request.method) \(([id, action].compactMap { $0 }).joined(separator: "/"))")
+                asked.append("\(request.method) \(([id, action].compactMap { $0 }).joined(separator: "/"))")
                 let read = { (id: String) -> [String: Any] in
                     let chat = self.chats[id]!
                     return ["group": chat.group, "status": chat.status, "state": ["discussing": false, "paused": false], "messages": chat.messages]
@@ -237,11 +238,14 @@ import Testing
         let following = Task { @MainActor in
             for try await part in PhoneLink.respond(to: LinkRequest(path: "kuvo/groups/grp_box0000001/events"), link: link,
                                                     engine: URL(string: mac.url + "/")!, password: nil, agents: nil) {
-                if case .body(let data) = part, let line = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { lines.append(line) }
+                if case .body(let data) = part, let line = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    lines.append(line)
+                    TestPulse.beat()
+                }
             }
         }
         defer { following.cancel() }
-        try await eventually { lines.count == 1 }
+        try await until { lines.count == 1 }
         #expect((lines.first?["messages"] as? [Any])?.count == 1)
         let group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"])
         let read: [String: Any] = ["kind": "tool", "call": ["type": "tool", "id": "call_1", "name": "read",
@@ -253,7 +257,7 @@ import Testing
         #expect(shown.count == 2)
         if case .step(let call) = shown[0] { #expect(call.name == "read") } else { Issue.record("not the step") }
         #expect(shown[1] == .thinking("Checking the build"))
-        try await eventually { lines.count == 2 }
+        try await until { lines.count == 2 }
         #expect(lines.count == 2 && lines[1]["messages"] == nil, "the phone keeps the ones it has")
         #expect((lines.last?["activity"] as? [Any])?.count == 2 && lines.last?["speaking"] as? String == "bot_lb")
         app.machineGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
@@ -271,7 +275,7 @@ import Testing
         await app.machineGroups.connected("box")
         let told = { held.actions.filter { $0 == "PATCH grp_box0000001" }.count }
         app.chats.markViewed("grp_box0000001")
-        for _ in 0..<50 where told() == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        try await until { told() > 0 }
         #expect(told() == 1)
         let seen = try #require(app.chats.group("grp_box0000001")?.viewed)
         var group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"])

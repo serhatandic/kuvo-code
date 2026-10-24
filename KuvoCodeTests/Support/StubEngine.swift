@@ -102,6 +102,8 @@ nonisolated final class StubEngine: @unchecked Sendable {
             log.append(recorded)
             return answers[key] ?? answers.first(where: { $0.key.hasSuffix("*") && key.hasPrefix($0.key.dropLast()) })?.value
         }
+        // Asked: a test waiting on it looks again (`until`), though the answer may wait.
+        TestPulse.beat()
         // Outside the lock: an answer may wait (see `Gate`) while other requests go on.
         if let answer { return answer(recorded) }
         return lock.withLock {
@@ -150,12 +152,6 @@ nonisolated final class Gate: @unchecked Sendable {
         opened = true
         condition.broadcast()
         condition.unlock()
+        TestPulse.beat()
     }
-}
-
-/// Until `condition` holds (the app's work goes on off the main thread and in tasks), five
-/// seconds at most; then the test's own expectations say what didn't happen.
-@MainActor
-func eventually(_ condition: () -> Bool) async throws {
-    for _ in 0..<500 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
 }
