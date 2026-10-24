@@ -13,11 +13,15 @@ final class FakeEngine: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         Self.asked.append(request)
         let stream = request.url?.path() == "/api/event"
+        // A box's stream of JSON lines (`kuvo/…/events`).
+        let lines = request.url?.path() == "/kuvo/projects/events"
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-            "Content-Type": stream ? "text/event-stream" : "application/json", "Set-Cookie": "no=thanks",
+            "Content-Type": stream ? "text/event-stream" : lines ? "application/x-ndjson" : "application/json", "Set-Cookie": "no=thanks",
         ])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        if stream {
+        if lines {
+            client?.urlProtocol(self, didLoad: Data("{\"projects\":[]}\n{\"projects\":[{\"directory\":\"/w\"}]}\n".utf8))
+        } else if stream {
             client?.urlProtocol(self, didLoad: Data("data: {\"type\":\"server.connected\"}\n\ndata: {\"type\":\"server.heartbeat\"}\n\n".utf8))
         } else {
             client?.urlProtocol(self, didLoad: Data(#"{"path":"\#(request.url!.absoluteString)"}"#.utf8))
@@ -112,5 +116,14 @@ final class FakeEngine: URLProtocol, @unchecked Sendable {
         #expect(headers["content-type"] == "text/event-stream")
         #expect(pieces.count == 2)
         #expect(String(decoding: pieces[0], as: UTF8.self) == "data: {\"type\":\"server.connected\"}\n\n")
+    }
+
+    /// A box's stream (this Mac's, as PhoneLink hands it a moved area): each line goes as it's
+    /// whole, not once 32 KB have come.
+    @Test func aBoxsLinesGoOneByOne() async throws {
+        let (_, headers, pieces) = try await collect(EngineRoutes.forward(LinkRequest(path: "kuvo/projects/events"), to: base, password: nil, session: session,
+                                                                         allowing: { path, _ in path.hasPrefix("kuvo/") }))
+        #expect(headers["content-type"] == "application/x-ndjson")
+        #expect(pieces.map { String(decoding: $0, as: UTF8.self) } == ["{\"projects\":[]}\n", "{\"projects\":[{\"directory\":\"/w\"}]}\n"])
     }
 }

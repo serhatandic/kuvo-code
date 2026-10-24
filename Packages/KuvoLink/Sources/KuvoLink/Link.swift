@@ -633,4 +633,7 @@ public enum Bridge {
     public static var script: Data {
         get throws { try Data(contentsOf: Bundle.module.url(forResource: "kuvo-link", withExtension: "js")!) }
     }
+
+    /// The same, where it is, for this Mac's own box to run (`kuvo-link.js serve`).
+    public static var scriptURL: URL? { Bundle.module.url(forResource: "kuvo-link", withExtension: "js") }
 }

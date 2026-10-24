@@ -97,6 +97,9 @@ public final class ServerProcess: @unchecked Sendable {
 
     public var isRunning: Bool { process.isRunning }
 
+    /// Its process, for a record that names it (the agents bridge's, for this Mac's box).
+    public var processID: Int32 { process.processIdentifier }
+
     /// The last lines the server wrote to stderr, for error reports.
     public var recentOutput: String { log.text }
 

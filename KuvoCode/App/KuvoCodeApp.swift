@@ -148,6 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.phoneLink.flushBeforeQuit()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
+        // This Mac's box, and its record of the agents bridge, which goes with the app too.
+        model.box.stop()
+        BoxProcess.agentsChanged(nil, pid: nil)
         model.stopMachines()
         IntegrationKeys.removeFiles()
         Analytics.shared.flushBeforeQuit()
