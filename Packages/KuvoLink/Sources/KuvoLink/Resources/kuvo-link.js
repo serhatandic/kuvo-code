@@ -3225,12 +3225,19 @@ export class NoticeHold {
   constructor({ send, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
     Object.assign(this, { send, now, setTimer, clearTimer, save });
     this.leases = new Map();
+    // When each client last spoke (its word's `at`): an older word, come late, is let go.
+    this.heard = new Map();
     this.answered = [];
     this.timer = null;
     this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number")
       .map(entry => ({ notice: entry.notice, at: entry.at, due: 0, seen: entry.seen === true }));
-    this.saved = JSON.stringify(this.held);
+    this.saved = NoticeHold.kept(this.held);
     this.settle();
+  }
+
+  // What's kept of what's held, as JSON.
+  static kept(entries) {
+    return JSON.stringify(entries.map(({ notice, at, seen }) => ({ notice, at, seen })));
   }
 
   // Whether a client is in use now, and how many notices wait.
@@ -3241,7 +3248,12 @@ export class NoticeHold {
   get count() { return this.held.length; }
 
   // `client` is in use for `seconds` more, with `sessions` on its screen; 0: it isn't any more.
-  attend(client, { seconds, sessions = [] }) {
+  // `at`: when it said so, by its own clock, for words that can come out of order (mail).
+  attend(client, { seconds, sessions = [] }, at) {
+    if (typeof at === "number") {
+      if (at < (this.heard.get(client) ?? -Infinity)) return;
+      this.heard.set(client, at);
+    }
     if (seconds > 0) {
       this.leases.set(client, this.now() + seconds * 1000);
       const shown = new Set(sessions);
@@ -3276,27 +3288,35 @@ export class NoticeHold {
     const now = this.now();
     for (const [client, until] of this.leases) if (until <= now) this.leases.delete(client);
     const waiting = this.leases.size > 0;
+    // When an entry may go: its hold's end while a client's in use, else now; one that couldn't
+    // go waits for its next try.
+    const when = entry => Math.max(waiting ? entry.due : 0, entry.retry ?? 0);
     const kept = [];
     for (const entry of this.held) {
-      // With no client in use, it's due; one that couldn't go waits for its next try.
-      if (Math.max(waiting ? entry.due : 0, entry.retry ?? 0) > now) {
+      if (when(entry) > now) {
         kept.push(entry);
         continue;
       }
-      if (entry.seen || this.send(entry.notice)) continue;
+      // Seen: news needs telling no more; what's asked of you waits until it's answered, and goes
+      // once no one's at a client (you saw it, and left it unanswered).
+      if (entry.seen && !ASKED.has(entry.notice.category)) continue;
+      if (entry.seen && waiting) {
+        kept.push({ ...entry, due: Infinity });
+        continue;
+      }
+      if (this.send(entry.notice)) continue;
       if (now - entry.at < TRY_FOR) kept.push({ ...entry, retry: now + RETRY_EVERY });
     }
     this.held = kept;
-    const text = JSON.stringify(kept.map(({ notice, at, seen }) => ({ notice, at, seen })));
+    const text = NoticeHold.kept(kept);
     if (text !== this.saved) {
       this.saved = text;
-      this.save(kept.map(({ notice, at, seen }) => ({ notice, at, seen })));
+      this.save(JSON.parse(text));
     }
     if (this.timer !== null) this.clearTimer(this.timer);
     this.timer = null;
-    if (!kept.length) return;
-    const next = Math.min(...kept.map(entry => Math.max(waiting ? entry.due : 0, entry.retry ?? 0)), ...this.leases.values());
-    this.timer = this.setTimer(() => this.settle(), Math.max(0, next - now));
+    const next = Math.min(...kept.map(when), ...(kept.length ? this.leases.values() : []));
+    if (Number.isFinite(next)) this.timer = this.setTimer(() => this.settle(), Math.max(0, next - now));
   }
 }
 
@@ -4952,8 +4972,8 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
 }
 
 // What came by mail, from a Mac or a peer: a Mac's lists, or what peers tell each other
-// (`peerMail`, its agents and their letters); `attended(mac, given)`: a Mac in use, or not any
-// more (PROTOCOL.md, "kuvo/attention").
+// (`peerMail`, its agents and their letters); `attended(mac, given, at)`: a Mac in use, or not any
+// more, as of its mail's `at` (PROTOCOL.md, "kuvo/attention").
 export function receiveMail(body, host, peerMail = () => {}, attended = () => {}) {
   const link = readLink();
   const opened = openMail(body, link);
@@ -4961,7 +4981,7 @@ export function receiveMail(body, host, peerMail = () => {}, attended = () => {}
   const { sender, payload } = opened;
   if (macsOf(link).includes(sender.key) && (Array.isArray(payload.phones) || Array.isArray(payload.peers))) takeFromMac(payload, sender.key, host);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
-  if (attention) attended(sender.key, attention);
+  if (attention && typeof payload.at === "number") attended(sender.key, attention, payload.at);
   peerMail(sender, payload);
 }
 
@@ -5594,8 +5614,9 @@ const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pair
 
 async function run() {
   // One bridge at a time: a newer one (the engine restarted) takes over.
+  let old = null;
   try {
-    const old = Number(fs.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs.readFileSync(PID_FILE, "utf8"));
     if (isBridge(old)) process.kill(old, "SIGTERM");
   } catch {}
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
@@ -5650,7 +5671,9 @@ async function run() {
     return sent;
   };
   // Each held a little while a client's in use here (PROTOCOL.md, "kuvo/attention"); what's held
-  // is kept in run/held-notices.json, for the next bridge to send if this one stops first.
+  // is kept in run/held-notices.json, for the next bridge to send if this one stops first: read
+  // once the one before has gone (a few seconds at most), so it neither sends nor holds one more.
+  for (let tries = 0; tries < 60 && old && isBridge(old); tries++) await sleep(50);
   let held = [];
   try { held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8")); } catch {}
   const hold = new NoticeHold({
@@ -5712,7 +5735,7 @@ async function run() {
       hello: { v: 1, kind: "machine", name: link.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
-      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given) => hold.attend(`mac:${mac}`, given)),
+      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
       handle: engineHandler(readEngineFile, { name: link.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {},

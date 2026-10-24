@@ -372,22 +372,26 @@ a machine sent each at once, and a Mac's box sent its own only while you were aw
   replaces its last.
 - **A Mac** says it for you: in use while it's awake, its screen awake and unlocked, there's been
   input in the last two minutes, and Kuvo Code can show you things there (its window in front, or
-  its notifications on). It renews every 15 seconds for 45, with the conversations on screen while
-  its window's in front, and says it isn't at once as the Mac or its screen sleeps, the screen
-  locks, you go idle, or it quits. Its own box hears it in the app; each of its machines whose
-  bridge talks to peers by mail, `{"attention": {for, sessions}, "at"}`, taken only from a Mac
-  that set the machine up. A Mac without the phone link on says nothing.
+  its notifications on), and not while another account is in front. It renews every 15 seconds
+  for 45, with the conversations on screen while its window's in front and there's been input
+  since its last word, and says it isn't at once as the Mac or its screen sleeps, the screen locks
+  or another account comes in front, and at its next word once you've gone idle, or as it quits.
+  Its own box hears it in the app; each of its machines whose bridge talks to peers by mail,
+  `{"attention": {for, sessions}, "at"}`, taken only from a Mac that set the machine up, and only
+  when its `at` isn't older than that Mac's last (mail can come out of order). A Mac without the
+  phone link on says nothing.
 - **The box**, while any client's lease is current, holds each new notice: 30 seconds for what's
   asked of you (`permission`, `question`, `ask`), 60 for news (the rest). When its hold ends it
   goes, unless meanwhile it was answered (the permission or form replied to, or cancelled; the ask
-  no longer asked) or a client in use said its conversation (`data.session`, else `data.group`,
-  else `thread`) is on its screen, in a word that came after the notice. When the last lease ends
-  (it ran out, or its client said `0`), what's held goes at once. With no lease, a notice goes at
-  once.
+  no longer asked) or seen: a client in use said its conversation (`data.session`, else
+  `data.group`, else `thread`) is on its screen, in a word that came after the notice. Seen news
+  is let go; something seen that's asked of you waits until it's answered, or goes once no client
+  is in use. When the last lease ends (it ran out, or its client said `0`), what's held goes at
+  once. With no lease, a notice goes at once.
 - So a client that vanishes (a Mac's lid closed before it could say so) holds nothing back longer
   than a hold or its lease, whichever ends first, and a conversation it last showed doesn't count
-  as seen. One a box couldn't send (no relay just now) is tried again every few seconds, for ten
-  minutes. A machine's bridge keeps what it holds in `run/held-notices.json`, so the next one sends
+  as seen. One a box couldn't hand to the relay (no connection just now) is tried again every few
+  seconds, for ten minutes. A machine's bridge keeps what it holds in `run/held-notices.json`, so the next one sends
   it if it stops first. The Mac's own notifications are the same either way.
 - A phone needn't say it's in use: it leaves out what's on its screen itself, and its own lease
   would hold its own notices.

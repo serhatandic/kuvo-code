@@ -116,6 +116,21 @@ import Testing
         #expect(phones.notices.isEmpty)
     }
 
+    /// Seen, a permission still waits on you: it goes once you've left it unanswered.
+    @Test func aPermissionSeenButLeftUnansweredGoesWhenYouLeave() async throws {
+        defer { done() }
+        await start(["ses_a"])
+        let (attention, mac) = atTheMac(onScreen: { ["ses_a"] })
+        defer { attention.stop() }
+        try await ask("per_1", in: "ses_a")
+        clock.pass(Attention.renewEvery)
+        attention.check(renewing: true)
+        clock.pass(NoticeHold.askHold)
+        #expect(phones.notices.isEmpty)
+        mac.distributed.post(name: Attention.screenLocked, object: nil)
+        #expect(phones.notices.map(\.category) == [.permission])
+    }
+
     @Test func aLeaseThatRunsOutSendsWhatsHeldAtOnce() async throws {
         defer { done() }
         await start(["ses_a"])
@@ -187,6 +202,20 @@ import Testing
         mac.workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
         #expect(told.last == .some(nil))
         mac.workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        #expect(told.last == ["ses_a"])
+
+        // Another account in front.
+        mac.workspace.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+        #expect(told.last == .some(nil))
+        mac.workspace.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        #expect(told.last == ["ses_a"])
+
+        // No input since the last word: still here, but what's on screen isn't seen by anyone.
+        mac.idle = Attention.renewEvery
+        mac.renew()
+        #expect(told.last == [])
+        mac.idle = 1
+        mac.renew()
         #expect(told.last == ["ses_a"])
 
         // The window behind another app's, with notifications on: here, nothing on screen.

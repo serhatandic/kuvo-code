@@ -22,8 +22,11 @@ final class NoticeHold {
     /// Requests answered lately: one answered before its notice was made never goes.
     private static let mostAnswered = 200
 
+    /// What's asked of you, as opposed to news.
+    private static let asked: Set<Notice.Category> = [.permission, .question, .ask]
+
     static func hold(for category: Notice.Category) -> TimeInterval {
-        [.permission, .question, .ask].contains(category) ? askHold : newsHold
+        asked.contains(category) ? askHold : newsHold
     }
 
     /// What time it is, and a way to be woken after a while: a test's own moves only when it says.
@@ -124,7 +127,15 @@ final class NoticeHold {
                 kept.append(entry)
                 continue
             }
-            if entry.seen || send(entry.notice) { continue }
+            // Seen: news needs telling no more; what's asked of you waits until it's answered, and
+            // goes once no one's at a client (you saw it, and left it unanswered).
+            if entry.seen && !Self.asked.contains(entry.notice.category) { continue }
+            if entry.seen && waiting {
+                entry.due = .distantFuture
+                kept.append(entry)
+                continue
+            }
+            if send(entry.notice) { continue }
             if now.timeIntervalSince(entry.at) < Self.tryFor {
                 entry.retry = now.addingTimeInterval(Self.retryEvery)
                 kept.append(entry)

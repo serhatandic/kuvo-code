@@ -8,11 +8,13 @@ import Observation
 /// meanwhile (`NoticeHold`, and the same in each machine's bridge). The Mac's own notifications
 /// are unchanged.
 ///
-/// In use: the Mac awake, its screen awake and unlocked, input in the last two minutes, and Kuvo
-/// Code able to show you things here (its window in front, or its notifications on). Told again
-/// every 15 seconds while it is, with the conversations on screen while the window's in front, and
-/// told it isn't at once as the Mac or its screen sleeps, the screen locks, you go idle, or the app
-/// quits. A lease that isn't renewed runs out by itself, so a Mac that vanishes holds nothing.
+/// In use: the Mac awake, its screen awake and unlocked, your account in front, input in the last
+/// two minutes, and Kuvo Code able to show you things here (its window in front, or its
+/// notifications on). Told again every 15 seconds while it is, with the conversations on screen
+/// while the window's in front and you've touched something since; told it isn't at once as the
+/// Mac or its screen sleeps, the screen locks or another account comes in front, at the next word
+/// once you've gone idle, and as the app quits. A lease that isn't renewed runs out by itself, so a
+/// Mac that vanishes holds nothing.
 final class Attention {
     /// How long each word lasts, and how often it's renewed: renewed well before it runs out, and
     /// before the shortest hold ends, so a conversation you're looking at counts as seen.
@@ -66,6 +68,7 @@ final class Attention {
     private var systemAsleep = false
     private var screenAsleep = false
     private var locked = false
+    private var switchedAway = false
     /// What was told last: nothing yet, or what it said.
     private var told: [String]?? = .none
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -97,6 +100,9 @@ final class Attention {
         watch(mac.workspace, NSWorkspace.didWakeNotification) { [weak self] in self?.systemAsleep = false }
         watch(mac.workspace, NSWorkspace.screensDidSleepNotification) { [weak self] in self?.screenAsleep = true }
         watch(mac.workspace, NSWorkspace.screensDidWakeNotification) { [weak self] in self?.screenAsleep = false }
+        // Another account in front (fast user switching): you're not at this one.
+        watch(mac.workspace, NSWorkspace.sessionDidResignActiveNotification) { [weak self] in self?.switchedAway = true }
+        watch(mac.workspace, NSWorkspace.sessionDidBecomeActiveNotification) { [weak self] in self?.switchedAway = false }
         watch(mac.distributed, Self.screenLocked) { [weak self] in self?.locked = true }
         watch(mac.distributed, Self.screenUnlocked) { [weak self] in self?.locked = false }
         watch(mac.app, NSApplication.didBecomeActiveNotification) {}
@@ -120,13 +126,15 @@ final class Attention {
 
     /// Whether you're using Kuvo Code here now.
     private var inUse: Bool {
-        !systemAsleep && !screenAsleep && !locked && mac.idle() < Self.idleAfter && (mac.windowInFront() || mac.notificationsOn())
+        !systemAsleep && !screenAsleep && !locked && !switchedAway && mac.idle() < Self.idleAfter && (mac.windowInFront() || mac.notificationsOn())
     }
 
     /// Tells the boxes what's so now, when it changed, or again (`renewing`) while you're here.
     func check(renewing: Bool = false) {
         guard isRunning else { return }
-        let now: [String]? = inUse ? (mac.windowInFront() ? onScreen() : []) : nil
+        // On screen counts as seen only with input since the last word: you, not an empty chair
+        // in the two minutes before you count as gone.
+        let now: [String]? = inUse ? (mac.windowInFront() && mac.idle() < Self.renewEvery ? onScreen() : []) : nil
         let changed = told.map { $0 != now } ?? true
         guard changed || (renewing && now != nil) else { return }
         told = .some(now)

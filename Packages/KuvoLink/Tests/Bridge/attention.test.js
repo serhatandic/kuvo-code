@@ -116,6 +116,27 @@ test("one whose conversation comes on the client's screen during its hold never 
   assert.deepEqual(phones, []);
 });
 
+test("a permission seen but left unanswered waits on you, and goes once you leave", () => {
+  const { time, phones, hold } = box();
+  hold.attend("mac:a", atTheMac);
+  hold.tell(permission);
+  hold.attend("mac:a", { seconds: 45, sessions: ["ses_main"] });
+  time.pass(link.ASK_HOLD);
+  assert.deepEqual(phones, []);
+  hold.attend("mac:a", { seconds: 0 });
+  assert.deepEqual(phones, [permission]);
+});
+
+test("a Mac's older word, come late by mail, is let go", () => {
+  const { phones, hold } = box();
+  // It said it's not in use; its renewal from just before comes after.
+  hold.attend("mac:a", { seconds: 0 }, 2);
+  hold.attend("mac:a", atTheMac, 1);
+  assert.equal(hold.inUse, false);
+  hold.tell(finished);
+  assert.deepEqual(phones, [finished]);
+});
+
 test("on screen before the notice came doesn't count: a lid closed then leaves nothing seen", () => {
   const { time, phones, hold } = box();
   hold.attend("mac:a", { seconds: 45, sessions: ["ses_main"] });
@@ -217,10 +238,12 @@ const mailFrom = (from, payload) => link.sealOneWay(Buffer.from(JSON.stringify(p
 test("a Mac you're at says so by mail, and only a Mac that set this machine up is heard", () => {
   link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(machineKey), relay: "wss://relay.invalid", name: "lab", id: "lab.invalid", mac: k(link.publicOf(macKey)), macs: [k(link.publicOf(macKey))], phones: [] });
   const attended = [];
-  link.receiveMail(mailFrom(strangerKey, { at: 1, attention: { for: 45 } }), undefined, () => {}, (mac, given) => attended.push({ mac, given }));
-  link.receiveMail(mailFrom(macKey, { at: 2, attention: { for: 45, sessions: ["ses_main"] } }), undefined, () => {}, (mac, given) => attended.push({ mac, given }));
-  link.receiveMail(mailFrom(macKey, { at: 3, attention: { for: "soon" } }), undefined, () => {}, (mac, given) => attended.push({ mac, given }));
-  assert.deepEqual(attended, [{ mac: k(link.publicOf(macKey)), given: { seconds: 45, sessions: ["ses_main"] } }]);
+  const heard = (mac, given, at) => attended.push({ mac, given, at });
+  link.receiveMail(mailFrom(strangerKey, { at: 1, attention: { for: 45 } }), undefined, () => {}, heard);
+  link.receiveMail(mailFrom(macKey, { at: 2, attention: { for: 45, sessions: ["ses_main"] } }), undefined, () => {}, heard);
+  link.receiveMail(mailFrom(macKey, { at: 3, attention: { for: "soon" } }), undefined, () => {}, heard);
+  link.receiveMail(mailFrom(macKey, { attention: { for: 45 } }), undefined, () => {}, heard);
+  assert.deepEqual(attended, [{ mac: k(link.publicOf(macKey)), given: { seconds: 45, sessions: ["ses_main"] }, at: 2 }]);
 });
 
 // An engine whose events a test sends to whoever follows them.
