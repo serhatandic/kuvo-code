@@ -682,7 +682,8 @@ held to the same route scenarios (`Vectors/routes`). A host serves:
   - `GET kuvo/worktrees` → `{"worktrees": [{path, folder, project, projectName, branch, base?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `folder`
     where its session runs (the project's place in its repository), `project` its project's,
-    `sessions` how many run there and `working` whether an agent is at work in one.
+    `sessions` how many run there and `working` whether an agent is at work in one. (A Mac before
+    this version left `folder` out: take `path` then.)
     What git says, left out when it can't say (a folder deleted by hand): `uncommitted`, changes
     not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
     stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
