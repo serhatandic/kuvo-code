@@ -688,6 +688,11 @@ export class GroupRunner {
         this.note(`${bot.name} is on ${peers.name(bot.box)}, which needs an update to take part.`, id)
         return "absent"
       }
+      // Moving to another computer (its folder says so while a move holds it): its turn once it's there.
+      if (!bot.box && this.bot(botID)?.moving) {
+        this.note(`${bot.name} is moving to another computer, so it sat this out.`, id)
+        return "absent"
+      }
       // Its seat, unless the bot lives on another computer than its seat now (it moved): that one
       // goes, and its next seat hears the whole chat.
       let seat = guest ? undefined : kept.group.seats[botID]

@@ -136,6 +136,19 @@ describe("who a message to a group chat names with &", () => {
   })
 })
 
+describe("a bot a move holds", () => {
+  test("sits its turn out, saying why, and nothing goes to an engine for it; the others go on", async () => {
+    writeFileSync(join(root, "bots", "bot_ada", "paused"), "moving")
+    const { groups } = runner()
+    engine.lines = { Ben: ["Here.", "PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Where are we?")
+    await until(() => !groups.talk(id).discussing && groups.get(id)!.messages.some((message) => message.author === "bot_ben"))
+    expect(groups.get(id)!.messages.filter((message) => message.kind === "note").map((message) => message.text)).toContain("Ada is moving to another computer, so it sat this out.")
+    expect(engine.seatsMade().some((title) => title.startsWith("Ada"))).toBe(false)
+  })
+})
+
 describe("what a box lets go of", () => {
   test("goes to its trash, and it says where (this Mac's app puts it in the Finder's Trash)", async () => {
     const { groups } = runner()
