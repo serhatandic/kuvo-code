@@ -41,6 +41,15 @@ import Testing
         machine.stop()
     }
 
+    /// Once it's connected, it's sent what its bots are made with (their kit: templates, your
+    /// personalities, its projects), so it makes bots itself with this Mac closed.
+    @Test func connectedItsSentItsBotsKit() async throws {
+        defer { done() }
+        let id = Self.name()
+        await app.connect(add(id, at: machine)).value
+        #expect(ssh.scripts(to: id).contains { $0.contains("kit.json") }, "its bots' kit went to it")
+    }
+
     /// Removed while it copies your sign-ins, the step before it's sent your agents' list, its
     /// wake-ups' time zone and the rest: none of those go, nor anything after, and it's gone from
     /// the sidebar with its sessions.
