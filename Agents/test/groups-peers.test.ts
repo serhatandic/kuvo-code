@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
-import { RemoteHome, SeatServer, askAgainAfter, awayAfter, type Clock, type PeerBot, type PeerDirectory, type SeatMail } from "../src/groups/peer"
+import { RemoteHome, SeatServer, activityEvery, askAgainAfter, awayAfter, type Clock, type PeerBot, type PeerDirectory, type SeatMail } from "../src/groups/peer"
 import { GroupRunner } from "../src/groups/runner"
 import { stamp, type Group } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
@@ -329,6 +329,29 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(instruction()).toContain(`"Lokum crew"`)
     home.runner.stop("grp_local00001")
   }, 20_000)
+
+  test("what it's doing goes to the chat's computer at most every 1.5 s, the latest of it", async () => {
+    const clock = new HandClock()
+    let finish = () => {}
+    const seats = {
+      turn: async (_turn: any, report: (state: any) => void) => {
+        report({ phase: "activity", activity: [{ kind: "thinking", text: "one" }] })
+        report({ phase: "activity", activity: [{ kind: "thinking", text: "two" }] })
+        report({ phase: "activity", activity: [{ kind: "writing" }] })
+        await new Promise<void>((resolve) => (finish = resolve))
+        return { ok: true, text: "Done.", steps: [] }
+      },
+    } as any
+    const sent: SeatMail[] = []
+    const server = new SeatServer(seats, { send: (_to, mail) => { sent.push(mail); beat() } }, undefined, clock)
+    server.take("key_mac", { kind: "turn", turn: { id: "trn_busy", chat: { id, name: "Team", members: [] }, bot: "bot_ben", kind: "turn", text: "Go." } })
+    const activities = () => sent.flatMap((mail) => (mail.kind === "state" && mail.state.phase === "activity" ? [mail.state.activity] : []))
+    expect(activities()).toEqual([[{ kind: "thinking", text: "one" }]])
+    clock.advance(activityEvery)
+    expect(activities()).toEqual([[{ kind: "thinking", text: "one" }], [{ kind: "writing" }]])
+    finish()
+    await until(() => sent.some((mail) => mail.kind === "result"))
+  })
 
   test("what another computer says of a turn it wasn't asked is taken from nobody", async () => {
     const forger = new Box("key_stranger", relay)
