@@ -1,0 +1,146 @@
+{
+  "servers" : [
+    {
+      "access" : "signIn",
+      "id" : "linear",
+      "integration" : true,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.linear.app/mcp"
+      },
+      "summary" : "Issues, projects and cycles",
+      "title" : "Linear"
+    },
+    {
+      "access" : "signIn",
+      "id" : "sentry",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.sentry.dev/mcp"
+      },
+      "summary" : "Errors and performance problems in your apps",
+      "title" : "Sentry"
+    },
+    {
+      "access" : "signIn",
+      "id" : "notion",
+      "integration" : true,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.notion.com/mcp"
+      },
+      "summary" : "Pages and databases in your workspace",
+      "title" : "Notion"
+    },
+    {
+      "access" : "signIn",
+      "id" : "atlassian",
+      "integration" : true,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.atlassian.com/v2/mcp"
+      },
+      "summary" : "Jira issues and Confluence pages",
+      "title" : "Atlassian"
+    },
+    {
+      "access" : "signIn",
+      "id" : "stripe",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.stripe.com"
+      },
+      "summary" : "Payments, customers and Stripe's docs",
+      "title" : "Stripe"
+    },
+    {
+      "access" : "signIn",
+      "id" : "supabase",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.supabase.com/mcp"
+      },
+      "summary" : "Databases, auth and storage in your projects",
+      "title" : "Supabase"
+    },
+    {
+      "access" : "signIn",
+      "id" : "neon",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.neon.tech/mcp"
+      },
+      "summary" : "Postgres databases and branches",
+      "title" : "Neon"
+    },
+    {
+      "access" : "open",
+      "id" : "context7",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://mcp.context7.com/mcp"
+      },
+      "summary" : "Current docs and examples for libraries",
+      "title" : "Context7"
+    },
+    {
+      "access" : "open",
+      "id" : "cloudflare-docs",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://docs.mcp.cloudflare.com/mcp"
+      },
+      "summary" : "Cloudflare's documentation",
+      "title" : "Cloudflare Docs"
+    },
+    {
+      "access" : "open",
+      "id" : "huggingface",
+      "integration" : false,
+      "macOnly" : false,
+      "settings" : {
+        "type" : "remote",
+        "url" : "https://huggingface.co/mcp"
+      },
+      "summary" : "Models, datasets, Spaces and papers",
+      "title" : "Hugging Face"
+    },
+    {
+      "access" : "local",
+      "id" : "chrome-devtools",
+      "integration" : false,
+      "macOnly" : true,
+      "settings" : {
+        "command" : [
+          "kuvo-npx",
+          "chrome-devtools-mcp@1.11.0",
+          "--isolated",
+          "--no-usage-statistics"
+        ],
+        "environment" : {
+          "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS" : "1",
+          "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS" : "1",
+          "KUVO_NPX_APART" : "fetch"
+        },
+        "type" : "local"
+      },
+      "summary" : "Inspect and debug pages in Google Chrome",
+      "title" : "Chrome DevTools"
+    }
+  ]
+}

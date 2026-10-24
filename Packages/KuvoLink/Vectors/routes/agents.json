@@ -1,0 +1,122 @@
+{
+  "about": "Who `&` can name (kuvo/named), what agents ask for while they browse (kuvo/asks), group chats (kuvo/groups) and the coding agents (kuvo/agents/…, kuvo/sessions/<id>/agents), as each box answers for its own.",
+  "scenarios": [
+    {
+      "name": "kuvo/named: every bot, then the latest sessions with a title",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada", "job": "Watches the build" } } },
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{chats}}", "updated": 30 } } },
+        { "given": { "session": { "id": "ses_cart", "title": "Fix the cart", "directory": "{{work}}/shop", "updated": 20 } } },
+        { "given": { "session": { "id": "ses_blank", "title": "", "directory": "{{work}}/shop", "updated": 40 } } },
+        { "given": { "session": { "id": "ses_sub", "title": "A subagent", "directory": "{{work}}/shop", "parent": "ses_cart", "updated": 50 } } },
+        { "given": { "session": { "id": "ses_old", "title": "Put away", "directory": "{{work}}/shop", "archived": true, "updated": 60 } } },
+        {
+          "send": "GET kuvo/named",
+          "expect": { "status": 200, "json": { "agents": [
+            { "session": "ses_ada", "name": "Ada", "kind": "bot", "machine": null, "about": "Watches the build" },
+            { "session": "ses_plan", "name": "Plan the launch", "kind": "session", "machine": null, "project": "Chats" },
+            { "session": "ses_cart", "name": "Fix the cart", "kind": "session", "machine": null, "project": "shop" }
+          ] } }
+        }
+      ]
+    },
+    {
+      "name": "kuvo/asks: nothing asked, and an answer to an ask that isn't there",
+      "steps": [
+        { "send": "GET kuvo/asks", "expect": { "status": 200, "json": { "asks": [] } } },
+        { "send": "POST kuvo/asks/ask_nothing", "body": { "answer": "declined" }, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "kuvo/asks: a code an agent browsing asks for, listed, and answers that don't fit it",
+      "steps": [
+        { "given": { "ask": { "id": "ask_code1", "kind": "code", "host": "example.invalid", "prompt": "Enter the code we texted you" } } },
+        { "given": { "ask": { "id": "ask_step1", "kind": "action", "host": "example.invalid", "instruction": "Approve it in the app" } } },
+        { "send": "GET kuvo/asks", "expect": { "status": 200, "json": { "asks": [
+          { "id": "ask_code1", "kind": "code", "host": "example.invalid", "prompt": "Enter the code we texted you" },
+          { "id": "ask_step1", "kind": "action", "host": "example.invalid", "instruction": "Approve it in the app" }
+        ] } } },
+        {
+          "send": "GET kuvo/asks",
+          "why": "A Mac names the machine whose browser asks, and none for its own; a machine's bridge names itself on each.",
+          "expect": {
+            "mac": { "status": 200, "json": { "asks": [ { "machine": "<absent>" }, { "machine": "<absent>" } ] } },
+            "machine": { "status": 200, "json": { "asks": [ { "machine": "lab.invalid" }, { "machine": "lab.invalid" } ] } }
+          }
+        },
+        { "send": "POST kuvo/asks/ask_code1", "body": { "answer": "code", "code": "   " }, "expect": { "status": 400 } },
+        { "send": "POST kuvo/asks/ask_code1", "body": { "answer": "done" }, "expect": { "status": 400 } },
+        { "send": "post kuvo/asks/ask_code1", "body": { "answer": "signIn", "username": "ada" }, "expect": { "status": 400 } },
+        { "send": "POST kuvo/asks/ask_step1", "body": { "answer": "code", "code": "123456" }, "expect": { "status": 400 } },
+        { "send": "GET kuvo/asks/ask_code1", "expect": { "status": 405 } },
+        {
+          "send": "POST kuvo/asks/ask_code1", "body": { "answer": "code", "code": " 123456 " }, "expect": { "status": 200, "json": {} },
+          "only": "mac",
+          "why": "On a machine its browser's keeper takes the answer, over its socket, which this suite doesn't run (bridge.test.js covers it)."
+        },
+        { "send": "GET kuvo/asks", "only": "mac", "why": "The same answer, taken.", "expect": { "status": 200, "json": { "asks": [ { "id": "ask_step1" } ] } } }
+      ]
+    },
+    {
+      "name": "making a group chat: what can't be is said before anything's made",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "bot": { "id": "bot_bo", "name": "Bo", "session": "ses_bo" } } },
+        { "given": { "agentsBridge": {} } },
+        { "send": "POST kuvo/groups", "body": { "members": [ "bot_ada", "bot_bo" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs a name." } } },
+        { "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_ada" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs at least two bots." } } },
+        { "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_nobody" ] }, "expect": { "status": 404, "json": { "message": "There’s no bot “bot_nobody”." } } },
+        { "send": "POST kuvo/groups", "body": "not json", "expect": { "status": 400, "json": { "message": "<string>" } } }
+      ]
+    },
+    {
+      "name": "a group chat made of two bots, listed and changed",
+      "only": "mac",
+      "why": "A machine's group chats live and run in its coding agents' bridge (Agents/src/groups), which this suite doesn't run; Agents' own tests hold it to the Mac's rules (groups-vectors.json), and groups.test.js its routes.",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "bot": { "id": "bot_bo", "name": "Bo", "session": "ses_bo" } } },
+        {
+          "send": "POST kuvo/groups", "body": { "name": "Standup", "members": [ "bot_ada", "bot_bo" ], "purpose": "  Ship it  " },
+          "expect": { "status": 201, "json": { "group": { "id": "<string>", "name": "Standup", "purpose": "Ship it", "discussing": false, "paused": false,
+            "members": [ { "id": "bot_ada", "name": "Ada", "session": "ses_ada", "agents": false }, { "id": "bot_bo", "name": "Bo" } ] } } },
+          "save": { "group": "group.id" }
+        },
+        { "send": "GET kuvo/groups", "expect": { "status": 200, "json": { "groups": [ { "id": "{{group}}", "name": "Standup" } ] } } },
+        { "send": "PATCH kuvo/groups/{{group}}", "body": { "name": "Daily", "purpose": "" }, "expect": { "status": 200, "json": { "group": { "id": "{{group}}", "name": "Daily", "purpose": null } } } },
+        { "send": "PATCH kuvo/groups/{{group}}", "body": { "members": [ "bot_ada" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs at least two bots." } } },
+        { "send": "PATCH kuvo/groups/grp_nothing", "body": { "name": "Ghost" }, "expect": { "status": 404, "json": { "message": "<string>" } } }
+      ]
+    },
+    {
+      "name": "group chats while the coding agents' bridge isn't running",
+      "steps": [
+        {
+          "send": "GET kuvo/groups",
+          "why": "A Mac runs its group chats itself; a machine's run in its coding agents' bridge, so it answers 503 while that isn't up (PROTOCOL.md, kuvo/groups).",
+          "expect": {
+            "mac": { "status": 200, "json": { "groups": [] } },
+            "machine": { "status": 503, "json": { "message": "<string>" } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "the coding agents' routes while their bridge isn't running",
+      "steps": [
+        { "send": "GET kuvo/agents/api/session", "expect": { "status": 503, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/info", "expect": { "status": 200, "json": { "agents": false } } }
+      ]
+    },
+    {
+      "name": "carrying a conversation on with the coding agents: what can't be is said",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "send": "POST kuvo/sessions/ses_plan/agents", "body": { "model": { "providerID": "opencode", "id": "big-pickle" } }, "expect": { "status": 400, "json": { "message": "That isn’t a coding agent’s model." } } },
+        { "send": "POST kuvo/sessions/ses_plan/agents", "body": {}, "expect": { "status": 400, "json": { "message": "That isn’t a coding agent’s model." } } },
+        { "send": "POST kuvo/sessions/ses_plan/agents", "body": { "model": { "providerID": "claude-code", "id": "sonnet" } }, "expect": { "status": 503, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/sessions/ses_plan/agents", "expect": { "status": 405 } }
+      ]
+    }
+  ]
+}

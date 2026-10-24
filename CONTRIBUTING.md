@@ -102,6 +102,30 @@ OpenCodeKit's tests. `LiveServerTests` run against a real binary when
 Linux machine when `KUVO_TEST_SSH_HOST` names one you reach with SSH (they
 install the engine in its `~/.kuvo-code-test`, and remove it after).
 
+#### Route scenarios
+
+Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a machine's bridge
+(`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
+run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
+`PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
+bridge's real handler. Only the engine is a stand-in, the same small one on both. To add one:
+
+- Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
+  each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `settings`, `key`, `credential`,
+  `file`, `repository`, `write`, `ask`, `agentsBridge`; bots before anything else), a request
+  `{"send": "PATCH kuvo/bots/bot_ada", "body": {…}, "expect": {"status", "json"?, "type"?,
+  "text"?}, "save": {"name": "bot.id"}}`, or `{"engineGot": {"method", "path", "json"}}`.
+- `json` names only what matters. `"<string>"`, `"<number>"`, `"<bool>"`, `"<object>"`,
+  `"<array>"`, `"<any>"`, `"<absent>"` stand for volatile values; lists match in order, or with
+  `{"<includes>": […]}`, `{"<excludes>": […]}`, `{"<length>": n}`; `{"<contains>": "…"}` in a
+  string. `null` matches null or left out. `{{name}}` fills in what was saved, the box's places
+  (`chats`, `skills`, `work`, `keys`) and `{{now+3600}}`.
+- Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
+  step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
+- Run both runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
+  machine, which the bridge's runner uses) after a change to the integrations, the MCP catalog or
+  bot templates.
+
 `Tests/E2E` tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with
 OpenCode's free models, on real projects. Its README says how to run it, and

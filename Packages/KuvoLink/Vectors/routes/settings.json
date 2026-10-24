@@ -1,0 +1,89 @@
+{
+  "about": "kuvo/config, kuvo/mcp/catalog and kuvo/keys (PROTOCOL.md, \"Settings per box\"): each box's own engine settings, changed as Settings changes them, its popular MCP servers, and its integrations' keys.",
+  "scenarios": [
+    {
+      "name": "the settings read and changed as Settings changes them",
+      "steps": [
+        { "given": { "settings": { "value": { "model": "anthropic/sonnet" } } } },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "model": "anthropic/sonnet" } } },
+        {
+          "send": "PATCH kuvo/config",
+          "body": { "changes": [ { "path": [ "model" ], "value": "openai/luna" }, { "path": [ "mcp", "servers", "linear", "disabled" ], "value": true } ] },
+          "expect": { "status": 200, "json": { "model": "openai/luna", "mcp": { "servers": { "linear": { "disabled": true } } } } }
+        },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "model": "openai/luna", "mcp": { "servers": { "linear": { "disabled": true } } } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "model" ], "value": "x/y", "was": "anthropic/sonnet" } ] }, "expect": { "status": 409, "json": { "message": "It changed since you read it." } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "model" ], "value": null, "was": "openai/luna" } ] }, "expect": { "status": 200, "json": { "model": "<absent>" } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "theme" ], "value": "dark", "was": null } ] }, "expect": { "status": 200, "json": { "theme": "dark" } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "theme", "inner" ], "value": 1 } ] }, "expect": { "status": 400, "json": { "message": "A path goes through objects only; send a list whole, at its own path." } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "model" ] } ] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PATCH kuvo/config", "body": "not json", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PUT kuvo/config", "body": {}, "expect": { "status": 405 } },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "theme": "dark", "mcp": { "servers": { "linear": { "disabled": true } } } } } }
+      ]
+    },
+    {
+      "name": "a settings file that isn't plain JSON is left alone, and said to be",
+      "steps": [
+        { "given": { "settings": { "text": "{\n  // my own\n  \"model\": \"anthropic/sonnet\"\n}\n" } } },
+        { "send": "GET kuvo/config", "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "model" ], "value": "openai/luna" } ] }, "expect": { "status": 409, "json": { "message": "<string>" } } }
+      ]
+    },
+    {
+      "name": "a key named where another computer keeps its keys is named where this box keeps them",
+      "steps": [
+        {
+          "send": "PATCH kuvo/config",
+          "body": { "changes": [ { "path": [ "mcp", "servers", "todoist" ], "value": { "type": "local", "environment": { "TODOIST_API_KEY": "{file:/Users/someone/elsewhere/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } } ] },
+          "expect": { "status": 200, "json": { "mcp": { "servers": { "todoist": { "environment": { "TODOIST_API_KEY": "{file:{{keys}}/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } } } } }
+        }
+      ]
+    },
+    {
+      "name": "the popular MCP servers, and adding one as its Add button does",
+      "steps": [
+        {
+          "send": "GET kuvo/mcp/catalog",
+          "expect": { "status": 200, "json": { "servers": { "<includes>": [
+            { "id": "context7", "title": "Context7", "summary": "<string>", "access": "open", "added": false, "integration": false, "macOnly": false },
+            { "id": "linear", "access": "signIn", "added": false }
+          ] } } }
+        },
+        {
+          "send": "GET kuvo/mcp/catalog",
+          "why": "Chrome DevTools uses the Mac's own Chrome, so a machine's list leaves it out (PROTOCOL.md, kuvo/mcp/catalog).",
+          "expect": {
+            "mac": { "status": 200, "json": { "servers": { "<includes>": [ { "id": "chrome-devtools", "macOnly": true } ] } } },
+            "machine": { "status": 200, "json": { "servers": { "<excludes>": [ { "id": "chrome-devtools" } ] } } }
+          }
+        },
+        { "send": "POST kuvo/mcp/catalog/context7", "expect": { "status": 200, "json": { "mcp": { "servers": { "context7": "<object>" } } } } },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "mcp": { "servers": { "context7": "<object>" } } } } },
+        { "send": "GET kuvo/mcp/catalog", "expect": { "status": 200, "json": { "servers": { "<includes>": [ { "id": "context7", "added": true, "integration": false } ] } } } },
+        { "send": "POST kuvo/mcp/catalog/context7", "expect": { "status": 200, "json": { "mcp": { "servers": { "context7": "<object>" } } } } },
+        { "send": "POST kuvo/mcp/catalog/nothing", "expect": { "status": 404 } },
+        { "send": "GET kuvo/mcp/catalog/context7", "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "an integration's key: set, listed, read and removed; a bot's own isn't one of these",
+      "steps": [
+        { "send": "GET kuvo/keys", "expect": { "status": 200, "json": { "keys": { "<excludes>": [ "KUVO_KEY_TODOIST_TODOIST_API_KEY" ] } } } },
+        { "send": "PUT kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": { "value": "tok_123" }, "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/keys", "expect": { "status": 200, "json": { "keys": { "<includes>": [ "KUVO_KEY_TODOIST_TODOIST_API_KEY" ] } } } },
+        { "send": "GET kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 200, "json": { "value": "tok_123" } } },
+        { "send": "PUT kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": {}, "expect": { "status": 400, "json": { "message": "Send {\"value\": \"…\"}." } } },
+        { "send": "PUT kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": { "value": "" }, "expect": { "status": 400, "json": { "message": "Send {\"value\": \"…\"}." } } },
+        { "send": "GET kuvo/keys/TODOIST", "expect": { "status": 400, "json": { "message": "That isn't a key's name." } } },
+        { "send": "GET kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY__BOT_ADA", "expect": { "status": 400, "json": { "message": "That isn't a key's name." } } },
+        { "send": "DELETE kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 404 } },
+        { "send": "DELETE kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "expect": { "status": 200, "json": {} } },
+        { "send": "POST kuvo/keys", "expect": { "status": 405 } },
+        { "send": "PATCH kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": { "value": "x" }, "expect": { "status": 405 } }
+      ]
+    }
+  ]
+}

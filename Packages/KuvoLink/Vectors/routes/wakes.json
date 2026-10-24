@@ -1,0 +1,97 @@
+{
+  "about": "kuvo/wakes and kuvo/wakes/<session> (PROTOCOL.md): a session's or a bot's wake-ups and watches, as the bar over the Mac's composer shows them, added, paused, cancelled and sent now.",
+  "scenarios": [
+    {
+      "name": "a session's wake-ups and watches, and every session that keeps some",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 7200, "note": "Check the build", "letters": "Wk1", "every": "1d" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 3600, "note": "Ask about the docs", "letters": "Wk2" } } },
+        { "given": { "watch": { "session": "ses_plan", "letters": "Wt1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } } },
+        {
+          "send": "GET kuvo/wakes/ses_plan",
+          "expect": { "status": 200, "json": {
+            "wakes": [
+              { "id": "<string>", "due": "<number>", "note": "Ask about the docs", "every": null },
+              { "id": "<string>", "due": "<number>", "note": "Check the build", "every": "1d" }
+            ],
+            "watches": [ { "letters": "Wt1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } ],
+            "paused": false
+          } }
+        },
+        { "send": "GET kuvo/wakes", "expect": { "status": 200, "json": { "sessions": [ { "session": "ses_plan", "next": "<number>", "watching": true } ] } } }
+      ]
+    },
+    {
+      "name": "a session with none answers an empty list; bots' come with kuvo/bots, not kuvo/wakes",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "given": { "wake": { "session": "ses_ada", "in": 3600, "note": "Morning digest", "letters": "Bw1" } } },
+        { "send": "GET kuvo/wakes/ses_plan", "expect": { "status": 200, "json": { "wakes": [], "watches": [], "paused": false } } },
+        { "send": "GET kuvo/wakes", "expect": { "status": 200, "json": { "sessions": [] } } },
+        { "send": "GET kuvo/wakes/ses_ada", "expect": { "status": 200, "json": { "wakes": [ { "note": "Morning digest" } ] } } }
+      ]
+    },
+    {
+      "name": "adding a wake-up as the bar over the composer does, and what can't be one",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+3600}}", "note": "Morning digest" }, "expect": { "status": 200, "json": { "wakes": [ { "note": "Morning digest", "every": null, "due": "<number>" } ], "paused": false } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+7200}}", "every": "1d", "note": "Every day" }, "expect": { "status": 200, "json": { "wakes": [ { "note": "Morning digest" }, { "note": "Every day", "every": "1d" } ] } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+3600}}", "every": "08h", "note": "A bad repeat" }, "expect": { "status": 400, "json": { "message": "That isn’t a repeat: 30m, 2h, 1d, 1w or weekdays." } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+10}}", "note": "Too soon" }, "expect": { "status": 400, "json": { "message": "Pick a time at least a minute from now." } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+3600}}", "note": "   " }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "note": "When?" }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/wakes/ses_plan", "expect": { "status": 200, "json": { "wakes": { "<length>": 2 } } } },
+        { "send": "POST kuvo/wakes/ses_nobody", "body": { "due": "{{now+3600}}", "note": "Hi" }, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "a bot's wake-up goes in its own folder, where kuvo/bots reads it",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "send": "POST kuvo/wakes/ses_ada", "body": { "due": "{{now+3600}}", "note": "Morning digest" }, "expect": { "status": 200, "json": { "wakes": [ { "note": "Morning digest" } ] } } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "wakes": "<number>" } ] } } },
+        { "send": "POST kuvo/wakes/ses_ada/pause", "body": { "paused": true }, "expect": { "status": 200, "json": { "paused": true } } },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "paused": true } ] } } },
+        { "send": "GET kuvo/wakes", "expect": { "status": 200, "json": { "sessions": [] } } }
+      ]
+    },
+    {
+      "name": "pausing them and letting them go",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 3600, "note": "Check the build", "letters": "Wk1" } } },
+        { "send": "POST kuvo/wakes/ses_plan/pause", "body": { "paused": true }, "expect": { "status": 200, "json": { "paused": true, "wakes": [ { "note": "Check the build" } ] } } },
+        { "send": "GET kuvo/wakes/ses_plan", "expect": { "status": 200, "json": { "paused": true } } },
+        { "send": "POST kuvo/wakes/ses_plan/pause", "body": { "paused": "yes" }, "expect": { "status": 400, "json": { "message": "Send {\"paused\": true} or false." } } },
+        { "send": "POST kuvo/wakes/ses_plan/pause", "body": { "paused": false }, "expect": { "status": 200, "json": { "paused": false } } }
+      ]
+    },
+    {
+      "name": "cancelling a wake-up or a watch, and one that isn't there",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 3600, "note": "Check the build", "letters": "Wk1", "every": "1d" } } },
+        { "given": { "watch": { "session": "ses_plan", "letters": "Wt1", "every": "30m", "check": "true" } } },
+        { "send": "POST kuvo/wakes/ses_plan/cancel", "body": { "wake": "Wk1" }, "expect": { "status": 200, "json": {} } },
+        { "send": "POST kuvo/wakes/ses_plan/cancel", "body": { "wake": "Wk1" }, "expect": { "status": 404, "json": {} } },
+        { "send": "POST kuvo/wakes/ses_plan/cancel", "body": { "watch": "Wt1" }, "expect": { "status": 200, "json": {} } },
+        { "send": "POST kuvo/wakes/ses_plan/cancel", "body": {}, "expect": { "status": 404, "json": {} } },
+        { "send": "GET kuvo/wakes/ses_plan", "expect": { "status": 200, "json": { "wakes": [], "watches": [] } } }
+      ]
+    },
+    {
+      "name": "Wake Up Now sends it to the conversation as its time would, and takes a one-off off the schedule",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 3600, "note": "Check the build", "letters": "Wk1" } } },
+        { "send": "POST kuvo/wakes/ses_plan/now", "body": { "wake": "Wk1" }, "expect": { "status": 200, "json": {} } },
+        { "engineGot": { "method": "POST", "path": "/api/session/ses_plan/prompt", "json": { "text": "[Wake-up] Check the build" } } },
+        { "send": "GET kuvo/wakes/ses_plan", "expect": { "status": 200, "json": { "wakes": [] } } },
+        { "send": "POST kuvo/wakes/ses_plan/now", "body": { "wake": "Wk1" }, "expect": { "status": 404, "json": {} } }
+      ]
+    }
+  ]
+}

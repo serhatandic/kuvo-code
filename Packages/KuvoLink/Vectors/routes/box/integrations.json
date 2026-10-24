@@ -1,0 +1,513 @@
+{
+  "integrations" : [
+    {
+      "by" : "Softeria's ms-365-mcp-server",
+      "how" : "Open source",
+      "id" : "microsoft-365",
+      "kind" : "Mail and Calendar",
+      "settings" : {
+        "codemode" : false,
+        "command" : [
+          "kuvo-npx",
+          "@softeria/ms-365-mcp-server@0.170.2",
+          "--discovery"
+        ],
+        "environment" : {
+          "KUVO_NPX_APART" : "1",
+          "MS365_MCP_LOG_DIR" : "{env:KUVO_INTEGRATIONS}/microsoft-365/logs",
+          "MS365_MCP_SELECTED_ACCOUNT_PATH" : "{env:KUVO_INTEGRATIONS}/microsoft-365/selected-account.json",
+          "MS365_MCP_TOKEN_CACHE_PATH" : "{env:KUVO_INTEGRATIONS}/microsoft-365/token-cache.json",
+          "MS365_MCP_USE_KEYTAR" : "0"
+        },
+        "type" : "local"
+      },
+      "site" : "https://outlook.live.com",
+      "summary" : "Mail, calendar, contacts and files; you sign in with a code the first time",
+      "symbol" : "envelope",
+      "title" : "Outlook and Microsoft 365",
+      "way" : "package"
+    },
+    {
+      "how" : "Official",
+      "id" : "fastmail",
+      "kind" : "Mail and Calendar",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://api.fastmail.com/mcp"
+      },
+      "site" : "https://app.fastmail.com",
+      "summary" : "Mail, contacts and calendars",
+      "symbol" : "envelope.badge",
+      "title" : "Fastmail",
+      "way" : "official"
+    },
+    {
+      "by" : "dominik1001's caldav-mcp",
+      "help" : "https://support.apple.com/en-us/102654",
+      "how" : "Open source · your key",
+      "id" : "caldav",
+      "keys" : [
+        {
+          "label" : "Server",
+          "name" : "CALDAV_BASE_URL",
+          "prompt" : "https://caldav.icloud.com"
+        },
+        {
+          "label" : "Username",
+          "name" : "CALDAV_USERNAME",
+          "prompt" : "you@icloud.com"
+        },
+        {
+          "label" : "Password",
+          "name" : "CALDAV_PASSWORD",
+          "prompt" : "An app-specific password"
+        }
+      ],
+      "kind" : "Mail and Calendar",
+      "settings" : {
+        "codemode" : false,
+        "command" : [
+          "kuvo-npx",
+          "caldav-mcp@0.10.0"
+        ],
+        "environment" : {
+          "CALDAV_BASE_URL" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_BASE_URL}",
+          "CALDAV_PASSWORD" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_PASSWORD}",
+          "CALDAV_USERNAME" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_CALDAV_CALDAV_USERNAME}",
+          "KUVO_NPX_APART" : "1"
+        },
+        "type" : "local"
+      },
+      "site" : "https://www.icloud.com/calendar",
+      "summary" : "iCloud, Nextcloud and other CalDAV calendars",
+      "symbol" : "calendar.badge.clock",
+      "title" : "Other Calendars",
+      "variables" : {
+        "CALDAV_BASE_URL" : "KUVO_KEY_CALDAV_CALDAV_BASE_URL",
+        "CALDAV_PASSWORD" : "KUVO_KEY_CALDAV_CALDAV_PASSWORD",
+        "CALDAV_USERNAME" : "KUVO_KEY_CALDAV_CALDAV_USERNAME"
+      },
+      "way" : "package"
+    },
+    {
+      "help" : "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "how" : "Official · your app",
+      "id" : "gmail",
+      "keys" : [
+        {
+          "label" : "Client ID",
+          "name" : "CLIENT_ID",
+          "prompt" : "From your app"
+        },
+        {
+          "label" : "Client secret",
+          "name" : "CLIENT_SECRET",
+          "prompt" : "From your app"
+        }
+      ],
+      "kind" : "Mail and Calendar",
+      "redirect" : "http://127.0.0.1:19876/mcp/oauth/callback",
+      "settings" : {
+        "codemode" : false,
+        "oauth" : {
+          "clientId" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_GMAIL_CLIENT_ID}",
+          "clientSecret" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_GMAIL_CLIENT_SECRET}"
+        },
+        "type" : "remote",
+        "url" : "https://gmailmcp.googleapis.com/mcp/v1"
+      },
+      "site" : "https://mail.google.com",
+      "summary" : "Google's own server, in preview: with an app in your Google Cloud project",
+      "symbol" : "envelope.open",
+      "title" : "Gmail",
+      "variables" : {
+        "CLIENT_ID" : "KUVO_KEY_GMAIL_CLIENT_ID",
+        "CLIENT_SECRET" : "KUVO_KEY_GMAIL_CLIENT_SECRET"
+      },
+      "way" : "app"
+    },
+    {
+      "help" : "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "how" : "Official · your app",
+      "id" : "google-calendar",
+      "keys" : [
+        {
+          "label" : "Client ID",
+          "name" : "CLIENT_ID",
+          "prompt" : "From your app"
+        },
+        {
+          "label" : "Client secret",
+          "name" : "CLIENT_SECRET",
+          "prompt" : "From your app"
+        }
+      ],
+      "kind" : "Mail and Calendar",
+      "redirect" : "http://127.0.0.1:19876/mcp/oauth/callback",
+      "settings" : {
+        "codemode" : false,
+        "oauth" : {
+          "clientId" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_GOOGLE_CALENDAR_CLIENT_ID}",
+          "clientSecret" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_GOOGLE_CALENDAR_CLIENT_SECRET}"
+        },
+        "type" : "remote",
+        "url" : "https://calendarmcp.googleapis.com/mcp/v1"
+      },
+      "site" : "https://calendar.google.com",
+      "summary" : "Google's own server, in preview: with an app in your Google Cloud project",
+      "symbol" : "calendar.circle",
+      "title" : "Google Calendar",
+      "variables" : {
+        "CLIENT_ID" : "KUVO_KEY_GOOGLE_CALENDAR_CLIENT_ID",
+        "CLIENT_SECRET" : "KUVO_KEY_GOOGLE_CALENDAR_CLIENT_SECRET"
+      },
+      "way" : "app"
+    },
+    {
+      "help" : "https://docs.slack.dev/ai/mcp-server/",
+      "how" : "Official · your app",
+      "id" : "slack",
+      "keys" : [
+        {
+          "label" : "Client ID",
+          "name" : "CLIENT_ID",
+          "prompt" : "From your app"
+        },
+        {
+          "label" : "Client secret",
+          "name" : "CLIENT_SECRET",
+          "prompt" : "From your app"
+        }
+      ],
+      "kind" : "Chat",
+      "redirect" : "http://127.0.0.1:19876/mcp/oauth/callback",
+      "settings" : {
+        "codemode" : false,
+        "oauth" : {
+          "clientId" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_SLACK_CLIENT_ID}",
+          "clientSecret" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_SLACK_CLIENT_SECRET}"
+        },
+        "type" : "remote",
+        "url" : "https://mcp.slack.com/mcp"
+      },
+      "site" : "https://app.slack.com",
+      "summary" : "Channels, messages and search, through an app you add to your workspace",
+      "symbol" : "number",
+      "title" : "Slack",
+      "variables" : {
+        "CLIENT_ID" : "KUVO_KEY_SLACK_CLIENT_ID",
+        "CLIENT_SECRET" : "KUVO_KEY_SLACK_CLIENT_SECRET"
+      },
+      "way" : "app"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "discord",
+      "kind" : "Chat",
+      "site" : "https://discord.com/app",
+      "summary" : "Your servers and messages",
+      "symbol" : "bubble.left.and.bubble.right",
+      "title" : "Discord",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "telegram",
+      "kind" : "Chat",
+      "site" : "https://web.telegram.org",
+      "summary" : "Your chats",
+      "symbol" : "paperplane",
+      "title" : "Telegram",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "whatsapp",
+      "kind" : "Chat",
+      "site" : "https://web.whatsapp.com",
+      "summary" : "Your chats",
+      "symbol" : "phone.bubble",
+      "title" : "WhatsApp",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "x",
+      "kind" : "Social",
+      "site" : "https://x.com",
+      "summary" : "Posts, replies and messages",
+      "symbol" : "at",
+      "title" : "X",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "linkedin",
+      "kind" : "Social",
+      "site" : "https://www.linkedin.com",
+      "summary" : "Your feed, posts and messages",
+      "symbol" : "person.2",
+      "title" : "LinkedIn",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "reddit",
+      "kind" : "Social",
+      "site" : "https://www.reddit.com",
+      "summary" : "Posts and comments",
+      "symbol" : "text.bubble",
+      "title" : "Reddit",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "bluesky",
+      "kind" : "Social",
+      "site" : "https://bsky.app",
+      "summary" : "Posts and replies",
+      "symbol" : "cloud",
+      "title" : "Bluesky",
+      "way" : "browser"
+    },
+    {
+      "how" : "In the browser",
+      "id" : "mastodon",
+      "kind" : "Social",
+      "site" : "https://mastodon.social",
+      "summary" : "Posts and replies",
+      "symbol" : "megaphone",
+      "title" : "Mastodon",
+      "way" : "browser"
+    },
+    {
+      "help" : "https://github.com/settings/personal-access-tokens/new",
+      "how" : "Official · your token",
+      "id" : "github",
+      "keys" : [
+        {
+          "label" : "Personal access token",
+          "name" : "TOKEN",
+          "prompt" : "github_pat_…"
+        }
+      ],
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "headers" : {
+          "Authorization" : "Bearer {file:~/.kuvo-code/box/keys/KUVO_KEY_GITHUB_TOKEN}"
+        },
+        "oauth" : false,
+        "type" : "remote",
+        "url" : "https://api.githubcopilot.com/mcp/"
+      },
+      "site" : "https://github.com",
+      "summary" : "Repositories, issues, pull requests and Actions",
+      "symbol" : "chevron.left.forwardslash.chevron.right",
+      "title" : "GitHub",
+      "variables" : {
+        "TOKEN" : "KUVO_KEY_GITHUB_TOKEN"
+      },
+      "way" : "token"
+    },
+    {
+      "how" : "Official",
+      "id" : "gitlab",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://gitlab.com/api/v4/mcp"
+      },
+      "site" : "https://gitlab.com",
+      "summary" : "Projects, issues and merge requests",
+      "symbol" : "arrow.triangle.branch",
+      "title" : "GitLab",
+      "way" : "official"
+    },
+    {
+      "how" : "Official",
+      "id" : "linear",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://mcp.linear.app/mcp"
+      },
+      "site" : "https://linear.app",
+      "summary" : "Issues, projects and cycles",
+      "symbol" : "checklist",
+      "title" : "Linear",
+      "way" : "official"
+    },
+    {
+      "how" : "Official",
+      "id" : "notion",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://mcp.notion.com/mcp"
+      },
+      "site" : "https://www.notion.so",
+      "summary" : "Pages and databases",
+      "symbol" : "doc.text",
+      "title" : "Notion",
+      "way" : "official"
+    },
+    {
+      "how" : "Official",
+      "id" : "atlassian",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://mcp.atlassian.com/v2/mcp"
+      },
+      "site" : "https://www.atlassian.com",
+      "summary" : "Issues and pages at Atlassian",
+      "symbol" : "square.stack.3d.up",
+      "title" : "Jira and Confluence",
+      "way" : "official"
+    },
+    {
+      "by" : "Doist's own todoist-mcp",
+      "help" : "https://app.todoist.com/app/settings/integrations/developer",
+      "how" : "Open source · your key",
+      "id" : "todoist",
+      "keys" : [
+        {
+          "label" : "API token",
+          "name" : "TODOIST_API_KEY",
+          "prompt" : "From Settings › Integrations › Developer"
+        }
+      ],
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "command" : [
+          "kuvo-npx",
+          "@doist/todoist-mcp@13.6.1"
+        ],
+        "environment" : {
+          "KUVO_NPX_APART" : "1",
+          "TODOIST_API_KEY" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY}"
+        },
+        "type" : "local"
+      },
+      "site" : "https://app.todoist.com",
+      "summary" : "Tasks and projects",
+      "symbol" : "checkmark.circle",
+      "title" : "Todoist",
+      "variables" : {
+        "TODOIST_API_KEY" : "KUVO_KEY_TODOIST_TODOIST_API_KEY"
+      },
+      "way" : "package"
+    },
+    {
+      "how" : "Official",
+      "id" : "calendly",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://mcp.calendly.com"
+      },
+      "site" : "https://calendly.com/app",
+      "summary" : "Your event types, bookings and availability",
+      "symbol" : "calendar.badge.plus",
+      "title" : "Calendly",
+      "way" : "official"
+    },
+    {
+      "how" : "Official",
+      "id" : "figma",
+      "kind" : "Code and Work",
+      "settings" : {
+        "codemode" : false,
+        "type" : "remote",
+        "url" : "https://mcp.figma.com/mcp"
+      },
+      "site" : "https://www.figma.com",
+      "summary" : "Files and frames, to build designs from",
+      "symbol" : "paintbrush",
+      "title" : "Figma",
+      "way" : "official"
+    },
+    {
+      "help" : "https://developers.asana.com/docs/using-asanas-mcp-server",
+      "how" : "Official · your app",
+      "id" : "asana",
+      "keys" : [
+        {
+          "label" : "Client ID",
+          "name" : "CLIENT_ID",
+          "prompt" : "From your app"
+        },
+        {
+          "label" : "Client secret",
+          "name" : "CLIENT_SECRET",
+          "prompt" : "From your app"
+        }
+      ],
+      "kind" : "Code and Work",
+      "redirect" : "http://127.0.0.1:19876/mcp/oauth/callback",
+      "settings" : {
+        "codemode" : false,
+        "oauth" : {
+          "clientId" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_ASANA_CLIENT_ID}",
+          "clientSecret" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_ASANA_CLIENT_SECRET}"
+        },
+        "type" : "remote",
+        "url" : "https://mcp.asana.com/v2/mcp"
+      },
+      "site" : "https://app.asana.com",
+      "summary" : "Tasks and projects, through an app you register",
+      "symbol" : "circle.grid.3x3",
+      "title" : "Asana",
+      "variables" : {
+        "CLIENT_ID" : "KUVO_KEY_ASANA_CLIENT_ID",
+        "CLIENT_SECRET" : "KUVO_KEY_ASANA_CLIENT_SECRET"
+      },
+      "way" : "app"
+    },
+    {
+      "help" : "https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers/",
+      "how" : "Official · your app",
+      "id" : "zoom",
+      "keys" : [
+        {
+          "label" : "Client ID",
+          "name" : "CLIENT_ID",
+          "prompt" : "From your app"
+        },
+        {
+          "label" : "Client secret",
+          "name" : "CLIENT_SECRET",
+          "prompt" : "From your app"
+        }
+      ],
+      "kind" : "Code and Work",
+      "redirect" : "http://127.0.0.1:19876/mcp/oauth/callback",
+      "settings" : {
+        "codemode" : false,
+        "oauth" : {
+          "clientId" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_ZOOM_CLIENT_ID}",
+          "clientSecret" : "{file:~/.kuvo-code/box/keys/KUVO_KEY_ZOOM_CLIENT_SECRET}"
+        },
+        "type" : "remote",
+        "url" : "https://mcp.zoom.us/mcp/zoom/streamable"
+      },
+      "site" : "https://zoom.us/meeting",
+      "summary" : "Meetings, recordings and chat, through an app you register",
+      "symbol" : "video",
+      "title" : "Zoom",
+      "variables" : {
+        "CLIENT_ID" : "KUVO_KEY_ZOOM_CLIENT_ID",
+        "CLIENT_SECRET" : "KUVO_KEY_ZOOM_CLIENT_SECRET"
+      },
+      "way" : "app"
+    }
+  ]
+}
