@@ -165,7 +165,9 @@ relay other than one on this Mac (`ws://127.0.0.1:8790`).
 ### Debug launch variables
 
 Debug builds read these environment variables to open the app in a given state
-without clicking, for trying a change or taking screenshots:
+without clicking, for trying a change or taking screenshots. What the window does
+for them (tabs, the panel, prompts, bots, Settings) is in `KuvoCode/App/Demo`, and
+the `KUVO_PERF_*` runs are in `DemoPerf` there:
 
 | Variable | Effect |
 | --- | --- |
