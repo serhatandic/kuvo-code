@@ -351,7 +351,7 @@ final class Moves {
         save(record)
         do {
             let held = try await groupHome(from, in: app).hold(id)
-            try await groupHome(machine, in: app).bring(held.group, messages: held.messages)
+            try await groupHome(machine, in: app).bring(held)
         } catch {
             if await !takeBackGroup(record) { recoverSoon() }
             log.error("A group chat didn't move: \(error.localizedDescription, privacy: .public)")

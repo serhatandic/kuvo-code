@@ -346,6 +346,8 @@ extension AppModel {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)
                 await self.boxGroups.connected(machine)
+                // Seats an older version made there for its bots, which its group chats don't use.
+                if let api = engine.api { await GroupMigration.dropOrphanSeats(on: machine, api: api) }
                 // A move of a group chat to or from it cut short, now it's there to finish.
                 await self.moves.recover()
             }

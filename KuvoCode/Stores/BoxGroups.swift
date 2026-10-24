@@ -10,10 +10,11 @@ import os
 protocol GroupHome: AnyObject {
     /// Whether it can be asked now (a machine connected, this Mac's bridge up).
     var isReachable: Bool { get }
-    /// Its talk stops and nothing more happens to it here; the chat as it is now.
-    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage])
+    /// Its talk stops and nothing more happens to it here; the chat as it is now, as the box keeps
+    /// it (passed on as it is: what the box keeps of it is the box's to read).
+    func hold(_ id: String) async throws -> HeldChat
     /// A copy brought here, held until it's started.
-    func bring(_ group: BotGroup, messages: [GroupMessage]) async throws
+    func bring(_ held: HeldChat) async throws
     /// Started here.
     func activate(_ id: String) async throws
     /// Gone from here, moved away: to the trash where it was, its seats left (its bots live there).
@@ -21,6 +22,12 @@ protocol GroupHome: AnyObject {
     /// A copy brought here that didn't get to start: gone, seats and all left as they are.
     /// Whether it is (not if it can't be asked now).
     func takeBack(_ id: String) async -> Bool
+}
+
+/// A chat held for a move, its record and messages as its box keeps them.
+struct HeldChat {
+    var group: JSONValue
+    var messages: JSONValue
 }
 
 /// One computer's group chats, as a move sees them (`GroupHome`), through `BoxGroups`: a machine's,
@@ -36,8 +43,8 @@ final class BoxGroupHome: GroupHome {
     }
 
     var isReachable: Bool { groups.reachable(machine) }
-    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) { try await groups.hold(id, on: machine) }
-    func bring(_ group: BotGroup, messages: [GroupMessage]) async throws { try await groups.bring(group, messages: messages, to: machine) }
+    func hold(_ id: String) async throws -> HeldChat { try await groups.hold(id, on: machine) }
+    func bring(_ held: HeldChat) async throws { try await groups.bring(held, to: machine) }
     func activate(_ id: String) async throws { try await groups.activate(id, on: machine) }
     func letGo(_ id: String) async throws { try await groups.release(id, on: machine) }
     func takeBack(_ id: String) async -> Bool { await groups.takeBack(id, on: machine) }
@@ -90,11 +97,7 @@ final class BoxGroups {
     private static var oldFolder: URL { AppInfo.supportDirectory.appending(path: "machine-groups") }
 
     init() {
-        let manager = FileManager.default
-        if !manager.fileExists(atPath: Self.file.path), manager.fileExists(atPath: Self.oldFile.path) {
-            try? manager.moveItem(at: Self.oldFile, to: Self.file)
-            if manager.fileExists(atPath: Self.oldFolder.path), !manager.fileExists(atPath: Self.folder.path) { try? manager.moveItem(at: Self.oldFolder, to: Self.folder) }
-        }
+        Self.takeOldCache()
         chats = JSONFile.read([Chat].self, from: Self.file, isoDates: true) ?? []
         // As last seen: nothing's talking until its computer says so.
         for index in chats.indices {
@@ -102,6 +105,25 @@ final class BoxGroups {
             chats[index].speaking = nil
         }
         for id in Set(chats.map(\.group.id)) { logs[id] = JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(id).json"), isoDates: true) ?? [] }
+    }
+
+    /// What 0.8.0-beta.1 kept of machines' chats (`machine-groups.json`, and their messages), taken
+    /// into what's kept now, alongside what's there (this Mac's own, seeded as they moved), then
+    /// gone.
+    static func takeOldCache() {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: oldFile.path) else { return }
+        let old = JSONFile.read([Chat].self, from: oldFile, isoDates: true) ?? []
+        var kept = JSONFile.read([Chat].self, from: file, isoDates: true) ?? []
+        for chat in old where !kept.contains(where: { $0.group.id == chat.group.id && $0.machine == chat.machine }) { kept.append(chat) }
+        guard JSONFile.write(kept, to: file, isoDates: true, readable: true) else { return }
+        try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        for chat in old {
+            let from = oldFolder.appending(path: "\(chat.group.id).json"), to = folder.appending(path: "\(chat.group.id).json")
+            if !manager.fileExists(atPath: to.path) { try? manager.moveItem(at: from, to: to) }
+        }
+        try? manager.removeItem(at: oldFolder)
+        try? manager.removeItem(at: oldFile)
     }
 
     /// A computer as a key: "" for this Mac (a machine's ID is never empty).
@@ -551,14 +573,17 @@ final class BoxGroups {
 
     // MARK: Moving one
 
-    /// A chat brought to a computer, with its messages (`Moves`): held there until `activate`.
-    func bring(_ group: BotGroup, messages: [GroupMessage], to machine: String?) async throws {
-        guard let api = api(machine) else { throw failure(for: machine) }
-        try await api.putBoxGroup(group, messages: messages, held: true)
+    /// A chat brought to a computer, as the box it leaves keeps it (`Moves`): held there until
+    /// `activate`. What's kept here of it is read from that, for the window.
+    func bring(_ held: HeldChat, to machine: String?) async throws {
+        guard let api = api(machine), let id = held.group["id"]?.string else { throw failure(for: machine) }
+        _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/groups/\(id.groupPathEscaped)",
+                                                              body: JSONValue.object(["group": held.group, "messages": held.messages, "status": .string("held")])), as: JSONValue.self)
+        guard let group = try? Self.decode(BotGroup.self, from: held.group) else { return }
         apply(group, held: true, state: State(discussing: false, paused: false), on: machine)
-        if logs[group.id]?.isEmpty != false {
-            logs[group.id] = messages
-            saveLog(group.id)
+        if logs[id]?.isEmpty != false, let messages = try? Self.decode([GroupMessage].self, from: held.messages) {
+            logs[id] = messages
+            saveLog(id)
         }
     }
 
@@ -568,25 +593,29 @@ final class BoxGroups {
         await reload(id, on: machine)
     }
 
-    /// Held there for a move away: its talk stops; the chat as it is now.
-    func hold(_ id: String, on machine: String?) async throws -> (group: BotGroup, messages: [GroupMessage]) {
+    /// Held there for a move away: its talk stops; the chat as it is now, as the box keeps it.
+    func hold(_ id: String, on machine: String?) async throws -> HeldChat {
         guard let api = api(machine) else { throw failure(for: machine) }
-        guard let held = try await api.boxGroupAction(id, "hold"),
-              let group = held["group"].flatMap({ try? Self.decode(BotGroup.self, from: $0) }),
-              let messages = held["messages"].flatMap({ try? Self.decode([GroupMessage].self, from: $0) }) else { throw Failure.unreadable }
+        guard let held = try await api.boxGroupAction(id, "hold"), let group = held["group"], case .object = group,
+              let messages = held["messages"], case .array = messages else { throw Failure.unreadable }
         if let index = chats.firstIndex(where: { $0.group.id == id && $0.machine == machine }) {
             chats[index].held = true
             chats[index].discussing = false
             chats[index].speaking = nil
             save()
         }
-        return (group, messages)
+        return HeldChat(group: group, messages: messages)
     }
 
-    /// Let go there, its seats left (its bots stay there); gone from here.
+    /// Let go there, its seats left (its bots stay there); gone from here. One gone there already
+    /// (let go before a crash, or by an older version) is as good as let go.
     func release(_ id: String, on machine: String?) async throws {
         guard let api = api(machine) else { throw failure(for: machine) }
-        _ = try await api.boxGroupAction(id, "release")
+        do {
+            _ = try await api.boxGroupAction(id, "release")
+        } catch let error as ServerError where error.status == 404 {
+            // Gone there already.
+        }
         forget(id, on: machine)
     }
 
@@ -679,9 +708,13 @@ final class BoxGroups {
         return engine.agents.api
     }
 
+    /// Why this Mac's bridge isn't running, when it won't by itself: it stopped, or it never could
+    /// start (the engine, whose Bun runs it, didn't).
     private var macFailure: String? {
         if let stoppedBecause { return stoppedBecause() }
-        return app?.agents.failure
+        if let failure = app?.agents.failure { return failure }
+        if app?.agents.wasStarted == false, case .failed(let reason)? = app?.engine { return reason }
+        return nil
     }
 
     /// Whether a computer's bridge can be reached now.

@@ -209,7 +209,8 @@ final class AppModel {
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
         workspace.runsOnAgents(boxGroups.agentSeatIDs)
-        workspace.seats = boxGroups.seatIDs
+        // Seats an older version left on machines too, until they're gone there.
+        workspace.seats = boxGroups.seatIDs.union(GroupMigration.orphanSeats)
     }
 
     /// What a phone's request reaches on this Mac (`PhoneLink`): its stores, as they are now, and
@@ -531,6 +532,12 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// This Mac's group chats running again (Restart, where they say they stopped): its coding
+    /// agents' bridge started again, or the engine whose Bun runs it, if that's what never started.
+    func restartGroupChats() async {
+        if agents.wasStarted { await agents.startAgain() } else { await restart() }
     }
 
     /// `config` merged over any inline config already in the environment.

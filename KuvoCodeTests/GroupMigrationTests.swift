@@ -19,7 +19,7 @@ import Testing
     }
 
     private static func clean() {
-        for name in ["groups.json", "groups", "Backups", "bots.json", "bots", "group-chats.json", "group-chats"] {
+        for name in ["groups.json", "groups", "Backups", "bots.json", "bots", "group-chats.json", "group-chats", "machine-groups.json", "machine-groups"] {
             try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name))
         }
     }
@@ -113,12 +113,13 @@ import Testing
             #expect(group["purpose"] as? String == "Ship each release")
         }
         #expect((group["agentSeats"] as? [String] ?? []) == (["0.6.0", "0.7.2", "beta.1"].contains(shape) ? ["ses_seatAda"] : []))
-        // The old files, kept where an older version's copy can be had back.
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "groups.json").path))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "groups/\(Self.chatID).json").path))
-        #expect(report.backup?.lastPathComponent == "groups-0.8.0")
-        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Backups/groups-0.8.0/groups.json").path))
-        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Backups/groups-0.8.0/groups/\(Self.chatID).json").path))
+        // The old files, left for an older version to read if you go back to it, and copied to Backups.
+        #expect(FileManager.default.fileExists(atPath: support.appending(path: "groups.json").path))
+        #expect(FileManager.default.fileExists(atPath: support.appending(path: "groups/\(Self.chatID).json").path))
+        let backup = try #require(report.backup)
+        #expect(backup.lastPathComponent.hasPrefix("groups-0.8.0-"))
+        #expect(FileManager.default.fileExists(atPath: backup.appending(path: "groups.json").path))
+        #expect(FileManager.default.fileExists(atPath: backup.appending(path: "groups/\(Self.chatID).json").path))
         // The window shows it from its first frame, as last seen.
         let shown = BoxGroups()
         #expect(shown.chats.map(\.group.id) == [Self.chatID] && shown.chats.first?.machine == nil)
@@ -166,19 +167,105 @@ import Testing
     }
 
     /// An older version run again (a rollback) writes a list of its own: what it has that's new
-    /// is taken in by each chat's ID, what's here stays, and its files are kept beside the first.
+    /// is taken in by each chat's ID, what's here stays, one deleted since it was taken stays
+    /// deleted, and its files are kept beside the first.
     @Test func anOlderVersionsListLaterIsTakenInByID() throws {
         defer { Self.clean() }
         try Self.write(shape: "beta.1", in: support)
-        GroupMigration.run(version: "0.8.0", defaults: defaults)
-        try Self.write(shape: "beta.1", in: support)
+        try Self.write(shape: "beta.1", in: support, id: "grp_gone000001", name: "Deleted since")
+        let first = GroupMigration.run(version: "0.8.0", defaults: defaults)
+        // Deleted after it moved (its bridge puts its folder in the trash).
+        try FileManager.default.removeItem(at: support.appending(path: "groups/grp_gone000001"))
         try Self.write(shape: "beta.1", in: support, id: "grp_new0000001", name: "Made while rolled back")
 
         let report = GroupMigration.run(version: "0.8.0", defaults: defaults)
 
-        #expect(report.moved == ["grp_new0000001"] && report.skipped == [Self.chatID])
-        #expect(report.backup?.lastPathComponent == "groups-0.8.0 2")
-        #expect(Set(BoxGroups().chats.map(\.group.id)) == [Self.chatID, "grp_new0000001"])
+        #expect(report.moved == ["grp_new0000001"] && report.skipped == [Self.chatID] && report.deleted == ["grp_gone000001"])
+        #expect(report.backup != nil && report.backup != first.backup)
+        #expect(BoxGroups().chats.contains { $0.group.id == "grp_new0000001" })
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "groups/grp_gone000001").path), "not brought back")
+    }
+
+    /// A chat that couldn't be moved (its folder can't be made), or a list that can't be read,
+    /// leaves what was kept as it is, and is tried again at the next launch.
+    @Test func whatCouldntBeMovedIsTriedAgain() throws {
+        defer { Self.clean() }
+        try Self.write(shape: "0.7.2", in: support)
+        // Something in its folder's place.
+        try Data("in the way".utf8).write(to: support.appending(path: "groups/\(Self.chatID)"))
+
+        let failed = GroupMigration.run(version: "0.8.0", defaults: defaults)
+
+        #expect(failed.failed == [Self.chatID] && failed.backup == nil)
+        try FileManager.default.removeItem(at: support.appending(path: "groups/\(Self.chatID)"))
+        let again = GroupMigration.run(version: "0.8.0", defaults: defaults)
+        #expect(again.moved == [Self.chatID] && again.backup != nil)
+        #expect(try messages().count == 6)
+
+        // A list that won't read: nothing noted, so it's read again once it can be.
+        Self.clean()
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try Data("[{\"id\": ".utf8).write(to: support.appending(path: "groups.json"))
+        #expect(GroupMigration.run(version: "0.8.0", defaults: defaults).failed == ["groups.json"])
+        try? FileManager.default.removeItem(at: support.appending(path: "groups.json"))
+        try Self.write(shape: "0.7.2", in: support)
+        #expect(GroupMigration.run(version: "0.8.0", defaults: defaults).moved == [Self.chatID])
+    }
+
+    /// A seat an older version made on a machine for a bot there isn't one the machine knows as a
+    /// seat: it's out of the chat (the bot's next turn makes one there), out of the lists, and
+    /// deleted there once the machine connects.
+    @Test func aSeatLeftOnAMachineIsTakenOutAndDeletedThere() async throws {
+        defer { Self.clean() }
+        let bots = [("bot_ada", "Ada", nil as String?), ("bot_ben", "Ben", "box")].map { id, name, machine -> [String: Any] in
+            var bot: [String: Any] = ["id": id, "name": name, "job": "Helps", "instructions": "Helps.", "look": ["color": "mint", "shape": "round", "face": "calm"],
+                                      "folder": support.appending(path: "bots/\(id)").path, "sessionID": "ses_\(id)", "created": "2026-05-01T08:00:00Z"]
+            if let machine { bot["machine"] = machine }
+            return bot
+        }
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: bots).write(to: support.appending(path: "bots.json"))
+        try Self.write(shape: "0.7.2", in: support)
+        var list = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: support.appending(path: "groups.json"))) as? [[String: Any]])
+        list[0]["seats"] = ["bot_ada": "ses_seatAda", "bot_ben": "ses_seatBen"]
+        list[0]["heard"] = ["bot_ada": "gm_2", "bot_ben": "gm_2"]
+        list[0]["agentSeats"] = ["ses_seatBen"]
+        try JSONSerialization.data(withJSONObject: list).write(to: support.appending(path: "groups.json"))
+
+        GroupMigration.run(version: "0.8.0", defaults: defaults)
+
+        let group = try #require(try record()["group"] as? [String: Any])
+        #expect(group["seats"] as? [String: String] == ["bot_ada": "ses_seatAda"], "the Mac's bot keeps its seat")
+        #expect(group["heard"] as? [String: String] == ["bot_ada": "gm_2"] && group["agentSeats"] as? [String] == [])
+        #expect(GroupMigration.orphanSeats == ["ses_seatBen"], "out of the lists until it's gone")
+
+        let machine = StubEngine(port: 47953)
+        defer { machine.stop() }
+        machine.on("DELETE", "/api/session/ses_seatBen", json: [:])
+        await GroupMigration.dropOrphanSeats(on: "box", api: machine.api)
+        #expect(machine.requests("DELETE", "/api/session/ses_seatBen").count == 1)
+        #expect(GroupMigration.orphanSeats.isEmpty)
+    }
+
+    /// What 0.8.0-beta.1's window kept of machines' chats is kept alongside this Mac's, which show
+    /// from the first frame, and its old files go.
+    @Test func machinesChatsAsLastSeenStayBesideThisMacs() throws {
+        defer { Self.clean() }
+        try Self.write(shape: "beta.1", in: support)
+        let machineChat: [String: Any] = ["machine": "box", "held": false, "discussing": false, "paused": false,
+                                          "group": ["id": "grp_box0000001", "name": "On the box", "members": ["bot_x", "bot_y"], "seats": [:], "heard": [:], "created": "2026-05-01T09:00:00Z"]]
+        try JSONSerialization.data(withJSONObject: [machineChat]).write(to: support.appending(path: "machine-groups.json"))
+        try FileManager.default.createDirectory(at: support.appending(path: "machine-groups"), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [["id": "gm_9", "text": "Hi", "time": "2026-05-01T09:00:00Z", "kind": "message"]])
+            .write(to: support.appending(path: "machine-groups/grp_box0000001.json"))
+
+        GroupMigration.run(version: "0.8.0", defaults: defaults)
+
+        let shown = BoxGroups()
+        #expect(Set(shown.chats.map(\.group.id)) == [Self.chatID, "grp_box0000001"])
+        #expect(shown.machine(of: "grp_box0000001") == "box" && shown.messages(in: "grp_box0000001").map(\.text) == ["Hi"])
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "machine-groups.json").path))
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "machine-groups").path))
     }
 
     /// What bots whose machine was away were still to be told goes to the box, and every bot here
@@ -209,7 +296,7 @@ import Testing
         try Self.write(shape: "0.7.2", in: support)
         GroupMigration.run(version: "0.8.0", defaults: defaults)
         for day in 1...5 { Backups.make(now: Date(timeIntervalSince1970: 1_800_000_000 + Double(day) * 86_400)) }
-        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Backups/groups-0.8.0/groups.json").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: support.appending(path: "Backups").path).contains { $0.hasPrefix("groups-0.8.0-") })
         let made = try FileManager.default.contentsOfDirectory(atPath: support.appending(path: "Backups").path).filter { $0.first?.isNumber == true }
         #expect(made.count == Backups.kept)
     }

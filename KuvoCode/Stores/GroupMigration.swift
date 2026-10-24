@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import OpenCodeKit
 import os
 
 /// This Mac's group chats, moved into its own box, once: Kuvo Code 0.5 to 0.8.0-beta.1 ran them in
@@ -11,13 +13,18 @@ import os
 /// any point and run again: each chat's messages are written first and its record last (each
 /// written whole, then renamed), and a chat whose record is there already is left as it is. A
 /// chat that was moving when the app last quit is kept held, so the move's recovery finishes it
-/// or takes it back (`Moves.recover`). Then what the bots were still to be told (a bot whose
-/// machine was away) goes to `groups/pending-memory.json`, every bot here gets its description
-/// and its conversation beside its memory (where the bridge reads a bot), and the old files go
-/// to `Backups/groups-<version>`, where an older version's copy can be had back.
+/// or takes it back (`Moves.recover`). A seat an older version made on a machine for a bot that
+/// lives there isn't one the machine knows as a seat: it's left out of the chat (the bot's next
+/// turn makes one there), kept out of the lists, and deleted there once the machine connects
+/// (`dropOrphanSeats`). What the bots were still to be told (a bot whose machine was away) goes to
+/// `groups/pending-memory.json`, and every bot here gets its description and its conversation
+/// beside its memory (where the bridge reads a bot). Once every chat is there, the old files are
+/// copied to `Backups/groups-<version>-<their hash>` and left where they are, for an older version
+/// to read if you go back to it, and what was taken is noted (`groups/imported.json`).
 ///
 /// An older version run again afterwards writes a `groups.json` of its own: what it has that's new
-/// is taken in the same way at the next launch, by each chat's ID.
+/// is taken in the same way at the next launch, by each chat's ID; one taken before and deleted
+/// since stays deleted.
 enum GroupMigration {
     /// The folder this Mac's bridge keeps its group chats in (`KUVO_GROUPS`).
     static var root: URL { AppInfo.supportDirectory.appending(path: "groups") }
@@ -28,19 +35,38 @@ enum GroupMigration {
     static let movesKey = "movesUnderWay"
     private static let log = Logger(subsystem: "run.kuvo.code", category: "groups")
 
-    /// What a run did: the chats it moved, and those it found moved already.
+    /// What a run did: the chats it moved, those it found moved already, those taken before and
+    /// deleted since, those it couldn't move (tried again at the next launch), and where it kept
+    /// the old files.
     struct Report: Equatable {
         var moved: [String] = []
         var skipped: [String] = []
+        var deleted: [String] = []
+        var failed: [String] = []
         var backup: URL?
     }
+
+    /// What's been taken from an older version's list: its hash as it was then, and every chat ID.
+    private struct Imported: Codable {
+        var list: String?
+        var ids: [String] = []
+    }
+
+    private static var importedFile: URL { root.appending(path: "imported.json") }
+    /// Seats an older version made on machines, to delete there, by machine.
+    static var orphansFile: URL { root.appending(path: "orphan-seats.json") }
 
     @discardableResult
     static func run(version: String = AppInfo.version, defaults: UserDefaults = .standard) -> Report {
         var report = Report()
         let manager = FileManager.default
+        // What the window kept of machines' chats (0.8.0-beta.1), with what it shows from now on.
+        BoxGroups.takeOldCache()
         let pendingMemory = defaults.dictionary(forKey: waitingMemoryKey) as? [String: [String]]
-        let hasList = manager.fileExists(atPath: oldList.path)
+        let list = try? Data(contentsOf: oldList)
+        let hash = list.map { Data(SHA256.hash(data: $0)).map { String(format: "%02x", $0) }.joined() }
+        var imported = (try? Data(contentsOf: importedFile)).flatMap { try? JSONDecoder().decode(Imported.self, from: $0) } ?? Imported()
+        let hasList = list != nil && hash != imported.list
         guard hasList || pendingMemory != nil else { return report }
         do {
             try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -48,12 +74,17 @@ enum GroupMigration {
             log.error("This Mac's group chats couldn't be moved: \(error.localizedDescription, privacy: .public)")
             return report
         }
-        if hasList {
+        if hasList, let list {
             let held = movingChats(defaults)
-            let chats = (try? Data(contentsOf: oldList)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }
-            if chats == nil { log.error("groups.json couldn't be read; it's kept in Backups") }
+            let bots = macBots()
+            let chats = try? JSONSerialization.jsonObject(with: list) as? [[String: Any]]
+            if chats == nil {
+                log.error("groups.json couldn't be read; it's left where it is, and tried again at the next launch")
+                report.failed.append("groups.json")
+            }
             var seeded: [BoxGroups.Chat] = []
             var logs: [String: Data] = [:]
+            var orphans = readOrphans()
             for chat in chats ?? [] {
                 guard let id = chat["id"] as? String, isChatID(id) else { continue }
                 let folder = root.appending(path: id)
@@ -61,8 +92,29 @@ enum GroupMigration {
                     report.skipped.append(id)
                     continue
                 }
+                if imported.ids.contains(id) {
+                    log.notice("A group chat taken before and deleted since stays deleted (\(id, privacy: .public))")
+                    report.deleted.append(id)
+                    continue
+                }
                 let messages = self.messages(from: root.appending(path: "\(id).json"))
-                guard let group = group(from: chat, id: id, messages: messages) else { continue }
+                guard var group = group(from: chat, id: id, messages: messages) else {
+                    report.failed.append(id)
+                    continue
+                }
+                // A seat made on a machine for a bot there: the machine doesn't know it as a seat.
+                // Out of the chat (the bot's next turn makes one there), and deleted there later.
+                var seats = group["seats"] as? [String: String] ?? [:]
+                for (bot, seat) in seats {
+                    guard let machine = bots.first(where: { $0.id == bot })?.machine else { continue }
+                    seats[bot] = nil
+                    var heard = group["heard"] as? [String: String] ?? [:]
+                    heard[bot] = nil
+                    group["heard"] = heard
+                    if let agentSeats = group["agentSeats"] as? [String] { group["agentSeats"] = agentSeats.filter { $0 != seat } }
+                    orphans[machine, default: []].append(seat)
+                }
+                group["seats"] = seats
                 let status = held.contains(id) ? "held" : "active"
                 do {
                     try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -79,9 +131,11 @@ enum GroupMigration {
                     }
                 } catch {
                     log.error("A group chat couldn't be moved (it's tried again at the next launch): \(error.localizedDescription, privacy: .public)")
+                    report.failed.append(id)
                 }
             }
             seed(seeded, logs: logs)
+            writeOrphans(orphans)
         }
         if let pendingMemory {
             var pending = (try? Data(contentsOf: root.appending(path: "pending-memory.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [String]] } ?? [:]
@@ -91,8 +145,49 @@ enum GroupMigration {
             }
         }
         describeBots()
-        if hasList { report.backup = keepOldFiles(version: version) }
+        // Every chat there: the old files kept, and what was taken noted (not before, so what
+        // failed is tried again).
+        if hasList, report.failed.isEmpty, let hash, let backup = keepOldFiles(version: version, hash: hash) {
+            report.backup = backup
+            imported.list = hash
+            imported.ids = Array(Set(imported.ids + report.moved + report.skipped)).sorted()
+            if let data = try? JSONEncoder().encode(imported) { try? write(data, to: importedFile) }
+        }
         return report
+    }
+
+    // MARK: Seats left on machines
+
+    private static func readOrphans() -> [String: [String]] {
+        (try? Data(contentsOf: orphansFile)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [String]] } ?? [:]
+    }
+
+    private static func writeOrphans(_ orphans: [String: [String]]) {
+        let kept = orphans.filter { !$0.value.isEmpty }
+        if kept.isEmpty { try? FileManager.default.removeItem(at: orphansFile); return }
+        if let data = try? JSONSerialization.data(withJSONObject: kept, options: [.sortedKeys]) { try? write(data, to: orphansFile) }
+    }
+
+    /// Seats an older version made on machines, kept out of the lists until they're gone.
+    static var orphanSeats: Set<String> { Set(readOrphans().values.flatMap { $0 }) }
+
+    /// Those on `machine`, deleted there now it's connected (`api`, its engine); one that's gone
+    /// already is as good as deleted, and one that couldn't be is tried again next time.
+    static func dropOrphanSeats(on machine: String, api: OpenCodeAPI) async {
+        guard let seats = readOrphans()[machine], !seats.isEmpty else { return }
+        var left: [String] = []
+        for seat in seats {
+            do {
+                try await api.deleteSession(seat)
+            } catch let error as ServerError where error.status == 404 {
+                // Gone already.
+            } catch {
+                left.append(seat)
+            }
+        }
+        var orphans = readOrphans()
+        orphans[machine] = left
+        writeOrphans(orphans)
     }
 
     // MARK: Reading what was kept
@@ -192,17 +287,20 @@ enum GroupMigration {
         for (id, data) in logs { try? data.write(to: BoxGroups.folder.appending(path: "\(id).json"), options: .atomic) }
     }
 
+    /// Your bots, as `bots.json` lists them (without setting aside one that won't read).
+    private static func macBots() -> [Bot] {
+        guard let data = try? Data(contentsOf: AppInfo.supportDirectory.appending(path: "bots.json")) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([Bot].self, from: data)) ?? []
+    }
+
     /// Each bot here with its description and its conversation beside its memory, where the bridge
     /// reads a bot (a bot made by 0.5 has no description yet). What's there is left as it is: the
     /// app writes it again as a bot changes.
     private static func describeBots() {
-        let file = AppInfo.supportDirectory.appending(path: "bots.json")
-        guard let data = try? Data(contentsOf: file) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let bots = try? decoder.decode([Bot].self, from: data) else { return }
         let manager = FileManager.default
-        for bot in bots where bot.machine == nil {
+        for bot in macBots() where bot.machine == nil {
             var isFolder: ObjCBool = false
             guard manager.fileExists(atPath: bot.folder, isDirectory: &isFolder), isFolder.boolValue else { continue }
             let folder = URL(filePath: bot.folder)
@@ -221,24 +319,23 @@ enum GroupMigration {
         }
     }
 
-    /// `groups.json` and each chat's old messages, to `Backups/groups-<version>` (another name for a
-    /// second time the same version moves them, after an older version wrote them again).
-    private static func keepOldFiles(version: String) -> URL? {
+    /// A copy of `groups.json` and each chat's old messages, in `Backups/groups-<version>-<the
+    /// list's hash>`: one folder for each list taken, so a run cut short carries on into the same
+    /// one. The files themselves stay, for an older version to read if you go back to it.
+    private static func keepOldFiles(version: String, hash: String) -> URL? {
         let manager = FileManager.default
-        var target = Backups.folder.appending(path: "groups-\(version)")
-        var number = 2
-        while manager.fileExists(atPath: target.path) {
-            target = Backups.folder.appending(path: "groups-\(version) \(number)")
-            number += 1
-        }
+        let target = Backups.folder.appending(path: "groups-\(version)-\(hash.prefix(8))")
         do {
             try manager.createDirectory(at: target.appending(path: "groups"), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let old = (try? manager.contentsOfDirectory(atPath: root.path)) ?? []
             for name in old where name.hasSuffix(".json") && isChatID(String(name.dropLast(5))) {
-                try manager.moveItem(at: root.appending(path: name), to: target.appending(path: "groups/\(name)"))
+                let copy = target.appending(path: "groups/\(name)")
+                try? manager.removeItem(at: copy)
+                try manager.copyItem(at: root.appending(path: name), to: copy)
             }
-            // The list last: while it's there, a run cut short does this again.
-            try manager.moveItem(at: oldList, to: target.appending(path: "groups.json"))
+            let copy = target.appending(path: "groups.json")
+            try? manager.removeItem(at: copy)
+            try manager.copyItem(at: oldList, to: copy)
             return target
         } catch {
             log.error("The old group chat files couldn't be kept in Backups: \(error.localizedDescription, privacy: .public)")

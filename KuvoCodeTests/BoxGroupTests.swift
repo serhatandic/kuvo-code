@@ -45,6 +45,7 @@ import Testing
         func has(_ id: String) -> Bool { lock.withLock { chats[id] != nil } }
         func status(_ id: String) -> String? { lock.withLock { chats[id]?.status } }
         func messages(_ id: String) -> [[String: Any]] { lock.withLock { chats[id]?.messages ?? [] } }
+        func group(_ id: String) -> [String: Any]? { lock.withLock { chats[id]?.group } }
 
         func answer(_ request: StubEngine.Request) -> StubWeb.Answer {
             defer { TestPulse.beat() }
@@ -304,6 +305,48 @@ import Testing
         await #expect(throws: (any Error).self) { try await move.value }
         // Taken back: it carries on here.
         #expect(here.status(id) == "active" && app.chats.send("Now", to: id))
+    }
+
+    /// What a box keeps of a chat goes to the other whole, what the window doesn't read too: which
+    /// computer each seat is on, who a message named, what's become of a part.
+    @Test func whatABoxKeepsOfAChatGoesWhole() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
+        let id = "grp_k000000005"
+        var group = Self.group(id, members: ["bot_pal", "bot_lb"], seats: ["bot_pal": "ses_seatP"])
+        group["seatBoxes"] = ["bot_pal": "key_box"]
+        let said: [String: Any] = ["id": "gm_1", "text": "&Scout?", "time": "2026-10-22T08:00:00Z", "kind": "message", "named": "<named-agents>\nx\n</named-agents>",
+                                   "tasks": [["id": "gt_1", "bot": "bot_pal", "task": "Tag", "state": "failed", "lost": true]]]
+        here.add(group, messages: [said])
+        let app = app()
+        await app.boxGroups.connected(nil)
+        await app.boxGroups.connected("box")
+
+        try await app.moves.move(group: id, to: "box")
+
+        #expect(there.group(id)?["seatBoxes"] as? [String: String] == ["bot_pal": "key_box"])
+        #expect(there.messages(id).first?["named"] as? String == "<named-agents>\nx\n</named-agents>")
+        #expect((there.messages(id).first?["tasks"] as? [[String: Any]])?.first?["lost"] as? Bool == true)
+    }
+
+    /// A move cut short after the chat was let go where it was, before it started where it went
+    /// (the app quit, or an older version's move): it starts there, rather than staying held.
+    @Test func aMoveCutShortAfterItWasLetGoStartsWhereItWent() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
+        let id = "grp_k000000006"
+        there.add(Self.group(id, members: ["bot_pal", "bot_lb"]), status: "held")
+        let record: [String: Any] = ["kind": "group", "id": id, "sessions": [String](), "to": "box", "wasPaused": true, "stage": "switched"]
+        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
+        let app = app()
+        await app.boxGroups.connected(nil)
+        await app.boxGroups.connected("box")
+
+        await app.moves.recover()
+
+        #expect(there.status(id) == "active")
+        #expect(UserDefaults.standard.data(forKey: "movesUnderWay") == nil)
+        #expect(app.chats.machine(of: id) == "box" && app.chats.group(id) != nil)
     }
 
     @Test func aChatWhoseBotsLiveOnDifferentComputersStaysWhereItIs() async throws {
