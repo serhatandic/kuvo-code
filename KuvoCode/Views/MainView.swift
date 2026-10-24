@@ -97,15 +97,9 @@ struct MainView: View {
         machine(for: folder)?.catalog ?? catalog
     }
 
-    /// What the window has room for, for the tabs: the split in view, and one opened now.
+    /// How wide the window and its cards are, for the tabs to lay them out.
     private var room: WindowTabs.Room {
-        var opened = tabs.givesWay.filter { $0 != .split }
-        opened.append(.split)
-        return WindowTabs.Room(
-            showsBeside: paneLayout(available: contentWidth).split != nil,
-            fitsBeside: PaneLayout(available: contentWidth, sessions: showsSidebar ? sessionsWidth : nil, changes: showsPanel ? changesWidth : nil,
-                                   split: splitWidth, givesWay: opened).split != nil
-        )
+        WindowTabs.Room(width: contentWidth, sessions: showsSidebar ? sessionsWidth : nil, changes: changesWidth, split: splitWidth)
     }
 
     /// The cards, the title bar and what shows over them.
@@ -399,8 +393,10 @@ struct MainView: View {
             // Opened again after the window closed: the terminals went with it.
             tabs.dropClosed()
             tabs.startIfEmpty()
+            // What changed while the window was away, kept too.
+            savedTabs = tabs.saved
         }
-        .onChange(of: tabs.saved) { _, saved in savedTabs = saved }
+        .onChange(of: tabs.snapshot) { _, saved in savedTabs = saved.text }
         .onChange(of: workspace.waitingCount, initial: true) { Notifier.shared.setBadge(workspace.waitingCount) }
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
         // Another tab: a rename in the last one's header ends, keeping what was typed.
@@ -783,13 +779,7 @@ struct MainView: View {
     }
 
     private func paneLayout(available: Double) -> PaneLayout {
-        PaneLayout(
-            available: available,
-            sessions: showsSidebar ? sessionsWidth : nil,
-            changes: showsPanel ? changesWidth : nil,
-            split: splitModel == nil ? nil : splitWidth,
-            givesWay: selection != nil && selection == tabs.keptSplit ? tabs.givesWay : [.split] + tabs.givesWay.filter { $0 != .split }
-        )
+        tabs.layout(available: available)
     }
 
     /// Whether the panel and the sidebar are on screen: wanted, and with room for them.

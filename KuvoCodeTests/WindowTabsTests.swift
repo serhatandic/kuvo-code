@@ -141,9 +141,27 @@ import Testing
         #expect(app.utilities.visibleTabs.contains { $0.kind == .file(file) })
         #expect(tabs.focusedModel?.id == "ses_b", "and the menus' commands go to it")
 
-        tabs.room.showsBeside = false
+        tabs.room.width = 600
         panelFollows()
         #expect(app.utilities.panelKey == "ses_a", "out of room, it gave way: the tab's again")
+    }
+
+    /// Short of room, only the split you opened last keeps its place: another tab's, met again,
+    /// gives way, and its session beside isn't in view (nor read) the moment you get there.
+    @Test func aSplitMetAgainGivesWay() async {
+        defer { done() }
+        await sessions(["ses_a", "ses_b", "ses_c", "ses_d"])
+        tabs.room = .init(width: 800, sessions: 280)
+        tabs.open(.session("ses_a"))
+        tabs.openBeside("ses_b")
+        tabs.open(.session("ses_c"))
+        tabs.openBeside("ses_d")
+        #expect(tabs.sessionsInView == ["ses_c", "ses_d"])
+        #expect(tabs.layout().sessions == nil, "the sidebar gave way for the split opened last")
+        tabs.open(.session("ses_a"))
+        #expect(tabs.sessionsInView == ["ses_a"])
+        #expect(tabs.layout().split == nil)
+        #expect(tabs.layout().sessions != nil)
     }
 
     @Test func anotherTabStartsInItsOwnConversation() async {
@@ -280,8 +298,11 @@ import Testing
         let nextLaunch = AppModel()
         let next = nextLaunch.tabs
         next.open(.draft("/tmp/opened"))
-        next.restore(#"{"tabs":["ses_a","ses_b"],"selection":"ses_b","pairs":[],"showsPanel":false}"#, older: .init())
-        #expect(next.keys == [.session("ses_a"), .session("ses_b"), .draft("/tmp/opened")])
-        #expect(next.selection == .draft("/tmp/opened"))
+        next.open(.session("ses_notified"))
+        next.restore(#"{"tabs":["ses_a","ses_b"],"selection":"ses_b","pairs":[{"tab":"ses_a","beside":"ses_notified"}]}"#, older: .init())
+        #expect(next.keys == [.session("ses_a"), .session("ses_b"), .draft("/tmp/opened"), .session("ses_notified")])
+        #expect(next.selection == .session("ses_notified"))
+        #expect(next.pairs.isEmpty, "a session opened in a tab of its own isn't also beside another")
+        #expect(!next.showsPanel, "what a version that kept less didn't keep is as it starts")
     }
 }

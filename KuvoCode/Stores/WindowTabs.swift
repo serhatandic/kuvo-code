@@ -74,7 +74,7 @@ enum TabKey: Hashable, Codable {
 /// conversation, and an editor (a bot's, a group chat's) shown in the main card in place of the
 /// tab. The app has one main window, so one set (`AppModel.tabs`): stores open, swap and close tabs
 /// here directly, also while the window is closed, and the window shows them as it opens. The
-/// window keeps them with its scene (`saved`, `restore`) and tells it how much room it has.
+/// window keeps them with its scene (`saved`, `restore`) and tells it how wide it and its cards are.
 @Observable
 final class WindowTabs {
     enum Pane { case sessions, conversation, split, changes }
@@ -88,12 +88,14 @@ final class WindowTabs {
         var besideOf: TabKey?
     }
 
-    /// What the window has room for, as it lays out (it sets this).
+    /// How wide the window's content is, and the widths its cards are dragged to (it sets this):
+    /// with what's open, they lay out the cards (`layout`).
     struct Room: Equatable {
-        /// The split in view shows: there's room for it, and it didn't give way.
-        var showsBeside = true
-        /// A session opened beside the tab in view now would show.
-        var fitsBeside = true
+        var width = 1200.0
+        /// The sidebar's, nil while it's hidden.
+        var sessions: Double? = 280
+        var changes = 420.0
+        var split = 560.0
     }
 
     /// The open tabs, in order.
@@ -166,10 +168,25 @@ final class WindowTabs {
         return workspace.model(for: beside)
     }
 
+    /// How wide each card is in the window `available` wide (the room's, by default). Out of room,
+    /// a split you didn't just open (one restored, or met again on its tab) gives way first.
+    func layout(available: Double? = nil) -> PaneLayout {
+        PaneLayout(
+            available: available ?? room.width,
+            sessions: room.sessions,
+            changes: showsPanel ? room.changes : nil,
+            split: splitModel == nil ? nil : room.split,
+            givesWay: selection != nil && selection == keptSplit ? givesWay : [.split] + givesWay.filter { $0 != .split }
+        )
+    }
+
+    /// The split in view shows: there's room for it, and it didn't give way.
+    private var showsBeside: Bool { layout().split != nil }
+
     /// The session beside the tab's, while it shows: with room for it in the window, and not under
     /// the expanded panel. One that gave way is out of view: not read, nor working there.
     var besideID: String? {
-        guard let splitModel, room.showsBeside, !(showsPanel && panelExpanded) else { return nil }
+        guard let splitModel, showsBeside, !(showsPanel && panelExpanded) else { return nil }
         return splitModel.id
     }
 
@@ -177,7 +194,7 @@ final class WindowTabs {
     /// It stays so while the expanded panel covers it (the panel is still its), not once it gave
     /// way for want of room.
     var worksBeside: Bool {
-        activeHalf == .split && splitModel != nil && room.showsBeside
+        activeHalf == .split && splitModel != nil && showsBeside
     }
 
     /// The session beside you work in, if you do.
@@ -229,16 +246,17 @@ final class WindowTabs {
     // MARK: Opening and closing
 
     /// Shows a tab, opening it next to the current one if needed (the session beside a tab: that
-    /// tab, with it beside), out of Settings and any editor.
+    /// tab, with it beside, and you in it while it shows), out of Settings and any editor.
     func open(_ key: TabKey) {
-        let key = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key ?? key
+        let pair = pairs.first { $0.value == key.sessionID && keys.contains($0.key) }?.key
+        let key = pair ?? key
         if !keys.contains(key) {
             let index = selection.flatMap { keys.firstIndex(of: $0) }.map { $0 + 1 } ?? keys.count
             keys.insert(key, at: index)
         }
         withAnimation(.ui) {
             selection = key
-            focus = .conversation
+            focus = pair != nil && showsBeside ? .split : .conversation
             app.showsSettings = false
             botEditor = nil
             groupEditor = nil
@@ -412,13 +430,17 @@ final class WindowTabs {
         }
         let key = TabKey.session(old)
         guard let index = keys.firstIndex(of: key) else { return false }
+        let half = activeHalf, focused = focus
         if let beside = pairs[key] {
             pairs[key] = nil
             pairs[.session(id)] = beside
         }
         keys[index] = .session(id)
         if keptSplit == key { keptSplit = .session(id) }
-        if selection == key { selection = .session(id) }
+        if selection == key {
+            selection = .session(id)
+            (focus, activeHalf) = (focused, half)
+        }
         return true
     }
 
@@ -451,7 +473,6 @@ final class WindowTabs {
     /// if there's room for it: the menus' commands go to it.
     func openBeside(_ id: String) {
         guard let main = selection, let mainID = main.sessionID, mainID != id, workspace.session(mainID) != nil, workspace.session(id) != nil else { return }
-        let fits = room.fitsBeside
         var pairs = pairs
         var keys = keys
         let key = TabKey.session(id)
@@ -471,7 +492,7 @@ final class WindowTabs {
             keep(.split)
             keptSplit = main
         }
-        if fits { focus = .split }
+        if showsBeside { focus = .split }
     }
 
     /// Close Split View: the two go back to tabs of their own, the one beside next to `tab`.
@@ -627,13 +648,32 @@ final class WindowTabs {
         var selection: TabKey?
         var pairs: [Pair] = []
         var showsPanel = false
+
+        init(tabs: [TabKey] = [], selection: TabKey? = nil, pairs: [Pair] = [], showsPanel: Bool = false) {
+            (self.tabs, self.selection, self.pairs, self.showsPanel) = (tabs, selection, pairs, showsPanel)
+        }
+
+        /// What's missing (kept by a version that had less, or more) is as it starts.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            tabs = try container.decodeIfPresent([TabKey].self, forKey: .tabs) ?? []
+            selection = try container.decodeIfPresent(TabKey.self, forKey: .selection)
+            pairs = try container.decodeIfPresent([Pair].self, forKey: .pairs) ?? []
+            showsPanel = try container.decodeIfPresent(Bool.self, forKey: .showsPanel) ?? false
+        }
+
+        var text: String {
+            (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        }
     }
 
-    /// The tabs as the window keeps them, as JSON.
-    var saved: String {
-        let saved = Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel)
-        return (try? JSONEncoder().encode(saved)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    /// What the window keeps of them.
+    var snapshot: Saved {
+        Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel)
     }
+
+    /// The same, as JSON.
+    var saved: String { snapshot.text }
 
     /// Before the tabs were kept as JSON: the tabs' keys a line each, the one in view, and the
     /// pairs a `<tab>=<session>` line each, in scene storage of their own.
@@ -662,12 +702,14 @@ final class WindowTabs {
         let opened = keys
         var restored: [TabKey] = []
         for key in saved.tabs where !restored.contains(key) { restored.append(key) }
+        let all = restored + opened.filter { !restored.contains($0) }
         var pairs: [TabKey: String] = [:]
         // Each session in one place: in a pair at most once, never also in a tab of its own.
-        for pair in saved.pairs where restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside) && !restored.contains(.session(pair.beside)) {
+        for pair in saved.pairs where restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside)
+            && !all.contains(.session(pair.beside)) && !self.pairs.values.contains(pair.beside) {
             pairs[pair.tab] = pair.beside
         }
-        keys = restored + opened.filter { !restored.contains($0) }
+        keys = all
         self.pairs = pairs.merging(self.pairs) { kept, _ in kept }
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
         if saved.showsPanel { showsPanel = true }
