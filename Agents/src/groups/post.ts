@@ -107,11 +107,21 @@ export function receive(parts: PeerParts, from: string, mail: SeatMail) {
   else parts.server.take(from, mail)
 }
 
+/**
+ * A letter to `to` that the link gave up (days without that computer saying it has it), as it went
+ * at `at`: a part given there fails, said in the chat; a part's report from here goes again.
+ */
+export function gaveUp(parts: PeerParts, to: string, mail: SeatMail, at?: number) {
+  if (mail.kind === "work") parts.runner.workGaveUp(to, mail.work, at)
+  else if (mail.kind === "report") parts.server.gaveUp(to, mail)
+}
+
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })
 
 /**
- * `/api/kuvo/peers[/mail|/sent]`, for the box's link: what goes (`GET mail`, followed), what it has
- * taken of what mustn't be lost (`POST sent {ids}`), what came (`POST mail {from, mail}`), and who
+ * `/api/kuvo/peers[/mail|/sent|/gaveup]`, for the box's link: what goes (`GET mail`, followed), what it has
+ * taken of what mustn't be lost (`POST sent {ids}`), what of that it gave up (`POST gaveup {to,
+ * mail, at}`), what came (`POST mail {from, mail}`), and who
  * your other computers and their bots are (`PUT {boxes, bots}`). 404 where group chats don't run.
  */
 export async function peerRoutes(parts: PeerParts | undefined, method: string, path: string[], body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
@@ -122,6 +132,12 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
     const given = await body().catch(() => undefined)
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     receive(parts, given.from, given.mail)
+    return json({})
+  }
+  if (what === "gaveup" && method === "POST") {
+    const given = await body().catch(() => undefined)
+    if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
+    gaveUp(parts, given.to, given.mail, typeof given.at === "number" ? given.at : undefined)
     return json({})
   }
   if (what === "sent" && method === "POST") {

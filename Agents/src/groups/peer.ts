@@ -94,8 +94,10 @@ export const longestTurn = turnLimit + 60_000
 export interface Clock {
   setTimeout(work: () => void, ms: number): unknown
   clearTimeout(timer: unknown): void
+  /** Milliseconds since 1970 (`Date.now()` when it doesn't say). */
+  now?(): number
 }
-export const realClock: Clock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer as any) }
+export const realClock: Clock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer as any), now: () => Date.now() }
 
 interface Pending {
   turn: SeatTurn
@@ -225,6 +227,12 @@ export class RemoteHome implements SeatHome {
 
 /** How long a turn's id is remembered, so one asked again isn't taken twice. */
 const rememberTurns = 86_400_000
+/**
+ * How long a part done here is remembered, with how it went: far longer than a letter lives (two
+ * days), so a part given again however late (its chat's computer off meanwhile, its report's
+ * letter given up) is told again how it went, never done twice.
+ */
+export const rememberWork = 30 * 86_400_000
 /** What a bot's doing goes at most this often, the latest of it. */
 export const activityEvery = 1_500
 
@@ -257,21 +265,41 @@ export class SeatServer {
     private readonly clock: Clock = realClock,
   ) {}
 
-  /** Parts given here before this started (the bridge restarted): followed again, and those done told again until they're there. */
+  private now(): number {
+    return this.clock.now?.() ?? Date.now()
+  }
+
+  /** Parts given here before this started (the bridge restarted): followed again; those done long ago forgotten. */
   start() {
+    this.forgetOldWork()
     for (const [task, work] of Object.entries(this.context?.store.peerWork() ?? {})) {
-      if (work.done) {
-        // Remembered a day, so a part given again isn't done twice.
-        if (Date.now() - Date.parse(work.started) > rememberTurns) this.context?.store.keepPeerWork(task, undefined)
-      } else if (work.prompt) this.follow(task, work)
+      if (work.done) continue
+      if (work.prompt) this.follow(task, work)
       else this.report(task, work, { ok: false, why: "Kuvo Code stopped before it reached the bot" })
     }
   }
 
-  /** A part, to its bot's own conversation here; then followed until the bot reports. Given twice, taken once. */
+  private forgetOldWork() {
+    const store = this.context?.store
+    for (const [task, work] of Object.entries(store?.peerWork() ?? {})) {
+      if (work.done && this.now() - Date.parse(work.finished ?? work.started) > rememberWork) store?.keepPeerWork(task, undefined)
+    }
+  }
+
+  /**
+   * A part, to its bot's own conversation here; then followed until the bot reports. Given twice,
+   * taken once: given again once it's done (its chat's computer started again, its report not
+   * there), it's told again how it went.
+   */
   private async work(host: string, given: WorkGiven) {
     const store = this.context?.store
-    if (!store || store.peerWork()[given.task]) return
+    if (!store) return
+    this.forgetOldWork()
+    const known = store.peerWork()[given.task]
+    if (known) {
+      if (known.done && known.result && known.host === host) this.tell(given.task, known, known.result)
+      return
+    }
     const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started }
     store.keepPeerWork(given.task, work)
     const bot = this.seats.bot(given.bot)
@@ -299,10 +327,21 @@ export class SeatServer {
       .finally(() => this.following.delete(task))
   }
 
-  /** How a part went, to the chat's computer (never lost on the way), and noted here as done. */
+  /** How a part went, noted here as done with it (to tell it again), and to the chat's computer (never lost on the way). */
   private report(task: string, work: PeerWork, result: SeatResult) {
+    this.context?.store.keepPeerWork(task, { ...work, done: true, result, finished: new Date(this.now()).toISOString() })
+    this.tell(task, work, result)
+  }
+
+  private tell(task: string, work: PeerWork, result: SeatResult) {
     this.transport.send(work.host, { kind: "report", task, wrapUp: work.wrapUp, chat: work.chat, result }, true)
-    this.context?.store.keepPeerWork(task, { ...work, done: true })
+  }
+
+  /** A letter of this computer's given up by its link (days without its computer saying it has it): a part's report goes again, while the part is remembered. */
+  gaveUp(to: string, mail: SeatMail) {
+    if (mail.kind !== "report") return
+    const known = this.context?.store.peerWork()[mail.task]
+    if (known?.done && known.result && known.host === to) this.tell(mail.task, known, known.result)
   }
 
   /** What a chat's computer (`from`, one of this computer's peers: the link opens only theirs) asks. */

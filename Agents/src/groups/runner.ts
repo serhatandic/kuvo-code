@@ -34,7 +34,7 @@ import {
   type GroupTask,
   type Meeting,
 } from "./rules"
-import type { MemoryGiven, PeerDirectory } from "./peer"
+import type { MemoryGiven, PeerDirectory, WorkGiven } from "./peer"
 import { Cancelled, Seats, type ChatContext, type SeatHome, type SeatResult, type SeatState } from "./seat"
 import type { GroupStore, Kept, MachineBot, Status } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
@@ -1023,6 +1023,21 @@ export class GroupRunner {
     const task = this.taskState(report.task, report.wrapUp, report.chat)
     if (!task || task.prompt !== `peer:${from}`) return
     this.finish(report.task, report.wrapUp, report.chat, task.bot, report.result)
+  }
+
+  /** When this started: a part's letter that went before it was given again since (`resumeWork`). */
+  private readonly startedAt = Date.now()
+
+  /**
+   * A part's letter to another computer given up by the link (that computer not there for days):
+   * the part fails, said in the chat, rather than working forever. Not for a letter that went
+   * before this started (`at`): the part went again as it started.
+   */
+  workGaveUp(to: string, work: WorkGiven, at?: number) {
+    if (typeof at === "number" && at < this.startedAt) return
+    const task = this.taskState(work.task, work.wrapUp, work.chat)
+    if (!task || task.state !== "working" || task.prompt !== `peer:${to}`) return
+    this.fail(work.task, work.wrapUp, work.chat, `${this.context.peers?.name(to) ?? "its computer"} couldn’t be reached for two days, so it was given up`)
   }
 
   /** `thenOthers`: parts that waited on it fail too. */

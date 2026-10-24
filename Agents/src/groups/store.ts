@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ModelRef } from "../wire"
+import type { SeatResult } from "./seat"
 import { jobInMemory, type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
 
 /** Goes up only when what's kept changes in a way an older runner can't follow. */
@@ -109,8 +110,10 @@ export interface PeerWork {
   /** Its message in the bot's own conversation, once it went there. */
   prompt?: string
   started: string
-  /** How it went, once it did: told again until the chat's computer has it. */
+  /** Done, how it went and when: told again whenever the part is given again, for as long as it's remembered. */
   done?: boolean
+  result?: SeatResult
+  finished?: string
 }
 
 /** One of the machine's bots, as its folder has it. */

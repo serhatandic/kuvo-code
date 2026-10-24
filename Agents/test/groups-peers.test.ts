@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
 import { SeatServer, activityEvery, askAgainAfter, awayAfter, type Clock, type PeerBot, type SeatMail } from "../src/groups/peer"
-import { LinkDirectory, PeerPost, receive, type PeerParts } from "../src/groups/post"
+import { LinkDirectory, PeerPost, gaveUp, receive, type PeerParts } from "../src/groups/post"
 import { GroupRunner, transcriptMailBytes } from "../src/groups/runner"
 import { stamp, type Group, type GroupMessage } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
@@ -37,10 +37,13 @@ async function until(condition: () => boolean) {
 
 /** A clock a test moves on by hand: what comes due goes in its order, what that sets up too. */
 class HandClock implements Clock {
-  private now = 0
+  private time = Date.now()
   private timers: { at: number; work: () => void }[] = []
+  now() {
+    return this.time
+  }
   setTimeout(work: () => void, ms: number) {
-    const timer = { at: this.now + ms, work }
+    const timer = { at: this.time + ms, work }
     this.timers.push(timer)
     return timer
   }
@@ -48,15 +51,15 @@ class HandClock implements Clock {
     this.timers = this.timers.filter((each) => each !== timer)
   }
   advance(ms: number) {
-    const end = this.now + ms
+    const end = this.time + ms
     for (;;) {
       const due = this.timers.filter((each) => each.at <= end).sort((a, b) => a.at - b.at)[0]
       if (!due) break
       this.timers = this.timers.filter((each) => each !== due)
-      this.now = due.at
+      this.time = due.at
       due.work()
     }
-    this.now = end
+    this.time = end
   }
 }
 
@@ -138,8 +141,10 @@ class Box {
   readonly runner: GroupRunner
   readonly post: PeerPost
   readonly directory: LinkDirectory
-  readonly parts: PeerParts
+  parts: PeerParts
   private following = new AbortController()
+  /** Whether its seats' bridge as it runs now is heard: one restarted stands in for the last, which says nothing more. */
+  private bridge = { on: true }
 
   constructor(
     readonly key: string,
@@ -152,10 +157,23 @@ class Box {
     this.runner = new GroupRunner({
       store: this.store, engine: server(this.engine.url, "x"), bridge: () => undefined, trash: join(this.root, "trash"), pace: 0.05, place: key, peers: this.directory,
     })
-    const seats = new SeatServer(this.runner.seats, this.post, { store: this.store, remembered: (from, memory) => this.runner.remembered(from, memory) })
-    this.parts = { post: this.post, directory: this.directory, server: seats, runner: this.runner }
+    this.parts = { post: this.post, directory: this.directory, server: this.seatServer(), runner: this.runner }
     relay.boxes.set(key, this)
     void this.link()
+  }
+
+  private seatServer() {
+    const bridge = this.bridge
+    const transport = { send: (to: string, mail: SeatMail, durable: boolean) => void (bridge.on && this.post.send(to, mail, durable)) }
+    return new SeatServer(this.runner.seats, transport, { store: this.store, remembered: (from, memory) => this.runner.remembered(from, memory) }, this.clock)
+  }
+
+  /** Its bridge's seats started again, as after the bridge restarted: what it held only in memory is gone, and the one before says nothing more. */
+  restartSeats() {
+    this.bridge.on = false
+    this.bridge = { on: true }
+    this.parts.server = this.seatServer()
+    this.parts.server.start()
   }
 
   /** The box's link: follows what its post sends, carries it on the relay, and says it has what mustn't be lost. */
@@ -179,6 +197,12 @@ class Box {
 
   receive(from: string, mail: SeatMail) {
     receive(this.parts, from, mail)
+    beat()
+  }
+
+  /** Its link gave up a letter to `to` (sent at `at`): too long without that computer saying it has it. */
+  gaveUp(to: string, mail: SeatMail, at = Date.now()) {
+    gaveUp(this.parts, to, mail, at)
     beat()
   }
 
@@ -250,6 +274,20 @@ function hostOnClock() {
   host = hostWith(clock)
   return clock
 }
+
+/** Ben's computer on a clock of the test's, as it was otherwise. */
+function homeOnClock() {
+  relay.boxes.delete("key_lokum")
+  home.stop()
+  const clock = new HandClock()
+  home = new Box("key_lokum", relay, clock)
+  home.bot("bot_ben", "Ben")
+  home.knows([{ key: "key_mac", name: "mac" }])
+  return clock
+}
+
+const day = 86_400_000
+const reports = () => relay.sent.filter((each) => each.mail.kind === "report").map((each) => (each.mail as any).result)
 
 describe("a group chat with a bot on another of your computers", () => {
   test("the bot takes its turn on its own computer, in a seat there, and its words reach the chat", async () => {
@@ -555,6 +593,47 @@ describe("a group chat with a bot on another of your computers", () => {
     ])
     finish()
     await until(() => sent.some((mail) => mail.kind === "result"))
+  })
+
+  test("a part given again after the chat's computer was off for days: told again how it went, not done again", async () => {
+    const clock = homeOnClock()
+    home.engine.reports = { Ben: "Build fixed." }
+    const work = { task: "gt_build", wrapUp: "gm_wrap", chat: id, bot: "bot_ben", text: "Fix the build.", started: stamp() }
+    relay.forge("key_mac", "key_lokum", { kind: "work", work })
+    await until(() => reports().length === 1)
+    // Its report's letter given up while the chat's computer was off; Ben's computer's bridge
+    // restarted meanwhile. The chat's computer starts again, and gives the part again.
+    clock.advance(3 * day)
+    home.restartSeats()
+    relay.forge("key_mac", "key_lokum", { kind: "work", work })
+    await until(() => reports().length === 2)
+    expect(reports().map((result) => result.text)).toEqual(["Build fixed.", "Build fixed."])
+    expect(relay.sent.filter((each) => each.mail.kind === "report").every((each) => each.durable && each.to === "key_mac")).toBe(true)
+    expect(home.engine.prompts("ses_own_Ben").length).toBe(1)
+  })
+
+  test("a report's letter given up before the chat's computer had it is sent again", async () => {
+    home.engine.reports = { Ben: "Build fixed." }
+    const work = { task: "gt_build", wrapUp: "gm_wrap", chat: id, bot: "bot_ben", text: "Fix the build.", started: stamp() }
+    relay.forge("key_mac", "key_lokum", { kind: "work", work })
+    await until(() => reports().length === 1)
+    home.gaveUp("key_mac", relay.sent.find((each) => each.mail.kind === "report")!.mail)
+    await until(() => reports().length === 2)
+    expect(reports()[1]).toEqual(reports()[0])
+  })
+
+  test("a part whose letter is given up, its bot's computer away for days: the part fails, and the chat says why", async () => {
+    relay.away.add("key_lokum")
+    const wrapUp: GroupMessage = {
+      id: "gm_wrap", author: "bot_ada", text: "Ben fixes the build.", time: stamp(), kind: "wrapUp",
+      tasks: [{ id: "gt_build", bot: "bot_ben", task: "Fix the build", state: "proposed" }],
+    }
+    host.runner.put(team(), [{ id: "gm_ask", text: "Ship it?", time: stamp(), kind: "message" }, wrapUp], "active", false)
+    host.runner.startWork("gm_wrap", id)
+    await until(() => relay.sent.some((each) => each.mail.kind === "work"))
+    host.gaveUp("key_lokum", relay.sent.find((each) => each.mail.kind === "work")!.mail)
+    await until(() => said(host).find((message) => message.id === "gm_wrap")!.tasks![0].state === "failed")
+    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben couldn’t do its part: lokum couldn’t be reached for two days, so it was given up."])
   })
 
   test("what another computer says of a turn it wasn't asked is taken from nobody", async () => {
