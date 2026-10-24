@@ -37,12 +37,16 @@ extension PhoneLink {
                 return (409, Self.message("This Mac's engine isn't running, so the worktree of \(tree.branch) can't be removed now."))
             }
             // Made for a session that never started: taken back, branch and all, as the composer
-            // takes one back (not one you removed).
+            // takes one back (not one you removed). Not one a session has after all.
             if given["forget"] as? Bool == true {
-                if workspace.sessions.contains(where: { workspace.worktrees[$0.location.directory]?.root == tree.root && workspace.isWorking($0.id) }) {
-                    return (409, Self.message("An agent is still working in the worktree of \(tree.branch), so it stays. Stop it first, then remove the worktree."))
+                if workspace.sessions.contains(where: { workspace.worktrees[$0.location.directory]?.root == tree.root }) {
+                    return (409, Self.message("A session works in the worktree of \(tree.branch), so it stays. Remove it with the session, or in Settings › Worktrees."))
                 }
-                await workspace.discardWorktree(folder)
+                if given["discard"] as? Bool == false,
+                   await Task.detached(operation: { Git.hasUncommittedChanges(in: tree.root, includingHidden: true) }).value {
+                    return (409, Self.message("The worktree of \(tree.branch) has changes that aren’t committed, so it stays."))
+                }
+                guard await workspace.discardWorktree(folder) else { return (502, Self.message("The worktree of \(tree.branch) couldn't be removed. Try again, or remove it in Settings › Worktrees.")) }
                 return (200, Data("{}".utf8))
             }
             do {

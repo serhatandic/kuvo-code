@@ -673,8 +673,8 @@ itself. A host serves:
     branch one made there started on, and `prefix`, what its name starts with.
   - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
     anything in it not committed (`"discard": false`: one with changes stays, `409`); its branch
-    stays unless it's merged (`"forget": true`, on a machine: it goes anyway, for one made for a
-    session that never started). `200 {}`; `404` for none; `409 {"message"}` while an agent works
+    stays unless it's merged (`"forget": true`: it goes anyway, for one made for a session that
+    never started, on a Mac and a machine; `409` when a session has it after all). `200 {}`; `404` for none; `409 {"message"}` while an agent works
     there; `502 {"message"}` when the engine couldn't remove it. `404 {"message"}` for one it
     doesn't have (removed already): a Mac takes it as gone.
   - For a new session's worktree, as the composer's Worktree makes one: `POST kuvo/worktrees

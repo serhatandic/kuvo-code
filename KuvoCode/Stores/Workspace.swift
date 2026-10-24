@@ -818,17 +818,26 @@ final class Workspace {
 
     /// A worktree made for a session that wasn't: removed, with its branch, and not recorded as
     /// one you removed.
-    func discardWorktree(_ folder: String) async {
-        guard let tree = worktrees[folder] else { return }
+    /// Whether it went: one the engine couldn't remove stays listed, to remove from Settings.
+    @discardableResult
+    func discardWorktree(_ folder: String) async -> Bool {
+        guard let tree = worktrees[folder] else { return true }
         if let remote = RemoteFolder.parse(tree.root) {
-            let _: Empty? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "forget": true])
+            do {
+                let _: Empty = try await onBox(remote.machine, "POST", "kuvo/worktrees/remove", ["path": remote.path, "forget": true])
+            } catch let refusal as BoxRefusal where refusal.status == 404 {
+                // Gone there already.
+            } catch {
+                return false
+            }
         } else {
-            guard let api = api(forFolder: tree.project), let project = try? await api.location(directory: tree.project).project else { return }
-            try? await api.removeWorktree(project: project.id, directory: tree.root, force: true)
+            guard let api = api(forFolder: tree.project), let project = try? await api.location(directory: tree.project).project,
+                  (try? await api.removeWorktree(project: project.id, directory: tree.root, force: true)) != nil else { return false }
             _ = await Task.detached { Git.run(["branch", "-D", tree.branch], in: tree.project) }.value
         }
         worktrees = worktrees.filter { $0.value.root != tree.root }
         saveWorktrees()
+        return true
     }
 
     /// A worktree's branch starts with a made-up name; once its session has a title, the branch
@@ -924,7 +933,7 @@ final class Workspace {
             do {
                 let _: Empty = try await onBox(machine, "POST", "kuvo/worktrees/record", record)
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
-            } catch is BoxRefusal {
+            } catch let refusal as BoxRefusal where refusal.status == 404 {
                 // Not there any more: it goes here too.
             } catch {
                 // Not asked: kept as it was, for next time.

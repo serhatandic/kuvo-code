@@ -220,10 +220,15 @@ import Testing
         #expect(told.all == ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"])
         #expect(try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": "relative"]).status == 400)
 
-        // One whose session never started, taken back (`forget`): gone with its branch, and not
-        // kept as a worktree you removed (its folder isn't the project's any more).
+        // Taken back as one whose session never started (`forget`): not while a session has it.
         let root = try #require(made.json["root"] as? String), branch = try #require(made.json["branch"] as? String)
-        #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: ["path": root, "discard": true, "forget": true]).status == 200)
+        let forget: [String: Any] = ["path": root, "discard": true, "forget": true]
+        #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: forget).status == 409)
+        #expect(FileManager.default.fileExists(atPath: root))
+        // Its session gone (it never started after all): gone with its branch, and not kept as a
+        // worktree you removed (its folder isn't the project's any more).
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.deleted", "created": 1, "data": ["sessionID": "ses_phone"]])))
+        #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: forget).status == 200)
         #expect(!FileManager.default.fileExists(atPath: root))
         #expect(try git("branch", "--list", branch, in: repository.path).isEmpty)
         #expect(workspace.projectDirectory(folder) == folder, "not one you removed")

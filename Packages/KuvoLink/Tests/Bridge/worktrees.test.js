@@ -130,6 +130,9 @@ test("a session a phone makes in a worktree it asked for is told it works there"
   sessions.push({ id: "ses_plain", location: { directory: project } });
   await link.tellWorktree(atEngine, "ses_plain");
   assert.equal(told.length, 1);
+  // Taken back as one made for nothing (`forget`): not while a session has it.
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 409);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_phone"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
@@ -142,6 +145,7 @@ test("with no Mac there, the machine names a branch after its session's title, o
   await link.nameWorktreeBranch(atEngine, "ses_named");
   assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "me/giris-duzeltmesi", "named once");
   assert.equal(link.branchSlug("Trim note titles"), "trim-note-titles");
+  sessions.splice(sessions.findIndex(each => each.id === "ses_named"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
