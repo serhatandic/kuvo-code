@@ -60,6 +60,24 @@ import Testing
         #expect(bridge.requests("POST", "/api/kuvo/peers/mail").count == before)
     }
 
+    /// What the bridge sends is followed again whenever its stream drops, the bridge told who your
+    /// machines are each time, so what goes now (a turn's result) still goes.
+    @Test func whatTheBridgeSendsIsFollowedAgainWhenItsStreamDrops() async throws {
+        defer { bridge.stop(); try? FileManager.default.removeItem(at: SeatRelay.file) }
+        bridge.on("PUT", "/api/kuvo/peers", json: [:])
+        let line = #"{"id":"sm_now0000001","to":"key_box","durable":false,"mail":{"kind":"result","id":"trn_1","result":{"ok":true,"text":"Done","steps":[]}}}"# + "\n"
+        // Each time: one line, then the stream ends.
+        bridge.on("GET", "/api/kuvo/peers/mail") { _ in
+            TestPulse.beat()
+            return StubWeb.Answer(status: 200, body: Data(line.utf8))
+        }
+        let relay = relay(clock: { 1 })
+        relay.follow()
+        defer { relay.stop() }
+        try await until { bridge.requests("GET", "/api/kuvo/peers/mail").count >= 3 && sent.all.filter { $0["seat"] != nil }.count >= 3 }
+        #expect(bridge.requests("PUT", "/api/kuvo/peers").count >= 3, "told who your machines are each time")
+    }
+
     @Test func bigMailGoesInPartsAndIsPutTogetherWhereItGoes() async throws {
         defer { bridge.stop(); try? FileManager.default.removeItem(at: SeatRelay.file) }
         bridge.on("POST", "/api/kuvo/peers/mail", json: [:])

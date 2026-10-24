@@ -13409,7 +13409,7 @@ class GroupRunner {
       if (left())
         return "absent";
       if (!result.ok) {
-        this.note(result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can\u2019t be reached now, so it sat this out.` : `${bot.name} couldn\u2019t answer: ${result.why}`, id);
+        this.note(result.moving ? `${bot.name} is moving to another computer, so it sat this out.` : result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can\u2019t be reached now, so it sat this out.` : `${bot.name} couldn\u2019t answer: ${result.why}`, id);
         return "absent";
       }
       if (result.outgrown) {
@@ -14325,6 +14325,8 @@ class SeatServer {
     const bot = this.seats.bot(given.bot);
     if (!bot)
       return this.report(given.task, work, { ok: false, why: "the bot doesn\u2019t live on this computer any more" });
+    if (bot.moving)
+      return this.report(given.task, work, { ok: false, why: "it was moving to another computer", moving: true });
     try {
       const prompt = await this.seats.give(bot, given.text);
       store.keepPeerWork(given.task, { ...work, prompt });
@@ -14464,6 +14466,9 @@ class SeatServer {
       if (turn.seat && turn.fresh === undefined && anew.without++ < 1)
         return this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false);
       this.anew.delete(turn.id);
+    }
+    if (!this.turns.has(turn.id) && this.context?.store.bot(turn.bot)?.moving) {
+      return this.transport.send(host, { kind: "result", id: turn.id, result: { ok: false, why: "it\u2019s moving to another computer", moving: true } }, false);
     }
     const known = this.turns.get(turn.id);
     if (known) {
@@ -15484,4 +15489,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src aef503a53a1361a23d7a232cf06ad653cf74e42db83ad2798e13095967b6c6c5
+// Built from Agents/src a87c4f7171f945c1ccf90eac30ff205893c75cb464383a0f621b34ee025003ac

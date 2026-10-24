@@ -726,7 +726,14 @@ export class GroupRunner {
       )
       if (left()) return "absent"
       if (!result.ok) {
-        this.note(result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can’t be reached now, so it sat this out.` : `${bot.name} couldn’t answer: ${result.why}`, id)
+        this.note(
+          result.moving
+            ? `${bot.name} is moving to another computer, so it sat this out.`
+            : result.away && bot.box && peers
+              ? `${bot.name} is on ${peers.name(bot.box)}, which can’t be reached now, so it sat this out.`
+              : `${bot.name} couldn’t answer: ${result.why}`,
+          id,
+        )
         return "absent"
       }
       // Grown well past the chat it's in: its seat went, and its next turn starts anew.

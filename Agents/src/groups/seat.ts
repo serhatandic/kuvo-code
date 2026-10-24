@@ -70,8 +70,8 @@ export type SeatState =
 export type SeatResult =
   /** What it said (nothing: it passed), with its steps; `outgrown`: its seat went, too big, and its next turn starts anew. */
   | { ok: true; text: string; steps: ToolCall[]; outgrown?: boolean }
-  /** It couldn't answer, and why, as the chat says it; `away`: its computer couldn't be reached. */
-  | { ok: false; why: string; away?: true }
+  /** It couldn't answer, and why, as the chat says it; `away`: its computer couldn't be reached; `moving`: a move holds it there. */
+  | { ok: false; why: string; away?: true; moving?: true }
 
 /** How far a turn got: its seat, then its message there and when it went. */
 export interface SeatProgress {

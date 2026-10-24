@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -13,7 +12,9 @@ import os
 /// online (the bridge told, which decides what goes again); what came, to the bridge; and who your
 /// machines and their bots are, to the bridge (PROTOCOL.md, "The rule for these letters").
 ///
-/// A stopgap with no rules of its own: it goes when this Mac's box process takes the relay
+/// A stopgap: it holds only what a machine's link holds, in parity with it (how long a letter waits
+/// online before it's given up, and a newer memory of a bot and chat going for one still waiting),
+/// and decides nothing about the mail itself. It goes when this Mac's box process takes the relay
 /// connection over (D1c), and the box's link carries this Mac's mail as a machine's does.
 @MainActor
 final class SeatRelay {
@@ -47,10 +48,8 @@ final class SeatRelay {
     private var following: Task<Void, Never>?
     private var toldPeers: Data?
 
-    /// A mail's whole seat at most this big; bigger, in parts.
+    /// A mail's whole seat at most this big; bigger, in parts (as a document's, `Documents.parts`).
     nonisolated static let whole = 48_000
-    nonisolated static let partLength = Documents.partLength
-    nonisolated static let mostParts = Int((Double(512 * 1024) * 4 / 3 / Double(partLength)).rounded(.up)) + 1
     static let letterMemory: Double = 2 * 86_400_000
     /// From one round to the next counts this much at most: a longer gap is this Mac asleep.
     static let onlineStep: Double = 5 * 60_000
@@ -67,22 +66,34 @@ final class SeatRelay {
     func follow() {
         following?.cancel()
         following = Task { [weak self] in
-            guard let self, let endpoint = self.link.bridge() else { return }
-            await self.tellPeers(force: true)
-            do {
-                var request = URLRequest(url: endpoint.url.appending(path: "api/kuvo/peers/mail"))
-                request.timeoutInterval = .infinity
-                if let password = endpoint.password { request.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-                for try await line in bytes.lines {
-                    guard let data = line.data(using: .utf8), let given = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                    if await self.carry(given), given["durable"] as? Bool == true, let id = given["id"] as? String {
-                        await self.ask("POST", "sent", ["ids": [id]])
-                    }
-                }
-            } catch {}
+            var attempt = 0
+            while !Task.isCancelled {
+                guard let self, let endpoint = self.link.bridge() else { return }
+                if await self.followOnce(endpoint) { attempt = 0 }
+                // Gone (the bridge restarted, the stream dropped): followed again, a little later each time.
+                attempt += 1
+                try? await Task.sleep(for: .milliseconds(min(30_000, 250 * (1 << min(attempt, 7)))))
+            }
         }
+    }
+
+    /// Follows what the bridge sends until it stops, the bridge first told who your machines are.
+    /// Whether it followed (the bridge answered).
+    private func followOnce(_ endpoint: ServerEndpoint) async -> Bool {
+        var request = URLRequest(url: endpoint.url.appending(path: "api/kuvo/peers/mail"))
+        request.timeoutInterval = .infinity
+        if let password = endpoint.password { request.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
+        guard let (bytes, response) = try? await URLSession.shared.bytes(for: request), (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        await tellPeers(force: true)
+        do {
+            for try await line in bytes.lines {
+                guard let data = line.data(using: .utf8), let given = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                if await carry(given), given["durable"] as? Bool == true, let id = given["id"] as? String {
+                    await ask("POST", "sent", ["ids": [id]])
+                }
+            }
+        } catch {}
+        return true
     }
 
     func stop() {
@@ -136,15 +147,9 @@ final class SeatRelay {
         if json.count <= whole, let mail = try? JSONSerialization.jsonObject(with: json) {
             return [["seat": mail].merging(id.map { ["seatID": $0] } ?? [:]) { $1 }]
         }
-        let d = json.base64URL
-        let count = (d.count + partLength - 1) / partLength
-        guard count <= mostParts else { return nil }
-        let hash = Data(SHA256.hash(data: Data(d.utf8))).base64URL
-        let characters = Array(d)
-        return (0..<count).map { index in
-            let piece = String(characters[(index * partLength)..<min(characters.count, (index + 1) * partLength)])
-            return ["seatPart": ["whole": hash, "i": index, "of": count, "d": piece, "s": id ?? ""] as [String: Any]]
-        }
+        let parts = Documents.parts(of: json.base64URL, s: id ?? "")
+        guard parts.count <= Documents.mostParts else { return nil }
+        return parts.map { ["seatPart": $0] }
     }
 
     /// A letter sent to its machine now: noted as tried (sent again in a minute), or, too big ever
@@ -186,8 +191,9 @@ final class SeatRelay {
     func tick() async {
         let online = link.online()
         let now = clock()
-        for (id, kept) in letters {
-            var letter = kept
+        for id in Array(letters.keys) {
+            // As it is now: one that went, or was given up, meanwhile is gone.
+            guard var letter = letters[id] else { continue }
             let last = rounds[id]
             rounds[id] = now
             if online, let last, now > last {
