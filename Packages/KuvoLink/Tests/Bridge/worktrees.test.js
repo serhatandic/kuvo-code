@@ -29,6 +29,7 @@ git(project, "commit", "-q", "-m", "First");
 const folderOf = request => decodeURIComponent(request.headers["x-opencode-directory"] ?? encodeURIComponent(path.join(home, "workspace")));
 const sessions = [];
 const active = new Set();
+const told = [];
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -50,6 +51,10 @@ const engine = http.createServer((request, response) => {
       return send({});
     }
     if (url.pathname === "/api/session") return send({ data: sessions });
+    if (request.method === "PUT" && url.pathname.includes("/instructions/entries/")) {
+      told.push({ url: url.pathname, value: JSON.parse(body).value });
+      return send({});
+    }
     if (url.pathname.startsWith("/api/session/") && url.pathname !== "/api/session/active") return send({ data: sessions.find(each => each.id === decodeURIComponent(url.pathname.split("/").pop())) ?? null });
     if (url.pathname === "/api/session/active") return send({ data: Object.fromEntries([...active].map(id => [id, {}])) });
     send({}, 404);
@@ -113,6 +118,19 @@ test("made for a session on a branch of its own, named after it, listed with wha
   // Recorded again by a Mac that still had it: it's gone, so it stays gone.
   assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root, branch: "kuvo/fix-the-total" })).status, 404);
   assert.deepEqual((await ask("GET", "kuvo/worktrees?records=1")).value.worktrees, []);
+});
+
+test("a session a phone makes in a worktree it asked for is told it works there", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project })).value;
+  sessions.push({ id: "ses_phone", location: { directory: made.folder } });
+  await link.tellWorktree(atEngine, "ses_phone");
+  assert.deepEqual(told.map(each => each.url), ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"]);
+  assert.match(told[0].value, new RegExp(`on the branch ${made.branch}, .* checkout at ${project} `));
+  // One elsewhere: nothing.
+  sessions.push({ id: "ses_plain", location: { directory: project } });
+  await link.tellWorktree(atEngine, "ses_plain");
+  assert.equal(told.length, 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
 test("with no Mac there, the machine names a branch after its session's title, once, and only one it made", async () => {

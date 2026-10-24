@@ -1060,6 +1060,18 @@ export async function nameWorktreeBranch(engine, sessionID) {
   renameWorktree(tree, tree.made, (tree.prefix ?? "") + slug);
 }
 
+/** A session just made in one of this box's worktrees (by a phone, in one it asked for here):
+ * told it works there, as a Mac tells one it makes. */
+export async function tellWorktree(target, sessionID) {
+  if (typeof sessionID !== "string") return;
+  const session = (await engineGet(target, `api/session/${encodeURIComponent(sessionID)}`))?.data;
+  const folder = session?.location?.directory ?? session?.directory;
+  const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
+  if (!tree) return;
+  const told = `You work in a git worktree of this project, on the branch ${tree.branch}, so your changes stay apart from the user's own checkout at ${tree.project} until they merge them. Make your changes here, not there.`;
+  await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries/kuvo.worktree`, { value: told });
+}
+
 /** `kuvo/worktrees…`, for this box's own. */
 export async function answerWorktrees(method, requestPath, body, engine, signal) {
   const route = requestPath.split("?")[0];
@@ -2687,11 +2699,7 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
     if (typeof moved?.id !== "string") return no(502, "The coding agents didn’t take it.");
     for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
-    const tree = readWorktrees().find(each => (each.folder ?? each.root) === directory);
-    if (tree) {
-      const told = `You work in a git worktree of this project, on the branch ${tree.branch}, so your changes stay apart from the user's own checkout at ${tree.project} until they merge them. Make your changes here, not there.`;
-      await call(agents, "PUT", `${entries}/kuvo.worktree`, { value: told }).catch(() => {});
-    }
+    await tellWorktree(agents, moved.id).catch(() => {});
     if (bot) {
       // The bot's conversation is the new one, marked as its, told what it is.
       await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }).catch(() => {});
@@ -3307,6 +3315,7 @@ async function watchEvents(read, tell) {
       for await (const event of serverEvents(response.body)) {
         // A worktree's branch named after its session, and a bot's job read from its memory as
         // its run ends, as a Mac does while it's here (which may tell its bots otherwise meanwhile).
+        if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (macConnected()) {
           toldBots.clear();
         } else {

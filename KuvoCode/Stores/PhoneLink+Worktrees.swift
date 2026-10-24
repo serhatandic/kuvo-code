@@ -10,6 +10,24 @@ extension PhoneLink {
         switch (request.method.uppercased(), request.path.split(separator: "?").first.map(String.init)) {
         case ("GET", "kuvo/worktrees"):
             return (200, Self.json(["worktrees": await Self.worktrees(workspace)]))
+        case ("POST", "kuvo/worktrees"):
+            // One for a new session, as the composer's Worktree makes it; the phone makes the
+            // session in its folder.
+            guard let project = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["project"] as? String,
+                  project.hasPrefix("/"), RemoteFolder.machine(of: project) == nil else {
+                return (400, Self.message("Send the project's folder on this Mac as {\"project\"}."))
+            }
+            guard workspace.api(forFolder: project) != nil else { return (503, Self.message("This Mac's engine isn't running.")) }
+            do {
+                let (folder, tree) = try await workspace.makeWorktree(forNewSessionIn: project)
+                var made: [String: Any] = ["project": tree.project, "root": tree.root, "folder": folder, "branch": tree.branch]
+                if let base = tree.base { made["base"] = base }
+                return (200, Self.json(made))
+            } catch let refused as GitFailure {
+                return (409, Self.message(refused.message))
+            } catch {
+                return (502, Self.message(error.localizedDescription))
+            }
         case ("POST", "kuvo/worktrees/remove"):
             guard let root = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["path"] as? String,
                   let (folder, tree) = workspace.worktrees.first(where: { $0.value.root == root && RemoteFolder.machine(of: $0.value.root) == nil }).map({ ($0.key, $0.value) })

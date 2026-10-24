@@ -654,9 +654,13 @@ itself. A host serves:
     session that never started). `200 {}`; `404` for none; `409 {"message"}` while an agent works
     there; `502 {"message"}` when the engine couldn't remove it. `404 {"message"}` for one it
     doesn't have (removed already): a Mac takes it as gone.
-  - On a machine, for a new session's worktree: `POST kuvo/worktrees {"project", "branchPrefix"?}`
-    makes one of the project's repository on a branch of its own → `{project, root, folder,
-    branch, base?, made, prefix}` (`folder`: where its session runs); `POST kuvo/worktrees/rename
+  - For a new session's worktree, as the composer's Worktree makes one: `POST kuvo/worktrees
+    {"project", "branchPrefix"?}` makes one of the project's repository on a branch of its own →
+    `{project, root, folder, branch, base?}` (a machine's also `made`, `prefix`; a Mac uses its
+    own prefix, from Settings › Git); make the session in `folder`, and the computer tells it it
+    works in a worktree (a Mac's from this version, a machine's bridge from 0.9.23). `400` for a
+    project that isn't a folder there, `409 {"message"}` when it isn't in a git repository, `503`
+    while the engine isn't running. On a machine: `POST kuvo/worktrees/rename
     {"path", "branch", "from"?}` names its branch (once its session has a title; `409` once it's
     pushed, or when it isn't called `from` any more: named already) → `{"branch"}`, the name it
     got; `POST kuvo/worktrees/record {project, root, folder?, branch, base?}` keeps one a Mac

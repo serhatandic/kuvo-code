@@ -192,6 +192,43 @@ import Testing
         return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
     }
 
+    /// A phone starts a session in a new worktree, as the composer's Worktree does: this Mac makes
+    /// the worktree on a branch of its own, the phone makes the session in its folder, and the
+    /// session is told it works there.
+    @Test func aPhoneStartsASessionInANewWorktree() async throws {
+        defer { done() }
+        let link = PhoneLink()
+        link.workspace = workspace
+        let told = Sent()
+        StubWeb.handle(Self.engine + "/api/experimental/session/") { request, _ in
+            told.add(request.url?.path() ?? "")
+            return StubWeb.json([:])
+        }
+        let made = try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": repository.path])
+        #expect(made.status == 200)
+        let folder = try #require(made.json["folder"] as? String)
+        #expect(made.json["branch"] as? String == workspace.worktrees[folder]?.branch)
+        #expect(try git("symbolic-ref", "--short", "HEAD", in: folder) == made.json["branch"] as? String)
+        // The phone's session, made there through the engine.
+        engineState.add(["id": "ses_phone", "projectID": "prj_shop", "cost": 0, "agent": "build",
+                         "tokens": ["input": 0, "output": 0, "reasoning": 0, "cache": ["read": 0, "write": 0]],
+                         "time": ["created": Date.now.timeIntervalSince1970 * 1000, "updated": Date.now.timeIntervalSince1970 * 1000],
+                         "location": ["directory": folder]])
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.created", "created": 1, "data": ["sessionID": "ses_phone"]])))
+        await workspace.reloading["ses_phone"]?.value
+        await workspace.tellingWorktree["ses_phone"]?.value
+        #expect(told.all == ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"])
+        #expect(try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": "relative"]).status == 400)
+    }
+
+    /// Paths an engine was asked for.
+    nonisolated final class Sent: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: [String] = []
+        func add(_ path: String) { lock.withLock { paths.append(path) } }
+        var all: [String] { lock.withLock { paths } }
+    }
+
     @Test func aPhoneListsAndRemovesWorktrees() async throws {
         defer { done() }
         let link = PhoneLink()

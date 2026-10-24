@@ -725,6 +725,7 @@ final class Workspace {
             try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: folder, folders: extra))
         }
         if let tree = worktrees[folder] {
+            toldWorktree.insert(session.id)
             try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
         }
         upsert(session)
@@ -741,6 +742,35 @@ final class Workspace {
     // MARK: Worktrees
 
     static let worktreeInstructionKey = "kuvo.worktree"
+
+    /// Sessions told they work in a worktree, as they're made.
+    @ObservationIgnored private var toldWorktree: Set<String> = []
+    /// Telling a session made elsewhere that it works in one of this Mac's worktrees, by session
+    /// (what a test waits for).
+    @ObservationIgnored private(set) var tellingWorktree: [String: Task<Void, Never>] = [:]
+
+    /// A session just made in one of this Mac's worktrees somewhere else (a phone made it in one
+    /// it asked this Mac for, `makeWorktree(forNewSessionIn:)`): told it works there, as one made
+    /// here is.
+    private func tellWorktree(_ session: Session) {
+        guard let tree = worktrees[session.location.directory], RemoteFolder.machine(of: tree.root) == nil,
+              Date.now.timeIntervalSince1970 * 1000 - session.time.created < 120_000, toldWorktree.insert(session.id).inserted,
+              let api = api(for: session) else { return }
+        tellingWorktree[session.id] = Task {
+            try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
+            tellingWorktree[session.id] = nil
+        }
+    }
+
+    /// A worktree of the project at `directory` for a session a phone starts (`kuvo/worktrees`,
+    /// POST), as the composer's Worktree makes one: the folder the phone makes it in, and the
+    /// worktree.
+    func makeWorktree(forNewSessionIn directory: String) async throws -> (folder: String, tree: Worktree) {
+        let directory = addFolder(directory)
+        let folder = try await makeWorktree(of: directory)
+        guard let tree = worktrees[folder] else { throw CancellationError() }
+        return (folder, tree)
+    }
 
     private static func instructions(for tree: Worktree) -> String {
         """
@@ -2371,6 +2401,7 @@ final class Workspace {
             noteArchiving(session, was: wasArchived)
         } else {
             sessions.insert(session, at: 0)
+            tellWorktree(session)
         }
         models[session.id]?.session = session
         if let machine = RemoteFolder.machine(of: session.location.directory) {
