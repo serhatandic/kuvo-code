@@ -340,10 +340,10 @@ doesn't fit is cut, ending in "…". Keys are sorted, as both sides write them.
 
 Who sends it: each box, for what happens on it, so each notice comes once.
 
-- **The Mac**, for its own sessions, its group chats and browser asks, never a machine's.
-  Only while you're away from it (no input for two minutes, or its screen locked), or while a
-  phone has a session open (the phone leaves out what's on its screen); at the Mac, its own
-  notifications are enough.
+- **The Mac**, for its own sessions, its group chats and browser asks, never a machine's. Like a
+  machine, it holds each a little while a client is in use there ("kuvo/attention", below);
+  before, it sent nothing while you were at it (no input for two minutes, screen unlocked) unless
+  a phone had a session open.
 - **A machine's bridge**, for that machine's sessions (permissions, questions, runs finished
   or failed, bots' news), from 0.9.9 what agents ask for as they browse there (category `ask`),
   and from 0.9.10 its coding agents' sessions and the group chats that live there (a meeting
@@ -355,6 +355,42 @@ Who sends it: each box, for what happens on it, so each notice comes once.
   the Mac does. An engine run a coding agent's session started (Auto on an engine model)
   tells its news as that session's, once. A Mac connected to the machine shows the machine's
   news in its own notifications, and doesn't send them to your phones.
+
+### kuvo/attention
+
+While you're using a client, each box it's connected to holds your phones' notices a little, so
+your phone doesn't buzz for what you're already looking at or answer at once (from 0.9.28; before,
+a machine sent each at once, and a Mac's box sent its own only while you were away from it).
+
+- **A client in use says so**, for a lease it renews: `POST kuvo/attention` with `{"for":
+  <seconds>, "sessions": [<id>, …]}`. `for` is how long it's in use from now (the box's clock,
+  so the two clocks needn't agree), cut to 60; `0` says it isn't any more. `sessions`, optional,
+  are the conversations on its screen: sessions by id, group chats by theirs. The answer is
+  `{"for": <seconds granted>}`; 400 `{message}` for a `for` that isn't a number of seconds from 0
+  up, or `sessions` that aren't strings; 405 for another method. `GET kuvo/attention` answers
+  `{"inUse": bool, "held": <count>}`. Each client has one lease, a phone by its key; a newer word
+  replaces its last.
+- **A Mac** says it for you: in use while it's awake, its screen awake and unlocked, there's been
+  input in the last two minutes, and Kuvo Code can show you things there (its window in front, or
+  its notifications on). It renews every 15 seconds for 45, with the conversations on screen while
+  its window's in front, and says it isn't at once as the Mac or its screen sleeps, the screen
+  locks, you go idle, or it quits. Its own box hears it in the app; each of its machines whose
+  bridge talks to peers by mail, `{"attention": {for, sessions}, "at"}`, taken only from a Mac
+  that set the machine up. A Mac without the phone link on says nothing.
+- **The box**, while any client's lease is current, holds each new notice: 30 seconds for what's
+  asked of you (`permission`, `question`, `ask`), 60 for news (the rest). When its hold ends it
+  goes, unless meanwhile it was answered (the permission or form replied to, or cancelled; the ask
+  no longer asked) or a client in use said its conversation (`data.session`, else `data.group`,
+  else `thread`) is on its screen, in a word that came after the notice. When the last lease ends
+  (it ran out, or its client said `0`), what's held goes at once. With no lease, a notice goes at
+  once.
+- So a client that vanishes (a Mac's lid closed before it could say so) holds nothing back longer
+  than a hold or its lease, whichever ends first, and a conversation it last showed doesn't count
+  as seen. One a box couldn't send (no relay just now) is tried again every few seconds, for ten
+  minutes. A machine's bridge keeps what it holds in `run/held-notices.json`, so the next one sends
+  it if it stops first. The Mac's own notifications are the same either way.
+- A phone needn't say it's in use: it leaves out what's on its screen itself, and its own lease
+  would hold its own notices.
 
 ## Messages in a session
 

@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.27";
+export const BRIDGE_VERSION = "0.9.28";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -1460,8 +1460,9 @@ export async function answerSkills(method, requestPath, body, engine = null) {
   }
 }
 
-// The handler LinkHost runs for each request.
-export function engineHandler(readEngine = readEngineFile, info = {}, readBridge = readBridgeFile, phonesChanged = () => {}) {
+// The handler LinkHost runs for each request. `hold`: the running bridge's notices held while
+// you're at a computer (none in `box route`, a command of its own).
+export function engineHandler(readEngine = readEngineFile, info = {}, readBridge = readBridgeFile, phonesChanged = () => {}, hold = null) {
   // The agents' bridge, while it runs: its record, while the process it names is still it.
   const bridge = () => {
     try {
@@ -1603,6 +1604,18 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const link = updateLink(current => current?.relay ? { ...current, pairing: newPairingToken() } : null);
       if (!link) return yield* json(409, { message: "This machine has no relay to pair through." });
       return yield* json(200, { link: pairingLink(link), ends: Math.floor(link.pairing.expires / 1000) });
+    }
+    // A client in use here (PROTOCOL.md, "kuvo/attention"): notices for your phones wait a little
+    // while one is. GET says whether one is, and how many wait.
+    if (route === "kuvo/attention") {
+      const method = request.method.toUpperCase();
+      if (!hold) return yield* json(503, { message: "Only this machine's bridge holds its notices." });
+      if (method === "GET" || method === "HEAD") return yield* json(200, { inUse: hold.inUse, held: hold.count });
+      if (method !== "POST") return yield* json(405, {});
+      const given = attentionGiven(parsed(request.body));
+      if (!given) return yield* json(400, { message: "Say for how many seconds you're in use (for: 0 for not), and which conversations are on your screen (sessions)." });
+      hold.attend(`phone:${phone?.key?.toString("base64url") ?? ""}`, given);
+      return yield* json(200, { for: given.seconds });
     }
     // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
     // latest sessions (`machine` null), then those its other computers told it of.
@@ -3169,6 +3182,124 @@ export function pushTo(phone, json, hostKey) {
   return relayPush(Buffer.from(phone.address, "base64url"), mail);
 }
 
+// ---- Notices held while you're at a computer (PROTOCOL.md, "kuvo/attention") ----
+// A client in use (the Mac app, while you're at the Mac) tells the box so, for a short lease it
+// renews. While one is, each notice waits a little before it goes to your phones, and doesn't go
+// if it was answered meanwhile (a permission, a question, an ask) or its conversation came on that
+// client's screen. When the last lease ends (it ran out, or the client said it's not in use), what
+// waits goes at once; with none, notices go at once. So a client that vanishes (a Mac's lid closed)
+// holds nothing back for longer than a hold.
+
+// How long a notice waits while you're at a computer: what's asked of you less than news.
+export const ASK_HOLD = 30_000;
+export const NEWS_HOLD = 60_000;
+// The longest lease a client gets: one it doesn't renew is over by then.
+export const LONGEST_LEASE = 60_000;
+// Where a running bridge keeps what's held.
+const HELD_FILE = path.join(RUN, "held-notices.json");
+// A notice that couldn't go (no relay just now) is tried again this often, for this long.
+const RETRY_EVERY = 5_000;
+const TRY_FOR = 10 * 60_000;
+// Requests answered lately: one answered before its notice was made (the engine is asked who's
+// asking first) never goes.
+const MOST_ANSWERED = 200;
+const ASKED = new Set(["permission", "question", "ask"]);
+export const holdFor = category => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
+
+// What a notice is about (its conversation, or group chat), and what answering takes it back.
+const shownIn = notice => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
+const answeredBy = notice => notice?.data?.request ?? notice?.data?.ask;
+
+// What a client said (`POST kuvo/attention`'s body, or a Mac's mail): `{seconds, sessions}`, its
+// lease cut to the longest; null for what isn't that.
+export function attentionGiven(given) {
+  if (!isObject(given) || typeof given.for !== "number" || !Number.isFinite(given.for) || given.for < 0) return null;
+  if (given.sessions !== undefined && (!Array.isArray(given.sessions) || !given.sessions.every(each => typeof each === "string"))) return null;
+  return { seconds: Math.min(given.for, LONGEST_LEASE / 1000), sessions: (given.sessions ?? []).slice(0, 50) };
+}
+
+export class NoticeHold {
+  // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
+  // the clock (a test's own). `save(entries)`: what's held, kept for a bridge that starts again,
+  // which gives them back as `held` (no client is in use with it yet, so they go).
+  constructor({ send, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
+    Object.assign(this, { send, now, setTimer, clearTimer, save });
+    this.leases = new Map();
+    this.answered = [];
+    this.timer = null;
+    this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number")
+      .map(entry => ({ notice: entry.notice, at: entry.at, due: 0, seen: entry.seen === true }));
+    this.saved = JSON.stringify(this.held);
+    this.settle();
+  }
+
+  // Whether a client is in use now, and how many notices wait.
+  get inUse() {
+    const now = this.now();
+    return [...this.leases.values()].some(until => until > now);
+  }
+  get count() { return this.held.length; }
+
+  // `client` is in use for `seconds` more, with `sessions` on its screen; 0: it isn't any more.
+  attend(client, { seconds, sessions = [] }) {
+    if (seconds > 0) {
+      this.leases.set(client, this.now() + seconds * 1000);
+      const shown = new Set(sessions);
+      for (const entry of this.held) if (shown.has(shownIn(entry.notice))) entry.seen = true;
+    } else {
+      this.leases.delete(client);
+    }
+    this.settle();
+  }
+
+  // A notice for your phones: it goes now, or once its hold ends. True: it's taken.
+  tell(notice) {
+    const answer = answeredBy(notice);
+    if (answer !== undefined && this.answered.includes(answer)) return true;
+    const now = this.now();
+    this.held.push({ notice, at: now, due: this.inUse ? now + holdFor(notice.category) : now, seen: false });
+    this.settle();
+    return true;
+  }
+
+  // A request or an ask answered (or gone): its notice, waiting, never goes.
+  resolve(id) {
+    if (typeof id !== "string" || !id) return;
+    this.answered.push(id);
+    if (this.answered.length > MOST_ANSWERED) this.answered.shift();
+    this.held = this.held.filter(entry => answeredBy(entry.notice) !== id);
+    this.settle();
+  }
+
+  // Sends what's due, and wakes again when the next is (or a lease ends with something waiting).
+  settle() {
+    const now = this.now();
+    for (const [client, until] of this.leases) if (until <= now) this.leases.delete(client);
+    const waiting = this.leases.size > 0;
+    const kept = [];
+    for (const entry of this.held) {
+      // With no client in use, it's due; one that couldn't go waits for its next try.
+      if (Math.max(waiting ? entry.due : 0, entry.retry ?? 0) > now) {
+        kept.push(entry);
+        continue;
+      }
+      if (entry.seen || this.send(entry.notice)) continue;
+      if (now - entry.at < TRY_FOR) kept.push({ ...entry, retry: now + RETRY_EVERY });
+    }
+    this.held = kept;
+    const text = JSON.stringify(kept.map(({ notice, at, seen }) => ({ notice, at, seen })));
+    if (text !== this.saved) {
+      this.saved = text;
+      this.save(kept.map(({ notice, at, seen }) => ({ notice, at, seen })));
+    }
+    if (this.timer !== null) this.clearTimer(this.timer);
+    this.timer = null;
+    if (!kept.length) return;
+    const next = Math.min(...kept.map(entry => Math.max(waiting ? entry.due : 0, entry.retry ?? 0)), ...this.leases.values());
+    this.timer = this.setTimer(() => this.settle(), Math.max(0, next - now));
+  }
+}
+
 // Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
 // quotes at a line's start, emphasis around words, code ticks, a link's address.
 const plain = text => String(text ?? "")
@@ -3313,6 +3444,8 @@ async function* serverEvents(body) {
 // chat's.
 const NEWS = new Set(["permission.asked", "form.created", "session.execution.succeeded", "session.execution.failed"]);
 const GROUP_NEWS = new Set(["kuvo.group.met", "kuvo.group.done"]);
+// A permission or a form answered (or cancelled): its notice, if it waits, never goes.
+const ANSWERED = new Set(["permission.replied", "form.replied", "form.cancelled"]);
 
 // A group chat's news, as the Mac tells it: its meeting held (who spoke last, or no one could take
 // part), or a bot done with the part it took on.
@@ -3341,8 +3474,9 @@ const pause = (ms, signal) => new Promise(resolve => {
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
 // and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
-// each one's notification to `tell`, and doing what the box does as they come.
-export async function watchEvents(read, tell, signal) {
+// each one's notification to `tell` and each request answered to `answered`, and doing what the
+// box does as they come.
+export async function watchEvents(read, tell, signal, answered = () => {}) {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -3360,6 +3494,7 @@ export async function watchEvents(read, tell, signal) {
         if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
         if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
         if (GROUP_NEWS.has(event.type)) {
           const notice = groupNotice(event);
@@ -3492,16 +3627,20 @@ async function inConversation(ask, readEngine) {
 
 // What's asked, to your phones' notifications, once (again if it didn't go): each once it's still
 // asked a look later, so one a Mac answers at once (with a saved password) never buzzes a phone.
-// `tell` says whether it went. Every `every` ms, until `signal` stops it; `read`: what's asked
-// (a test's).
-export async function watchAsks(tell, { signal, every = 2000, read = readAsks } = {}) {
+// `tell` says whether it went; `answered` hears of one told that's no longer asked. Every `every`
+// ms, until `signal` stops it; `read`: what's asked (a test's).
+export async function watchAsks(tell, { signal, every = 2000, read = readAsks, answered = () => {} } = {}) {
   const told = new Set();
   let seen = new Set();
   while (!signal?.aborted) {
     try {
       const asks = read();
       const open = new Set(asks.map(ask => ask.id));
-      for (const id of told) if (!open.has(id)) told.delete(id);
+      for (const id of told) {
+        if (open.has(id)) continue;
+        told.delete(id);
+        answered(id);
+      }
       for (const ask of asks) {
         if (told.has(ask.id) || !seen.has(ask.id)) continue;
         const { ask: shown, asker } = await inConversation(ask);
@@ -4813,13 +4952,16 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
 }
 
 // What came by mail, from a Mac or a peer: a Mac's lists, or what peers tell each other
-// (`peerMail`, its agents and their letters).
-export function receiveMail(body, host, peerMail = () => {}) {
+// (`peerMail`, its agents and their letters); `attended(mac, given)`: a Mac in use, or not any
+// more (PROTOCOL.md, "kuvo/attention").
+export function receiveMail(body, host, peerMail = () => {}, attended = () => {}) {
   const link = readLink();
   const opened = openMail(body, link);
   if (!opened) return;
   const { sender, payload } = opened;
   if (macsOf(link).includes(sender.key) && (Array.isArray(payload.phones) || Array.isArray(payload.peers))) takeFromMac(payload, sender.key, host);
+  const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
+  if (attention) attended(sender.key, attention);
   peerMail(sender, payload);
 }
 
@@ -5490,14 +5632,16 @@ async function run() {
 
   // Your phones' notifications, on whichever relay connection is up: the engine's news, and what
   // agents ask for as they browse.
+  // False when it can't go now (the relay isn't there), to be tried again.
   const tellPhones = notice => {
     const link = readLink();
-    if (!current || !link?.key) return false;
+    const phones = (link?.phones ?? []).filter(phone => phone.address);
+    if (!phones.length) return true;
+    if (!current?.welcomed || !link?.key) return false;
     const json = noticeJSON(notice);
     const key = Buffer.from(link.key, "base64url");
     let sent = false;
-    for (const phone of link.phones ?? []) {
-      if (!phone.address) continue;
+    for (const phone of phones) {
       try {
         current.send(pushTo(phone, json, key));
         sent = true;
@@ -5505,10 +5649,26 @@ async function run() {
     }
     return sent;
   };
-  watchEvents(readEngineFile, tellPhones);
+  // Each held a little while a client's in use here (PROTOCOL.md, "kuvo/attention"); what's held
+  // is kept in run/held-notices.json, for the next bridge to send if this one stops first.
+  let held = [];
+  try { held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8")); } catch {}
+  const hold = new NoticeHold({
+    send: tellPhones,
+    held,
+    save: entries => {
+      try {
+        if (entries.length) writePrivate(HELD_FILE, JSON.stringify(entries));
+        else fs.rmSync(HELD_FILE, { force: true });
+      } catch {}
+    },
+  });
+  const tell = notice => hold.tell(notice);
+  const answered = id => hold.resolve(id);
+  watchEvents(readEngineFile, tell, undefined, answered);
   // The coding agents here (their sessions, and group chats that live here), through their bridge.
-  watchEvents(readBridgeFile, tellPhones);
-  watchAsks(tellPhones);
+  watchEvents(readBridgeFile, tell, undefined, answered);
+  watchAsks(tell, { answered });
   // Your other computers: this box's agents told to them while the relay connection is up (and
   // listed here, relay or not), and its agents' letters sent; without the relay a while, those
   // not sent yet go to the Mac.
@@ -5552,8 +5712,8 @@ async function run() {
       hello: { v: 1, kind: "machine", name: link.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
-      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
-      handle: engineHandler(readEngineFile, { name: link.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key)))),
+      mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given) => hold.attend(`mac:${mac}`, given)),
+      handle: engineHandler(readEngineFile, { name: link.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {},
     });
