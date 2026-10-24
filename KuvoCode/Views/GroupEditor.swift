@@ -81,15 +81,17 @@ struct GroupEditor: View {
     }
 
     /// What the bots section says: a machine's chat that can have bots of your other computers says
-    /// where each takes its turn.
+    /// where each takes its turn, and that this Mac's can't join yet (its box doesn't take a chat's
+    /// turns until it runs group chats in its coding agents' bridge, D1b step 4).
     private var botsNote: String {
         guard let machine = group.flatMap({ groups.machine(of: $0.id) }) else {
             return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
         }
+        let macBots = bots.list.contains { $0.machine == nil } ? " Bots on this Mac can join once it runs group chats too." : ""
         if choices.contains(where: { $0.machine != machine }) {
-            return "Pick two or more. They answer one at a time, each on its own computer, and each remembers the chat in its own conversation."
+            return "Pick two or more. They answer one at a time, each on its own computer, and each remembers the chat in its own conversation." + macBots
         }
-        return "Pick two or more of the bots on \(machine), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation."
+        return "Pick two or more of the bots on \(machine), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation." + macBots
     }
     private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && (meeting.map { $0.next > .now } ?? true) }
 
