@@ -583,14 +583,17 @@ itself. A host serves:
   0.9.22, with the Mac closed too). Each computer answers for its own bots; a Mac asked about a machine's
   bot answers `409 {"message"}`. A bot that works in a project uses that project's keys, and
   answers `409 {"message"}`.
-  - `GET kuvo/bots/<id>/keys` → `{"keys": [{integration, own, shared}]}`: each integration a bot can
-    have a key of its own for (those you bring a key for, `token` and `package` ones with keys),
-    whether it has its own, and whether the computer has a shared one.
+  - `GET kuvo/bots/<id>/keys` → `{"keys": [{integration, own, shared, title, symbol, keys, help?}]}`:
+    each integration a bot can have a key of its own for (those you bring a key for, `token` and
+    `package` ones with keys), whether it has its own, whether the computer has a shared one, and,
+    as `kuvo/integrations` has them, its name, symbol, the keys it takes (`[{name, label,
+    prompt}]`) and where to get them.
   - `kuvo/bots/<id>/keys/<integration>`: `GET` → `{"keys": {"<name>": "<value>"}}`, its own (`404`
     for none); `PUT {"keys": {"<name>": "<value>"}}` gives it its own, all of them (`400
     {"message"}` without), and its folder's settings name the integration's server with them, which
     connects again a moment later in its folder: `200 {integration, own, shared}`; `DELETE` takes
-    them away (`404` for none). `409 {"message"}` when its folder's settings aren't plain JSON.
+    them away (`404` for none). `409 {"message"}`, with nothing changed, when its folder's settings
+    aren't plain JSON.
   - `DELETE kuvo/bots/<id>/keys` takes away every one, as it moves off the computer.
   - Moving a bot (Move to Computer), its keys go with it: read where it lived, given where it
     goes, then taken away where it was.

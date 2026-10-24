@@ -894,7 +894,9 @@ export async function answerBotKeys(method, requestPath, body, engine, file = IN
     for (const entry of entries) for (const variable of Object.values(entry.variables)) fs.rmSync(path.join(BOT_KEYS, botVariable(variable, bot)), { force: true });
   };
   if (parts.length === 4) {
-    if (method === "GET") return { status: 200, value: { keys: keyed.map(entry => ({ integration: entry.id, own: hasOwnKeys(bot, entry), shared: shared(entry) })) } };
+    // Each with what Edit Bot shows of it: its name, symbol, the keys it takes and where to get them.
+    if (method === "GET") return { status: 200, value: { keys: keyed.map(entry => ({ integration: entry.id, own: hasOwnKeys(bot, entry), shared: shared(entry),
+      title: entry.title, symbol: entry.symbol, keys: (entry.keys ?? []).map(({ name, label, prompt }) => ({ name, label, prompt })), ...(entry.help ? { help: entry.help } : {}) })) } };
     if (method !== "DELETE") return { status: 405, value: {} };
     // All of them, as it leaves this machine: what it moved with goes with it.
     const had = keyed.filter(entry => hasOwnKeys(bot, entry));
@@ -930,6 +932,9 @@ export async function answerBotKeys(method, requestPath, body, engine, file = IN
     }
     case "DELETE": {
       if (!hasOwnKeys(bot, entry)) return { status: 404, value: {} };
+      // Its folder's settings are checked first: its key stays while they can't say it's gone.
+      const { problem } = botSettings(bot);
+      if (problem) return { status: 409, value: message(problem) };
       drop([entry]);
       const written = writeBotSettings(bot, catalog);
       reconnectForBot(engine, entry.id, bot, later);

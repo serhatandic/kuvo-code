@@ -55,7 +55,8 @@ test("given a key of its own: kept here, its folder's settings naming its server
   await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
   after(() => { engine.closeAllConnections(); engine.close(); });
 
-  assert.deepEqual((await ask("GET", "kuvo/bots/bot_scout/keys")).value, { keys: [{ integration: "todoist", own: false, shared: false }] }, "only those you bring a key for");
+  assert.deepEqual((await ask("GET", "kuvo/bots/bot_scout/keys")).value, { keys: [{ integration: "todoist", own: false, shared: false,
+    title: "Todoist", symbol: "checklist", keys: [{ name: "API_KEY", label: "API token", prompt: "From Todoist" }] }] }, "only those you bring a key for, as Edit Bot shows them");
   fs.mkdirSync(path.join(home, "box", "keys"), { recursive: true });
   fs.writeFileSync(path.join(home, "box", "keys", "KUVO_KEY_TODOIST_API_KEY"), "shared");
   assert.equal((await ask("GET", "kuvo/bots/bot_scout/keys")).value.keys[0].shared, true, "the machine's shared key");
@@ -121,6 +122,12 @@ test("a bot in a project, one that isn't here, an integration it can't have a ke
   fs.writeFileSync(folderSettings, "// mine\n{}");
   assert.equal((await ask("PUT", "kuvo/bots/bot_scout/keys/todoist", { keys: { API_KEY: "tok" } })).status, 409);
   assert.equal(fs.existsSync(own), false);
+  // One it has stays while its settings can't say it's gone.
+  fs.mkdirSync(path.dirname(own), { recursive: true });
+  fs.writeFileSync(own, "tok_kept");
+  assert.equal((await ask("DELETE", "kuvo/bots/bot_scout/keys/todoist")).status, 409);
+  assert.equal(fs.readFileSync(own, "utf8"), "tok_kept");
+  fs.rmSync(own);
   fs.rmSync(path.dirname(folderSettings), { recursive: true });
 });
 

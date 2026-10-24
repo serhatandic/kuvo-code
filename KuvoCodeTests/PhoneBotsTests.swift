@@ -73,7 +73,11 @@ import Testing
 
         let listed = try #require(try await ask(path).json?["keys"] as? [[String: Any]])
         #expect(listed.map { $0["integration"] as? String } == BotKeys.services.map(\.id))
-        #expect(listed.first { $0["integration"] as? String == service.id }?["own"] as? Bool == false)
+        let entry = listed.first { $0["integration"] as? String == service.id }
+        #expect(entry?["own"] as? Bool == false)
+        // As Edit Bot shows it: its name, symbol and the keys it takes.
+        #expect(entry?["title"] as? String == service.title && entry?["symbol"] as? String == service.symbol)
+        #expect((entry?["keys"] as? [[String: String]])?.map { $0["name"] } == Integrations.keys(of: service.way).map(\.name))
         #expect(try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [:]]).status == 400)
 
         let given = try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [name: " tok_ada "]])

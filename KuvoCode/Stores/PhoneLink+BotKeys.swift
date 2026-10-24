@@ -17,7 +17,12 @@ extension PhoneLink {
             switch method {
             case "GET":
                 let (own, shared) = await BotKeys.keychainStatus(of: bot.id)
-                return (200, Self.json(["keys": BotKeys.services.map { ["integration": $0.id, "own": own.contains($0.id), "shared": shared.contains($0.id)] }]))
+                // Each with what Edit Bot shows of it: its name, symbol, the keys it takes and where to get them.
+                return (200, Self.json(["keys": BotKeys.services.map { service in
+                    var entry: [String: Any] = ["integration": service.id, "own": own.contains(service.id), "shared": shared.contains(service.id), "keys": []]
+                    for (key, value) in Self.described(service) where ["title", "symbol", "keys", "help"].contains(key) { entry[key] = value }
+                    return entry
+                }]))
             case "DELETE":
                 // All of them, as it leaves this Mac.
                 for service in BotKeys.services { await BotKeys.remove(service, bot: bot, app: app) }
