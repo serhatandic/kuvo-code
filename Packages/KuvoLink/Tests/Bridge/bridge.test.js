@@ -68,12 +68,12 @@ test("addresses, relay messages, frames and messages match the vectors", () => {
     if (r.name === "deliver") assert.deepEqual(link.readRelay(bytes), { kind: "deliver", address: hex(r.address), payload: hex(r.payload) });
     if (r.name === "unreachable") assert.equal(link.readRelay(bytes).kind, "unreachable");
     if (r.name === "pushed") assert.equal(link.readRelay(bytes).status, r.status);
-    if (r.name === "gone") assert.deepEqual(link.readRelay(bytes), { kind: "gone", address: hex(r.address), reason: ["replaced", "left"][r.reason] });
+    if (r.name === "gone") assert.deepEqual(link.readRelay(bytes), { kind: "gone", address: hex(r.address), reason: r.reads });
   }
-  // A gone of another length, or with a reason it doesn't know, isn't one.
+  // A gone of another length isn't one.
   const gone = hex(v.relay.find(r => r.name === "gone").bytes);
   assert.equal(link.readRelay(Buffer.concat([gone, Buffer.from([0])])), null);
-  assert.equal(link.readRelay(Buffer.concat([gone.subarray(0, 17), Buffer.from([2])])), null);
+  assert.equal(link.readRelay(gone.subarray(0, 17)), null);
   for (const f of v.frames) {
     assert.equal(link.frame(f.kind, f.session, hex(f.body)).toString("hex"), f.bytes);
     assert.deepEqual(link.readFrame(hex(f.bytes)), { kind: f.kind, session: f.session, body: hex(f.body) });

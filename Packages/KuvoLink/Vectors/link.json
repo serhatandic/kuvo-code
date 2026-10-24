@@ -57,6 +57,7 @@
       "from": "relay",
       "address": "394990364febb27cad3cc4833214c295",
       "reason": 0,
+      "reads": "replaced",
       "bytes": "07394990364febb27cad3cc4833214c29500"
     },
     {
@@ -64,7 +65,16 @@
       "from": "relay",
       "address": "34dc906174094645b96aeceff36552bd",
       "reason": 1,
+      "reads": "left",
       "bytes": "0734dc906174094645b96aeceff36552bd01"
+    },
+    {
+      "name": "gone",
+      "from": "relay",
+      "address": "34dc906174094645b96aeceff36552bd",
+      "reason": 9,
+      "reads": "left",
+      "bytes": "0734dc906174094645b96aeceff36552bd09"
     }
   ],
   "frames": [

@@ -25,7 +25,7 @@ public enum RelayMessage: Equatable, Sendable {
     public enum Gone: UInt8, Sendable {
         /// A new connection took the address (a host that started again, or came back).
         case replaced = 0
-        /// Its connection closed, and nothing is at the address now.
+        /// Its connection closed, and nothing is at the address now. Any reason but 0 reads as this.
         case left = 1
     }
 
@@ -61,8 +61,8 @@ public enum RelayMessage: Equatable, Sendable {
             guard let status = PushStatus(rawValue: rest.last!) else { throw FrameError.malformed }
             self = .pushed(to: address!, status: status)
         case 7 where rest.count == LinkAddress.length + 1:
-            guard let gone = Gone(rawValue: rest.last!) else { throw FrameError.malformed }
-            self = .gone(address!, gone)
+            // A reason this doesn't know yet counts as left: the sessions are over either way.
+            self = .gone(address!, rest.last! == Gone.replaced.rawValue ? .replaced : .left)
         default: throw FrameError.malformed
         }
     }

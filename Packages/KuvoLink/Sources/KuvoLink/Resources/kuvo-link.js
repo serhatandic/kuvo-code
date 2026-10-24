@@ -257,7 +257,8 @@ export function readRelay(bytes) {
   if (kind === 2 && bytes.length >= 17) return { kind: "deliver", address, payload: bytes.subarray(17) };
   if (kind === 3 && bytes.length === 17) return { kind: "unreachable", address };
   if (kind === 6 && bytes.length === 18) return { kind: "pushed", address, status: bytes[17] };
-  if (kind === 7 && bytes.length === 18 && bytes[17] <= 1) return { kind: "gone", address, reason: bytes[17] === 0 ? "replaced" : "left" };
+  // A reason it doesn't know yet counts as left: the sessions are over either way.
+  if (kind === 7 && bytes.length === 18) return { kind: "gone", address, reason: bytes[17] === 0 ? "replaced" : "left" };
   return null;
 }
 
