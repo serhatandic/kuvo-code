@@ -33,6 +33,10 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## Subagents: two at a time
+
+Each session runs at most 2 subagents at once: workers, reviewers, and any that your subagents start themselves all count. Start another only when one finishes. A review split by area runs two reviewers at a time, and the rest wait for a free slot.
+
 ## Tests: what users rely on (strict)
 
 - **Test scenarios, not the code's insides.** A test answers this: if someone refactors this or changes something nearby, will it catch a break a user would notice? Assert what the app shows, keeps or does, never which functions ran.
@@ -221,3 +225,5 @@ Betas are manual: an annotated `vX.Y.Z-beta.N` tag on `main` (the version it lea
 - Commit in small, logical chunks with plain messages.
 - Never add `Co-Authored-By` or any other AI attribution to commits or pull requests.
 - This repo will be open source. Before committing, check for personal paths, secrets and machine-specific data. The signing team stays in the git-ignored `Config/Signing.local.xcconfig`.
+- **Carry work to main in checkpoints.** Each finished piece that passes every suite and its review is merged into main and pushed, rather than waiting on a branch. Main doesn't need to be release ready: releases and betas come only from tags, on the user's word.
+- **Delete a branch once it's merged into main**, both locally and on origin (`git branch -d`, `git push origin --delete`), and remove its worktree. `git fetch --prune` and `git branch --merged origin/main` (with `-r` for origin's) show what's left. A branch someone is still working on stays until they're done, and a branch that isn't merged is never deleted this way.
