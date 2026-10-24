@@ -66,24 +66,29 @@ async function engineWith(sessions, refusing = new Set()) {
 
 const session = (id, directory, metadata = {}) => ({ id, location: { directory }, time: { created: 1, updated: 1 }, metadata });
 
-test("a project added from any client is kept on the box, by its real path, and changed there", async () => {
+test("a project added from any client is kept on the box as it's named, and changed there", async () => {
   const handle = link.engineHandler(() => { throw new Error("no engine"); }, { name: "box" }, () => null);
   assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json, { projects: [] });
 
+  // A link stays a link: its sessions run there, by that name.
   const linked = path.join(work, "shop-link");
   fs.symlinkSync(shop, linked);
-  const added = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(linked)}`, { name: "  Shop  ", folders: [blog, shop], run: "npm run dev", terminal: " " });
+  const added = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(linked)}`, { name: "  Shop  ", folders: [blog, linked], run: "npm run dev", terminal: " " });
   assert.equal(added.status, 200);
-  assert.deepEqual(added.json.project, { directory: shop, name: "Shop", folders: [blog], run: "npm run dev" });
+  assert.deepEqual(added.json.project, { directory: linked, name: "Shop", folders: [blog], run: "npm run dev" });
 
   // Its folder's own name is no name of its own; what's not given stays.
-  const renamed = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: "shop" });
-  assert.deepEqual(renamed.json.project, { directory: shop, folders: [blog], run: "npm run dev" });
+  const renamed = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(linked)}`, { name: "shop-link" });
+  assert.deepEqual(renamed.json.project, { directory: linked, folders: [blog], run: "npm run dev" });
   assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json.projects, [renamed.json.project]);
   // Only you can read it.
   assert.equal(fs.statSync(path.join(home, "box", "projects.json")).mode & 0o777, 0o600);
 
-  assert.equal((await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(path.join(work, "nowhere"))}`, {})).status, 404);
+  // One on a drive that isn't there now stays, and a client's copy of a removed one comes as removed.
+  const away = path.join(work, "on-a-drive");
+  assert.equal((await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(away)}`, { name: "Drive", removed: true })).status, 200);
+  assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json.projects[0], { directory: away, name: "Drive", folders: [], removed: true });
+
   assert.equal((await ask(handle, "PUT", "kuvo/projects", {})).status, 400);
   assert.equal((await ask(handle, "PUT", "kuvo/projects?directory=relative/path", {})).status, 400);
   assert.equal((await ask(handle, "POST", `kuvo/projects?directory=${encodeURIComponent(shop)}`, {})).status, 405);

@@ -483,7 +483,10 @@ final class AppModel {
         // Back in the app, you may have installed an agent or signed in to one in Terminal.
         if agentsActivation == nil {
             agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.catalog.refreshAgentsIfStale() }
+                MainActor.assumeIsolated {
+                    self?.catalog.refreshAgentsIfStale()
+                    self?.workspace.reloadMachinesProjects()
+                }
             }
         }
     }

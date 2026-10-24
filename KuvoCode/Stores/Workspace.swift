@@ -665,25 +665,29 @@ final class Workspace {
     func removeProject(_ directory: String) async throws -> Int {
         let box = Self.box(of: directory)
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
-        guard projectBoxes.contains(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
-        // Until worktrees move onto this Mac's box, it doesn't know this Mac's: their sessions go here.
-        var kept = 0
+        guard Self.keepsProjects(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
+        // Until worktrees move onto this Mac's box, it doesn't know this Mac's: their sessions go
+        // here, and the project stays while one of them couldn't.
         if box == BoxClient.mac {
-            kept = await archiveHere(sessions.filter { $0.location.directory != directory }, removing: nil)
+            let kept = await archiveHere(sessions.filter { $0.location.directory != directory }, removing: nil)
+            if kept > 0 { return kept }
         }
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
         switch status {
         case 200:
-            // All of them, there: so here too, as the engine has them now.
+            // All of them, there: so here too, as the engine has them now, and it's off the list.
             for session in sessions where session.location.directory == directory { noteArchivedThere(session.id) }
+            folders.removeAll { $0 == directory }
+            UserDefaults.standard.set(folders, forKey: "projectFolders")
+            await loadProjects(on: box)
+            return 0
         case 409:
-            kept += ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["kept"] as? Int) ?? 1
             if box == BoxClient.mac { await refresh() }
+            await loadProjects(on: box)
+            return ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["kept"] as? Int) ?? 1
         default:
             throw BoxRefusal(status: status, data: data)
         }
-        await loadProjects(on: box)
-        return kept
     }
 
     /// Archived here, one by one (a box that doesn't keep its projects yet); `removing`'s folder
@@ -1039,7 +1043,6 @@ final class Workspace {
 
     private struct Empty: Decodable {}
 
-    /// What a machine's box said when it said no: what to show, and its status.
     /// A request to `machine`'s box (`MachineBox.route`): its answer, or what it said when it
     /// said no (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ machine: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
@@ -1061,9 +1064,6 @@ final class Workspace {
     /// Each box's routes (`AppModel.box`): every computer keeps its own projects (PROTOCOL.md,
     /// "Projects"), which any client changes. What's here is a copy of theirs, to show at once.
     @ObservationIgnored var boxes: ((String) -> BoxClient?)?
-    /// The boxes whose projects have been read from them: changes to theirs go there. One that
-    /// can't keep them yet (a machine on an older Kuvo Code until it updates) keeps its here.
-    @ObservationIgnored private(set) var projectBoxes: Set<String> = []
 
     /// A project as its box keeps it, its folders as the box names them.
     struct BoxProject: Codable, Equatable {
@@ -1088,23 +1088,33 @@ final class Workspace {
         text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")) ?? text
     }
 
+    /// Whether `box` keeps its projects: once it has answered, it does from then on, and what's
+    /// changed here goes there. Before (a machine on an older Kuvo Code), they're kept here.
+    static func keepsProjects(_ box: String) -> Bool { UserDefaults.standard.bool(forKey: "projectsOnBox." + box) }
+
+    /// Projects changed here and not yet taken by their box (it was away, or not up yet), by
+    /// folder: sent as they are here when it answers, and shown as they are here meanwhile.
+    private var unsentProjects: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "projectsUnsent") ?? []) {
+        didSet { UserDefaults.standard.set(Array(unsentProjects).sorted(), forKey: "projectsUnsent") }
+    }
+
     /// `box`'s projects, read from it and shown: those it hasn't removed in the sidebar, each with
-    /// its settings (a removed one's too, for when a session brings it back). The first time, what
-    /// was kept here for it before boxes kept their own goes there. A box that can't keep them yet
-    /// is left as it was.
+    /// its settings (a removed one's too, for when a session brings it back). What's changed here
+    /// and not sent yet goes first; the first time, everything kept here for it before boxes kept
+    /// their own. A box that can't keep them yet, or isn't answering, is left as it was.
     func loadProjects(on box: String) async {
-        guard let client = boxes?(box), var listed = await Self.projects(of: client) else { return }
-        let moved = "projectsOnBox." + box
-        if !UserDefaults.standard.bool(forKey: moved) {
-            for folder in folders where Self.box(of: folder) == box && !listed.contains(where: { Self.here($0.directory, on: box) == folder }) {
-                _ = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: Self.boxBody(settings[folder] ?? ProjectSettings()))
+        await inTurn {
+            guard let client = self.boxes?(box), await Self.projects(of: client) != nil else { return }
+            if !Self.keepsProjects(box) {
+                // Its projects, and those it removed (their settings), as they were kept here.
+                let kept = Set(self.folders.filter { Self.box(of: $0) == box }).union(self.settings.keys.filter { Self.box(of: $0) == box })
+                self.unsentProjects.formUnion(kept)
+                UserDefaults.standard.set(true, forKey: "projectsOnBox." + box)
             }
-            guard let all = await Self.projects(of: client) else { return }
-            listed = all
-            UserDefaults.standard.set(true, forKey: moved)
+            await self.send(on: box, through: client)
+            guard let listed = await Self.projects(of: client) else { return }
+            self.take(listed, from: box)
         }
-        projectBoxes.insert(box)
-        take(listed, from: box)
     }
 
     /// This Mac's projects as its box has them, from now on: each change, wherever it was made
@@ -1115,8 +1125,8 @@ final class Workspace {
                 await loadProjects(on: BoxClient.mac)
                 do {
                     for try await line in client.follow("kuvo/projects/events") {
-                        guard projectBoxes.contains(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
-                        take(listed.projects, from: BoxClient.mac)
+                        guard Self.keepsProjects(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        await inTurn { self.take(listed.projects, from: BoxClient.mac) }
                     }
                 } catch {}
             }
@@ -1129,17 +1139,29 @@ final class Workspace {
         try? await client.value(BoxProjects.self, "GET", "kuvo/projects").projects
     }
 
-    /// `listed` as `box`'s, here, in place of what was known of them.
+    /// What's changed here for `box`, sent as it is here: taken off the list once the box has it,
+    /// or refuses it for good; kept to send again when it's away.
+    private func send(on box: String, through client: BoxClient) async {
+        for folder in unsentProjects.filter({ Self.box(of: $0) == box }).sorted() {
+            let body = Self.boxBody(settings[folder] ?? ProjectSettings(), removed: !folders.contains(folder))
+            guard let (status, _) = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: body) else { continue }
+            if (200..<300).contains(status) || status == 400 { unsentProjects.remove(folder) }
+        }
+    }
+
+    /// `listed` as `box`'s, here, in place of what was known of them; what's changed here and not
+    /// sent yet stays as it is here.
     private func take(_ listed: [BoxProject], from box: String) {
-        let theirs = listed.filter { $0.removed != true }.map { Self.here($0.directory, on: box) }
+        let unsent = unsentProjects.filter { Self.box(of: $0) == box }
+        let theirs = listed.filter { $0.removed != true }.map { Self.here($0.directory, on: box) }.filter { !unsent.contains($0) }
         // New ones first, as one added here is; the rest where they were.
-        let updatedFolders = theirs.filter { !folders.contains($0) } + folders.filter { Self.box(of: $0) != box || theirs.contains($0) }
+        let updatedFolders = theirs.filter { !folders.contains($0) } + folders.filter { Self.box(of: $0) != box || theirs.contains($0) || unsent.contains($0) }
         if updatedFolders != folders {
             folders = updatedFolders
             UserDefaults.standard.set(folders, forKey: "projectFolders")
         }
-        var updated = settings.filter { Self.box(of: $0.key) != box }
-        for project in listed {
+        var updated = settings.filter { Self.box(of: $0.key) != box || unsent.contains($0.key) }
+        for project in listed where !unsent.contains(Self.here(project.directory, on: box)) {
             let kept = ProjectSettings(name: project.name, folders: (project.folders ?? []).map { Self.here($0, on: box) }, run: project.run, terminal: project.terminal)
             if kept != ProjectSettings() { updated[Self.here(project.directory, on: box)] = kept }
         }
@@ -1149,37 +1171,48 @@ final class Workspace {
         }
     }
 
-    /// What a box is given for a project's settings.
-    private static func boxBody(_ project: ProjectSettings) -> Data? {
-        struct Body: Encodable { var name: String?; var folders: [String]; var run: String?; var terminal: String? }
-        let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "")
+    /// What a box is given for a project's settings: all of them, so it ends up as it is here.
+    private static func boxBody(_ project: ProjectSettings, removed: Bool) -> Data? {
+        struct Body: Encodable { var name: String; var folders: [String]; var run: String; var terminal: String; var removed: Bool }
+        let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "", removed: removed)
         return try? JSONEncoder().encode(body)
     }
 
-    /// The project at `directory` as it is here, on its box, when its box keeps its projects.
+    /// The project at `directory`, changed here, on its way to its box (when it answers, if it's
+    /// away now); a box that doesn't keep its projects yet gets it with the rest the first time.
     private func keepOnBox(_ directory: String) {
         let box = Self.box(of: directory)
-        guard projectBoxes.contains(box), let client = boxes?(box) else { return }
-        let body = Self.boxBody(settings[directory] ?? ProjectSettings())
-        // After the one before, so the box ends up as it is here.
-        let previous = projectWrites
-        projectWrites = Task {
+        guard Self.keepsProjects(box), boxes != nil else { return }
+        unsentProjects.insert(directory)
+        projectTurn = Task { [previous = projectTurn] in
             await previous?.value
-            do {
-                let (status, data) = try await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
-                guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
-            } catch {
-                Modal.show(error)
-            }
+            guard let client = self.boxes?(box) else { return }
+            await self.send(on: box, through: client)
         }
     }
 
-    /// The last change on its way to a box, after those before it.
-    @ObservationIgnored private var projectWrites: Task<Void, Never>?
+    /// What's done with boxes' projects, one after another, so a list read never undoes a change
+    /// on its way, and changes reach a box in the order they were made.
+    @ObservationIgnored private var projectTurn: Task<Void, Never>?
 
-    /// Once the changes on their way to boxes are there.
+    private func inTurn(_ work: @escaping () async -> Void) async {
+        let turn = Task { [previous = projectTurn] in
+            await previous?.value
+            await work()
+        }
+        projectTurn = turn
+        await turn.value
+    }
+
+    /// Your machines' projects read again (back in the app: a phone may have changed them; a
+    /// machine's aren't followed as this Mac's are).
+    func reloadMachinesProjects() {
+        for machine in connectedMachines { Task { await loadProjects(on: machine) } }
+    }
+
+    /// Once the changes on their way to boxes have gone (or are waiting for a box that's away).
     func projectsWritten() async {
-        await projectWrites?.value
+        await projectTurn?.value
     }
 
     private func saveWorktrees() {
@@ -1730,10 +1763,14 @@ final class Workspace {
         SessionCopies.removeSessions(of: machine)
         remoteSessions = remoteSessions.filter { $0.value.machine != machine }
         Self.saveRemoteSessions(remoteSessions)
+        // Its projects are the other's now: on their way to its box, if it keeps its own.
+        let movedProjects = Set(folders.filter { RemoteFolder.machine(of: $0) == machine } + settings.keys.filter { RemoteFolder.machine(of: $0) == machine }).map(moved)
         var kept: [String] = []
         for folder in folders.map(moved) where !kept.contains(folder) { kept.append(folder) }
         folders = kept
         UserDefaults.standard.set(folders, forKey: "projectFolders")
+        unsentProjects.subtract(unsentProjects.filter { RemoteFolder.machine(of: $0) == machine })
+        if Self.keepsProjects(other) { unsentProjects.formUnion(movedProjects) }
         // A project added under both names keeps the other's settings, its worktrees theirs.
         func isOthers(_ folder: String) -> Bool { RemoteFolder.machine(of: folder) != machine }
         settings = Dictionary(settings.map { folder, project in

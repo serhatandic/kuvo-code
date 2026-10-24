@@ -93,6 +93,21 @@ final class BoxProcess {
         }
     }
 
+    /// Started again after it stopped for good (Try Again where it shows).
+    func startAgain() async {
+        guard server == nil, let runtime else { return }
+        restarts.removeAll()
+        await launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
+    }
+
+    #if DEBUG
+    /// KUVO_DEMO_BOX_FAILED: as if it had stopped for good, to see how that shows.
+    func showFailure(_ text: String) {
+        stop()
+        failure = text
+    }
+    #endif
+
     func stop() {
         server?.stop()
         server = nil

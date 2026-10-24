@@ -86,3 +86,15 @@ test("a stream goes as it comes, and stops when the client goes", async t => {
   await reader.cancel();
   while (!stopped) await new Promise(resolve => setImmediate(resolve));
 });
+
+test("the app's own requests aren't a phone using the box; a phone's, through the Mac, are", async t => {
+  const server = link.serveBox("pw");
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/kuvo/projects`;
+  fs.rmSync(link.SEEN_FILE, { force: true });
+  assert.equal((await fetch(url, { headers: { authorization: auth("pw"), "x-kuvo-from": "app" } })).status, 200);
+  assert.equal(fs.existsSync(link.SEEN_FILE), false, "the app asking");
+  assert.equal((await fetch(url, { headers: { authorization: auth("pw") } })).status, 200);
+  assert.equal(fs.existsSync(link.SEEN_FILE), true, "a phone asking");
+});

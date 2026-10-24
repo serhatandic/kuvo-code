@@ -1048,16 +1048,19 @@ machine; this Mac's box's own on a Mac), and any client reads and changes them t
 app's sidebar and Edit Project as a phone does. A project's folder is in the query, as the box
 names it (a `/` can't be in a part of the path). A Mac answers from its box; a machine from bridge
 0.9.33 (`projects` in `features`). Before, a Mac kept a machine's projects itself, and moves them
-there the first time the machine keeps its own.
+there, with the settings of those it removed, the first time the machine answers; what it changes
+while a box is away goes there when it's back.
 
 - `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?}]}`,
   newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
   `removed`, one Remove Project took off the list, kept with its settings for when one of its
   sessions is brought back (a client shows it then, and not before).
-- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal}` adds the
-  project or changes what's given (an empty string is none), and brings a removed one back:
-  `200 {project}`. The folder must be one on the box (404 `{"message"}` otherwise), and is kept by
-  its real path, unless it's on the list already as it was given.
+- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
+  adds the project or changes what's given (an empty string is none), and brings a removed one
+  back unless `removed` is true (a client's copy of one it removed, with its settings):
+  `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
+  as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
+  that's away).
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
   too, archived on the engine and the coding agents' bridge, older ones included, then it's
   marked `removed`. `200 {archived}`; `409 {message, archived, kept}` when some couldn't be

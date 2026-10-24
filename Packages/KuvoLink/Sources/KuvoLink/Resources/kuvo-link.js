@@ -1032,7 +1032,9 @@ export function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOC
  * is one, its other folders without its own. */
 function keptProject(directory, given, before = {}) {
   const project = { ...before, directory, folders: before.folders ?? [] };
-  delete project.removed;
+  // Brought back, unless it's sent as removed (a client's copy of one, with its settings).
+  if (given.removed === true) project.removed = true;
+  else delete project.removed;
   const text = value => (typeof value === "string" && value.trim() ? value.trim() : undefined);
   if ("name" in given) project.name = text(given.name) === path.basename(directory) ? undefined : text(given.name);
   if ("folders" in given) project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter(folder => typeof folder === "string" && path.isAbsolute(folder) && folder !== directory))];
@@ -1088,7 +1090,7 @@ async function archiveProject(directory, readEngine, readBridge, signal) {
 }
 
 /** `kuvo/projects`: the box's projects, read and changed by any client, as Settings and the
- * sidebar change them on a Mac. */
+ * sidebar change them on a Mac. A folder is kept as the client names it. */
 export async function* answerProjects(request, readEngine = readEngineFile, readBridge = readBridgeFile, signal, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const [route, query = ""] = request.path.split("?");
@@ -1115,19 +1117,12 @@ export async function* answerProjects(request, readEngine = readEngineFile, read
   if (method === "PUT") {
     const body = parsed(request.body) ?? {};
     if (!isObject(body)) return yield* json(400, { message: "That isn’t a project." });
-    let directory;
-    try {
-      directory = fs.realpathSync(given);
-      if (!fs.statSync(directory).isDirectory()) throw new Error();
-    } catch {
-      return yield* json(404, { message: "That folder isn’t there." });
-    }
-    // Kept as it was named when it's on the list already that way (a link followed or not).
-    const known = readProjects(file).find(each => each.directory === given) ? given : directory;
+    // Kept as it's named: its sessions run there, by that name (a link followed would be another
+    // project), and one whose drive isn't there now stays.
     let project;
     changeProjects(projects => {
-      const before = projects.find(each => each.directory === known);
-      project = keptProject(known, body, before);
+      const before = projects.find(each => each.directory === given);
+      project = keptProject(given, body, before);
       return before ? projects.map(each => (each === before ? project : each)) : [project, ...projects];
     }, file, lock);
     return yield* json(200, { project });
@@ -1635,8 +1630,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
   };
   return async function* (request, phone, signal) {
     const text = (status, words) => [{ head: { status, headers: { "content-type": "text/plain" } } }, { body: Buffer.from(words) }];
-    // A phone using this machine, whatever it asks.
-    phoneHere();
+    // A phone using this machine, whatever it asks; not the app beside a Mac's own box.
+    if (!request.fromApp) phoneHere();
     // Which route answers, by its path alone: a query string never changes it (as on a Mac).
     const route = request.path.split("?")[0];
     if (route === "kuvo/info") {
@@ -5758,6 +5753,8 @@ function runs(pid, name) {
   try {
     return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(name);
   } catch {
+    // A Mac's own box: no /proc there, so a process that's alive is taken as it (the app removes
+    // its records as what they name stops).
     return !fs.existsSync("/proc");
   }
 }
@@ -6047,7 +6044,9 @@ export function serveBox(password, handle = engineHandler(readEngineFile, { name
     response.on("close", () => abort.abort());
     let headed = false;
     try {
-      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks) }, {}, abort.signal)) {
+      // The app's own (the Mac's link says which aren't a phone's), not a phone using this box.
+      const fromApp = request.headers["x-kuvo-from"] === "app";
+      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal)) {
         if (abort.signal.aborted) break;
         if (part.head && !headed) {
           response.writeHead(part.head.status, part.head.headers ?? {});

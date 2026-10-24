@@ -165,6 +165,12 @@ struct SidebarView: View {
             try? await Task.sleep(for: .seconds(4))
             removingProject = workspace.projects.first { $0.name == name }
         }
+        // KUVO_DEMO_BOX_FAILED: this Mac's box as if it had stopped for good, with that reason.
+        .task {
+            guard let text = ProcessInfo.processInfo.environment["KUVO_DEMO_BOX_FAILED"] else { return }
+            try? await Task.sleep(for: .seconds(8))
+            app.box.showFailure(text)
+        }
         // KUVO_DEMO_SEARCH: text in the sidebar's search field.
         .onAppear { if let text = ProcessInfo.processInfo.environment["KUVO_DEMO_SEARCH"] { search = text } }
         // KUVO_DEMO_RENAME=sidebar: the session in view, renamed in its row.
@@ -307,6 +313,22 @@ struct SidebarView: View {
             .accessibilityLabel("New Project")
         }
         if !isFolded("projects") {
+            // This Mac's box keeps its projects: stopped, nothing here can be saved until it's back.
+            if box.machine == nil, let failure = app.box.failure {
+                SidebarRow(isSelected: false, action: { Task { await app.box.startAgain() } }) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                } title: {
+                    Text("Projects can’t be saved")
+                        .foregroundStyle(.secondary)
+                } accessory: {
+                    Text("Try Again")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.tint)
+                }
+                .help("What keeps your projects on this Mac stopped. \(failure)")
+                .accessibilityLabel("Projects can’t be saved. Try Again")
+            }
             if workspace.isLoaded && projects.isEmpty {
                 Text(box.machine == nil ? "Open a folder for the agent to work in." : "Open a folder on \(boxName(box)) for the agent to work in.")
                     .font(.system(size: 13))

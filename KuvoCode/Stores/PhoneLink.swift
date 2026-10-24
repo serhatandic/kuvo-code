@@ -618,7 +618,9 @@ final class PhoneLink {
         if Self.boxRoutes.contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
-            return EngineRoutes.forward(request, to: base, password: box.password, allowing: { path, _ in path.hasPrefix("kuvo/") })
+            // The app's own requests (no phone asking) say so: they aren't a phone using the box.
+            return EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
+                                        allowing: { path, _ in path.hasPrefix("kuvo/") })
         }
         var routed = request
         routed.path = route

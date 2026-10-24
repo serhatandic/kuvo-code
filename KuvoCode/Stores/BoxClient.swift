@@ -57,6 +57,8 @@ struct BoxClient: Sendable {
                             }
                         }
                     }
+                    // Refused with nothing said: still refused, not a stream that ended.
+                    guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: buffer) }
                     if !buffer.isEmpty { continuation.yield(buffer) }
                     continuation.finish()
                 } catch {
