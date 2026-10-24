@@ -107,11 +107,35 @@ export function receive(parts: PeerParts, from: string, mail: SeatMail) {
   else parts.server.take(from, mail)
 }
 
+/**
+ * A letter to `to` that the link gave up (two days online without that computer saying it has it,
+ * too big, or turned down), as it went at `at`. Nothing given up is final: what still matters goes
+ * again as a new letter while `to` is one of your computers (a part, its report, a seat gone, what a
+ * bot remembers as it is now), and what doesn't is let go; a part given to a computer that isn't
+ * one of yours any more fails, and still takes its report should it come after all.
+ */
+export function gaveUp(parts: PeerParts, to: string, mail: SeatMail, at?: number) {
+  switch (mail.kind) {
+    case "work":
+      return parts.runner.workGaveUp(to, mail.work, at)
+    case "report":
+      return parts.server.gaveUp(to, mail, parts.directory.isPeer(to))
+    case "memory":
+      return parts.runner.memoryGaveUp(to, mail.memory)
+    case "drop":
+      if (typeof mail.bot === "string" && typeof mail.chat === "string" && parts.directory.takesSeats(to)) {
+        void parts.directory.home(to).drop(mail.seat, mail.agents, { bot: mail.bot, chat: mail.chat })
+      }
+      return
+  }
+}
+
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })
 
 /**
- * `/api/kuvo/peers[/mail|/sent]`, for the box's link: what goes (`GET mail`, followed), what it has
- * taken of what mustn't be lost (`POST sent {ids}`), what came (`POST mail {from, mail}`), and who
+ * `/api/kuvo/peers[/mail|/sent|/gaveup]`, for the box's link: what goes (`GET mail`, followed), what it has
+ * taken of what mustn't be lost (`POST sent {ids}`), what of that it gave up (`POST gaveup {to,
+ * mail, at}`), what came (`POST mail {from, mail}`), and who
  * your other computers and their bots are (`PUT {boxes, bots}`). 404 where group chats don't run.
  */
 export async function peerRoutes(parts: PeerParts | undefined, method: string, path: string[], body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
@@ -122,6 +146,14 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
     const given = await body().catch(() => undefined)
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     receive(parts, given.from, given.mail)
+    return json({})
+  }
+  if (what === "gaveup" && method === "POST") {
+    const given = await body().catch(() => undefined)
+    if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
+    // Not before the link has said who your computers are: what comes of it depends on that.
+    if (!parts.directory.told) return json({ message: "Not yet." }, 503)
+    gaveUp(parts, given.to, given.mail, typeof given.at === "number" ? given.at : undefined)
     return json({})
   }
   if (what === "sent" && method === "POST") {
@@ -139,6 +171,8 @@ export class LinkDirectory implements PeerDirectory {
   private boxes = new Map<string, { name: string; seats: boolean }>()
   private listed: PeerBot[] = []
   private homes = new Map<string, RemoteHome>()
+  /** Whether the link has said who your computers are since this started. */
+  told = false
 
   constructor(
     private readonly transport: PeerTransport,
@@ -153,6 +187,7 @@ export class LinkDirectory implements PeerDirectory {
       if (box && typeof box.key === "string" && box.key) boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true })
     }
     this.boxes = boxes
+    this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))
       .map((bot: any) => ({
@@ -176,6 +211,11 @@ export class LinkDirectory implements PeerDirectory {
 
   takesSeats(box: string): boolean {
     return this.boxes.get(box)?.seats === true
+  }
+
+  /** Whether it's one of your computers now. */
+  isPeer(box: string): boolean {
+    return this.boxes.has(box)
   }
 
   home(box: string): RemoteHome {

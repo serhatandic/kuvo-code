@@ -18,6 +18,7 @@ import {
   ring,
   said,
   splitText,
+  chatBudget,
   chatText,
   seatStartText,
   guestText,
@@ -34,7 +35,7 @@ import {
   type GroupTask,
   type Meeting,
 } from "./rules"
-import type { MemoryGiven, PeerDirectory } from "./peer"
+import type { MemoryGiven, PeerDirectory, WorkGiven } from "./peer"
 import { Cancelled, Seats, type ChatContext, type SeatHome, type SeatResult, type SeatState } from "./seat"
 import type { GroupStore, Kept, MachineBot, Status } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
@@ -48,7 +49,7 @@ export const recapMailBytes = 24_000
 export const transcriptMailBytes = 200_000
 
 /** `text`, cut to at most `most` bytes of UTF-8, at a character's end. */
-function prefixBytes(text: string, most: number): string {
+export function prefixBytes(text: string, most: number): string {
   const bytes = new TextEncoder().encode(text)
   if (bytes.length <= most) return text
   return new TextDecoder().decode(bytes.subarray(0, Math.max(0, most))).replace(/�+$/, "")
@@ -715,6 +716,8 @@ export class GroupRunner {
         },
         (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }),
         stopped.signal,
+        // Too big to send to its computer: what it hasn't heard, its latest within what a chat gives a bot.
+        { shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named(unheard), chatBudget) : undefined },
       )
       if (left()) return "absent"
       if (!result.ok) {
@@ -776,7 +779,7 @@ export class GroupRunner {
 
   /** What a bot's turn says of how it goes, kept in the chat: its seat, what it's heard, what it's doing. */
   private heardOf(state: SeatState, turn: { id: string; botID: string; box?: string; guest: boolean; run?: number; last?: string; retracted?: string; own: AbortController }) {
-    if (state.phase === "taken") return
+    if (state.phase === "taken" || state.phase === "working" || state.phase === "anew") return
     const { id, botID } = turn
     const live = this.state(id)
     if (state.phase === "activity") {
@@ -979,7 +982,9 @@ export class GroupRunner {
     const peers = this.context.peers
     if (bot.box && peers) {
       if (!peers.takesSeats(bot.box)) return this.fail(taskID, wrapUpID, id, `${peers.name(bot.box)} needs an update to take part`)
-      peers.home(bot.box).work({ task: taskID, wrapUp: wrapUpID, chat: id, bot: bot.id, text, started: task.started ?? stamp() })
+      if (!peers.home(bot.box).work({ task: taskID, wrapUp: wrapUpID, chat: id, bot: bot.id, text, started: task.started ?? stamp() })) {
+        return this.fail(taskID, wrapUpID, id, `its part is too big to send to ${peers.name(bot.box)}`)
+      }
       this.changeTask(taskID, wrapUpID, id, (part) => (part.prompt = `peer:${bot.box}`))
       return
     }
@@ -1023,13 +1028,23 @@ export class GroupRunner {
     if (result) this.finish(taskID, wrapUpID, id, task.bot, result)
   }
 
-  /** A part's report (or why it couldn't be done), back in the chat; reported meanwhile (or stopped), not again. */
+  /**
+   * A part's report (or why it couldn't be done), back in the chat; reported meanwhile (or stopped),
+   * not again. One failed only as its letter was given up (`lost`) still takes its report.
+   */
   private finish(taskID: string, wrapUpID: string, id: string, botID: string, result: SeatResult) {
-    if (this.taskState(taskID, wrapUpID, id)?.state !== "working") return
-    if (!result.ok) return this.fail(taskID, wrapUpID, id, result.why)
+    const task = this.taskState(taskID, wrapUpID, id)
+    const late = task?.state === "failed" && task.lost === true
+    if (task?.state !== "working" && !late) return
+    if (!result.ok) {
+      // Failed already, said in the chat: not said twice.
+      if (late) return this.changeTask(taskID, wrapUpID, id, (part) => delete part.lost)
+      return this.fail(taskID, wrapUpID, id, result.why)
+    }
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "done"
       part.finished = stamp()
+      delete part.lost
     })
     this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp(), kind: "message", report: taskID }, id)
     this.startReady(wrapUpID, id)
@@ -1044,11 +1059,43 @@ export class GroupRunner {
     this.finish(report.task, report.wrapUp, report.chat, task.bot, report.result)
   }
 
-  /** `thenOthers`: parts that waited on it fail too. */
-  private fail(taskID: string, wrapUpID: string, id: string, why: string, thenOthers = true) {
+  /** When this started: a part's letter that went before it was given again since (`resumeWork`). */
+  private readonly startedAt = Date.now()
+
+  /**
+   * A part's letter to another computer given up by the link (two days online without a word from
+   * it). While that computer still takes a chat's work, the part goes again, as a new letter (taken
+   * there once, however often it's given); one that isn't one of yours any more (or can't take it)
+   * fails, said in the chat, rather than working forever, and still takes its report should it come.
+   * Not for a letter that went before this started (`at`): the part went again as it started.
+   */
+  workGaveUp(to: string, work: WorkGiven, at?: number) {
+    if (typeof at === "number" && at < this.startedAt) return
+    const task = this.taskState(work.task, work.wrapUp, work.chat)
+    if (!task || task.state !== "working" || task.prompt !== `peer:${to}`) return
+    const peers = this.context.peers
+    if (peers?.takesSeats(to) && peers.home(to).work(work)) return
+    this.fail(work.task, work.wrapUp, work.chat, `${peers?.name(to) ?? "its computer"} couldn’t be reached for two days, so it was given up`, true, true)
+  }
+
+  /**
+   * What a bot on another computer remembers of a chat here, its letter given up: told again as it
+   * is now (or that it forgets the chat), while the bot still lives there and that computer takes it.
+   */
+  memoryGaveUp(to: string, memory: MemoryGiven) {
+    const peers = this.context.peers
+    if (this.member(memory.bot)?.box !== to || !peers?.takesSeats(to)) return
+    const kept = this.chats.get(memory.chat)
+    if (kept?.status === "active" && kept.group.members.includes(memory.bot) && kept.messages.length > 0) this.rememberThere(memory.bot, to, { changed: memory.chat })
+    else peers.home(to).remember({ chat: memory.chat, bot: memory.bot, at: this.memoryTime(), forget: true })
+  }
+
+  /** `thenOthers`: parts that waited on it fail too. `lost`: as its letter was given up, so its report is still taken. */
+  private fail(taskID: string, wrapUpID: string, id: string, why: string, thenOthers = true, lost = false) {
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed"
       part.finished = stamp()
+      if (lost) part.lost = true
     })
     const who = this.member(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot"
     const reasonText = trim(why).replace(/^\.+|\.+$/g, "")
@@ -1067,7 +1114,9 @@ export class GroupRunner {
           if (task.prompt?.startsWith("peer:")) {
             const text = this.partText(task.id, message.id, id)
             const box = task.prompt.slice("peer:".length)
-            if (text && this.context.peers) this.context.peers.home(box).work({ task: task.id, wrapUp: message.id, chat: id, bot: task.bot, text, started: task.started ?? stamp() })
+            if (text && this.context.peers && !this.context.peers.home(box).work({ task: task.id, wrapUp: message.id, chat: id, bot: task.bot, text, started: task.started ?? stamp() })) {
+              this.fail(task.id, message.id, id, `its part is too big to send to ${this.context.peers.name(box)}`)
+            }
           } else if (!task.prompt) {
             this.fail(task.id, message.id, id, "Kuvo Code stopped before it reached the bot")
           } else {

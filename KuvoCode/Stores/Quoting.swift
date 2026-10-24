@@ -51,17 +51,25 @@ enum Quoting {
     }
 
     /// The message to send: each quote you're replying to, as Markdown, with your answer to it
-    /// under it, then the rest of your words.
+    /// under it, then the rest of your words: after a line of their own (`ownWords`) when the last
+    /// quote has an answer, so the two stay apart; as its answer when it has none.
     static func message(quotes: [Drafts.Quote], text: String) -> String {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lastAnswered = quotes.last.map { !$0.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
         let parts = quotes.flatMap { quote in
             [message(quote: quote.text, text: ""), quote.response.trimmingCharacters(in: .whitespacesAndNewlines)]
-        } + [text.trimmingCharacters(in: .whitespacesAndNewlines)]
+        } + (lastAnswered && !words.isEmpty ? [ownWords] : []) + [words]
         return parts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
+    /// The line between your answers to quotes and the words after them: a Markdown rule, which
+    /// the model reads as a break.
+    static let ownWords = "---"
+
     /// A message as what it quotes and what it says: each quote (lines of "> ", as `message`
     /// writes them, starting the message or after a blank line, and ending at one) with the words
-    /// after it, in order; the first part's quote is nil when it starts with words. Lines in a code
+    /// after it, in order; the first part's quote is nil when it starts with words, and so is a
+    /// last part of words after an answer (after `ownWords`, after a blank line). Lines in a code
     /// block, or like ">>> x" or a merge marker, are words.
     static func segments(_ message: String) -> [(quote: String?, text: String)] {
         var segments: [(quote: String?, text: String)] = []
@@ -85,6 +93,9 @@ enum Quoting {
                 if !quoting { close() }
                 quoting = true
                 quote = (quote ?? []) + [line == ">" ? "" : String(line.dropFirst(2))]
+            } else if !inCode, line == ownWords, previousBlank, quote != nil, !quoting {
+                // The end of the answers: the words after are the message's own.
+                close()
             } else {
                 // Anything else ends a quote; the words after it are its answer.
                 quoting = false
@@ -105,10 +116,10 @@ enum Quoting {
     /// the words that came first or last.
     static func draft(of message: String) -> (quotes: [Drafts.Quote], text: String) {
         var quotes: [Drafts.Quote] = []
-        var text = ""
+        var words: [String] = []
         for segment in segments(message) {
-            if let quote = segment.quote { quotes.append(Drafts.Quote(text: quote, response: segment.text)) } else { text = segment.text }
+            if let quote = segment.quote { quotes.append(Drafts.Quote(text: quote, response: segment.text)) } else { words.append(segment.text) }
         }
-        return (quotes, text)
+        return (quotes, words.filter { !$0.isEmpty }.joined(separator: "\n\n"))
     }
 }

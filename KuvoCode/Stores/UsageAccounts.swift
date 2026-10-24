@@ -41,7 +41,7 @@ final class UsageAccounts {
                 return HostCredential(integrationID: credential.integrationID, secret: secret,
                                       signedIn: Self.isSignIn(credential),
                                       accountID: credential.value.metadata?["accountID"]?.string)
-            })
+            } + [Self.cursorAgentKey()].compactMap { $0 })
             engineProviders = Set(credentials.filter(\.active).compactMap {
                 Self.usageProvider(for: $0.integrationID, signedIn: Self.isSignIn($0))
             })
@@ -67,6 +67,8 @@ final class UsageAccounts {
         guard !accounts.isEmpty else { return }
         let providers = Set(accounts.filter(\.isConnected).compactMap { Self.usageProvider(forAgent: $0.id) })
         guard providers != agentProviders else { return }
+        // A coding agent signed in (or out) of Cursor: the panel reads it with what it has now.
+        if providers.contains("cursor") != agentProviders.contains("cursor") { Task { await sync() } }
         agentProviders = providers
         UserDefaults.standard.set(providers.sorted(), forKey: Self.agentsKey)
         publish()
@@ -93,6 +95,21 @@ final class UsageAccounts {
         case "antigravity": "antigravity"
         default: nil
         }
+    }
+
+    /// Cursor's sign-in for the coding agents (the agents bridge's, yours or the first account
+    /// you added), for the panel to read Cursor's usage with when the Cursor app isn't signed in.
+    /// Read where the bridge keeps it, while it's good.
+    static func cursorAgentKey(in home: URL = OutsideAgents.home, now: Date = .now) -> HostCredential? {
+        struct Saved: Decodable { var apiKey: String?; var apiKeyExpiresAtMs: Double? }
+        let accounts = home.appending(path: "cursor/accounts")
+        let added = ((try? FileManager.default.contentsOfDirectory(atPath: accounts.path)) ?? []).sorted().map { accounts.appending(path: "\($0)/auth.json") }
+        for file in [home.appending(path: "cursor/auth.json")] + added {
+            guard let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Saved.self, from: data),
+                  let key = saved.apiKey, !key.isEmpty, (saved.apiKeyExpiresAtMs ?? .infinity) > now.timeIntervalSince1970 * 1000 else { continue }
+            return HostCredential(integrationID: HostCredential.cursorAgent, secret: key, signedIn: true)
+        }
+        return nil
     }
 
     private static func isSignIn(_ credential: CredentialSecret) -> Bool {

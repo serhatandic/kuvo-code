@@ -509,7 +509,8 @@ describe("a group chat on any computer", () => {
     const asked = (server: string, form: string) => ({ id: form, sessionID: "global", title: "", fields: [], metadata: { kind: "mcp-elicitation", server, message: "Which notebook?" } })
     engine.shared.set(folder, [asked("notes", "frm_notes"), asked("calendar", "frm_calendar")])
     engine.running.set("Ada", "notes_search")
-    engine.slow.set("Ada", 1500)
+    // At work until what was asked is looked at: on the test's word, not a clock's.
+    engine.held.add("Ada")
     engine.lines = { Ada: ["Found it."], Ben: [] }
     groups.put(group(), [], "active", false)
     groups.send(id, "Look it up")
@@ -518,6 +519,7 @@ describe("a group chat on any computer", () => {
     expect(dismissed.directory).toBe(folder)
     // Another server's, whose tool isn't running in the seat, isn't the seat's to turn down.
     expect(engine.requests.some((request) => request.path === "/api/session/global/form/frm_calendar")).toBe(false)
+    engine.release("Ada")
     await over(groups)
   })
 

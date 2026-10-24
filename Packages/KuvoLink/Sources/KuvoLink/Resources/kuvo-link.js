@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.36";
+export const BRIDGE_VERSION = "0.9.41";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -4056,7 +4056,10 @@ function writePrivate(file, text) {
 // {status: "own" | "adopted", seeded, settings}.
 export function adoptBox(seed) {
   return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
-    if (fs.existsSync(CONFIG_FILE)) return { status: "own", settings: readSettings().settings ?? {} };
+    if (fs.existsSync(CONFIG_FILE)) {
+      addDefaultRules();
+      return { status: "own", settings: readSettings().settings ?? {} };
+    }
     const global = readSettings(GLOBAL_FILE);
     const mac = readSettings(MAC_SETTINGS);
     const before = deepMerged(global.settings ?? {}, mac.settings ?? {});
@@ -4084,6 +4087,7 @@ export function adoptBox(seed) {
       try { writePrivate(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
     }
     writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys(settings), null, 2) + "\n");
+    addDefaultRules();
     // The global file came in whole: the next start empties it (one you edited by hand, with
     // comments, it leaves as it is).
     if (!global.problem) writePrivate(path.join(BOX, "global-adopted"), "");
@@ -4092,8 +4096,23 @@ export function adoptBox(seed) {
       const lines = fs.readFileSync(launchEnv, "utf8").split("\n").filter(line => !/^KUVO_(PRIVATE_)?SETTINGS=/.test(line));
       writePrivate(launchEnv, lines.join("\n"));
     } catch {}
-    return { status: "adopted", seeded, settings };
+    return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
   }, { stale: 300_000, wait: 120_000 }));
+}
+
+// Bots' memory, theirs to write in any mode (Plan changes no files), as on a Mac: a rule in
+// Settings › Permissions you see and can take out. Once (`defaults-added` says so), so one you
+// took out stays out. Under the settings' lock.
+export const BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
+function addDefaultRules() {
+  const added = path.join(BOX, "defaults-added");
+  if (fs.existsSync(added)) return;
+  const { settings, problem } = readSettings();
+  if (problem) return;
+  const rules = Array.isArray(settings?.permissions) ? settings.permissions : [];
+  const has = rules.some(rule => rule?.action === BOT_MEMORY_RULE.action && rule?.resource === BOT_MEMORY_RULE.resource && rule?.effect === BOT_MEMORY_RULE.effect);
+  if (!has) writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys({ ...(settings ?? {}), permissions: [...rules, BOT_MEMORY_RULE] }), null, 2) + "\n");
+  writePrivate(added, "bot-memory\n");
 }
 
 // The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).
@@ -4875,8 +4894,16 @@ const fitsAgent = agent => isObject(agent) && typeof agent.session === "string" 
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
 // A bot's `id` too (`bot_…`, as group chats name their members), and how it looks (`look`: color,
 // shape, face), so a chat on another computer can have it and show it.
-const keptLook = look => (isObject(look) && ["color", "shape", "face"].every(key => typeof look[key] === "string" && look[key].length > 0 && look[key].length <= 40)
-  ? { color: look.color, shape: look.shape, face: look.face } : undefined);
+// Only colors, shapes and faces the apps draw (BotLook): another (a newer computer's) is the plain
+// one's, so a phone can always read it.
+const LOOKS = {
+  color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
+  shape: ["round", "squircle", "pebble", "gem", "bloom"],
+  face: ["calm", "happy", "sleepy", "wink", "curious", "bright"],
+};
+const PLAIN_LOOK = { color: "graphite", shape: "round", face: "calm" };
+const keptLook = look => (isObject(look)
+  ? Object.fromEntries(Object.keys(LOOKS).map(key => [key, LOOKS[key].includes(look[key]) ? look[key] : PLAIN_LOOK[key]])) : undefined);
 const keptAgent = ({ session, name, kind, project, about, machine, id, look }) => ({ session, name: plainName(name).slice(0, 200), kind,
   ...(kind === "bot" && typeof id === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(id) ? { id } : {}),
   ...(kind === "bot" && keptLook(look) ? { look: keptLook(look) } : {}),
@@ -5185,9 +5212,19 @@ const bridgeAsk = async (method, route, body, signal) => {
     body: body ? JSON.stringify(body) : undefined,
     signal: signal ?? AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`The coding agents' bridge answered ${response.status}.`);
+  if (!response.ok) throw Object.assign(new Error(`The coding agents' bridge answered ${response.status}.`), { status: response.status });
   return response;
 };
+
+// A group chat's letter is given up after two days of this link online without a word from its
+// computer. Only time online counts: while this computer sleeps, or has no relay, nobody could have
+// answered, so a laptop closed over the weekend doesn't give up what it sent on Friday. From one
+// round of the outbox to the next counts ONLINE_STEP at most: a longer gap is this computer asleep.
+const SEAT_LETTER_LIFE = LETTER_MEMORY;
+const ONLINE_STEP = 5 * 60_000;
+// Each letter's last round, as counted (none yet since the link started: its first round doesn't count).
+const seatRounds = new Map();
+const seatAge = letter => (typeof letter?.aged === "number" && Number.isFinite(letter.aged) ? letter.aged : 0);
 
 // What goes for one seat mail: whole, or in parts that are put together where it goes (its JSON's
 // UTF-8 bytes, base64url, so each part fits a mail whatever the words are); null for one too big to
@@ -5298,16 +5335,32 @@ export function carrySeat(host, given, link = readLink(), now = Date.now()) {
 
 // A letter of a group chat's mail that mustn't be lost, sent to its computer now: noted as tried
 // (sent again in a minute), or, too big ever to go, given up (the log says so).
-function sendSeatLetter(host, to, id, letter, link, now) {
+function sendSeatLetter(host, to, id, letter, link, now, ask = bridgeAsk) {
   const file = path.join(SENDING, `${id}.json`);
   if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
   const went = sendSeat(host, to.key, letter.seat, id, link);
-  if (went === "too big") {
-    fs.rmSync(file, { force: true });
-    letterTries.delete(id);
-  } else if (went) {
-    letterTries.set(id, now);
-  }
+  if (went === "too big") return giveUpSeat(id, letter, ask);
+  if (went) letterTries.set(id, now);
+  return null;
+}
+
+// A letter of a group chat's mail given up (two days online without its computer saying it has it,
+// too big ever to go, or turned down): the bridge is told (`POST /gaveup`), which decides what comes
+// of it (sent again as a new letter while that computer is one of yours and it still matters), and
+// the letter goes once the bridge has answered at all: a 4xx (an older bridge, group chats off here)
+// is an answer too, so it isn't told again forever. Until then it's kept, marked, and not sent. The
+// telling, or null while one is under way.
+const tellingGaveUp = new Set();
+function giveUpSeat(id, letter, ask = bridgeAsk) {
+  const file = path.join(SENDING, `${id}.json`);
+  letterTries.delete(id);
+  if (letter.gaveUp !== true) try { writePrivate(file, JSON.stringify({ ...letter, gaveUp: true })); } catch {}
+  if (tellingGaveUp.has(id)) return null;
+  tellingGaveUp.add(id);
+  const heard = () => fs.rmSync(file, { force: true });
+  return ask("POST", "/gaveup", { to: letter.peer, mail: letter.seat, at: letter.at })
+    .then(heard, error => { if (error?.status >= 400 && error.status < 500) heard(); })
+    .finally(() => tellingGaveUp.delete(id));
 }
 
 // Follows what the bridge sends, while it runs (`carrySeat`), saying what mustn't be lost is taken
@@ -5503,7 +5556,10 @@ export function letterWent(sender, { id, ok, why, retry, answer }) {
   let letter = null;
   try { letter = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
   if (letter?.sentTo !== sender.key) return;
-  if (!ok && retry === true && Date.now() - (letter.at ?? 0) < LETTER_MEMORY) return;
+  // Not now: sent again. A group chat's waits as long as it takes (the outbox counts its time online).
+  if (!ok && retry === true && (isObject(letter.seat) || Date.now() - (letter.at ?? 0) < LETTER_MEMORY)) return;
+  // A group chat's that can't be delivered is given up, and the bridge told, never just dropped.
+  if (!ok && isObject(letter.seat)) return void giveUpSeat(id, letter);
   letterTries.delete(id);
   const words = typeof why === "string" ? why.slice(0, 500) : null;
   if (ok && letter.wait === true && answer !== false) {
@@ -5552,9 +5608,11 @@ export function letterMail(peer, letter, link, now = Date.now()) {
 // each minute until that box says it has it (or why not), for two days. A tool that gave up
 // waiting (`replies/<id>.gaveup`) has its letter go on without waiting, and an answer that comes
 // later reaches its conversation as a message. Without the relay for a while (`offline`), letters
-// not yet sent go to the Mac instead.
-export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0) {
-  if (!link?.key) return;
+// not yet sent go to the Mac instead. A group chat's letters given up are told to the coding
+// agents' bridge (`ask`); the tellings are what it returns.
+export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask = bridgeAsk) {
+  const telling = [];
+  if (!link?.key) return Promise.all(telling);
   const peers = peersOf(link);
   const told = readPeerAgents(undefined, undefined, link);
   const moved = movedOf(link);
@@ -5589,16 +5647,26 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     listed.add(id);
     const made = typeof letter.at === "number" ? letter.at : now;
     // A group chat's mail that mustn't be lost: to its computer only (never through a Mac), each
-    // minute until it says it has it, for as long as a letter.
+    // minute until it says it has it, for two days of this link online (SEAT_LETTER_LIFE).
     if (isObject(letter.seat)) {
-      if (now - made > LETTER_MEMORY) {
-        fs.rmSync(file, { force: true });
+      const last = seatRounds.get(id);
+      seatRounds.set(id, now);
+      if (!offline && last !== undefined && now > last) {
+        const before = seatAge(letter);
+        letter = { ...letter, aged: before + Math.min(now - last, ONLINE_STEP) };
+        // Kept a minute at a time: a restart loses no more.
+        if (Math.floor(letter.aged / 60_000) !== Math.floor(before / 60_000)) try { writePrivate(file, JSON.stringify(letter)); } catch {}
+      }
+      if (letter.gaveUp === true || seatAge(letter) > SEAT_LETTER_LIFE) {
+        const told = giveUpSeat(id, letter, ask);
+        if (told) telling.push(told);
         continue;
       }
       const to = peers.find(each => each.key === letter.peer);
       if (!to || offline || now - (letterTries.get(id) ?? 0) < 60_000) continue;
       letterTries.set(id, now);
-      sendSeatLetter(host, to, id, letter, link, now);
+      const told = sendSeatLetter(host, to, id, letter, link, now, ask);
+      if (told) telling.push(told);
       continue;
     }
     const peer = typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
@@ -5639,6 +5707,7 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     try { host.send(bytes); } catch {}
   }
   for (const id of letterTries.keys()) if (!listed.has(id)) letterTries.delete(id);
+  for (const id of seatRounds.keys()) if (!listed.has(id)) seatRounds.delete(id);
   for (const id of introducing.keys()) if (!listed.has(id)) introducing.delete(id);
   // Answers no tool came for (it gave up waiting), and ones never answered, after a day.
   for (const name of listOf(REPLIES)) {
@@ -5646,6 +5715,7 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
       if (now - fs.statSync(path.join(REPLIES, name)).mtimeMs > LETTER_LIFE) fs.rmSync(path.join(REPLIES, name), { force: true });
     } catch {}
   }
+  return Promise.all(telling);
 }
 
 // What came by mail, from a Mac or a peer: a Mac's lists, or what peers tell each other

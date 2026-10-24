@@ -56,6 +56,8 @@ export interface GroupTask {
   started?: string
   finished?: string
   after?: string[]
+  /** Failed as its letter to the bot's computer was given up: its report, should it come after all, is still taken. */
+  lost?: boolean
 }
 
 /** A date as the Mac writes them: ISO 8601, to the second. */
@@ -107,8 +109,9 @@ export function isPass(text: string): boolean {
 
 /**
  * A message as what it quotes and what it says (Quoting.segments): each quote (lines of "> ",
- * starting the message or after a blank line, ending at one) with the words after it. Lines in a
- * code block, or like ">>> x", are words.
+ * starting the message or after a blank line, ending at one) with the words after it, and the
+ * message's own words after a "---" line that ends the answers. Lines in a code block, or like
+ * ">>> x", are words.
  */
 export function segments(message: string): { quote?: string; text: string }[] {
   const parts: { quote?: string; text: string }[] = []
@@ -131,6 +134,9 @@ export function segments(message: string): { quote?: string; text: string }[] {
       if (!quoting) close()
       quoting = true
       quote = [...(quote ?? []), line === ">" ? "" : line.slice(2)]
+    } else if (!inCode && line === "---" && previousBlank && quote !== undefined && !quoting) {
+      // The end of the answers: the words after are the message's own.
+      close()
     } else {
       quoting = false
       words.push(line)
@@ -232,9 +238,10 @@ export function label(message: GroupMessage, name: (author?: string) => string):
 
 /**
  * What a bot is told at its turn: what was said since it last spoke. `named`: the block naming the
- * agents your messages named with &, if any.
+ * agents your messages named with &, if any. `budget`: the latest of it that fit in that many bytes
+ * (the last always), as `chatText` gives a chat, for a turn too big to send to another computer.
  */
-export function turnText(bot: string, group: Group, unheard: GroupMessage[], wrapUp: boolean, name: (author?: string) => string, named?: string): string {
+export function turnText(bot: string, group: Group, unheard: GroupMessage[], wrapUp: boolean, name: (author?: string) => string, named?: string, budget?: number): string {
   let text = ""
   const taken = group.retracted?.[bot]
   if (taken !== undefined) {
@@ -244,8 +251,10 @@ export function turnText(bot: string, group: Group, unheard: GroupMessage[], wra
     text += `Nothing new in "${group.name}" since you last spoke.\n`
   } else {
     text += `New in "${group.name}" since you last spoke:\n`
-    if (unheard.length > 40) text += "\n(Earlier messages left out.)\n"
-    for (const message of unheard.slice(-40)) text += `\n${label(message, name)}:\n${indented(message.text)}\n`
+    const parts = unheard.slice(-40).map((message) => `\n${label(message, name)}:\n${indented(message.text)}\n`)
+    const first = budget === undefined ? 0 : latestWithin(parts, budget)
+    if (unheard.length > 40 || first > 0) text += "\n(Earlier messages left out.)\n"
+    text += parts.slice(first).join("")
     if (named) text += "\n" + named + "\n"
   }
   return text + turnEnd(name(bot), wrapUp)
@@ -281,9 +290,19 @@ export function chatText(bot: string, group: Group, all: GroupMessage[], name: (
         : label(message, name)
     return `\n${who}:\n${indented(message.text)}\n`
   })
-  // The latest that fit in the budget (the last always does).
+  const first = latestWithin(parts, budget)
+  const header =
+    first === 0
+      ? `Everything said in "${group.name}" so far, from the start:\n`
+      : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):\n`
+  return header + parts.slice(first).join("")
+}
+
+/** Where the latest of `parts` that fit in `budget` bytes start (the last always does). */
+function latestWithin(parts: string[], budget: number): number {
   const encoder = new TextEncoder()
   let first = parts.length - 1
+  if (first <= 0) return 0
   let size = encoder.encode(parts[first]).length
   while (first > 0) {
     const more = encoder.encode(parts[first - 1]).length
@@ -291,11 +310,7 @@ export function chatText(bot: string, group: Group, all: GroupMessage[], name: (
     size += more
     first--
   }
-  const header =
-    first === 0
-      ? `Everything said in "${group.name}" so far, from the start:\n`
-      : `What was said in "${group.name}" lately (${first === 1 ? "the 1 earlier message is" : `the ${first} earlier messages are`} left out, too long to give in full):\n`
-  return header + parts.slice(first).join("")
+  return first
 }
 
 /** How much of a chat a bot is given at most, in bytes of text (about 40,000 tokens): the latest of it. */

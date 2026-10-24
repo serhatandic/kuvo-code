@@ -38,6 +38,8 @@ struct MachineIndicator: View {
 /// and a way to try again.
 struct MachineWaitingView: View {
     let engine: MachineEngine
+    /// What's kept meanwhile, under the title (a browser tab's pages).
+    var note: String?
     @Environment(AppModel.self) private var app
 
     /// Up, its sessions not read yet: still on its way, from here.
@@ -51,6 +53,12 @@ struct MachineWaitingView: View {
                 .foregroundStyle(.secondary)
             Text(engine.statusTitle(connection))
                 .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+            if let note {
+                Text(note)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             switch engine.state {
             case .downloading(let progress) where progress > 0:
                 ProgressView(value: progress)

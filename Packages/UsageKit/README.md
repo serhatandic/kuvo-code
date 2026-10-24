@@ -21,7 +21,8 @@ here.
   caches (`~/Library/Application Support/<bundle id>/Usage`) follow the app UsageKit runs in, so it
   never shares files with an installed OpenUsage. A proxy goes in `Usage/proxy.json` there.
 - **The host's accounts** (`HostAccounts`). Copilot, OpenRouter and Z.ai accounts connected in Kuvo
-  Code are used, and so are its sign-ins: ChatGPT's for Codex, instead of the Codex CLI's or pi's
+  Code are used, and so are its sign-ins (Cursor's for its coding agent, an API key exchanged for an
+  access token for each read, when the Cursor app isn't signed in): ChatGPT's for Codex, instead of the Codex CLI's or pi's
   login (an account card for another account stays off), and SuperGrok's for Grok's weekly limit,
   before the Grok CLI's login (one the server turns away gives way to the next, which is then only
   read, never renewed). A sign-in's token is used as the host's engine keeps it, never refreshed or

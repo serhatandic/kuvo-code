@@ -152,7 +152,23 @@ final class EngineConfig {
             if value(at: ["websearch"]) == .object(["provider": .string("random")]) { set(Self.search, at: ["websearch"]) }
             if problem == nil { defaults.set(true, forKey: Self.searchMovedKey) }
         }
+        // Bots' memory, theirs to write in any mode (Plan changes no files): a rule in Settings ›
+        // Permissions you see, and can take out. Once: one you took out stays out.
+        if !defaults.bool(forKey: Self.botMemoryAddedKey) {
+            if settings["permissions"] == nil {
+                // As a line at its end, the rest of the file as you wrote it.
+                add(.array([Self.botMemoryJSON]), as: "permissions")
+            } else if !permissionRules.contains(Self.botMemory) {
+                set(.array((value(at: ["permissions"])?.array ?? []) + [Self.botMemoryJSON]), at: ["permissions"])
+            }
+            if problem == nil { defaults.set(true, forKey: Self.botMemoryAddedKey) }
+        }
     }
+
+    /// Bots may change their memory (`Bot.memoryFile`) whatever their conversation's mode.
+    static let botMemory = PermissionRule(action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: .allow)
+    private static let botMemoryJSON: JSONValue = .object(["action": .string(botMemory.action), "resource": .string(botMemory.resource), "effect": .string(botMemory.effect.rawValue)])
+    private static let botMemoryAddedKey = "engine.botMemoryRuleAdded"
 
     private static let search: JSONValue = .object(["provider": .string("exa")])
     private static let defaultsAddedKey = "engine.defaultsAdded"

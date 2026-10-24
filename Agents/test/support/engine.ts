@@ -17,6 +17,9 @@ export class Engine {
   private permissions = new Map<string, { id: string }[]>()
   /** Bots whose seats take a while (at work meanwhile), and ones whose prompts stay queued. */
   slow = new Map<string, number>()
+  /** Bots whose seats and own conversation stay at work until `release`: as `slow`, but on the test's word, not a clock's. */
+  held = new Set<string>()
+  private releases = new Map<string, (() => void)[]>()
   stuck = new Set<string>()
   /** How much a bot's seat sends the model at each step (its context, in tokens): one for every reply, or one for each in turn (the last kept). */
   sizes: Record<string, number | number[]> = {}
@@ -56,6 +59,13 @@ export class Engine {
   /** A conversation as it is already (a bot's own, with a part it was given before). */
   seed(session: string, messages: any[]) {
     this.conversations.set(session, messages)
+  }
+
+  /** A held bot's runs end now, and its next ones aren't held. */
+  release(bot: string) {
+    this.held.delete(bot)
+    for (const finish of this.releases.get(bot) ?? []) finish()
+    this.releases.delete(bot)
   }
 
   seatsMade() {
@@ -137,9 +147,11 @@ export class Engine {
         this.busy.delete(session)
       }
       const delay = (bot ? this.slow.get(bot) : undefined) ?? [...this.slowPrompts].find(([text]) => String(body.text).includes(text))?.[1]
-      if (delay) {
+      const holder = bot ?? owner
+      const held = holder !== undefined && this.held.has(holder)
+      if (delay || held) {
         // At work a while, its answer not there yet.
-        const said = conversation.pop()
+        const said = conversation.at(-1)?.type === "assistant" ? conversation.pop() : undefined
         const thinking = bot ? this.working.get(bot) : undefined
         const tool = bot ? this.running.get(bot) : undefined
         if (tool) {
@@ -155,10 +167,13 @@ export class Engine {
         }
         this.conversations.set(session, conversation)
         this.busy.add(session)
-        setTimeout(() => {
+        const end = () => {
           if (said?.type === "assistant") conversation.push(said)
           finish()
-        }, delay)
+          this.onRequest?.()
+        }
+        if (held) this.releases.set(holder!, [...(this.releases.get(holder!) ?? []), end])
+        else setTimeout(end, delay)
       } else {
         finish()
       }

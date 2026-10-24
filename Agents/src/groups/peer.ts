@@ -4,8 +4,47 @@
 // relay, with no Mac in the middle: the box's link carries this mail (in parts when it's big, and
 // what mustn't be lost until it's there), and hands what comes to this bridge.
 
-import { Cancelled, turnLimit, type SeatHome, type SeatResult, type SeatState, type SeatTurn, type Seats } from "./seat"
-import type { GroupStore, PeerWork } from "./store"
+import { prefixBytes } from "./runner"
+import { Cancelled, SeatGone, turnLimit, type SeatHome, type SeatProgress, type SeatResult, type SeatState, type SeatTurn, type SeatTurnOptions, type Seats } from "./seat"
+import type { GroupStore, PeerTurn, PeerWork } from "./store"
+
+/**
+ * A mail between two computers' bridges at most this big, its JSON in UTF-8 bytes: as much as the
+ * links put together from parts (a document's most), so one never goes without a word.
+ */
+export const seatMailBytes = 512 * 1024
+export const mailSize = (mail: SeatMail) => new TextEncoder().encode(JSON.stringify(mail)).length
+/** A part's report, its words cut to this many bytes: what's past it stays in the bot's own conversation. */
+export const reportBytes = 64_000
+const cutNote = "\n\n[Cut here: the rest is in its own conversation on its computer.]"
+
+/** Words cut to `most` bytes, said to be cut. */
+const cut = (text: string, most: number) => (new TextEncoder().encode(text).length <= most ? text : prefixBytes(text, most - cutNote.length) + cutNote)
+
+/** How a turn ended, to fit in a mail: its steps left out if they don't, then its words cut. */
+export function fitResult(id: string, result: SeatAnswer): SeatAnswer {
+  if (!result.ok || mailSize({ kind: "result", id, result }) <= seatMailBytes) return result.ok ? result : { ...result, why: cut(result.why, 2000) }
+  const words = { ...result, steps: [] }
+  if (mailSize({ kind: "result", id, result: words }) <= seatMailBytes) return words
+  return { ...words, text: cut(result.text, reportBytes) }
+}
+
+/**
+ * A turn as it goes to another computer, within what mail carries. Too big, the whole chat
+ * (`fresh`) is left out first (a seat made anew there then hears what the bot hasn't), then what
+ * the bot hasn't heard is cut to its latest (`shorter`); undefined when even that doesn't fit.
+ */
+export function fitTurn(turn: SeatTurn, shorter?: () => string): SeatTurn | undefined {
+  if (mailSize({ kind: "turn", turn }) <= seatMailBytes) return turn
+  const { fresh: _fresh, ...slim } = turn
+  if (mailSize({ kind: "turn", turn: slim }) <= seatMailBytes) return slim
+  if (!shorter) return undefined
+  const short = { ...slim, text: shorter() }
+  return mailSize({ kind: "turn", turn: short }) <= seatMailBytes ? short : undefined
+}
+
+/** How a part went, its report cut to `reportBytes`. */
+export const fitReport = (result: SeatResult): SeatResult => (result.ok ? { ...result, text: cut(result.text, reportBytes), steps: [] } : { ...result, why: cut(result.why, 2000) })
 
 /** A turn's result as its computer says it: with the seat it ended in, so a chat that missed `seated` still keeps it. */
 export type SeatAnswer = SeatResult & { seat?: string; agents?: boolean; replaced?: string }
@@ -94,8 +133,10 @@ export const longestTurn = turnLimit + 60_000
 export interface Clock {
   setTimeout(work: () => void, ms: number): unknown
   clearTimeout(timer: unknown): void
+  /** Milliseconds since 1970 (`Date.now()` when it doesn't say). */
+  now?(): number
 }
-export const realClock: Clock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer as any) }
+export const realClock: Clock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer as any), now: () => Date.now() }
 
 interface Pending {
   turn: SeatTurn
@@ -127,9 +168,12 @@ export class RemoteHome implements SeatHome {
    * computer takes a turn once, and says again how one it has goes, or how it ended); after a
    * longer silence, or past its longest, it's taken as away.
    */
-  turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal): Promise<SeatResult> {
+  turn(asked: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal, options: SeatTurnOptions = {}): Promise<SeatResult> {
     return new Promise<SeatResult>((resolve, reject) => {
       if (signal.aborted) return reject(new Cancelled())
+      // Too big for its computer to put together even cut to fit: said, rather than sent and never answered.
+      const turn = fitTurn(asked, options.shorter)
+      if (!turn) return resolve({ ok: false, why: `the chat is too big to send to ${this.place()}.` })
       const pending: Pending = { turn, report, done: resolve, seat: turn.seat, started: false, told: new Set() }
       const end = () => {
         for (const timer of [pending.asking, pending.silent, pending.limit]) if (timer !== undefined) this.clock.clearTimeout(timer)
@@ -159,7 +203,9 @@ export class RemoteHome implements SeatHome {
     if (pending.silent !== undefined) this.clock.clearTimeout(pending.silent)
     const askAgain = () => {
       pending.asking = this.clock.setTimeout(() => {
-        this.transport.send(this.box, { kind: "turn", turn: pending.turn }, false)
+        // Once its words are with its seat, no seat is made for it anew: the whole chat isn't sent again.
+        const { fresh: _fresh, ...slim } = pending.turn
+        this.transport.send(this.box, { kind: "turn", turn: pending.started ? slim : pending.turn }, false)
         askAgain()
       }, askAgainAfter)
     }
@@ -179,6 +225,14 @@ export class RemoteHome implements SeatHome {
     const pending = this.pending.get(mail.id)
     if (!pending) return
     this.listen(pending)
+    // Its seat there went while its computer restarted: asked again at once with the whole chat
+    // (as it was first asked), its words not with a seat until it says so again.
+    if (mail.kind === "state" && mail.state.phase === "anew") {
+      pending.started = false
+      pending.told.delete(JSON.stringify({ phase: "started" }))
+      this.transport.send(this.box, { kind: "turn", turn: pending.turn }, false)
+      return
+    }
     if (mail.kind === "state") return this.heard(pending, mail.state)
     // What it missed of how it went (its seat, that its words were with it) is in how it ended.
     const { seat, agents, replaced, ...result } = mail.result
@@ -191,6 +245,8 @@ export class RemoteHome implements SeatHome {
 
   /** How it goes, each thing once, though it's said again when it's asked again. */
   private heard(pending: Pending, state: SeatState) {
+    // Only that it's still at it: heard, nothing to say.
+    if (state.phase === "working") return
     const said = JSON.stringify(state)
     if (state.phase !== "activity") {
       if (pending.told.has(said)) return
@@ -212,9 +268,12 @@ export class RemoteHome implements SeatHome {
     this.transport.send(this.box, { kind: "drop", seat, agents, ...(owner ? { bot: owner.bot, chat: owner.chat } : {}) }, true)
   }
 
-  /** A part of the work, to its bot's own conversation there. */
-  work(work: WorkGiven) {
-    this.transport.send(this.box, { kind: "work", work }, true)
+  /** A part of the work, to its bot's own conversation there: false for one too big to send. */
+  work(work: WorkGiven): boolean {
+    const mail: SeatMail = { kind: "work", work }
+    if (mailSize(mail) > seatMailBytes) return false
+    this.transport.send(this.box, mail, true)
+    return true
   }
 
   /** What its bot remembers of a chat here. */
@@ -225,8 +284,22 @@ export class RemoteHome implements SeatHome {
 
 /** How long a turn's id is remembered, so one asked again isn't taken twice. */
 const rememberTurns = 86_400_000
+/**
+ * How long how a turn ended is kept to say again: past when its chat's computer stops asking (45 s
+ * without a word, or its longest), with time to spare. After it, only that it was taken is kept.
+ */
+export const keepResults = 15 * 60_000
+/**
+ * How long a part done here is remembered, with how it went: far longer than a letter lives (two
+ * days), so a part given again however late (its chat's computer off meanwhile, its report's
+ * letter given up) is told again how it went, never done twice.
+ */
+export const rememberWork = 30 * 86_400_000
 /** What a bot's doing goes at most this often, the latest of it. */
 export const activityEvery = 1_500
+
+/** A turn here says it's still at it this often, while it runs. */
+export const aliveEvery = 10_000
 
 interface Running {
   host: string
@@ -234,7 +307,14 @@ interface Running {
   /** How it goes so far (what it's doing, only the latest), said again when it's asked again; none once it's over. */
   states: SeatState[]
   result?: SeatAnswer
+  /** Over long enough that how it ended isn't kept any more (`keepResults`): taken, nothing to say. */
+  ended?: boolean
   at: number
+  /** Its seat once it's settled (checked as this bot's in that chat, or made for it), and whether its words are with it. */
+  seat?: { seat: string; agents: boolean }
+  started: boolean
+  /** Messages of yours that came before its words were with its seat, for it once they are. */
+  steers: { text: string; message: string }[]
 }
 
 /** What a computer's bots' part in chats elsewhere needs of it besides their seats. */
@@ -249,6 +329,8 @@ export class SeatServer {
   private turns = new Map<string, Running>()
   /** Parts being followed now, so none is followed twice. */
   private following = new Set<string>()
+  /** Turns whose seat went while this restarted, asked again with the whole chat (`anew`): by whom, when, and how often since without it. */
+  private anew = new Map<string, { host: string; at: number; without: number }>()
 
   constructor(
     private readonly seats: Seats,
@@ -257,21 +339,45 @@ export class SeatServer {
     private readonly clock: Clock = realClock,
   ) {}
 
-  /** Parts given here before this started (the bridge restarted): followed again, and those done told again until they're there. */
+  private now(): number {
+    return this.clock.now?.() ?? Date.now()
+  }
+
+  /** Parts given here before this started (the bridge restarted): followed again; those done long ago forgotten. */
   start() {
+    this.forgetOldWork()
     for (const [task, work] of Object.entries(this.context?.store.peerWork() ?? {})) {
-      if (work.done) {
-        // Remembered a day, so a part given again isn't done twice.
-        if (Date.now() - Date.parse(work.started) > rememberTurns) this.context?.store.keepPeerWork(task, undefined)
-      } else if (work.prompt) this.follow(task, work)
+      if (work.done) continue
+      if (work.prompt) this.follow(task, work)
       else this.report(task, work, { ok: false, why: "Kuvo Code stopped before it reached the bot" })
     }
   }
 
-  /** A part, to its bot's own conversation here; then followed until the bot reports. Given twice, taken once. */
+  /** Parts done longer ago than `rememberWork`, forgotten, in one write. */
+  private forgetOldWork() {
+    const now = this.now()
+    const old = ([, work]: [string, PeerWork]) => Boolean(work.done) && now - Date.parse(work.finished ?? work.started) > rememberWork
+    const store = this.context?.store
+    if (!store || !Object.entries(store.peerWork()).some(old)) return
+    store.changePeerWork((all) => {
+      for (const entry of Object.entries(all)) if (old(entry)) delete all[entry[0]]
+    })
+  }
+
+  /**
+   * A part, to its bot's own conversation here; then followed until the bot reports. Given twice,
+   * taken once: given again once it's done (its chat's computer started again, its report not
+   * there), it's told again how it went.
+   */
   private async work(host: string, given: WorkGiven) {
     const store = this.context?.store
-    if (!store || store.peerWork()[given.task]) return
+    if (!store) return
+    this.forgetOldWork()
+    const known = store.peerWork()[given.task]
+    if (known) {
+      if (known.done && known.result && known.host === host) this.tell(given.task, known, known.result)
+      return
+    }
     const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started }
     store.keepPeerWork(given.task, work)
     const bot = this.seats.bot(given.bot)
@@ -299,10 +405,28 @@ export class SeatServer {
       .finally(() => this.following.delete(task))
   }
 
-  /** How a part went, to the chat's computer (never lost on the way), and noted here as done. */
+  /** How a part went, noted here as done with it (to tell it again), and to the chat's computer (never lost on the way). */
   private report(task: string, work: PeerWork, result: SeatResult) {
+    const fitted = fitReport(result)
+    this.context?.store.keepPeerWork(task, { ...work, done: true, result: fitted, finished: new Date(this.now()).toISOString() })
+    this.tell(task, work, fitted)
+  }
+
+  private tell(task: string, work: PeerWork, result: SeatResult) {
     this.transport.send(work.host, { kind: "report", task, wrapUp: work.wrapUp, chat: work.chat, result }, true)
-    this.context?.store.keepPeerWork(task, { ...work, done: true })
+  }
+
+  /**
+   * A letter of this computer's given up by its link (two days online without its computer saying
+   * it has it): a part's report goes again as a new letter, while the part is remembered and the
+   * chat's computer is still one of yours (`stillPeer`); otherwise it's let go.
+   */
+  gaveUp(to: string, mail: SeatMail, stillPeer: boolean) {
+    if (mail.kind !== "report") return
+    this.forgetOldWork()
+    if (!stillPeer) return
+    const known = this.context?.store.peerWork()[mail.task]
+    if (known?.done && known.result && known.host === to) this.tell(mail.task, known, known.result)
   }
 
   /** What a chat's computer (`from`, one of this computer's peers: the link opens only theirs) asks. */
@@ -312,19 +436,24 @@ export class SeatServer {
         return this.turn(from, mail.turn)
       case "stop": {
         const running = this.turns.get(mail.id)
-        if (running?.host === from) running.controller.abort()
+        if (running) {
+          if (running.host === from) running.controller.abort()
+          return
+        }
+        // One this bridge took before it restarted, not asked again since: its seat stops there.
+        const before = this.keptTurns()[mail.id]
+        if (before?.host === from && before.seat && before.prompt && !before.result && !before.ended) {
+          void this.seats.interrupt(before.seat, before.agents ?? false)
+          this.keepTurn(mail.id, (kept) => ({ ...kept, result: { ok: false, why: "it was stopped." } }), from)
+        }
         return
       }
       case "steer": {
         const running = this.turns.get(mail.id)
-        const seat = running && [...running.states].reverse().find((state) => state.phase === "seated")
-        const turn = running && this.asked.get(mail.id)
-        if (!running || running.host !== from || running.result || !turn) return
-        const at = seat?.phase === "seated" ? seat : turn.seat ? { seat: turn.seat, agents: turn.agentsSeat ?? false } : undefined
-        if (!at) return
-        void this.seats.steer(at.seat, at.agents, mail.text).then((steered) => {
-          if (steered) this.send(from, mail.id, { phase: "steered", message: mail.message })
-        })
+        if (!running || running.host !== from || running.result || running.ended) return
+        // Only into a seat that's settled (checked as its, or made for it): until then, it waits.
+        if (running.started) this.steerNow(from, mail.id, running, mail.text, mail.message)
+        else running.steers.push({ text: mail.text, message: mail.message })
         return
       }
       case "drop":
@@ -345,8 +474,6 @@ export class SeatServer {
     if ((await this.seats.owns(mail.seat, mail.agents, mail.bot, mail.chat)) === "yes") await this.seats.drop(mail.seat, mail.agents)
   }
 
-  private asked = new Map<string, SeatTurn>()
-
   /** How it goes, to the chat's computer, and kept to say again: of what it's doing, only the latest. */
   private send(to: string, id: string, state: SeatState) {
     const running = this.turns.get(id)
@@ -357,20 +484,86 @@ export class SeatServer {
     this.transport.send(to, { kind: "state", id, state }, false)
   }
 
+  /**
+   * Turns kept on disk (so one asked again after the bridge restarted goes on where it was): those
+   * older than a day left out, and of those over for `keepResults`, only that they were taken.
+   */
+  private keptTurns(): Record<string, PeerTurn> {
+    const all = this.context?.store.peerTurns() ?? {}
+    const now = this.now()
+    for (const [id, kept] of Object.entries(all)) {
+      if (!(now - kept.at <= rememberTurns)) delete all[id]
+      else if (kept.ended !== undefined && now - kept.ended > keepResults && (kept.result || kept.seat)) all[id] = { host: kept.host, at: kept.at, ended: kept.ended }
+    }
+    return all
+  }
+
+  /**
+   * A turn as far as it got, on disk (undefined: forgotten). How each ended is kept without its
+   * steps, and only for `keepResults`: after that, that it was taken, so it isn't taken twice.
+   */
+  private keepTurn(id: string, change: (kept: PeerTurn) => PeerTurn | undefined, host: string) {
+    const store = this.context?.store
+    if (!store) return
+    try {
+      const all = this.keptTurns()
+      const changed = change(all[id] ?? { host, at: this.now() })
+      if (changed) all[id] = changed
+      else delete all[id]
+      store.keepPeerTurns(all)
+    } catch (error: any) {
+      // Not kept (its folder unwritable): the turn goes on all the same, as it would have.
+      console.error("group chat turn not kept:", String(error?.message ?? error))
+    }
+  }
+
   private turn(host: string, turn: SeatTurn) {
-    const now = Date.now()
-    for (const [id, running] of this.turns) if (running.result && now - running.at > rememberTurns) this.turns.delete(id)
+    const now = this.now()
+    for (const [id, running] of this.turns) {
+      // How it ended, kept to say again only while it may be asked; then only that it was taken.
+      if (running.result && now - running.at > keepResults) {
+        running.result = undefined
+        running.ended = true
+      }
+      if (running.ended && now - running.at > rememberTurns) this.turns.delete(id)
+    }
+    for (const [id, asked] of this.anew) if (now - asked.at > rememberTurns) this.anew.delete(id)
+    // Its seat went while this restarted, and it was asked again with the whole chat: asked
+    // without it (a word on the way already), it's asked again once more, then taken as it is.
+    const anew = this.anew.get(turn.id)
+    if (anew) {
+      if (anew.host !== host) return
+      if (turn.seat && turn.fresh === undefined && anew.without++ < 1) return this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false)
+      this.anew.delete(turn.id)
+    }
     const known = this.turns.get(turn.id)
     if (known) {
       // Asked again (an answer lost on the way): told where it is, not taken twice.
-      if (known.host !== host) return
+      if (known.host !== host || known.ended) return
       if (known.result) this.transport.send(host, { kind: "result", id: turn.id, result: known.result }, false)
       else for (const state of known.states) this.transport.send(host, { kind: "state", id: turn.id, state }, false)
       return
     }
-    const running: Running = { host, controller: new AbortController(), states: [], at: now }
+    // Taken before this bridge started (it restarted): how it ended told again, or it goes on where it was.
+    const before = this.keptTurns()[turn.id]
+    if (before && (before.host !== host || (before.ended !== undefined && !before.result))) return
+    if (before?.result) {
+      this.turns.set(turn.id, { host, controller: new AbortController(), states: [], result: before.result, at: before.ended ?? before.at, started: true, steers: [] })
+      this.transport.send(host, { kind: "result", id: turn.id, result: before.result }, false)
+      return
+    }
+    const running: Running = { host, controller: new AbortController(), states: [], at: now, started: false, steers: [] }
     this.turns.set(turn.id, running)
-    this.asked.set(turn.id, turn)
+    // Still at it, every few seconds, so a long quiet step isn't taken for silence and asked again.
+    let alive: unknown
+    const stillAt = () => {
+      alive = this.clock.setTimeout(() => {
+        if (running.result) return
+        this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "working" } }, false)
+        stillAt()
+      }, aliveEvery)
+    }
+    stillAt()
     // What it's doing, the latest, at most so often.
     let latest: SeatState | undefined
     let timer: unknown
@@ -384,7 +577,15 @@ export class SeatServer {
       this.send(host, turn.id, state)
     }
     const report = (state: SeatState) => {
-      if (state.phase !== "activity") return this.send(host, turn.id, state)
+      if (state.phase !== "activity") {
+        this.send(host, turn.id, state)
+        // Its words are with its seat, settled now: what you wrote meanwhile reaches it.
+        if (state.phase === "started") {
+          running.started = true
+          for (const steer of running.steers.splice(0)) this.steerNow(host, turn.id, running, steer.text, steer.message)
+        }
+        return
+      }
       latest = state
       if (timer !== undefined) return
       const wait = Math.max(0, activityEvery - (Date.now() - last))
@@ -393,18 +594,50 @@ export class SeatServer {
     }
     // Said at once that it has it, so the host doesn't ask again while its seat is made.
     this.send(host, turn.id, { phase: "taken" })
+    const resume = before?.seat ? { seat: before.seat, agents: before.agents ?? false, prompt: before.prompt, sent: before.sent } : undefined
+    if (resume) running.seat = { seat: resume.seat, agents: resume.agents }
+    const progress = (now: SeatProgress) => {
+      running.seat = { seat: now.seat, agents: now.agents }
+      this.keepTurn(turn.id, (kept) => ({ ...kept, ...now }), host)
+    }
     void this.seats
-      .turn(turn, report, running.controller.signal, true)
-      .catch((error): SeatResult => (error instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error?.message ?? error) }))
+      .turn(turn, report, running.controller.signal, { checkSeat: true, resume, progress })
+      .catch((error): SeatResult | undefined =>
+        error instanceof SeatGone ? undefined : error instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error?.message ?? error) },
+      )
       .then((result) => {
         if (timer !== undefined) this.clock.clearTimeout(timer)
+        if (alive !== undefined) this.clock.clearTimeout(alive)
+        if (!result) {
+          // Its seat went while this restarted, and a new one needs the whole chat: what it got
+          // that far forgotten, and the chat's computer asks again with it.
+          running.ended = true
+          this.turns.delete(turn.id)
+          this.keepTurn(turn.id, () => undefined, host)
+          this.anew.set(turn.id, { host, at: this.now(), without: 0 })
+          this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false)
+          return
+        }
         // With the seat it ended in, so a chat that missed `seated` keeps it all the same.
         const seated = [...running.states].reverse().find((state) => state.phase === "seated")
-        running.result = seated?.phase === "seated" ? { ...result, seat: seated.seat, agents: seated.agents, ...(seated.replaced ? { replaced: seated.replaced } : {}) } : result
+        const answer: SeatAnswer = seated?.phase === "seated" ? { ...result, seat: seated.seat, agents: seated.agents, ...(seated.replaced ? { replaced: seated.replaced } : {}) } : result
+        const ended = fitResult(turn.id, answer)
+        running.result = ended
         running.states = []
-        running.at = Date.now()
-        this.asked.delete(turn.id)
-        if (!running.controller.signal.aborted) this.transport.send(host, { kind: "result", id: turn.id, result: running.result }, false)
+        running.steers = []
+        running.at = this.now()
+        if (!running.controller.signal.aborted) this.transport.send(host, { kind: "result", id: turn.id, result: ended }, false)
+        // On disk without its steps: only for asking again after a restart, which needs its words.
+        this.keepTurn(turn.id, (kept) => ({ ...kept, result: ended.ok ? { ...ended, steps: [] } : ended, ended: running.at }), host)
       })
+  }
+
+  /** A message of yours, to its seat as it talks (settled: checked as its, or made for it), said back once it reached it. */
+  private steerNow(host: string, id: string, running: Running, text: string, message: string) {
+    const at = running.seat
+    if (!at || running.result) return
+    void this.seats.steer(at.seat, at.agents, text).then((steered) => {
+      if (steered) this.send(host, id, { phase: "steered", message })
+    })
   }
 }

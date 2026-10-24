@@ -57,6 +57,14 @@ export type SeatState =
   | { phase: "activity"; activity: Activity[] }
   /** A message of yours reached it as it talked. */
   | { phase: "steered"; message: string }
+  /** Still at it (from another computer, said every few seconds, so a long quiet step isn't asked again). */
+  | { phase: "working" }
+  /**
+   * From another computer: the seat it went on in after a restart is gone (deleted meanwhile), and
+   * a seat made for it now needs the whole chat, which this asking left out. It's asked again with
+   * it (`fresh`), and taken anew.
+   */
+  | { phase: "anew" }
 
 /** How a turn ended. */
 export type SeatResult =
@@ -65,9 +73,29 @@ export type SeatResult =
   /** It couldn't answer, and why, as the chat says it; `away`: its computer couldn't be reached. */
   | { ok: false; why: string; away?: true }
 
+/** How far a turn got: its seat, then its message there and when it went. */
+export interface SeatProgress {
+  seat: string
+  agents: boolean
+  prompt?: string
+  sent?: number
+}
+
+/** For a turn from another computer (`Seats.turn`). */
+export interface SeatTurnOptions {
+  /** The seat it names is used only when it's this bot's seat in that chat (`owns`); otherwise the bot gets a seat of its own. */
+  checkSeat?: boolean
+  /** How far it got before (the bridge restarted): it goes on from there, its message never sent twice. */
+  resume?: SeatProgress
+  /** Told how far it gets, before each step that mustn't be taken twice (a seat made, its message sent), to keep. */
+  progress?: (progress: SeatProgress) => void
+  /** For a turn to another computer: what the bot hasn't heard, cut to its latest, for when the turn is too big for mail. */
+  shorter?: () => string
+}
+
 /** Where a bot takes its turns: its seats on this computer (`Seats`), or on another (`RemoteHome`). */
 export interface SeatHome {
-  turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal): Promise<SeatResult>
+  turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal, options?: SeatTurnOptions): Promise<SeatResult>
   /** A message of yours to its seat at work. Whether it reached it now (from another computer, it's said later: `steered`). */
   steer(seat: string, agents: boolean, text: string, message: string): Promise<boolean>
   /** A seat gone: `bot`'s, in `chat` (on another computer, it's checked to be that before it goes). */
@@ -87,6 +115,9 @@ export interface SeatContext {
 
 class Cancelled extends Error {}
 export { Cancelled }
+
+/** A turn's seat gone meanwhile (deleted while the bridge restarted), and the whole chat a new one needs not given. */
+export class SeatGone extends Error {}
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done, fail) => {
@@ -254,10 +285,12 @@ export class Seats implements SeatHome {
   /**
    * One turn: its seat made or kept, what it's told sent, its run waited for, and what it said.
    * `report` hears how it goes. Stopped (`signal`), it stops where it is, mid-sentence.
-   * `checkSeat`, for a turn from another computer: the seat it names is used only when it's this
-   * bot's seat in that chat (`owns`); otherwise the bot gets a seat of its own.
+   * `options`, for a turn from another computer: its seat checked, and how far it got kept, so
+   * one asked again after the bridge restarted goes on where it was.
    */
-  async turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal, checkSeat = false): Promise<SeatResult> {
+  async turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal, options: SeatTurnOptions = {}): Promise<SeatResult> {
+    const { checkSeat = false, progress } = options
+    let resume = options.resume
     const bot = this.bot(turn.bot)
     if (!bot) return { ok: false, why: "it doesn’t live on this computer any more." }
     const going = () => {
@@ -287,10 +320,34 @@ export class Seats implements SeatHome {
       let agents: boolean
       let api: SeatAPI
       let text = turn.text
-      if (ownConversation) {
+      if (resume) {
+        const resumed = this.apiFor(resume.agents)
+        if (!resumed) throw new Error("the coding agents aren’t running")
+        // Gone meanwhile (deleted, as the bot left the chat, or by hand): what it got that far is
+        // set aside, and it goes as a turn new to it, in a seat of its own that hears the whole
+        // chat. Asked without it (the chat's computer had heard its words were with its seat),
+        // it's asked again with it.
+        if (!(await this.seatThere(resume.seat, resumed))) {
+          if (!ownConversation && turn.seat && turn.fresh === undefined) throw new SeatGone()
+          resume = undefined
+        }
+        going()
+      }
+      if (resume) {
+        // Its seat (or its conversation for this one turn) as it was settled before the bridge
+        // restarted: checked or made then.
+        ;({ seat, agents } = resume)
+        api = this.apiFor(agents)!
+        if (ownConversation) scratch = { seat, agents }
+        else if (seat !== turn.seat) {
+          report({ phase: "seated", seat, agents, ...(turn.seat ? { replaced: turn.seat } : {}) })
+          if (turn.seat) text = turn.fresh ?? turn.text
+        }
+      } else if (ownConversation) {
         const title = turn.kind === "guest" ? `${bot.name} asked into ${turn.chat.name}` : `${bot.name} handing out the work in ${turn.chat.name}`
         ;({ seat, agents, api } = await this.make(bot, turn.chat, title, true))
         scratch = { seat, agents }
+        progress?.({ seat, agents })
       } else {
         let ours = Boolean(turn.seat)
         if (turn.seat && checkSeat) {
@@ -302,18 +359,28 @@ export class Seats implements SeatHome {
         const kept = ours ? await this.keep(turn, bot) : undefined
         going()
         if (kept) {
+          // A seat it had: kept with its message, below, as nothing's made here.
           ;({ seat, agents, api } = kept)
         } else {
           ;({ seat, agents, api } = await this.make(bot, turn.chat, `${bot.name} in ${turn.chat.name}`, false))
+          progress?.({ seat, agents })
           report({ phase: "seated", seat, agents, ...(turn.seat ? { replaced: turn.seat } : {}) })
           if (turn.seat) text = turn.fresh ?? turn.text
         }
       }
       going()
-      const promptID = newID("msg")
-      await api.prompt(seat, promptID, text, "queue")
+      // Its message, by an id kept before it goes: after a restart, one already there is followed, not sent again.
+      let promptID = resume?.prompt
+      let sent = resume?.sent ?? Date.now()
+      const there = promptID ? await this.sentAlready(seat, promptID, sent, api) : false
+      going()
+      if (!promptID || !there) {
+        promptID ??= newID("msg")
+        sent = Date.now()
+        progress?.({ seat, agents, prompt: promptID, sent })
+        await api.prompt(seat, promptID, text, "queue")
+      }
       report({ phase: "started" })
-      const sent = Date.now()
       // Its latest thought, from the engine's stream, in a line under its name, a few times a
       // second at most; a look at its messages, which can be a step behind, doesn't take it back
       // for a moment.
@@ -371,6 +438,7 @@ export class Seats implements SeatHome {
       return { ok: true, text: reply.text, steps: reply.steps, ...(outgrown ? { outgrown } : {}) }
     } catch (error) {
       if (signal.aborted || error instanceof Cancelled) throw new Cancelled()
+      if (error instanceof SeatGone) throw error
       return { ok: false, why: plainError(reason(error), provider, this.context.place) }
     } finally {
       if (scratch) void this.drop(scratch.seat, scratch.agents)
@@ -441,6 +509,26 @@ export class Seats implements SeatHome {
       if (!found.text) return { ok: false, why: error ?? "it stopped without saying what it did" }
       return { ok: true, text: found.text, steps: [] }
     }
+  }
+
+  /** Whether a seat is there still (false once it's deleted); thrown when it can't be read now. */
+  private async seatThere(seat: string, api: SeatAPI): Promise<boolean> {
+    try {
+      await api.inbox(seat)
+      return true
+    } catch (error: any) {
+      if (error?.status === 404) return false
+      throw new Error("its seat couldn’t be read")
+    }
+  }
+
+  /** Whether a seat has message `promptID` (sent at `sent`), queued or read; thrown when it can't be read now. */
+  private async sentAlready(seat: string, promptID: string, sent: number, api: SeatAPI): Promise<boolean> {
+    const queued = await api.inbox(seat)
+    if (queued.some((item) => item.id === promptID)) return true
+    const read = await this.messagesFrom(promptID, seat, new Date(sent).toISOString(), api)
+    if (read.kind === "unreadable") throw new Error("its seat couldn’t be read")
+    return read.kind === "found"
   }
 
   /** The bot's conversation from `promptID` on, read further back while it's longer than a page, but not past the part's start. */
