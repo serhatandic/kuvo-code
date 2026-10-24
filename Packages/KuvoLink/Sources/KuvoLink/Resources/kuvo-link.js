@@ -3551,7 +3551,11 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
 
 // A peer's copy met with this one's (each box tells the others its own, box to box, with no Mac
 // needed): the personalities that changed here, whose bots here are told what they are now.
-export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
+export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK, now = Date.now()) {
+  // Never a change dated ahead of this box's clock by more than a day, which would win over every
+  // change to come.
+  const timely = list => (Array.isArray(list) ? list : []).filter(entry => changedAt(entry) <= now + 86_400_000);
+  given = { personalities: timely(given?.personalities), removed: timely(given?.removed) };
   const before = readPersonalities(file);
   const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
   const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
@@ -4125,13 +4129,19 @@ export function movedOf(link) {
 
 // This box's peers now: from each of its Macs' lists, itself left out.
 export function peersOf(link) {
-  const first = peersFromMacs(link);
-  // And those a machine among them was told of by its own Macs (`vouched`), one hop: your
-  // computers set up from different Macs meet with those Macs closed, and one a Mac drops goes.
+  if (!link?.peersFrom || !Object.keys(link.peersFrom).length) return [];
+  // Each of this box's Macs' lists as that Mac last gave it: its own copy, or a newer one a
+  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail.
+  const vouchers = peersFromMacs(link).filter(peer => peer.kind === "machine").map(peer => peer.key);
   const own = ownKey(link);
-  const byKey = new Map(first.map(peer => [peer.key, peer]));
-  for (const voucher of first.filter(peer => peer.kind === "machine")) {
-    for (const peer of link.vouched?.[voucher.key]?.peers ?? []) if (fitsPeer(peer) && peer.key !== own && !byKey.has(peer.key)) byKey.set(peer.key, peer);
+  const byKey = new Map();
+  for (const mac of macsOf(link)) {
+    let newest = link.peersFrom[mac];
+    for (const voucher of vouchers) {
+      const passed = link.vouched?.[voucher]?.[mac];
+      if (passed && passed.at > (newest?.at ?? 0)) newest = passed;
+    }
+    for (const peer of newest?.peers ?? []) if (fitsPeer(peer) && peer.key !== own) byKey.set(peer.key, peer);
   }
   return [...byKey.values()];
 }
@@ -4154,15 +4164,24 @@ export function peersFromMacs(link) {
   return [...byKey.values()];
 }
 
-// The peers a machine its Macs told it of says its own Macs told it of: kept, a newer list
-// replacing that machine's last. False for one that isn't such a machine, or an older list.
-export function takeVouched(link, by, peers, at) {
-  if (!Array.isArray(peers) || typeof at !== "number") return false;
+// The lists a machine this box's Macs named passes on, each as one of its Macs gave it
+// (`[{mac, at, peers}]`): kept for the Macs that are this box's own too, a newer copy replacing
+// that machine's last. Only a Mac says who a box's peers are; a machine only carries its word, to
+// a box that missed it. False when nothing's kept.
+export function takeVouched(link, by, lists) {
+  if (!Array.isArray(lists)) return false;
   if (!peersFromMacs(link).some(peer => peer.key === by && peer.kind === "machine")) return false;
-  link.vouched ??= {};
-  if (at <= (link.vouched[by]?.at ?? 0)) return false;
-  link.vouched[by] = { at, peers: peers.filter(fitsPeer).slice(0, MOST_PEERS).map(({ key, address, name, kind, id }) => ({ key, address, kind, name: plainName(name).slice(0, 100), ...(typeof id === "string" ? { id: id.slice(0, 200) } : {}) })) };
-  return true;
+  const macs = new Set(macsOf(link));
+  let changed = false;
+  for (const list of lists.slice(0, 16)) {
+    if (!isObject(list) || !macs.has(list.mac) || typeof list.at !== "number" || !Array.isArray(list.peers)) continue;
+    link.vouched ??= {};
+    link.vouched[by] ??= {};
+    if (list.at <= (link.vouched[by][list.mac]?.at ?? 0)) continue;
+    link.vouched[by][list.mac] = { at: list.at, peers: list.peers.filter(fitsPeer).slice(0, MOST_PEERS).map(({ key, address, name, kind, id }) => ({ key, address, kind, name: plainName(name).slice(0, 100), ...(typeof id === "string" ? { id: id.slice(0, 200) } : {}) })) };
+    changed = true;
+  }
+  return changed;
 }
 
 // A mail frame's body opened: from one of this box's Macs, or one of its peers. `{sender, payload}`,
@@ -4467,14 +4486,20 @@ export function peerMail(sender, payload, host, targets = () => []) {
   if (isObject(payload.agents)) {
     if (takeAgents(sender, payload.agents)) writeAgents();
   }
-  if (isObject(payload.personalities)) takePersonalities(payload.personalities).catch(() => {});
+  // Your personalities only from a machine this box's own Macs named.
+  if (isObject(payload.personalities) && sender.kind === "machine" && peersFromMacs(readLink()).some(peer => peer.key === sender.key)) {
+    takePersonalities(payload.personalities).catch(() => {});
+  }
   if (isObject(payload.vouched) && sender.kind === "machine") {
-    const changed = updateLink(link => link && takeVouched(link, sender.key, payload.vouched.peers, payload.vouched.at) ? link : null);
+    const changed = updateLink(link => link && takeVouched(link, sender.key, payload.vouched.lists) ? link : null);
     if (changed) writeAgents(changed);
   }
   // It's just connected, and may have missed what this box told it (the relay keeps nothing):
   // told again at the next round.
-  if (payload.ask === "agents") toldPeers.delete(sender.key);
+  if (payload.ask === "agents") {
+    toldPeers.delete(sender.key);
+    toldPersonalities.delete(sender.key);
+  }
   if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer }).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered);
 }
@@ -4511,13 +4536,15 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
   if (!link?.key) return;
   await refreshOwn(readEngine, link);
   if (!ownList) return;
-  // With them, to a machine, the peers this box's Macs told it of (`vouched`).
-  const vouched = peersFromMacs(link);
-  const json = JSON.stringify([ownList, vouched]);
+  // With them, to a machine this box's Macs named, their lists as they gave them (`vouched`), for
+  // one that missed a Mac's mail.
+  const direct = new Set(peersFromMacs(link).map(peer => peer.key));
+  const lists = macsOf(link).filter(mac => link.peersFrom?.[mac]).map(mac => ({ mac, at: link.peersFrom[mac].at, peers: link.peersFrom[mac].peers }));
+  const json = JSON.stringify([ownList, lists]);
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
     if (!ask && last && last.json === json && now - last.at < 600_000) continue;
-    const others = peer.kind === "machine" ? { vouched: { at: now, peers: vouched.filter(each => each.key !== peer.key) } } : {};
+    const others = peer.kind === "machine" && direct.has(peer.key) && lists.length ? { vouched: { lists } } : {};
     // As many as fit in one mail: the first (bots, then the latest sessions) first.
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
@@ -4536,13 +4563,26 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
   const library = readPersonalities();
   const words = JSON.stringify(library);
   if (!library.personalities.length && !library.removed.length) return;
-  for (const peer of peersOf(link).filter(peer => peer.kind === "machine")) {
+  for (const peer of peersFromMacs(link).filter(peer => peer.kind === "machine")) {
     const last = toldPersonalities.get(peer.key);
     if (!ask && last && last.words === words && now - last.at < 600_000) continue;
-    const bytes = mailFor(peer, { personalities: library, at: now }, link);
-    if (!bytes) continue;
+    // In as many mails as it takes (each personality is met on its own), the newest first.
+    const entries = [...library.personalities, ...library.removed].sort((a, b) => changedAt(b) - changedAt(a));
+    const parts = [[]];
+    let size = 0;
+    for (const entry of entries) {
+      // Well within a mail (`mailFor`'s limit), as JSON.
+      const length = Buffer.byteLength(JSON.stringify(entry));
+      if (size + length > 40_000 && parts.at(-1).length) {
+        parts.push([]);
+        size = 0;
+      }
+      parts.at(-1).push(entry);
+      size += length;
+    }
+    const mails = parts.map(list => mailFor(peer, { personalities: { personalities: list.filter(entry => !isRemoval(entry)), removed: list.filter(isRemoval) }, at: now }, link)).filter(Boolean);
     try {
-      host.send(bytes);
+      for (const mail of mails) host.send(mail);
       toldPersonalities.set(peer.key, { words, at: now });
     } catch {}
   }

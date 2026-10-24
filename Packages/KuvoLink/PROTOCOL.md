@@ -123,10 +123,12 @@ connection.
   and its other machines whose bridge said `"peers": true` in setup's answer. `id` is the
   machine's name on that Mac. A machine keeps each Mac's list (`peersFrom`), a newer one replacing
   that Mac's last, and takes lists only from its Macs. Its peers are every list's, itself left
-  out. From 0.9.23 a machine also tells its peer machines, in its agents' mail, `"vouched": {at,
-  peers}`: the peers its own Macs told it of. A box keeps the newest from each machine its own
-  Macs told it of (`vouched`), and those peers count too, one hop only: computers set up from
-  different Macs meet with those Macs closed, and one a Mac drops goes from what it vouched for. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
+  out. From 0.9.23 a machine also passes its Macs' lists on, in its agents' mail to the machines
+  its Macs named: `"vouched": {"lists": [{mac, at, peers}]}`, each as that Mac gave it, with its
+  `at`. A box keeps a copy only for a Mac that's its own too, from a machine that Mac named, and
+  uses it in place of its own copy of that Mac's list when it's newer: one that missed the Mac's
+  mail (it was away) learns of a machine the Mac added, and of one it dropped, with the Mac
+  closed. Only a Mac says who a box's peers are; a machine only carries its word, one hop. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
   carry `moved: [{session, key}]`: conversations being moved, by the key of the computer each
   lives on now (the one it left may still list it until it's let go). With the
   phone link off, a Mac's setup and mail leave out `phones` and `removed`, and the machine keeps
@@ -149,10 +151,12 @@ connection.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
     the bridge takes when it's newer than the Mac's mail.
 - **Personalities**: `{"personalities": {personalities, removed}}`, the library as
-  `kuvo/personalities` keeps it (from 0.9.23). A machine sends its copy to its other machines when
-  it changes and every ten minutes (with `"ask"`, at once), and meets each it gets with its own:
-  per personality the newest change wins, a removal too. Its bots whose personality changed are
-  told what they are now. A Mac meets a machine's copy as it connects, over SSH.
+  `kuvo/personalities` keeps it (from 0.9.23). A machine sends its copy to the machines its Macs
+  named when it changes and every ten minutes (with `"ask"`, at once), in as many mails as it
+  takes, and meets each it gets from such a machine with its own: per personality the newest
+  change wins, a removal too; one dated more than a day ahead of its clock isn't taken. Its bots
+  whose personality changed are told what they are now. A connected Mac meets a machine's copy
+  every minute, over SSH.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
   `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids

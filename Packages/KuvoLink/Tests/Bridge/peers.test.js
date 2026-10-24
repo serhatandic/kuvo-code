@@ -396,6 +396,8 @@ test("your personalities go box to box with no Mac: each machine tells the other
     assert.equal(told.length, 1);
     assert.equal(told[0].url, "/api/experimental/session/ses_scout/instructions/entries/kuvo.bot");
     assert.match(told[0].value, /Calm, brief and kind\./);
+    // A change dated days ahead of this box's clock isn't taken (it would win over every one to come).
+    assert.deepEqual(await link.takePersonalities({ removed: [{ id: "custom.bold", removed: Date.now() + 10 * 86_400_000 }] }, () => target, () => null), []);
     // An older copy changes nothing; a removal wins over an older change, and the bot is told it's gone.
     assert.deepEqual(await link.takePersonalities({ personalities: [{ id: "custom.calm", name: "Calm", description: "Old.", updated: 1 }] }, () => target, () => null), []);
     await link.takePersonalities({ removed: [{ id: "custom.calm", removed: 30 }] }, () => target, () => null);
@@ -408,27 +410,36 @@ test("your personalities go box to box with no Mac: each machine tells the other
   }
 });
 
-test("boxes meet with no Mac: a machine tells the others the peers its Macs told it of, and those count one hop away, from a machine this box's Macs vouched for, only while they do", async t => {
-  const third = box("machine", "third");
-  fresh({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
-  // `second`'s other Mac set up `third`, which this box's Mac doesn't know.
-  link.receiveMail(mailFrom(second, { vouched: { at: 5, peers: [third.peer, here.peer] }, at: 5 }), undefined, link.peerMail);
-  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second", "third"]);
-  // So `third` can write here now, and is told this box's agents, with this box's own peers.
+test("a box that missed its Mac's mail learns that Mac's newer list from a machine the Mac named; another Mac's list, an older one, or one passed on twice counts for nothing", async t => {
+  const third = box("machine", "third"), otherMac = box("mac", "other");
+  fresh({ peersFrom: { [mac.pub]: { at: 10, peers: [mac.peer, second.peer] } } });
+  const passOn = (from, lists) => link.receiveMail(mailFrom(from, { vouched: { lists }, at: Date.now() }), undefined, link.peerMail);
+  const names = () => link.peersOf(link.readLink()).map(peer => peer.name).sort();
+  // The Mac added `third` while this box was away: `second` heard it, and passes it on.
+  passOn(second, [{ mac: mac.pub, at: 20, peers: [mac.peer, second.peer, third.peer, here.peer] }]);
+  assert.deepEqual(names(), ["mac", "second", "third"]);
+  // So `third` can write here now; told this box's agents, it isn't sent lists to pass on.
   const heard = [];
   link.receiveMail(mailFrom(third, { agents: { at: 1, list: [] } }), undefined, sender => heard.push(sender.name));
   assert.deepEqual(heard, ["third"]);
   const { target } = await engine(t);
   const sent = [];
   await link.announce({ send: bytes => sent.push(bytes) }, () => target, link.readLink(), Date.now());
-  const toThird = sent.filter(bytes => k(bytes.subarray(1, 17)) === third.address).map(bytes => opened(bytes, third).payload);
-  assert.deepEqual(toThird[0].vouched.peers.map(peer => peer.name).sort(), ["mac", "second"]);
-  // Only one hop: what `third` vouches for counts for nothing here; an older list from `second` neither.
+  const to = who => sent.filter(bytes => k(bytes.subarray(1, 17)) === who.address).map(bytes => opened(bytes, who).payload);
+  assert.deepEqual(to(second)[0].vouched.lists.map(list => [list.mac, list.at]), [[mac.pub, 10]], "the Mac's list as it gave it here");
+  assert.equal(to(third)[0].vouched, undefined);
+  assert.equal(to(mac)[0].vouched, undefined);
+  // Another Mac's list, one passed on by `third`, and an older copy: nothing.
   const fourth = box("machine", "fourth");
-  link.receiveMail(mailFrom(third, { vouched: { at: 9, peers: [fourth.peer] }, at: 9 }), undefined, link.peerMail);
-  link.receiveMail(mailFrom(second, { vouched: { at: 3, peers: [] }, at: 3 }), undefined, link.peerMail);
-  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second", "third"]);
-  // This box's Mac drops `second`: what it vouched for goes with it.
+  passOn(second, [{ mac: otherMac.pub, at: 50, peers: [otherMac.peer, fourth.peer] }]);
+  passOn(third, [{ mac: mac.pub, at: 60, peers: [mac.peer, fourth.peer] }]);
+  passOn(second, [{ mac: mac.pub, at: 15, peers: [mac.peer] }]);
+  assert.deepEqual(names(), ["mac", "second", "third"]);
+  // Nor personalities from a machine only passed on: only from one this box's own Mac named.
+  link.receiveMail(mailFrom(third, { personalities: { personalities: [{ id: "custom.sly", name: "Sly", description: "Sly.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(link.readPersonalities().personalities.some(each => each.id === "custom.sly"), false);
+  // The Mac's own newer word wins over what was passed on: it dropped `third` and `second`.
   link.receiveMail(mailFrom(mac, { at: 30, peers: [mac.peer] }));
-  assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name), ["mac"]);
+  assert.deepEqual(names(), ["mac"]);
 });
