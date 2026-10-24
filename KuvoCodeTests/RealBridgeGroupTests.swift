@@ -106,13 +106,13 @@ import Testing
         ])
         defer { bridge.stop() }
         let api = try #require(bridge.api)
-        let groups = MachineGroups()
+        let groups = BoxGroups()
         groups.bridge = { [machine] in $0 == machine ? api : nil }
         bridge.agents.onEvent = { [machine] event in groups.handle(event, machine: machine) }
 
         // A chat there, as New Group Chat makes one.
         let made = BotGroup(id: "grp_crew000001", name: "Crew", members: ["bot_ada", "bot_ben"], created: .now, viewed: .now)
-        try await api.putMachineGroup(made, messages: [], held: false)
+        try await api.putBoxGroup(made, messages: [], held: false)
         await groups.connected(machine)
         #expect(groups.chats.map(\.group.name) == ["Crew"])
 
@@ -123,5 +123,44 @@ import Testing
         #expect(said.map(\.text) == ["Ready to ship?", "Ship it Friday. &Ben, the build?", "Green since this morning."])
         #expect(groups.isUnread(groups.group(made.id)!), "its bots' words, not seen yet")
         #expect(groups.speaking[made.id] == nil)
+    }
+
+    /// A meeting set up in Edit Group Chat for a machine's chat is worked out there, on that
+    /// computer's clock: a daily one whose time went by while you edited comes at its next round,
+    /// rather than at once.
+    @Test func aMeetingSetUpForAMachinesChatIsPlannedThere() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: folder)
+            for name in ["machine-groups.json", "machine-groups"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name)) }
+        }
+        try bots()
+        serve(Seats(lines: [:]))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder, environment: [
+            "KUVO_GROUPS": folder.appending(path: "groups").path, "KUVO_BOTS": folder.appending(path: "bots").path, "KUVO_TRASH": folder.appending(path: "trash").path,
+        ])
+        defer { bridge.stop() }
+        let api = try #require(bridge.api)
+        let groups = BoxGroups()
+        groups.bridge = { [machine] in $0 == machine ? api : nil }
+        let made = BotGroup(id: "grp_crew000001", name: "Crew", members: ["bot_ada", "bot_ben"], created: .now, viewed: .now)
+        try await api.putBoxGroup(made, messages: [], held: false)
+        await groups.connected(machine)
+
+        let passed = Date(timeIntervalSince1970: (Date.now.timeIntervalSince1970 / 60).rounded(.down) * 60 - 3600)
+        var edited = try #require(groups.group(made.id))
+        edited.meeting = BotGroup.Meeting(next: passed, every: "1d", topic: "Standup")
+        try await groups.update(edited)
+        let meeting = try #require(groups.group(made.id)?.meeting)
+        #expect(meeting.next > .now, "not at once")
+        #expect(Wakes.minutes(of: meeting.next) == Wakes.minutes(of: passed), "at its time of day")
+        #expect((23 * 3600...25 * 3600).contains(meeting.next.timeIntervalSince(passed)), "the next day")
+        #expect(meeting.every == "1d" && meeting.topic == "Standup")
+        #expect(meeting.at == Wakes.minutes(of: passed), "the time of day it keeps")
+        // A meeting due would be held before what you write next is: none was.
+        bridge.agents.onEvent = { [machine] event in groups.handle(event, machine: machine) }
+        try await groups.send("Morning.", to: made.id)
+        try await until { groups.messages(in: made.id).contains { $0.text == "Morning." } && !groups.discussing.contains(made.id) }
+        #expect(!groups.messages(in: made.id).contains { $0.kind == .meeting }, "it didn't meet at once")
     }
 }

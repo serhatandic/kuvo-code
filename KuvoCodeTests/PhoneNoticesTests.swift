@@ -34,7 +34,7 @@ import Testing
     }
 
     @Test func aMachinesGroupChatsNewsGoesToPhonesFromTheMachineAlone() throws {
-        let groups = MachineGroups()
+        let groups = BoxGroups()
         let met = try ServerEvent(json: JSONSerialization.data(withJSONObject: [
             "id": "evt_met", "type": "kuvo.group.met", "created": 1_792_000_000_000,
             "data": ["id": "grp_box", "name": "Standup"],

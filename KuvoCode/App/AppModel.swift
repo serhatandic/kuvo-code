@@ -43,9 +43,9 @@ final class AppModel {
     let wakeUps = WakeUps()
     let groups = BotGroups()
     /// Group chats that live on your machines, which their machines run.
-    let machineGroups = MachineGroups()
+    let boxGroups = BoxGroups()
     /// Every group chat, this Mac's and your machines', as the window and the phone show them.
-    @ObservationIgnored private(set) lazy var chats = GroupChats(mac: groups, machines: machineGroups)
+    @ObservationIgnored private(set) lazy var chats = GroupChats(mac: groups, machines: boxGroups)
     /// What this Mac keeps, brought up to date with this version once, as it launches.
     let calibration = Calibration()
     /// Bots and chats moving to another computer.
@@ -190,13 +190,13 @@ final class AppModel {
         bots.app = self
         wakeUps.app = self
         groups.app = self
-        machineGroups.app = self
+        boxGroups.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
-        workspace.runsOnAgents(groups.agentSeatIDs.union(machineGroups.agentSeatIDs))
-        workspace.seats = groups.seatIDs.union(machineGroups.seatIDs)
+        workspace.runsOnAgents(groups.agentSeatIDs.union(boxGroups.agentSeatIDs))
+        workspace.seats = groups.seatIDs.union(boxGroups.seatIDs)
     }
 
     /// What a phone's request reaches on this Mac (`PhoneLink`): its stores, as they are now, and

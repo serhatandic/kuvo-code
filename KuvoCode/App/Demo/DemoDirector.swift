@@ -286,7 +286,7 @@ enum DemoDirector {
         if let place = environment["KUVO_DEMO_MOVE_GROUP"], groups.machine(of: group.id) != (place.isEmpty ? nil : place) {
             let machine = place.isEmpty ? nil : place
             let ends = [machine, groups.machine(of: group.id)].compactMap { $0 }
-            await DemoWait.until("group chats running on \(ends) (KUVO_DEMO_MOVE_GROUP)", limit: .seconds(180)) { ends.allSatisfy(app.machineGroups.running.contains) }
+            await DemoWait.until("group chats running on \(ends) (KUVO_DEMO_MOVE_GROUP)", limit: .seconds(180)) { ends.allSatisfy(app.boxGroups.running.contains) }
             do {
                 try await app.moves.move(group: group.id, to: machine)
                 print("KUVO_DEMO_MOVE_GROUP moved \(group.name)")
