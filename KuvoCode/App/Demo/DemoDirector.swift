@@ -479,6 +479,8 @@ enum DemoDirector {
                 model.reviewComments.append(ReviewComment(file: parts[0], line: line, side: .new, snippet: snippet, text: parts[2]))
             }
         }
+        // KUVO_DEMO_GROUP_REPLAY=setup|run: a group chat's discussion, measured (see PerfGroups).
+        if let mode = environment["KUVO_DEMO_GROUP_REPLAY"] { return await PerfGroups.run(mode, app: app) }
         guard let folder = environment["KUVO_DEMO_FOLDER"] else { return }
         // KUVO_DEMO_REPLAY=<file>: a recorded run, played into a new session there (see PerfReplay).
         if let file = environment["KUVO_DEMO_REPLAY"] {

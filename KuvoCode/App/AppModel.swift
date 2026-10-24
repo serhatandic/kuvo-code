@@ -349,6 +349,10 @@ final class AppModel {
             // What some providers need until opencode handles it (see ProviderCompatibility).
             let compatibility = ProviderCompatibility.config
             if !compatibility.isEmpty { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(compatibility, into: shell["OPENCODE_CONFIG_CONTENT"]) }
+            #if DEBUG
+            // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).
+            if let perf = PerfGroups.providerConfig { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(perf, into: shell["OPENCODE_CONFIG_CONTENT"]) }
+            #endif
             // The browser tools, for the engine to connect to. Without them the agent
             // still works, just without the browser.
             do {

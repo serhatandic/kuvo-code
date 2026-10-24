@@ -146,6 +146,145 @@ CASES = {
 }
 
 
+# ---- Group chats (PerfGroups): a three-bot discussion on a stand-in model ----
+
+ENGINE = os.environ.get("KUVO_PERF_ENGINE", HOME + "/Library/Application Support/run.kuvo.code/engine/2.0.32/opencode")
+
+
+class StandIn:
+    """An OpenAI-compatible model on 127.0.0.1 that answers a group chat's turns with the recorded
+    discussion (groups/discussion.json): the bot whose turn it is says its next line, a word at a
+    time at the pace it was written, then PASS; a wrap-up is the lead's. When each reply finished
+    goes to `log`, to set against when it reached the chat."""
+
+    def __init__(self, log):
+        import http.server
+        import threading
+        script = json.load(open(os.path.join(HERE, "groups", "discussion.json")))
+        self.lines = {name: list(lines) for name, lines in script["lines"].items()}
+        self.wrap_up = script["wrapUp"]
+        self.pace = 1.0 / script["words_per_second"]
+        self.log = log
+        open(log, "w").close()
+        stand_in = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"object": "list", "data": [{"id": "standin", "object": "model"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
+                text = stand_in.reply(asked)
+                if not asked.get("stream"):
+                    body = json.dumps({"id": "c", "object": "chat.completion", "created": int(time.time()), "model": "standin",
+                                       "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                                       "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+                def chunk(delta, finish=None, usage=None):
+                    value = {"id": "c", "object": "chat.completion.chunk", "created": int(time.time()), "model": "standin",
+                             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+                    if usage:
+                        value["usage"] = usage
+                    self.wfile.write(("data: " + json.dumps(value) + "\n\n").encode())
+                    self.wfile.flush()
+
+                chunk({"role": "assistant", "content": ""})
+                words = text.split(" ")
+                for index, word in enumerate(words):
+                    chunk({"content": word + ("" if index == len(words) - 1 else " ")})
+                    time.sleep(stand_in.pace)
+                chunk({}, "stop", {"prompt_tokens": 1000, "completion_tokens": len(words), "total_tokens": 1000 + len(words)})
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                if text != "PASS":
+                    with open(stand_in.log, "a") as f:
+                        f.write(json.dumps({"at": round(time.time() * 1000), "text": text[:80]}) + "\n")
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = "http://127.0.0.1:%d/v1" % self.server.server_address[1]
+
+    def reply(self, asked):
+        import re
+        said = []
+        for message in asked.get("messages", []):
+            content = message.get("content")
+            if isinstance(content, list):
+                content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+            if message.get("role") == "user" and isinstance(content, str):
+                said.append(content)
+        last = said[-1] if said else ""
+        if "Wrap up this discussion now" in last:
+            return self.wrap_up
+        turn = re.findall(r"Your turn, ([A-Za-z]+)\.", last)
+        if turn and self.lines.get(turn[-1]):
+            return self.lines[turn[-1]].pop(0)
+        return "PASS"
+
+    def stop(self):
+        self.server.shutdown()
+
+
+def groups_bench(app, label):
+    """Plays the discussion in a group chat of `app` (a build of this checkout or an older one),
+    from a clean copy: the bots and 40 chats made first, then the app opened again (the chats it
+    shows in its first moment, kept from before) and the discussion measured. Prints its numbers."""
+    clean()
+    os.makedirs(ROOT, exist_ok=True)
+    replies = os.path.join(ROOT, "replies.jsonl")
+    stand_in = StandIn(replies)
+    result = os.path.join(ROOT, "groups-result.json")
+    try:
+        for mode in ["setup", "run"]:
+            if os.path.exists(result):
+                os.remove(result)
+            launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, KUVO_OPENCODE_BINARY=ENGINE)
+            deadline = time.time() + 900
+            while not (os.path.exists(result) and os.path.getsize(result) > 0):
+                if time.time() > deadline:
+                    raise RuntimeError("no result from " + mode)
+                time.sleep(1)
+            quit_app(app)
+        measured = json.load(open(result))
+    finally:
+        stand_in.stop()
+    finished = [json.loads(line) for line in open(replies) if line.strip()]
+    lags = []
+    for shown in measured.get("appeared", []):
+        match = next((reply for reply in finished if reply["text"][:60] == shown["text"][:60]), None)
+        if match:
+            lags.append(shown["at"] - match["at"])
+    lags.sort()
+    p95 = lags[min(len(lags) - 1, int(len(lags) * 0.95))] if lags else None
+    line = "[%s] %d replies, reply-to-row p95 %s ms (all %s); first frame %s chats; %s s; app %.0f%% CPU, bridge %.0f%%, engine %.0f%%; %s" % (
+        label, len(lags), p95, lags, measured.get("firstFrameChats"), measured.get("seconds"), measured.get("appCPU", 0),
+        measured.get("bridgeCPU", 0), measured.get("engineCPU", 0), measured.get("meter"))
+    with open(os.path.join(ROOT, "results.txt"), "a") as f:
+        f.write(line + "\n")
+    return line
+
+
 def clean():
     """Removes everything the perf copy keeps on this Mac, and the perf folder."""
     quit_app()
@@ -167,6 +306,7 @@ USAGE = """kuvo_perf.py <command>
   record <name> <prompt>         a real run with a free model, recorded as <name>.jsonl
   bench <app> <name> <case>      plays <name>.jsonl into <app> and prints the measurements
                                  (cases: %s; KEY=VALUE adds launch values)
+  groups <app> [label]           a three-bot group chat discussion in <app>, on a stand-in model
   clean                          quits the copy and removes all it keeps""" % ", ".join(CASES)
 
 if __name__ == "__main__":
@@ -181,6 +321,8 @@ if __name__ == "__main__":
     elif a[0] == "bench" and len(a) >= 4:
         extra = dict(kv.split("=", 1) for kv in a[4:])
         print(bench(os.path.abspath(a[1]), os.path.join(ROOT, a[2] + ".jsonl"), "%s %s %s" % (os.path.basename(a[1]), a[2], a[3]), **{**CASES[a[3]], **extra}))
+    elif a[0] == "groups" and len(a) >= 2:
+        print(groups_bench(os.path.abspath(a[1]), a[2] if len(a) > 2 else os.path.basename(a[1])))
     elif a[0] == "clean":
         clean()
     else:

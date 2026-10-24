@@ -1,0 +1,17 @@
+{
+  "about": "A three-bot discussion, as kuvo_perf.py's stand-in model serves it to a group chat (PerfGroups): Ada leads, Ben and Cy weigh in, Ada sums up. Each bot's lines go in turn, then PASS. Written at about 60 words a second, a word at a time.",
+  "words_per_second": 60,
+  "lines": {
+    "Ada": [
+      "Let's settle it. The release candidate has been green on CI for three days, the migration ran clean on the staging copy of production, and the only open bug tagged for 2.0 is the settings sheet flicker, which is cosmetic. My lean is Friday, with a short freeze from Wednesday noon so nothing new lands. &Ben, how does the build look on the older Macs, and &Cy, is support ready for the questions the new sync will bring?",
+      "Agreed on both. Then the freeze holds from Wednesday noon, Ben owns the signing and notarization run on Thursday, and Cy gets the help pages and the canned replies out before the announcement goes. If the notarization queue is slow again we slip to Monday rather than shipping late on Friday evening."
+    ],
+    "Ben": [
+      "The build is fine on Apple silicon. On the two Intel machines in the lab the first launch takes about eleven seconds while the engine unpacks, which is slower than 1.9 but within what we promised. The one thing that worries me is notarization: last week it took four hours on a Friday afternoon. If we sign Thursday evening we have a full day of slack, and I'd rather keep that than gain one day."
+    ],
+    "Cy": [
+      "Support can be ready by Thursday. I've drafted the help page for the new sync and the three replies we'll need most: where did my settings go, why is the first launch slow, and how do I turn sync off. What I still need is one screenshot of the sync settings with the final wording, and a sentence from Ada for the announcement about what happens to people on 1.8 who haven't updated in months."
+    ]
+  },
+  "wrapUp": "Decided: we ship 2.0 on Friday, with a freeze from Wednesday noon.\n\n- **Ben** runs signing and notarization on Thursday evening, leaving Friday as slack.\n- **Cy** publishes the sync help page and the three replies by Thursday, once she has the final settings screenshot.\n- **Ada** writes the announcement, including what happens to people still on 1.8.\n\nStill open: if notarization runs past Friday morning, we move the release to Monday rather than ship late in the day."
+}
