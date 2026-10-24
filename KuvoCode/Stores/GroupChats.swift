@@ -2,14 +2,14 @@ import Foundation
 import OpenCodeKit
 
 /// Every group chat, wherever it lives, as the window and the phone show them: this Mac's
-/// (`BotGroups`, which runs them) and your machines' (`MachineGroups`, which their machines run).
+/// (`BotGroups`, which runs them) and your machines' (`BoxGroups`, which their machines run).
 /// What you do in one goes to where it lives.
 @MainActor @Observable
 final class GroupChats {
     let mac: BotGroups
-    let machines: MachineGroups
+    let machines: BoxGroups
 
-    init(mac: BotGroups, machines: MachineGroups) {
+    init(mac: BotGroups, machines: BoxGroups) {
         self.mac = mac
         self.machines = machines
     }
@@ -18,7 +18,7 @@ final class GroupChats {
     private func onMachine(_ id: String) -> Bool { machines.has(id) && mac.group(id) == nil }
     /// The machine a group chat lives on; nil for this Mac's.
     func machine(of id: String) -> String? { onMachine(id) ? machines.chats.first { $0.group.id == id }?.machine : nil }
-    private var machineChats: [MachineGroups.Chat] { machines.chats.filter { mac.group($0.group.id) == nil } }
+    private var machineChats: [BoxGroups.Chat] { machines.chats.filter { mac.group($0.group.id) == nil } }
 
     var list: [BotGroup] { mac.list + machineChats.map(\.group) }
     var speaking: [String: String] { mac.speaking.merging(machines.speaking.filter { onMachine($0.key) }) { first, _ in first } }

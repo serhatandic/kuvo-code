@@ -571,6 +571,11 @@ final class BotGroups {
         rememberSoon(group.id)
     }
 
+    /// That chat isn't here any more.
+    struct Gone: LocalizedError {
+        var errorDescription: String? { "That group chat isn’t there any more." }
+    }
+
     // MARK: Talking
 
     /// A seat at work, thinking or writing (from the engine's stream): its latest thought, in a
@@ -2049,5 +2054,32 @@ final class BotGroups {
     private func saveLog(_ id: String) {
         guard let messages = logs[id] else { return }
         JSONFile.write(messages, to: Self.folder.appending(path: "\(id).json"), isoDates: true, readable: true)
+    }
+}
+
+/// This Mac's group chats, as a move sees them: what's moving is frozen (`Moves.isFrozen`), so a
+/// chat brought here talks only once the move is done, and one held here doesn't talk meanwhile.
+extension BotGroups: GroupHome {
+    var isReachable: Bool { true }
+
+    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) {
+        stop(id)
+        guard let group = group(id) else { throw Gone() }
+        return (group, messages(in: id))
+    }
+
+    func bring(_ group: BotGroup, messages: [GroupMessage]) async throws {
+        adopt(group, messages: messages)
+    }
+
+    func activate(_ id: String) async throws {}
+
+    func letGo(_ id: String) async throws {
+        await release(id, toTrash: true)
+    }
+
+    func takeBack(_ id: String) async -> Bool {
+        await release(id, toTrash: false)
+        return true
     }
 }

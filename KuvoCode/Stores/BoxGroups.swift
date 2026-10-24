@@ -3,13 +3,53 @@ import KuvoLink
 import OpenCodeKit
 import os
 
+/// The group chats of one of your computers (a box), as a move between them sees it: the same
+/// steps on both ends, wherever each is. Held where it was, brought where it's going and held
+/// there, then started there and let go of where it was; or, cut short, taken back.
+@MainActor
+protocol GroupHome: AnyObject {
+    /// Whether it can be asked now (a machine connected).
+    var isReachable: Bool { get }
+    /// Its talk stops and nothing more happens to it here; the chat as it is now.
+    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage])
+    /// A copy brought here, held until it's started.
+    func bring(_ group: BotGroup, messages: [GroupMessage]) async throws
+    /// Started here.
+    func activate(_ id: String) async throws
+    /// Gone from here, moved away: to the trash where it was, its seats left (its bots live there).
+    func letGo(_ id: String) async throws
+    /// A copy brought here that didn't get to start: gone, seats and all left as they are.
+    /// Whether it is (not if it can't be asked now).
+    func takeBack(_ id: String) async -> Bool
+}
+
+/// A machine's group chats, as a move sees them (`GroupHome`), through `BoxGroups`.
+@MainActor
+final class MachineGroupHome: GroupHome {
+    let machine: String
+    let groups: BoxGroups
+
+    init(machine: String, groups: BoxGroups) {
+        self.machine = machine
+        self.groups = groups
+    }
+
+    var isReachable: Bool { groups.reachable(machine) }
+    func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) { try await groups.hold(id) }
+    func bring(_ group: BotGroup, messages: [GroupMessage]) async throws { try await groups.bring(group, messages: messages, to: machine) }
+    func activate(_ id: String) async throws { try await groups.activate(id) }
+    func letGo(_ id: String) async throws { try await groups.release(id) }
+    func takeBack(_ id: String) async -> Bool { await groups.takeBack(id, on: machine) }
+}
+
 /// Group chats that live on your machines: each machine's agents bridge runs them
 /// (`Agents/src/groups`), so they talk, meet and hand out work while this Mac is off. This Mac
 /// shows them as it shows its own (`BotGroups`, which stays as it is), from what each machine says
 /// of them as they go (its bridge's event feed), and sends there what you do in them. What it last
-/// saw of each is kept here, so they show while their machine is away.
+/// saw of each is kept here, so they show while their machine is away. It holds no rules of its
+/// own: what can be, and what comes of it, is the box's to say.
 @MainActor @Observable
-final class MachineGroups {
+final class BoxGroups {
     /// A chat as its machine last said it.
     struct Chat: Codable, Hashable {
         var machine: String
@@ -89,7 +129,7 @@ final class MachineGroups {
         touchedWhileListing[machine] = []
         defer { touchedWhileListing[machine] = nil }
         do {
-            listed = try await api.machineGroups()
+            listed = try await api.boxGroups()
         } catch let error as ServerError where error.status == 404 {
             // An older bridge: none run there yet.
             running.remove(machine)
@@ -115,7 +155,7 @@ final class MachineGroups {
                 // One held there for a move that isn't under way, which this Mac has (a move taken
                 // back that couldn't let it go there): let go now, its seats left.
                 if chat.status == "held", app?.groups.group(chat.group.id) != nil, app?.moves.isMoving(chat.group.id) != true, app?.moves.isPending(chat.group.id) != true {
-                    _ = try? await api.machineGroupAction(chat.group.id, "release")
+                    _ = try? await api.boxGroupAction(chat.group.id, "release")
                     forget(chat.group.id)
                     continue
                 }
@@ -240,7 +280,7 @@ final class MachineGroups {
             group.viewed = seen
             if let api = api(machine) {
                 let viewed = ISO8601DateFormatter().string(from: seen)
-                Task { try? await api.editMachineGroup(group.id, ["viewed": .string(viewed)]) }
+                Task { try? await api.editBoxGroup(group.id, ["viewed": .string(viewed)]) }
             }
         }
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
@@ -264,7 +304,7 @@ final class MachineGroups {
             reloading[id, default: 1] -= 1
             if reloading[id] == 0 { reloading[id] = nil; arriving[id] = nil }
         }
-        guard let read = try? await api.machineGroup(id) else { return }
+        guard let read = try? await api.boxGroup(id) else { return }
         apply(read.group, held: read.status == "held", state: read.state, on: machine)
         // What came while it was read: kept (the read is from before it).
         var messages = read.messages
@@ -291,7 +331,7 @@ final class MachineGroups {
         guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
         let members = Set((chat(id)?.group.members ?? []).compactMap { app?.bots.bot($0)?.sessionID })
         let named = AgentReferences.note(naming: AgentReferences.named(in: [text], excluding: members), here: machine)
-        let message = try await api.machineGroupAction(id, "send", ["text": .string(text)].merging(named.map { ["named": .string($0)] } ?? [:]) { $1 })
+        let message = try await api.boxGroupAction(id, "send", ["text": .string(text)].merging(named.map { ["named": .string($0)] } ?? [:]) { $1 })
         Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": "machine"])
         if let message = message.flatMap({ try? Self.message(from: $0) }), !(logs[id] ?? []).contains(where: { $0.id == message.id }) {
             logs[id, default: []].append(message)
@@ -314,7 +354,7 @@ final class MachineGroups {
     /// Takes the chat back to before one of your messages; its words, for the composer.
     func undo(from messageID: String, in id: String) async -> String? {
         guard let machine = machine(of: id), let api = api(machine),
-              let answer = try? await api.machineGroupAction(id, "undo", ["message": .string(messageID)]) else { return nil }
+              let answer = try? await api.boxGroupAction(id, "undo", ["message": .string(messageID)]) else { return nil }
         await reload(id)
         return answer["text"]?.string
     }
@@ -327,7 +367,7 @@ final class MachineGroups {
         save()
         guard let api = api(chats[index].machine) else { return }
         let viewed = ISO8601DateFormatter().string(from: now)
-        Task { try? await api.editMachineGroup(id, ["viewed": .string(viewed)]) }
+        Task { try? await api.editBoxGroup(id, ["viewed": .string(viewed)]) }
     }
 
     func isUnread(_ group: BotGroup) -> Bool {
@@ -335,7 +375,8 @@ final class MachineGroups {
         return last.time > (group.viewed ?? .distantPast)
     }
 
-    /// A new name, purpose, members (the lead first) or meeting, there.
+    /// A new name, purpose, members (the lead first) or meeting, there. A meeting goes as you set
+    /// it up (its time, how often, its topic), and the box works out when it comes, on its clock.
     func update(_ edited: BotGroup) async throws {
         guard let machine = machine(of: edited.id), let api = api(machine) else { throw Failure.away(machine(of: edited.id) ?? "Its machine") }
         var edits: [String: JSONValue] = [
@@ -343,7 +384,7 @@ final class MachineGroups {
             "members": .array(edited.members.map(JSONValue.string)),
         ]
         if let meeting = edited.meeting, let value = Self.json(meeting) { edits["meeting"] = value } else { edits["meeting"] = .null }
-        try await api.editMachineGroup(edited.id, edits)
+        try await api.editBoxGroup(edited.id, edits)
         await reload(edited.id)
     }
 
@@ -351,7 +392,7 @@ final class MachineGroups {
     func delete(_ group: BotGroup) async throws {
         guard let machine = machine(of: group.id), let api = api(machine) else { throw Failure.away(machine(of: group.id) ?? "Its machine") }
         do {
-            try await api.deleteMachineGroup(group.id)
+            try await api.deleteBoxGroup(group.id)
         } catch let refused as ServerError where refused.status == 404 && refused.message == "No such chat." {
             // Gone there already: as good as deleted.
         } catch let refused as ServerError where refused.status == 409 {
@@ -372,7 +413,7 @@ final class MachineGroups {
 
     private func act(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) {
         guard let machine = machine(of: id), let api = api(machine) else { return }
-        Task { _ = try? await api.machineGroupAction(id, action, body) }
+        Task { _ = try? await api.boxGroupAction(id, action, body) }
     }
 
     // MARK: Moving one
@@ -380,7 +421,7 @@ final class MachineGroups {
     /// A chat brought to a machine, with its messages (`Moves`): held there until `activate`.
     func bring(_ group: BotGroup, messages: [GroupMessage], to machine: String) async throws {
         guard let api = api(machine) else { throw Failure.away(machine) }
-        try await api.putMachineGroup(group, messages: messages, held: true)
+        try await api.putBoxGroup(group, messages: messages, held: true)
         apply(group, held: true, state: State(discussing: false, paused: false), on: machine)
         logs[group.id] = messages
         saveLog(group.id)
@@ -388,14 +429,14 @@ final class MachineGroups {
 
     func activate(_ id: String) async throws {
         guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
-        _ = try await api.machineGroupAction(id, "activate")
+        _ = try await api.boxGroupAction(id, "activate")
         await reload(id)
     }
 
     /// Held there for a move away: its talk stops; the chat as it is now.
     func hold(_ id: String) async throws -> (group: BotGroup, messages: [GroupMessage]) {
         guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
-        guard let held = try await api.machineGroupAction(id, "hold"),
+        guard let held = try await api.boxGroupAction(id, "hold"),
               let group = held["group"].flatMap({ try? Self.decode(BotGroup.self, from: $0) }),
               let messages = held["messages"].flatMap({ try? Self.decode([GroupMessage].self, from: $0) }) else { throw Failure.unreadable }
         return (group, messages)
@@ -404,7 +445,7 @@ final class MachineGroups {
     /// Let go there, its seats left (its bots stay there); gone from here.
     func release(_ id: String) async throws {
         guard let machine = machine(of: id), let api = api(machine) else { throw Failure.away(machine(of: id) ?? "Its machine") }
-        _ = try await api.machineGroupAction(id, "release")
+        _ = try await api.boxGroupAction(id, "release")
         forget(id)
     }
 
@@ -413,7 +454,7 @@ final class MachineGroups {
     func takeBack(_ id: String, on machine: String) async -> Bool {
         guard let api = api(machine) else { return false }
         do {
-            _ = try await api.machineGroupAction(id, "release")
+            _ = try await api.boxGroupAction(id, "release")
         } catch let error as ServerError where error.status == 404 {
             // Never got there.
         } catch {
@@ -454,7 +495,7 @@ final class MachineGroups {
         encoder.outputFormatting = .sortedKeys
         guard let data = try? encoder.encode(settings), settingsGiven[machine] != data else { return }
         do {
-            try await api.giveMachineGroupSettings(.object(settings))
+            try await api.giveBoxGroupSettings(.object(settings))
             settingsGiven[machine] = data
         } catch {
             log.error("\(machine, privacy: .public)'s group chats didn't get this Mac's settings: \(error.localizedDescription, privacy: .public)")
@@ -516,10 +557,10 @@ private extension String {
 }
 
 extension OpenCodeAPI {
-    struct MachineGroupRead: Decodable {
+    struct BoxGroupRead: Decodable {
         var group: BotGroup
         var status: String
-        var state: MachineGroups.State
+        var state: BoxGroups.State
         var messages: [GroupMessage]
     }
 
@@ -534,17 +575,17 @@ extension OpenCodeAPI {
         return try Self.groupDecoder.decode(type, from: JSONEncoder().encode(value))
     }
 
-    func machineGroups() async throws -> [MachineGroups.Listed] {
-        struct Answer: Decodable { var data: [MachineGroups.Listed] }
+    func boxGroups() async throws -> [BoxGroups.Listed] {
+        struct Answer: Decodable { var data: [BoxGroups.Listed] }
         return try await groupData(try client.request("GET", "api/kuvo/groups"), as: Answer.self).data
     }
 
-    func machineGroup(_ id: String) async throws -> MachineGroupRead {
-        struct Answer: Decodable { var data: MachineGroupRead }
+    func boxGroup(_ id: String) async throws -> BoxGroupRead {
+        struct Answer: Decodable { var data: BoxGroupRead }
         return try await groupData(try client.request("GET", "api/kuvo/groups/\(id.groupPathEscaped)"), as: Answer.self).data
     }
 
-    func putMachineGroup(_ group: BotGroup, messages: [GroupMessage], held: Bool) async throws {
+    func putBoxGroup(_ group: BotGroup, messages: [GroupMessage], held: Bool) async throws {
         struct Body: Encodable { var group: BotGroup; var messages: [GroupMessage]; var status: String }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -552,21 +593,21 @@ extension OpenCodeAPI {
         _ = try await client.send(try client.request("PUT", "api/kuvo/groups/\(group.id.groupPathEscaped)", body: body), as: JSONValue.self)
     }
 
-    func editMachineGroup(_ id: String, _ edits: [String: JSONValue]) async throws {
+    func editBoxGroup(_ id: String, _ edits: [String: JSONValue]) async throws {
         _ = try await client.send(try client.request("PATCH", "api/kuvo/groups/\(id.groupPathEscaped)", body: JSONValue.object(edits)), as: JSONValue.self)
     }
 
-    func deleteMachineGroup(_ id: String) async throws {
+    func deleteBoxGroup(_ id: String) async throws {
         _ = try await client.send(try client.request("DELETE", "api/kuvo/groups/\(id.groupPathEscaped)"), as: JSONValue.self)
     }
 
     /// What `action` answers, its `data`.
-    func machineGroupAction(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) async throws -> JSONValue? {
+    func boxGroupAction(_ id: String, _ action: String, _ body: [String: JSONValue] = [:]) async throws -> JSONValue? {
         let answer = try await client.send(try client.request("POST", "api/kuvo/groups/\(id.groupPathEscaped)/\(action)", body: JSONValue.object(body)), as: JSONValue.self)
         return answer["data"]
     }
 
-    func giveMachineGroupSettings(_ settings: JSONValue) async throws {
+    func giveBoxGroupSettings(_ settings: JSONValue) async throws {
         _ = try await client.send(try client.request("PUT", "api/kuvo/groups/settings", body: settings), as: JSONValue.self)
     }
 }

@@ -461,7 +461,7 @@ final class Bots {
     /// its place in the list and its group chats, its wake-ups, tabs, conversation and keys.
     private func forget(_ bot: Bot) async {
         await app?.groups.remove(bot)
-        await app?.machineGroups.remove(bot)
+        await app?.boxGroups.remove(bot)
         list.removeAll { $0.id == bot.id }
         described[bot.id] = nil
         if seenThere[bot.id] != nil { seenThere[bot.id] = nil }

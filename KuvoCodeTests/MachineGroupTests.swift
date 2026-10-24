@@ -101,11 +101,11 @@ import Testing
         app.bots.app = app
         app.wakeUps.app = app
         app.groups.app = app
-        app.machineGroups.app = app
+        app.boxGroups.app = app
         app.moves.app = app
         app.workspace.api = mac.api
         let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: bridge.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
-        app.machineGroups.bridge = { $0 == machine ? api : nil }
+        app.boxGroups.bridge = { $0 == machine ? api : nil }
         let held = held
         bridge.on("GET", "/api/kuvo/groups") { held.answer($0) }
         for method in ["GET", "PUT", "PATCH", "DELETE", "POST"] { bridge.on(method, "/api/kuvo/groups/*") { held.answer($0) } }
@@ -140,7 +140,7 @@ import Testing
         let app = app()
         let mine = app.groups.create(name: "Here", members: ["bot_pal"])
 
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
 
         #expect(Set(app.chats.list.map(\.id)) == [mine.id, "grp_box0000001"])
         #expect(app.chats.machine(of: "grp_box0000001") == "box" && app.chats.machine(of: mine.id) == nil)
@@ -159,22 +159,22 @@ import Testing
         #expect(phone.allSatisfy { $0["moving"] as? Bool == false })
         // What it says as it goes: a bot talking, a new message.
         let group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"], seats: ["bot_pal": "ses_seatP"])
-        app.machineGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+        app.boxGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                           "state": ["speaking": "bot_lb", "discussing": true, "paused": false]]), machine: "box")
         #expect(app.chats.speaking["grp_box0000001"] == "bot_lb" && app.chats.discussing.contains("grp_box0000001"))
-        app.machineGroups.handle(try bridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
+        app.boxGroups.handle(try bridge.event("kuvo.group.message", ["id": "grp_box0000001", "message":
             ["id": "gm_2", "author": "bot_lb", "text": "Build is green.", "time": "2026-10-22T08:01:00Z", "kind": "message"]]), machine: "box")
         #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning.", "Build is green."])
         // Seen last, for while it's away.
-        let lastSeen = MachineGroups()
+        let lastSeen = BoxGroups()
         #expect(lastSeen.chats.map(\.group.id) == ["grp_box0000001"] && lastSeen.messages(in: "grp_box0000001").count == 2)
         #expect(lastSeen.discussing.isEmpty, "nothing talks until its machine says so")
         // What you write goes there.
-        try await app.machineGroups.send("Go ahead", to: "grp_box0000001")
+        try await app.boxGroups.send("Go ahead", to: "grp_box0000001")
         #expect(held.actions.contains("POST grp_box0000001/send"))
         #expect(app.chats.messages(in: "grp_box0000001").last?.text == "Go ahead")
         // Gone there: gone here.
-        app.machineGroups.handle(try bridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
+        app.boxGroups.handle(try bridge.event("kuvo.group.deleted", ["id": "grp_box0000001"]), machine: "box")
         #expect(!app.chats.list.contains { $0.id == "grp_box0000001" })
     }
 
@@ -189,7 +189,7 @@ import Testing
         held.add(Self.group("grp_box0000002", members: ["bot_pal", "bot_lb"]))
         let app = app()
         let mine = app.groups.create(name: "Here", members: ["bot_ada", "bot_ben"])
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         let link = PhoneLink()
         link.groups = app.chats
         func delete(_ id: String) async throws -> (status: Int, message: String?) {
@@ -217,7 +217,7 @@ import Testing
         #expect(moving.status == 409 && moving.message == "That chat is moving. Try again once it’s there.")
         #expect(held.status("grp_box0000002") == "held" && app.chats.group("grp_box0000002") != nil)
 
-        app.machineGroups.bridge = { _ in nil }
+        app.boxGroups.bridge = { _ in nil }
         let away = try await delete("grp_box0000002")
         #expect(away.status == 503 && away.message == "box isn’t connected. Connect to it, then try again.")
         #expect(app.chats.group("grp_box0000002") != nil)
@@ -231,7 +231,7 @@ import Testing
         try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
         held.add(Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"]), messages: [Self.said])
         let app = app()
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         let link = PhoneLink()
         link.groups = app.chats
         var lines: [[String: Any]] = []
@@ -250,7 +250,7 @@ import Testing
         let group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"])
         let read: [String: Any] = ["kind": "tool", "call": ["type": "tool", "id": "call_1", "name": "read",
                                                             "state": ["status": "completed", "input": ["path": "notes.txt"], "content": []]]]
-        app.machineGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+        app.boxGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                           "state": ["speaking": "bot_lb", "discussing": true, "paused": false,
                                                                                     "activity": [read, ["kind": "thinking", "text": "Checking the build"]]]]), machine: "box")
         let shown = try #require(app.chats.activity["grp_box0000001"])
@@ -260,7 +260,7 @@ import Testing
         try await until { lines.count == 2 }
         #expect(lines.count == 2 && lines[1]["messages"] == nil, "the phone keeps the ones it has")
         #expect((lines.last?["activity"] as? [Any])?.count == 2 && lines.last?["speaking"] as? String == "bot_lb")
-        app.machineGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+        app.boxGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                           "state": ["discussing": false, "paused": false]]), machine: "box")
         #expect(app.chats.activity["grp_box0000001"] == nil)
     }
@@ -272,7 +272,7 @@ import Testing
         try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
         held.add(Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"]), messages: [Self.said])
         let app = app()
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         let told = { held.actions.filter { $0 == "PATCH grp_box0000001" }.count }
         app.chats.markViewed("grp_box0000001")
         try await until { told() > 0 }
@@ -280,7 +280,7 @@ import Testing
         let seen = try #require(app.chats.group("grp_box0000001")?.viewed)
         var group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"])
         group["viewed"] = ISO8601DateFormatter().string(from: seen)
-        app.machineGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
+        app.boxGroups.handle(try bridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                           "state": ["discussing": false, "paused": false]]), machine: "box")
         try await Task.sleep(for: .milliseconds(300))
         #expect(told() == 1, "not told again")
@@ -293,7 +293,7 @@ import Testing
         let app = app()
         let chat = app.groups.create(name: "k", members: ["bot_pal", "bot_lb"])
         app.groups.adopt(chat, messages: [try JSONDecoder.isoDecoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject: Self.said))])
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
 
         try await app.moves.move(group: chat.id, to: "box")
 
@@ -326,7 +326,7 @@ import Testing
         try saveBots([("bot_pal", "Pal", "box"), ("bot_scout", "Scout", nil)])
         let app = app()
         let chat = app.groups.create(name: "Mixed", members: ["bot_pal", "bot_scout"])
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         do {
             try await app.moves.move(group: chat.id, to: "box")
             Issue.record("it moved")
@@ -344,7 +344,7 @@ import Testing
         try saveBots([("bot_pal", "Pal", machine), ("bot_lb", "Lokum Builder", machine)])
         let app = app(machine: machine)
         let chat = app.groups.create(name: "k", members: ["bot_pal", "bot_lb"], meeting: .init(next: .now.addingTimeInterval(-60), topic: "Where we are"))
-        await app.machineGroups.connected(machine)
+        await app.boxGroups.connected(machine)
         let waypoint = Waypoint()
         bridge.on("PUT", "/api/kuvo/groups/\(chat.id)") { _ in
             waypoint.block()
@@ -393,11 +393,11 @@ import Testing
         let chat = app.groups.create(name: "k", members: ["bot_pal", "bot_lb"])
         app.groups.adopt(chat, messages: [try JSONDecoder.isoDecoder.decode(GroupMessage.self, from: JSONSerialization.data(withJSONObject: Self.said))])
         held.add(Self.group(chat.id, members: ["bot_pal", "bot_lb"]), status: "held")
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         #expect(app.chats.list.filter { $0.id == chat.id }.count == 1)
         #expect(app.chats.machine(of: chat.id) == nil && app.chats.messages(in: chat.id).map(\.text) == ["Morning."])
         #expect(held.actions.contains("POST \(chat.id)/release") && !held.has(chat.id))
-        #expect(!app.machineGroups.has(chat.id))
+        #expect(!app.boxGroups.has(chat.id))
     }
 
     @Test func aRemovedMachinesChatsGoFromHere() async throws {
@@ -405,11 +405,11 @@ import Testing
         try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
         held.add(Self.group("grp_box0000003", members: ["bot_pal", "bot_lb"]), messages: [Self.said])
         let app = app()
-        await app.machineGroups.connected("box")
+        await app.boxGroups.connected("box")
         #expect(app.chats.group("grp_box0000003") != nil)
-        app.machineGroups.forget(machine: "box")
+        app.boxGroups.forget(machine: "box")
         #expect(app.chats.group("grp_box0000003") == nil)
-        #expect(MachineGroups().chats.isEmpty, "nor kept for later")
+        #expect(BoxGroups().chats.isEmpty, "nor kept for later")
     }
 
     @Test func aDeletedBotLeavesAMachinesChats() async throws {
@@ -417,8 +417,8 @@ import Testing
         try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box"), ("bot_x", "X", "box")])
         held.add(Self.group("grp_box0000002", members: ["bot_pal", "bot_lb", "bot_x"]))
         let app = app()
-        await app.machineGroups.connected("box")
-        await app.machineGroups.remove(try #require(app.bots.bot("bot_x")))
+        await app.boxGroups.connected("box")
+        await app.boxGroups.remove(try #require(app.bots.bot("bot_x")))
         #expect(app.chats.group("grp_box0000002")?.members == ["bot_pal", "bot_lb"])
     }
 }

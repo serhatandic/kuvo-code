@@ -324,7 +324,7 @@ extension AppModel {
             guard let self else { return }
             workspace.syncPermissions()
             Task {
-                await self.machineGroups.giveSettings(to: machine)
+                await self.boxGroups.giveSettings(to: machine)
                 await self.bots.writeKit(on: machine)
             }
         }
@@ -332,7 +332,7 @@ extension AppModel {
         // models and Custom Auto lists (its own) in its catalog.
         engine.agents.onEvent = { [weak self, weak engine] event in
             // Its group chats, as it runs them.
-            if event.type.hasPrefix("kuvo.group.") { self?.machineGroups.handle(event, machine: machine); return }
+            if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: machine); return }
             engine?.catalog.handle(event)
             self?.workspace.handleAgents(event, machine: machine)
         }
@@ -341,7 +341,7 @@ extension AppModel {
             Task {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)
-                await self.machineGroups.connected(machine)
+                await self.boxGroups.connected(machine)
                 // A move of a group chat to or from it cut short, now it's there to finish.
                 await self.moves.recover()
             }
@@ -353,7 +353,7 @@ extension AppModel {
         }
         engine.onExit = { [weak self] in
             self?.workspace.forget(machine)
-            self?.machineGroups.disconnected(machine)
+            self?.boxGroups.disconnected(machine)
             // One way back at a time: a connection lost while one is tried is that one's to retry.
             guard !engine.isRetrying else { return }
             engine.isRetrying = true
@@ -480,7 +480,7 @@ extension AppModel {
         bots.fold(address, into: machine)
         AgentMail.shared.fold(address, into: machine)
         moves.fold(address, into: machine)
-        machineGroups.fold(address, into: machine)
+        boxGroups.fold(address, into: machine)
         // Its sessions listed again, now under one name; not connected (its own address doesn't
         // answer): now, at whichever does.
         if let engine = machines.engine(machine) {
@@ -509,7 +509,7 @@ extension AppModel {
         AgentMail.shared.machineRemoved(id)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
-        machineGroups.forget(machine: id)
+        boxGroups.forget(machine: id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
         // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
@@ -572,7 +572,7 @@ extension AppModel {
     private func keepSettingsCurrent(_ engine: MachineEngine) async {
         var wait = 30
         while !Task.isCancelled, engine.isBehind(await machineLaunch(engine)) {
-            if !workspace.isRunning(on: engine.machine.id), !machineGroups.isTalking(on: engine.machine.id),
+            if !workspace.isRunning(on: engine.machine.id), !boxGroups.isTalking(on: engine.machine.id),
                (try? await engine.api?.activeSessions())?.isEmpty == true {
                 // What it answered is this connection's: one closed meanwhile isn't started over.
                 guard !Task.isCancelled else { return }
@@ -600,7 +600,7 @@ extension AppModel {
             guard let self, !Task.isCancelled else { return }
             // Machines keep their own settings (`MachineBox`): this Mac's stay here. What their
             // group chats go by (Ask First, what's denied).
-            machineGroups.settingsChanged()
+            boxGroups.settingsChanged()
         }
     }
 
@@ -626,7 +626,7 @@ extension AppModel {
                 await MachineConnection.inTurn([
                     { await self.syncPersonalities(with: engine) },
                     { await self.bots.writeKit(on: engine.machine.id) },
-                    { await self.machineGroups.giveSettings(to: engine.machine.id) },
+                    { await self.boxGroups.giveSettings(to: engine.machine.id) },
                 ])
             }
         }
