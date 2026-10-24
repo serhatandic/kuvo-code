@@ -182,9 +182,11 @@ final class AppModel {
     @ObservationIgnored var restartedStuckEngine = false
     private let log = Logger(subsystem: "run.kuvo.code", category: "engine")
 
-    private var engineFolders: EngineFolders {
+    /// This Mac's engine's folders (its box reads its skills there too: `BoxProcess`).
+    nonisolated static var engineFolders: EngineFolders {
         EngineFolders(root: AppInfo.supportDirectory.appending(path: "opencode"))
     }
+    private var engineFolders: EngineFolders { Self.engineFolders }
 
     /// The stores told of each other, and of the machines' engines, once this Mac's engine is up.
     /// Also what the route scenarios run with (RouteContractTests).

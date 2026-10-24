@@ -42,6 +42,8 @@ final class BoxProcess {
     /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
     func start(engine: URL, environment: [String: String]) async {
         var env = environment
+        // GitHub's stand-in is for the tests' box only (`TestBox`), never the app's.
+        env["KUVO_TEST_GITHUB"] = nil
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
@@ -66,6 +68,9 @@ final class BoxProcess {
         }
         var env = environment
         env["KUVO_HOME"] = Self.home.path
+        // The engine's settings folder, where it reads the skills you add (a machine's box finds
+        // its engine's in its own folder): this Mac's skills stay where they've always been.
+        env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
         // Its temporary files, in the app's own temporary folder.
         let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
         env["TMPDIR"] = temporary.path + "/"

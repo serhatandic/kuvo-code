@@ -22,13 +22,36 @@ const github = http.createServer((request, response) => {
     ], truncated: false },
     // The engine beside it: the skills it lists, from other tools' folders too.
     "/api/skill": { data: [{ id: "pdf-forms", name: "pdf-forms" }] },
+    "/repos/acme/mixed": { default_branch: "main" },
+    "/repos/acme/mixed/git/trees/main?recursive=1": { tree: [
+      { path: "README.md", type: "blob" },
+      { path: "skills/docx/SKILL.md", type: "blob" },
+      // Copies kept for other tools, in hidden folders; one is only there.
+      { path: ".openclaw/skills/docx/SKILL.md", type: "blob" },
+      { path: ".claude/skills/only-here/SKILL.md", type: "blob" },
+      // A skill inside another's folder.
+      { path: "a/SKILL.md", type: "blob" }, { path: "a/notes.md", type: "blob" },
+      { path: "a/b/SKILL.md", type: "blob" }, { path: "a/b/c.txt", type: "blob" },
+      // One whose second file isn't there.
+      { path: "broken/SKILL.md", type: "blob" }, { path: "broken/gone.py", type: "blob" },
+    ], truncated: true },
+    "/repos/acme/one": { default_branch: "main" },
+    "/repos/acme/one/git/trees/main?recursive=1": { tree: [
+      { path: "SKILL.md", type: "blob" }, { path: "reference.md", type: "blob" }, { path: ".github/workflows/ci.yml", type: "blob" },
+    ] },
+    "/repos/acme/busy": { default_branch: "main" },
   };
+  if (request.url === "/repos/acme/busy/git/trees/main?recursive=1") {
+    response.writeHead(403);
+    return response.end();
+  }
   const files = {
     "/acme/skills/main/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Fills PDF forms\n---\nFill them.\n",
     "/acme/skills/main/skills/pdf/fill.py": "print('hi')\n",
     "/acme/skills/main/skills/c%2B%2B/SKILL.md": "---\nname: c++\ndescription: Writes C++\n---\nBe careful.\n",
     "/acme/skills/main/skills/c%2B%2B/a.cpp": "int a;\n",
     "/acme/skills/main/skills/c%2B%2B/b.cpp": "int b;\n",
+    "/acme/mixed/main/broken/SKILL.md": "---\nname: broken\n---\nBroken.\n",
   };
   if (answers[request.url]) {
     response.writeHead(200, { "content-type": "application/json" });
@@ -112,4 +135,29 @@ test("GitHub's collections, listed, described and installed from by the machine 
   assert.deepEqual(fs.readdirSync(path.join(skills, "c++")).sort(), [".kuvo-source.json", "SKILL.md", "a.cpp", "b.cpp"]);
   // Nothing half-made is left beside it.
   assert.deepEqual(fs.readdirSync(skills).filter(name => name.startsWith(".")), []);
+});
+
+test("a collection's skills, each listed once with its own files; a repository that's one skill; GitHub limiting says so", async () => {
+  const mixed = await ask("GET", "kuvo/skill-library/acme/mixed");
+  assert.equal(mixed.status, 200);
+  assert.deepEqual(mixed.value.skills.map(skill => skill.name).sort(), ["a", "b", "broken", "docx", "only-here"]);
+  assert.deepEqual(mixed.value.skills.find(skill => skill.path === "a").files.sort(), ["a/SKILL.md", "a/notes.md"]);
+  assert.deepEqual(mixed.value.skills.find(skill => skill.path === "a/b").files.sort(), ["a/b/SKILL.md", "a/b/c.txt"]);
+  assert.equal(mixed.value.skills.find(skill => skill.name === "docx").path, "skills/docx");
+  assert.equal(mixed.value.partial, true, "GitHub cut a very big one's list short");
+
+  const one = await ask("GET", "kuvo/skill-library/acme/one");
+  assert.deepEqual(one.value.skills, [{ name: "one", path: "", files: ["SKILL.md", "reference.md"] }]);
+
+  const busy = await ask("GET", "kuvo/skill-library/acme/busy");
+  assert.equal(busy.status, 503);
+  assert.match(busy.value.message, /limiting/);
+});
+
+test("a skill whose file can't be fetched leaves nothing half-installed", async () => {
+  const failed = await ask("POST", "kuvo/skill-library/install", { repository: "acme/mixed", path: "broken" });
+  assert.equal(failed.status, 404);
+  assert.equal(fs.existsSync(path.join(skills, "broken")), false);
+  assert.deepEqual(fs.readdirSync(skills).filter(name => name.startsWith(".")), []);
+  assert.equal((await ask("GET", "kuvo/skills")).value.github.broken, undefined);
 });

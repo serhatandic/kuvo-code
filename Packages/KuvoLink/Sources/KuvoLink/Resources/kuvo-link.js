@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.41";
+export const BRIDGE_VERSION = "0.9.43";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -1429,14 +1429,17 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
   return { status: 404, value: {} };
 }
 
-// MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
+// MARK: Skills (PROTOCOL.md, "Skills"): every box's, a Mac's too, and every client's way to GitHub's collections.
 
-const SKILLS = path.join(K, "config", "opencode", "skills");
+// Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
+// in this box's folder on a machine, and the app's engine's on a Mac (KUVO_ENGINE_CONFIG), so a
+// Mac's skills stay where they've always been.
+const SKILLS = path.join(process.env.KUVO_ENGINE_CONFIG || path.join(K, "config"), "opencode", "skills");
 const SKILL_SOURCE = ".kuvo-source.json";
 // GitHub, or a test's stand-in for it, in a test's folder only (never a machine's own).
 const testGitHub = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_GITHUB : undefined;
 const GITHUB = { api: testGitHub ?? "https://api.github.com", raw: testGitHub ?? "https://raw.githubusercontent.com" };
-// The well-known collections, as the Mac lists them (SkillLibrary.repositories).
+// The well-known collections, roughly most popular first. Anyone can open another by name.
 export const SKILL_REPOSITORIES = [
   ["anthropics", "skills", "Anthropic", "The reference set: documents, spreadsheets, slides, PDFs, design and more."],
   ["openai", "skills", "OpenAI", "Codex's catalog of curated skills."],
@@ -1460,7 +1463,7 @@ const limited = () => new SkillFailure(503, "GitHub is limiting requests for now
 /** A folder's name in the skills folder: not a path, nor hidden. */
 const isSkillFolder = name => typeof name === "string" && name.length > 0 && name.length <= 128 && !name.startsWith(".") && !/[\/\\\0]/.test(name);
 
-/** A skill's name from what's typed, as the Mac's SkillFile.name makes it. */
+/** A skill's name from what's typed, as Settings makes it (SkillFile.name). */
 export function skillName(text) {
   const words = String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
   return words.join("-").slice(0, 64).replace(/-+$/, "");
@@ -1520,7 +1523,9 @@ async function engineSkillNames(engine) {
   }
 }
 
-/** A repository's skills, from its file list, as SkillLibrary.skills(in:) reads it. */
+/** A repository's skills, from its file list (one request to GitHub's API): each folder with a
+ * SKILL.md, with every file in it (the deepest skill's, for skills inside skills), or the
+ * repository itself when its SKILL.md is at the top (without its hidden folders). */
 export async function skillsIn(repository) {
   const response = await github(`${GITHUB.api}/repos/${repository.owner}/${repository.name}/git/trees/${repository.branch}?recursive=1`);
   if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn't found on GitHub.`);
@@ -1547,7 +1552,7 @@ export async function skillsIn(repository) {
 
 const rawURL = (repository, file) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
 
-/** The front matter's name and description, as SkillLibrary.about(markdown:) reads them. */
+/** The front matter's name and description. */
 export function skillAbout(markdown) {
   const lines = String(markdown).split(/\r\n|\r|\n/);
   const about = {};
@@ -1595,7 +1600,7 @@ async function installSkill(repository, skill) {
   }
 }
 
-/** `kuvo/skills…` and `kuvo/skill-library…`, for this machine's own folder. */
+/** `kuvo/skills…` and `kuvo/skill-library…`, for this box's own folder. */
 export async function answerSkills(method, requestPath, body, engine = null) {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
@@ -1634,7 +1639,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
       }
       if (method === "DELETE") {
         if (!fs.existsSync(folder)) return { status: 404, value: {} };
-        // To Kuvo Code's own trash, kept 30 days, as the Mac puts a machine's away.
+        // To this box's own trash, kept 30 days.
         const trash = path.join(K, "trash", "skills");
         fs.mkdirSync(trash, { recursive: true });
         const away = path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`);
@@ -1667,7 +1672,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
         const repository = await skillRepository(parts[2], parts[3]);
-        // As written: a "+" is a plus, as the Mac reads it.
+        // As written: a "+" is a plus.
         const pair = query.split("&").find(each => each.startsWith("path="));
         let at = "";
         try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn't a path.") }; }
@@ -1742,8 +1747,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
-    // Settings › Skills (PROTOCOL.md, "Skills"): this machine's own skills folder, and GitHub's
-    // collections, which this machine reaches itself, with the Mac closed too.
+    // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, and GitHub's
+    // collections, which it reaches itself (a machine's with the Mac closed too).
     if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
