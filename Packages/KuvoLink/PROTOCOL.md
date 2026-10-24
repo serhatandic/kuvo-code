@@ -1041,6 +1041,30 @@ own, which reach every box's routes the same way (`BoxClient`: this Mac's throug
 answer, a machine's through `kuvo-link.js box route` over SSH). Until an area moves, the Mac
 answers it itself, as below.
 
+### Projects
+
+Each box keeps its own projects, in `box/projects.json` under its folder (`~/.kuvo-code` on a
+machine; this Mac's box's own on a Mac), and any client reads and changes them there: the Mac
+app's sidebar and Edit Project as a phone does. A project's folder is in the query, as the box
+names it (a `/` can't be in a part of the path). A Mac answers from its box; a machine from bridge
+0.9.33 (`projects` in `features`). Before, a Mac kept a machine's projects itself, and moves them
+there the first time the machine keeps its own.
+
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?}]}`,
+  newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
+  `removed`, one Remove Project took off the list, kept with its settings for when one of its
+  sessions is brought back (a client shows it then, and not before).
+- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal}` adds the
+  project or changes what's given (an empty string is none), and brings a removed one back:
+  `200 {project}`. The folder must be one on the box (404 `{"message"}` otherwise), and is kept by
+  its real path, unless it's on the list already as it was given.
+- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
+  too, archived on the engine and the coding agents' bridge, older ones included, then it's
+  marked `removed`. `200 {archived}`; `409 {message, archived, kept}` when some couldn't be
+  archived (it stays listed); `503 {"message"}` without its engine.
+- `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
+  changes.
+
 ### Settings per box
 
 Each computer keeps its own engine settings and keys; nothing copies them between computers but

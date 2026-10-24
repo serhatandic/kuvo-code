@@ -1,0 +1,36 @@
+{
+  "about": "A box's own projects (kuvo/projects): kept on the box, by their real path, changed by any client, and Remove Project there, which archives a project's sessions and keeps its settings for when one comes back.",
+  "scenarios": [
+    {
+      "name": "a project added, changed and listed, and what isn't one refused",
+      "steps": [
+        { "given": { "file": { "name": "shop/README.md", "text": "# Shop\n", "as": "readme" } } },
+        {
+          "send": "PUT kuvo/projects?directory={{work}}/shop", "body": { "name": "  Shop  ", "run": "npm run dev" },
+          "expect": { "status": 200, "json": { "project": { "directory": "{{work}}/shop", "name": "Shop", "run": "npm run dev", "folders": [] } } }
+        },
+        {
+          "send": "PUT kuvo/projects?directory={{work}}/shop", "body": { "name": "shop" },
+          "why": "Its folder's own name is no name of its own; what isn't given stays.",
+          "expect": { "status": 200, "json": { "project": { "directory": "{{work}}/shop", "name": "<absent>", "run": "npm run dev" } } }
+        },
+        { "send": "GET kuvo/projects", "expect": { "status": 200, "json": { "projects": [ { "directory": "{{work}}/shop", "run": "npm run dev" } ] } } },
+        { "send": "PUT kuvo/projects?directory={{work}}/nowhere", "body": {}, "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "PUT kuvo/projects", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/projects?directory={{work}}/shop", "body": {}, "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "Remove Project archives its sessions there and keeps its settings",
+      "steps": [
+        { "given": { "file": { "name": "shop/README.md", "text": "# Shop\n", "as": "readme" } } },
+        { "given": { "session": { "id": "ses_cart", "title": "Fix the cart", "directory": "{{work}}/shop" } } },
+        { "given": { "session": { "id": "ses_post", "title": "A post", "directory": "{{work}}/blog" } } },
+        { "send": "PUT kuvo/projects?directory={{work}}/shop", "body": { "name": "Shop" }, "expect": { "status": 200 } },
+        { "send": "DELETE kuvo/projects?directory={{work}}/shop", "expect": { "status": 200, "json": { "archived": 1 } } },
+        { "engineGot": { "method": "PATCH", "path": "/api/session/ses_cart", "json": { "metadata": { "kuvo.archived": true } } } },
+        { "send": "GET kuvo/projects", "expect": { "status": 200, "json": { "projects": [ { "directory": "{{work}}/shop", "name": "Shop", "removed": true } ] } } }
+      ]
+    }
+  ]
+}

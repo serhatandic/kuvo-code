@@ -515,7 +515,12 @@ struct SidebarView: View {
 
     private func remove(_ project: Workspace.Project) {
         Task {
-            let kept = await workspace.removeProject(project.directory)
+            let kept: Int
+            do {
+                kept = try await workspace.removeProject(project.directory)
+            } catch {
+                return Modal.show(error)
+            }
             guard kept > 0 else { return }
             let them = kept == 1 ? "One of its sessions couldn’t be archived" : "\(kept) of its sessions couldn’t be archived"
             Modal.show(ProjectKept(errorDescription: them + ", so “\(project.name)” stays in the sidebar with them. Try Remove Project… again in a moment."))

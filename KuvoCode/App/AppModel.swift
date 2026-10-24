@@ -65,6 +65,8 @@ final class AppModel {
     let agents = OutsideAgents()
     /// This Mac's box (`kuvo-link.js serve`), which answers the areas that have moved onto it.
     let box = BoxProcess()
+    /// This Mac's projects followed from its box, once started.
+    @ObservationIgnored private var projectsFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
     /// The engine's settings file, for Settings.
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(file: engineFolders.configFile)
@@ -187,6 +189,7 @@ final class AppModel {
     /// The stores told of each other, and of the machines' engines, once this Mac's engine is up.
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
+        workspace.boxes = { [weak self] id in self?.box(id) }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
@@ -391,7 +394,11 @@ final class AppModel {
             // This Mac's box finds the engine as a machine's does, and starts once.
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = shell
-            Task { await box.start(engine: binary, environment: boxEnvironment) }
+            Task {
+                await box.start(engine: binary, environment: boxEnvironment)
+                // Its projects, as this Mac's box keeps them, from now on.
+                if projectsFollowed == nil { projectsFollowed = Task { await workspace.followProjects() } }
+            }
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - began).components.seconds), "downloaded": downloaded])
             listen(to: api)
             agents.engineEndpoint = server.endpoint

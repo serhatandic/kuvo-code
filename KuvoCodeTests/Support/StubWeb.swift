@@ -29,6 +29,7 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
             requestRoutes = [:]
             handlers = []
             asked = []
+            realPorts = []
             Self.hosts = hosts
         }
         URLProtocol.registerClass(StubWeb.self)
@@ -69,25 +70,41 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard let host = request.url?.host() else { return false }
-        return lock.withLock { hosts.contains(host) }
+        return lock.withLock { hosts.contains(host) && !realPorts.contains(request.url?.port ?? 0) }
+    }
+
+    /// Ports a real server listens on (this Mac's box, run with Node): what's sent there goes
+    /// there, not here.
+    nonisolated(unsafe) private static var realPorts: Set<Int> = []
+
+    static func letThrough(port: Int) {
+        lock.withLock { _ = realPorts.insert(port) }
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    override func startLoading() {
+    /// What's set up to answer `request`, sending `body`: in this process, or from another one
+    /// through a port it listens on (`listen`).
+    static func answer(for request: URLRequest, body: Data) -> Answer {
         let url = request.url!
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         var bare = components
         bare.query = nil
-        let (route, requestRoute) = Self.lock.withLock {
-            Self.asked.append(url.absoluteString)
-            return (Self.routes[bare.string ?? ""], Self.requestRoutes[bare.string ?? ""])
+        let (route, requestRoute) = lock.withLock {
+            asked.append(url.absoluteString)
+            return (routes[bare.string ?? ""], requestRoutes[bare.string ?? ""])
         }
-        let handler = Self.lock.withLock { Self.handlers.first { url.absoluteString.hasPrefix($0.prefix) }?.answer }
-        let answer = Self.lock.withLock { Self.answers[url.absoluteString] } ?? requestRoute?(request, Self.body(of: request))
-            ?? route?(components) ?? handler?(request, Self.body(of: request)) ?? Answer(status: 404)
+        let handler = lock.withLock { handlers.first { url.absoluteString.hasPrefix($0.prefix) }?.answer }
+        let answer = lock.withLock { answers[url.absoluteString] } ?? requestRoute?(request, body)
+            ?? route?(components) ?? handler?(request, body) ?? Answer(status: 404)
         // Answered: what a test's answer noted on its way is there for a wait to see (`until`).
         TestPulse.beat()
+        return answer
+    }
+
+    override func startLoading() {
+        let url = request.url!
+        let answer = Self.answer(for: request, body: Self.body(of: request))
         let response = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: answer.body)

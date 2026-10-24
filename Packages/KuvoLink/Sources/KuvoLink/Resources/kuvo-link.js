@@ -33,7 +33,7 @@ export const BRIDGE_VERSION = "0.9.33";
 export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return",
+  "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "update", "wakes", "wakes.edit", "worktrees",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
@@ -996,6 +996,155 @@ function sizeLater(folder) {
   });
 }
 
+// ---- Projects: the box's own list (PROTOCOL.md, "Projects") ----
+
+const PROJECTS_FILE = path.join(K, "box", "projects.json");
+const PROJECTS_LOCK = PROJECTS_FILE + ".lock";
+
+/** The box's projects: `{directory, name?, folders, run?, terminal?, removed?}` each. One removed
+ * (Remove Project) keeps its settings, for when one of its sessions is brought back. */
+export function readProjects(file = PROJECTS_FILE) {
+  try {
+    const list = JSON.parse(fs.readFileSync(file, "utf8")).projects;
+    return Array.isArray(list) ? list.filter(each => typeof each?.directory === "string" && path.isAbsolute(each.directory)).map(each => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter(folder => typeof folder === "string") : [] })) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The projects New Bot offers here, `{directory, name}` each: the box's own, once it keeps them;
+ * before, those its Mac named in the kit. */
+export function boxProjects(kit, file = PROJECTS_FILE) {
+  if (!fs.existsSync(file)) return kit?.projects ?? [];
+  return readProjects(file).filter(each => !each.removed).map(each => ({ directory: each.directory, name: each.name ?? path.basename(each.directory) }));
+}
+
+/** The list as `change` makes it, read again just before, under its lock. */
+export function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
+  return locked(lock, () => {
+    const projects = change(readProjects(file));
+    writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
+    return projects;
+  });
+}
+
+/** A project as it's kept: its name only when it's not the folder's, a command only when there
+ * is one, its other folders without its own. */
+function keptProject(directory, given, before = {}) {
+  const project = { ...before, directory, folders: before.folders ?? [] };
+  delete project.removed;
+  const text = value => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  if ("name" in given) project.name = text(given.name) === path.basename(directory) ? undefined : text(given.name);
+  if ("folders" in given) project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter(folder => typeof folder === "string" && path.isAbsolute(folder) && folder !== directory))];
+  if ("run" in given) project.run = text(given.run);
+  if ("terminal" in given) project.terminal = text(given.terminal);
+  for (const key of ["name", "run", "terminal"]) if (project[key] === undefined) delete project[key];
+  return project;
+}
+
+/** Every session of the project, its worktrees' too, archived, on the engine and the coding
+ * agents' bridge, page after page; how many weren't. */
+async function archiveProject(directory, readEngine, readBridge, signal) {
+  const folders = [directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder)];
+  const targets = [];
+  try { targets.push(readEngine()); } catch {}
+  try {
+    const bridge = readBridge();
+    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+  } catch {}
+  if (!targets.length) return { archived: 0, kept: null };
+  let archived = 0, kept = 0;
+  for (const target of targets) {
+    for (const folder of folders) {
+      let query = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
+      for (let page = 0; page < 1000 && query; page++) {
+        // The page whole (`call` keeps only its data), for its cursor.
+        let listed;
+        try {
+          const response = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal });
+          if (!response.ok) throw new Error();
+          listed = await response.json();
+        } catch {
+          kept += 1;
+          break;
+        }
+        const sessions = Array.isArray(listed?.data) ? listed.data : [];
+        for (const session of sessions) {
+          if (session?.location?.directory !== folder || session.time?.archived || session.metadata?.["kuvo.archived"] === true) continue;
+          try {
+            await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
+            holdArchived(session.id, true);
+            archived += 1;
+          } catch {
+            kept += 1;
+          }
+        }
+        const next = listed?.cursor?.next;
+        query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
+      }
+    }
+  }
+  return { archived, kept };
+}
+
+/** `kuvo/projects`: the box's projects, read and changed by any client, as Settings and the
+ * sidebar change them on a Mac. */
+export async function* answerProjects(request, readEngine = readEngineFile, readBridge = readBridgeFile, signal, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
+  const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+  const [route, query = ""] = request.path.split("?");
+  const method = request.method.toUpperCase();
+  const listed = () => ({ projects: readProjects(file) });
+  if (route === "kuvo/projects/events") {
+    if (method !== "GET") return yield* json(405, {});
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    let last = "";
+    while (!signal?.aborted) {
+      const line = JSON.stringify(listed());
+      if (line !== last) {
+        yield { body: Buffer.from(line + "\n") };
+        last = line;
+      }
+      await new Promise(done => setTimeout(done, 1000));
+    }
+    return;
+  }
+  if (route !== "kuvo/projects") return yield* json(404, {});
+  if (method === "GET") return yield* json(200, listed());
+  const given = new URLSearchParams(query).get("directory");
+  if (!given || !path.isAbsolute(given)) return yield* json(400, { message: "Say which folder (directory)." });
+  if (method === "PUT") {
+    const body = parsed(request.body) ?? {};
+    if (!isObject(body)) return yield* json(400, { message: "That isn’t a project." });
+    let directory;
+    try {
+      directory = fs.realpathSync(given);
+      if (!fs.statSync(directory).isDirectory()) throw new Error();
+    } catch {
+      return yield* json(404, { message: "That folder isn’t there." });
+    }
+    // Kept as it was named when it's on the list already that way (a link followed or not).
+    const known = readProjects(file).find(each => each.directory === given) ? given : directory;
+    let project;
+    changeProjects(projects => {
+      const before = projects.find(each => each.directory === known);
+      project = keptProject(known, body, before);
+      return before ? projects.map(each => (each === before ? project : each)) : [project, ...projects];
+    }, file, lock);
+    return yield* json(200, { project });
+  }
+  if (method === "DELETE") {
+    const { archived, kept } = await archiveProject(given, readEngine, readBridge, signal);
+    if (kept === null) return yield* json(503, { message: "Its sessions can’t be reached: the engine isn’t running." });
+    if (kept > 0) return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept });
+    changeProjects(projects => {
+      const before = projects.find(each => each.directory === given);
+      return before ? projects.map(each => (each === before ? { ...each, removed: true } : each)) : projects;
+    }, file, lock);
+    return yield* json(200, { archived });
+  }
+  return yield* json(405, {});
+}
+
 /** The worktrees this box keeps: `{project, root, folder, branch, base?}` each (`folder`: where
  * its session runs, the project's place in its repository; one made here also has `made`, the
  * branch it was made on, and `prefix`, what its name starts with). */
@@ -1740,6 +1889,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
       return yield* json(status, value);
     }
+    // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
+    if (route === "kuvo/projects" || route === "kuvo/projects/events") return yield* answerProjects(request, readEngine, readBridge, signal);
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
     if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
       let engine = null;
@@ -2473,7 +2624,7 @@ export function botTemplates(kit, machine) {
     personalities: botPersonalities(kit).map(({ instruction: _, ...personality }) => personality),
     looks: kit.looks,
     startingModel: { [machine || "machine"]: kit.startingModel ?? null },
-    projects: (kit.projects ?? []).map(project => ({ ...project, machine: machine || undefined })),
+    projects: boxProjects(kit).map(project => ({ ...project, machine: machine || undefined })),
   };
 }
 
@@ -2599,7 +2750,7 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   const personality = personalityID ? botPersonalities(kit).find(each => each.id === personalityID) : undefined;
   if (personalityID && !personality) return no(400, `There’s no personality “${personalityID}”.`);
   const project = given.project ?? undefined;
-  if (project !== undefined && !(kit.projects ?? []).some(each => each.directory === project)) return no(400, "That project isn’t in Kuvo Code.");
+  if (project !== undefined && !boxProjects(kit).some(each => each.directory === project)) return no(400, "That project isn’t in Kuvo Code.");
   const looks = kit.looks;
   const pick = list => list[crypto.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? given.look : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
@@ -4578,7 +4729,7 @@ export async function ownAgents(readEngine, machine, kit = readKit(), readBridge
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) sessions = sessions.concat(await sessionsOf(bridge));
   } catch {}
-  const projects = kit?.projects ?? [];
+  const projects = boxProjects(kit);
   const named = directory => projects.find(project => project.directory === directory)?.name
     ?? (directory === path.join(K, "chats") ? "Chats" : directory ? path.basename(directory) : undefined);
   const recent = sessions

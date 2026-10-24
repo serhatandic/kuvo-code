@@ -792,7 +792,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.make": ["POST", "kuvo/groups"],
     integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"],
-    personalities: ["GET", "kuvo/personalities"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"],
+    personalities: ["GET", "kuvo/personalities"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], worktrees: ["GET", "kuvo/worktrees"],

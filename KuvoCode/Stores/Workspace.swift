@@ -642,6 +642,7 @@ final class Workspace {
         Analytics.shared.track("project_added", ["projects": folders.count + 1])
         folders.insert(directory, at: 0)
         UserDefaults.standard.set(folders, forKey: "projectFolders")
+        keepOnBox(directory)
         return directory
     }
 
@@ -657,11 +658,37 @@ final class Workspace {
 
     /// Remove Project…: every session of the project, its worktrees' too, archived (Archived
     /// Sessions brings them back), and the project off the sidebar. Its files, worktrees included,
-    /// stay, and so do its name and folders, for when a session brings it back. How many the
-    /// engine didn't take: those stay listed, and the project with them, as it was.
+    /// stay, and so do its name and folders, for when a session brings it back. Its box does it
+    /// (PROTOCOL.md, "Projects"), older sessions too. How many weren't archived: those stay
+    /// listed, and the project with them, as it was.
     @discardableResult
-    func removeProject(_ directory: String) async -> Int {
+    func removeProject(_ directory: String) async throws -> Int {
+        let box = Self.box(of: directory)
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
+        guard projectBoxes.contains(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
+        // Until worktrees move onto this Mac's box, it doesn't know this Mac's: their sessions go here.
+        var kept = 0
+        if box == BoxClient.mac {
+            kept = await archiveHere(sessions.filter { $0.location.directory != directory }, removing: nil)
+        }
+        let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
+        switch status {
+        case 200:
+            // All of them, there: so here too, as the engine has them now.
+            for session in sessions where session.location.directory == directory { noteArchivedThere(session.id) }
+        case 409:
+            kept += ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["kept"] as? Int) ?? 1
+            if box == BoxClient.mac { await refresh() }
+        default:
+            throw BoxRefusal(status: status, data: data)
+        }
+        await loadProjects(on: box)
+        return kept
+    }
+
+    /// Archived here, one by one (a box that doesn't keep its projects yet); `removing`'s folder
+    /// off the list once they all are. How many weren't.
+    private func archiveHere(_ sessions: [Session], removing directory: String?) async -> Int {
         // Side by side: on a machine, each is a round trip.
         let kept = await withTaskGroup(of: Bool.self) { group in
             for session in sessions {
@@ -671,11 +698,20 @@ final class Workspace {
             for await archived in group where !archived { kept += 1 }
             return kept
         }
-        if kept == 0 {
+        if kept == 0, let directory {
             folders.removeAll { $0 == directory }
             UserDefaults.standard.set(folders, forKey: "projectFolders")
         }
         return kept
+    }
+
+    /// A session its box archived: so here, and told, as one archived here is.
+    private func noteArchivedThere(_ id: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }), !Self.isArchived(sessions[index]) else { return }
+        var metadata = sessions[index].metadata?.object ?? [:]
+        metadata[Self.archivedKey] = .bool(true)
+        sessions[index].metadata = .object(metadata)
+        onArchived?(id, true)
     }
 
     /// The project's name: its own, or its primary folder's. A worktree has its project's.
@@ -699,6 +735,7 @@ final class Workspace {
         if project.run?.isEmpty == true { project.run = nil }
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
+        keepOnBox(directory)
         // Sessions not open yet catch up when they open.
         for model in models.values where projectDirectory(of: model.session) == directory {
             Task { await model.syncFolders() }
@@ -1017,6 +1054,132 @@ final class Workspace {
     private static func loadWorktrees() -> [String: Worktree] {
         guard let data = UserDefaults.standard.data(forKey: "worktrees") else { return [:] }
         return (try? JSONDecoder().decode([String: Worktree].self, from: data)) ?? [:]
+    }
+
+    // MARK: Projects on their boxes
+
+    /// Each box's routes (`AppModel.box`): every computer keeps its own projects (PROTOCOL.md,
+    /// "Projects"), which any client changes. What's here is a copy of theirs, to show at once.
+    @ObservationIgnored var boxes: ((String) -> BoxClient?)?
+    /// The boxes whose projects have been read from them: changes to theirs go there. One that
+    /// can't keep them yet (a machine on an older Kuvo Code until it updates) keeps its here.
+    @ObservationIgnored private(set) var projectBoxes: Set<String> = []
+
+    /// A project as its box keeps it, its folders as the box names them.
+    struct BoxProject: Codable, Equatable {
+        var directory: String
+        var name: String?
+        var folders: [String]?
+        var run: String?
+        var terminal: String?
+        var removed: Bool?
+    }
+
+    private struct BoxProjects: Decodable { var projects: [BoxProject] }
+
+    /// The box a folder's on: a machine's id, or this Mac's.
+    static func box(of directory: String) -> String { RemoteFolder.machine(of: directory) ?? BoxClient.mac }
+    /// A folder as its box names it, and as it's named here.
+    private static func onBox(_ directory: String) -> String { RemoteFolder.parse(directory)?.path ?? directory }
+    private static func here(_ path: String, on box: String) -> String { box == BoxClient.mac ? path : RemoteFolder.folder(path, on: box) }
+
+    /// A query's value, written so a box reads it back exactly (a "+" is a space in a query).
+    static func queryValue(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")) ?? text
+    }
+
+    /// `box`'s projects, read from it and shown: those it hasn't removed in the sidebar, each with
+    /// its settings (a removed one's too, for when a session brings it back). The first time, what
+    /// was kept here for it before boxes kept their own goes there. A box that can't keep them yet
+    /// is left as it was.
+    func loadProjects(on box: String) async {
+        guard let client = boxes?(box), var listed = await Self.projects(of: client) else { return }
+        let moved = "projectsOnBox." + box
+        if !UserDefaults.standard.bool(forKey: moved) {
+            for folder in folders where Self.box(of: folder) == box && !listed.contains(where: { Self.here($0.directory, on: box) == folder }) {
+                _ = try? await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(folder)), body: Self.boxBody(settings[folder] ?? ProjectSettings()))
+            }
+            guard let all = await Self.projects(of: client) else { return }
+            listed = all
+            UserDefaults.standard.set(true, forKey: moved)
+        }
+        projectBoxes.insert(box)
+        take(listed, from: box)
+    }
+
+    /// This Mac's projects as its box has them, from now on: each change, wherever it was made
+    /// (a phone's too), as it's made.
+    func followProjects() async {
+        while !Task.isCancelled {
+            if let client = boxes?(BoxClient.mac) {
+                await loadProjects(on: BoxClient.mac)
+                do {
+                    for try await line in client.follow("kuvo/projects/events") {
+                        guard projectBoxes.contains(BoxClient.mac), let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
+                        take(listed.projects, from: BoxClient.mac)
+                    }
+                } catch {}
+            }
+            // The box restarted, or isn't up yet: followed again in a moment.
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    private static func projects(of client: BoxClient) async -> [BoxProject]? {
+        try? await client.value(BoxProjects.self, "GET", "kuvo/projects").projects
+    }
+
+    /// `listed` as `box`'s, here, in place of what was known of them.
+    private func take(_ listed: [BoxProject], from box: String) {
+        let theirs = listed.filter { $0.removed != true }.map { Self.here($0.directory, on: box) }
+        // New ones first, as one added here is; the rest where they were.
+        let updatedFolders = theirs.filter { !folders.contains($0) } + folders.filter { Self.box(of: $0) != box || theirs.contains($0) }
+        if updatedFolders != folders {
+            folders = updatedFolders
+            UserDefaults.standard.set(folders, forKey: "projectFolders")
+        }
+        var updated = settings.filter { Self.box(of: $0.key) != box }
+        for project in listed {
+            let kept = ProjectSettings(name: project.name, folders: (project.folders ?? []).map { Self.here($0, on: box) }, run: project.run, terminal: project.terminal)
+            if kept != ProjectSettings() { updated[Self.here(project.directory, on: box)] = kept }
+        }
+        if updated != settings {
+            settings = updated
+            saveSettings()
+        }
+    }
+
+    /// What a box is given for a project's settings.
+    private static func boxBody(_ project: ProjectSettings) -> Data? {
+        struct Body: Encodable { var name: String?; var folders: [String]; var run: String?; var terminal: String? }
+        let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "")
+        return try? JSONEncoder().encode(body)
+    }
+
+    /// The project at `directory` as it is here, on its box, when its box keeps its projects.
+    private func keepOnBox(_ directory: String) {
+        let box = Self.box(of: directory)
+        guard projectBoxes.contains(box), let client = boxes?(box) else { return }
+        let body = Self.boxBody(settings[directory] ?? ProjectSettings())
+        // After the one before, so the box ends up as it is here.
+        let previous = projectWrites
+        projectWrites = Task {
+            await previous?.value
+            do {
+                let (status, data) = try await client.send("PUT", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
+                guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+            } catch {
+                Modal.show(error)
+            }
+        }
+    }
+
+    /// The last change on its way to a box, after those before it.
+    @ObservationIgnored private var projectWrites: Task<Void, Never>?
+
+    /// Once the changes on their way to boxes are there.
+    func projectsWritten() async {
+        await projectWrites?.value
     }
 
     private func saveWorktrees() {
@@ -1452,6 +1615,8 @@ final class Workspace {
             Self.saveRemoteSessions(remoteSessions)
             SessionCopies.saveSessions(theirs, of: machine)
             connectedMachines.insert(machine)
+            // Its projects, as it keeps them.
+            Task { await loadProjects(on: machine) }
             // Read while it was away: so here, and told there now.
             for (id, idle) in unsentViews where sessionMachines[id] == machine {
                 unsentViews[id] = nil

@@ -1025,7 +1025,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes: [String] = []
+    nonisolated static let boxRoutes = ["kuvo/projects"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 
@@ -1051,7 +1051,7 @@ final class PhoneLink {
     static let features = [
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog",
-        "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "wakes", "wakes.edit", "worktrees",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
