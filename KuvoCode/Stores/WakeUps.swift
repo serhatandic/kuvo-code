@@ -533,7 +533,6 @@ final class WakeUps {
     /// Sends a waiting wake-up now rather than at its time (to see the job run), on this Mac or
     /// its machine; one that doesn't repeat is then done.
     func wakeNow(_ wake: Wakes.Pending, of owner: Owner) async throws {
-        if Moves.isFrozen(owner.key) || Moves.isFrozen(owner.session) { throw Moves.Failure.moving }
         // Once: not again while it's on its way (waiting for the folder's tools can take a
         // while), nor, for one that doesn't repeat, once it's gone (sent, or cancelled).
         let key = owner.key + "/" + wake.id
@@ -555,7 +554,8 @@ final class WakeUps {
             guard let output, case let whole = String(decoding: output, as: UTF8.self), !whole.isEmpty else { throw Failure.unreadWake(machine) }
             note = whole
         }
-        try await api.prompt(session: owner.session, id: Identifier.message(), text: Wakes.marker + note, delivery: .queue)
+        // Moving to another computer: it goes there, with its folder.
+        guard try await Deliveries.send(Wakes.marker + note, to: owner.session, delivery: .queue, later: true, on: api) else { throw Moves.Failure.moving }
         if wake.every == nil {
             do { try await cancel(wake, of: owner) } catch { throw Failure.wakeStays(error.localizedDescription) }
         }
@@ -673,8 +673,6 @@ final class WakeUps {
     }
 
     private func send(_ wake: Wakes.Pending, of owner: Owner, api: OpenCodeAPI) async {
-        // Moving to another computer: it comes there, at its time.
-        guard !Moves.isFrozen(owner.session), !Moves.isFrozen(owner.key) else { return }
         let key = owner.key + "/" + wake.id
         do {
             // One that repeats and still waits from last time (busy, or waiting on you) isn't
@@ -683,7 +681,8 @@ final class WakeUps {
             var waiting = false
             if wake.every != nil, let queued = try? await api.inbox(session: owner.session) { waiting = queued.contains { $0.text == text } }
             if !waiting {
-                try await api.prompt(session: owner.session, id: Identifier.message(), text: text, delivery: .queue)
+                // Moving to another computer: it comes there, at its time, with its folder.
+                guard try await Deliveries.send(text, to: owner.session, delivery: .queue, later: true, on: api) else { return }
                 Analytics.shared.track(owner.isBot ? "bot_wakeup_ran" : "session_wakeup_ran", ["kind": "wake", "repeats": wake.every != nil])
             }
             retries[key] = nil
@@ -725,10 +724,9 @@ final class WakeUps {
                 for letters in Wakes.changedWatches(in: await run([owner.folder, "check"], stopAfter: 300)) {
                     guard let message = Wakes.watchMessage(letters, inBot: owner.folder) else { continue }
                     if !owner.agents { await api.waitForTools(in: owner.directory) }
-                    // Moving to another computer: what it saw goes there, with its watch.
-                    guard !Moves.isFrozen(owner.session), !Moves.isFrozen(owner.key) else { continue }
                     do {
-                        try await api.prompt(session: owner.session, id: Identifier.message(), text: Wakes.marker + message, delivery: .queue)
+                        // Moving to another computer: what it saw goes there, with its watch.
+                        guard try await Deliveries.send(Wakes.marker + message, to: owner.session, delivery: .queue, later: true, on: api) else { continue }
                         Wakes.watchDelivered(letters, inBot: owner.folder)
                         Analytics.shared.track(owner.isBot ? "bot_wakeup_ran" : "session_wakeup_ran", ["kind": "watch", "repeats": true])
                     } catch {
