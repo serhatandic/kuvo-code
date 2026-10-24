@@ -51,20 +51,41 @@ async function ask(handle, method, p, body) {
   return { status: parts[0].head.status, json, text };
 }
 
-// An engine (or the agents' bridge) on a free port: its tools connected, prompts taken.
+// An engine (or the agents' bridge) on a free port: its tools connected, prompts taken, its
+// events sent (`send`) to whoever follows them; `request(match)`, the first request that matches.
 async function fakeEngine() {
   const asked = [];
+  const followers = [];
+  const awaited = [];
+  let followed;
+  const following = new Promise(resolve => { followed = resolve; });
   const server = http.createServer((request, response) => {
+    if (request.url === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      followers.push(response);
+      return followed();
+    }
     let body = "";
     request.on("data", chunk => { body += chunk; });
     request.on("end", () => {
-      asked.push({ method: request.method, url: request.url, auth: request.headers.authorization, directory: request.headers["x-opencode-directory"], body });
+      const entry = { method: request.method, url: request.url, auth: request.headers.authorization, directory: request.headers["x-opencode-directory"], body };
+      asked.push(entry);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(request.url === "/api/mcp" ? JSON.stringify({ browser: { status: { status: "connected" } } }) : "{}");
+      for (const waiting of awaited.filter(each => each.match(entry))) {
+        awaited.splice(awaited.indexOf(waiting), 1);
+        waiting.resolve(entry);
+      }
     });
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { asked, port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
+  return {
+    asked, port: server.address().port, following,
+    send: event => { for (const follower of followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); },
+    request: match => asked.find(match) ? Promise.resolve(asked.find(match)) : new Promise(resolve => awaited.push({ match, resolve })),
+    close: () => { server.closeAllConnections(); server.close(); },
+  };
 }
 
 test("wake-ups read from their names as the app reads them", () => {
@@ -109,6 +130,22 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
     assert.equal(refused.json.message, "Connect to this machine from your Mac once, then try again.");
   }
   assert.equal((await ask(handle, "PUT", "kuvo/bots")).status, 405);
+});
+
+test("a Mac reads the machine's bots with their jobs as their memories have them now, which the machine keeps", async () => {
+  const scout = bot("bot_scout00001");
+  write(path.join(scout, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n\n## Notes\nx\n");
+  bot("bot_first00001", { name: "First" });
+  const unread = bot("bot_unread0001", { name: "Unread" });
+  fs.rmSync(path.join(unread, "MEMORY.md"));
+  const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
+  const read = await ask(handle, "GET", "kuvo/bots?memory=1");
+  const byName = Object.fromEntries(read.json.bots.map(each => [each.name, each]));
+  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Watches the nightly build.\nPosts when it breaks." });
+  assert.deepEqual(byName.First.memoryJob, { line: "", section: "" }, "a memory without one: none");
+  assert.equal("memoryJob" in byName.Unread, false, "a memory that can't be read: left out");
+  // A phone's list doesn't carry it.
+  assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.some(each => "memoryJob" in each), false);
 });
 
 test("kuvo/wakes reads a bot's or a session's wake-ups, watches and pause", async () => {
@@ -662,13 +699,23 @@ test("a machine makes bots with its release's words where they're newer than a M
   }
 });
 
-test("a Mac connected, phone link or not, is one the machine leaves a Mac's work to, for a couple of minutes after its last note", () => {
-  const marker = path.join(home, "run", "connected", "mac_1");
-  assert.equal(link.macConnected(), false);
-  write(marker, "");
-  assert.equal(link.macConnected(), true);
-  const old = new Date(Date.now() - 10 * 60_000);
-  fs.utimesSync(marker, old, old);
-  assert.equal(link.macConnected(), false, "gone quiet: the machine does it again");
-  fs.rmSync(path.join(home, "run"), { recursive: true, force: true });
+test("with a Mac connected, a bot here whose run ended still has its job read from its memory, by the machine", async () => {
+  // What a connected Mac of an earlier version leaves each minute: a note that it's there.
+  write(path.join(home, "run", "connected", "mac_1"), "");
+  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  const folder = bot("bot_scout00001");
+  write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
+  const engine = await fakeEngine();
+  const stop = new AbortController();
+  try {
+    link.watchEvents(() => ({ port: engine.port, password: "p" }), () => true, stop.signal);
+    await engine.following;
+    engine.send({ type: "session.execution.succeeded", data: { sessionID: "ses_bot_scout00001" } });
+    const told = await engine.request(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries/kuvo.bot");
+    assert.match(JSON.parse(told.body).value, /Watches the nightly build\.\nPosts when it breaks\./);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "Watches the nightly build");
+  } finally {
+    stop.abort();
+    engine.close();
+  }
 });

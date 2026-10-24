@@ -338,21 +338,21 @@ A phone should ignore a category it doesn't know, and show the notification plai
 The payload stays under 2,500 bytes, so the push fits the 4 KB Apple takes: a body that
 doesn't fit is cut, ending in "…". Keys are sorted, as both sides write them.
 
-Who sends it:
+Who sends it: each box, for what happens on it, so each notice comes once.
 
-- **The Mac**, for its own sessions, its group chats and browser asks, and the sessions on
-  a machine it's connected to. Only while you're away from it (no input for two minutes, or
-  its screen locked), or while a phone has a session open (the phone leaves out what's on
-  its screen); at the Mac, its own notifications are enough.
+- **The Mac**, for its own sessions, its group chats and browser asks, never a machine's.
+  Only while you're away from it (no input for two minutes, or its screen locked), or while a
+  phone has a session open (the phone leaves out what's on its screen); at the Mac, its own
+  notifications are enough.
 - **A machine's bridge**, for that machine's sessions (permissions, questions, runs finished
   or failed, bots' news), from 0.9.9 what agents ask for as they browse there (category `ask`),
   and from 0.9.10 its coding agents' sessions and the group chats that live there (a meeting
-  held, a bot done with its part: category `message`, `data.group`), each as the Mac words it,
-  while no Mac is connected to it. An engine run a coding agent's session started (Auto on an
-  engine model) tells its news as that session's, once. A Mac that's connected touches
-  `~/.kuvo-code/run/present/<its id>` each minute and removes it when it quits; the bridge
-  tells your phones only when none of those files is less than 150 seconds old. The Mac
-  tells them only for 120 seconds after it last touched its file, so the two never both do.
+  held, a bot done with its part: category `message`, `data.group`), each as the Mac words it.
+  From 0.9.24 it tells them whether a Mac is connected to it or not (before, it stayed quiet
+  while a Mac noted it was there, in `run/present`), and leaves out a group chat's seats, as
+  the Mac does. An engine run a coding agent's session started (Auto on an engine model)
+  tells its news as that session's, once. A Mac connected to the machine shows the machine's
+  news in its own notifications, and doesn't send them to your phones.
 
 ## Messages in a session
 
@@ -726,9 +726,11 @@ itself. A host serves:
   live on that machine, as their folders are now, with the Mac closed too: their name, look and
   job as the Mac last wrote them there (`bot.json`, which the Mac writes when they change and
   each time it connects, and the bridge when a phone changes them; one it hasn't written yet
-  isn't listed). With no Mac connected, the bridge (from 0.9.23) also reads a bot's job from its
-  memory as each of its runs ends, as a Mac does, and tells its conversation when it changed (a
-  Mac notes it's connected, phone link or not, in `run/connected/<its id>` every minute). For a
+  isn't listed). The bridge also reads a bot's job from its memory as each of its runs ends, as a
+  Mac does for its own, and tells its conversation when it changed (from 0.9.24 whether a Mac is
+  connected or not; 0.9.23 left it to a connected Mac). `?memory=1` adds `memoryJob`, the job as
+  its memory has it now: `{line, section}` (both `""` for a memory without one; left out when
+  its memory can't be read), which a Mac takes for its copy of the machine's bots. For a
   machine's bot, its machine's list is the newer while it answers.
 - On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
   `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],

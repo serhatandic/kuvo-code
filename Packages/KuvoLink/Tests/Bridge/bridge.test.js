@@ -680,21 +680,6 @@ test("engine events become notifications, as the Mac words them", async () => {
   assert.equal(await link.noticeFor({ type: "session.text.delta", data: { sessionID: "ses_main" } }, get), null);
 });
 
-test("a Mac that said it's here in the last few minutes keeps the bridge quiet", () => {
-  const folder = fs.mkdtempSync(path.join(home, "present-"));
-  try {
-    assert.equal(link.macPresent(path.join(folder, "none")), false);
-    assert.equal(link.macPresent(folder), false);
-    fs.writeFileSync(path.join(folder, "mac-1"), "");
-    assert.equal(link.macPresent(folder), true);
-    const old = new Date(Date.now() - 10 * 60_000);
-    fs.utimesSync(path.join(folder, "mac-1"), old, old);
-    assert.equal(link.macPresent(folder), false);
-  } finally {
-    fs.rmSync(folder, { recursive: true, force: true });
-  }
-});
-
 test("a phone list a Mac mails through the relay is taken from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", () => {
   const machine = link.newKey(), mac = link.newKey(), other = link.newKey(), stranger = link.newKey();
   const [lost, fresh, own, others] = [0, 1, 2, 3].map(() => crypto.randomBytes(32));

@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.23";
+export const BRIDGE_VERSION = "0.9.24";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
@@ -1750,7 +1750,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (request.path.split("?")[0] === "kuvo/bots") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-      yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name) })) };
+      // A Mac's read (`?memory=1`): with each one's job as its memory has it now.
+      const memory = /(^|[?&])memory=1(&|$)/.test(request.path.split("?")[1] ?? "");
+      yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
       return;
     }
     if (request.path.split("?")[0] === "kuvo/wakes") {
@@ -2330,8 +2332,10 @@ const sameModel = (a, b) => (a?.id ?? null) === (b?.id ?? null) && (a?.providerI
 // This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
 // look, job, personality and model as the app last described it (or as changed here), and what its
 // folder says now (paused, its next wake-up, how many things it watches, whether it runs with the
-// coding agents). One without a description or a session isn't listed.
-export function listBots(machine) {
+// coding agents). One without a description or a session isn't listed. With `memory`, each also
+// with `memoryJob`, its job as its memory has it now (`{line, section}`, empty for none), left out
+// when its memory can't be read.
+export function listBots(machine, { memory = false } = {}) {
   const bots = [];
   for (const id of listOf(BOTS)) {
     const here = botHere(id);
@@ -2353,11 +2357,21 @@ export function listBots(machine) {
         agents,
         personality: typeof described.personality === "string" ? described.personality : undefined,
         model: isModel(described.model) ? described.model : undefined,
+        memoryJob: memory ? memoryJob(folder) : undefined,
       },
     });
   }
   // In the order they were made, as the Mac's list is.
   return bots.sort((a, b) => a.created.localeCompare(b.created)).map(entry => entry.bot);
+}
+
+// A bot's job as its memory has it now: `{line, section}`, both empty for a memory without one;
+// undefined when its memory can't be read.
+function memoryJob(folder) {
+  const text = textOf(path.join(folder, "MEMORY.md"));
+  if (typeof text !== "string") return undefined;
+  const job = jobInMemory(text);
+  return { line: job?.line ?? "", section: job?.section ?? "" };
 }
 
 // ---- Bots and group chats made here ----
@@ -2610,9 +2624,9 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
 // What each bot here was last told, by its conversation: told again only when it changes.
 const toldBots = new Map();
 
-// With no Mac here, a bot's run ended: its job as its memory has it now, in its description and
-// what it's told, as a Mac does when one of its runs ends (Bots.syncJob). `target` runs its
-// conversation (the engine, or the coding agents' bridge).
+// A bot's run ended: its job as its memory has it now, in its description and what it's told, as
+// a Mac does when one of its own bots' runs ends (Bots.syncJob). `target` runs its conversation
+// (the engine, or the coding agents' bridge).
 export async function refreshBotJob(target, sessionID) {
   const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
   const kit = readKit();
@@ -3092,33 +3106,10 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
 
 // ---- Notifications ----
 
-// While no Mac is telling your phones what happens in this machine's sessions, the bridge does:
-// a permission or a question asked, a run finished or failed, a bot's news (PROTOCOL.md,
-// "Notifications"). A Mac connected to the engine touches a file of its own in run/present
-// each minute, and tells your phones itself for two minutes after; the bridge waits longer.
-const PRESENT = path.join(RUN, "present");
-const PRESENT_MS = 150_000;
-// The Macs connected now, phone link or not (RemoteServer.markConnected): while one is, what a Mac
-// does for this box (reading its bots' jobs, naming worktrees' branches) is left to it.
-const CONNECTED = path.join(RUN, "connected");
-export const macConnected = (now = Date.now()) => macPresent(CONNECTED, now) || macPresent(PRESENT, now);
+// The bridge tells your phones what happens in this machine's sessions, Mac connected or not: a
+// permission or a question asked, a run finished or failed, a bot's news (PROTOCOL.md,
+// "Notifications"). A Mac never tells them a machine's news, so each comes once, from here.
 export const NOTICE_LIMIT = 2500;
-
-export function macPresent(folder = PRESENT, now = Date.now()) {
-  let names;
-  try {
-    names = fs.readdirSync(folder);
-  } catch {
-    return false;
-  }
-  return names.some(name => {
-    try {
-      return now - fs.statSync(path.join(folder, name)).mtimeMs < PRESENT_MS;
-    } catch {
-      return false;
-    }
-  });
-}
 
 // The characters of `text` that fit in `bytes` of UTF-8.
 function prefixBytes(text, bytes) {
@@ -3180,9 +3171,10 @@ export function describeForm(form) {
 
 const isBot = session => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
 
-// An engine run a coding agents' session started (Auto on one of the engine's models), kept out
-// of sight: the agents' bridge tells its news, as its session's.
-const isHiddenRun = session => Boolean(session?.metadata?.kuvo?.engineFor);
+// Kept out of sight, as the Mac keeps them: an engine run a coding agents' session started (Auto on
+// one of the engine's models), whose news the agents' bridge tells as its session's; and a bot's
+// seat in a group chat, whose chat tells what matters.
+const isHiddenRun = session => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat);
 
 // Asks the engine for `route` (a path under its API), as JSON.
 function engineGet(engine, route) {
@@ -3323,7 +3315,7 @@ const pause = (ms, signal) => new Promise(resolve => {
 
 // Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
 // and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
-// each one's notification to `tell`, while no Mac is present.
+// each one's notification to `tell`, and doing what the box does as they come.
 export async function watchEvents(read, tell, signal) {
   let attempt = 0;
   while (!signal?.aborted) {
@@ -3336,18 +3328,13 @@ export async function watchEvents(read, tell, signal) {
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
       for await (const event of serverEvents(response.body)) {
-        // A session made in one of this box's worktrees told so; a worktree's branch named after
-        // its session; and with no Mac here, a bot's job read from its memory as its run ends,
-        // as a Mac does while it's here (which may tell its bots otherwise meanwhile).
+        // The box's own work, Mac connected or not: a session made in one of its worktrees told
+        // so; a worktree's branch named after its session; a bot's job read from its memory as
+        // its run ends.
         if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
-        // Named here whether a Mac is here or not (one a phone made here, which a connected Mac
-        // doesn't know of yet): a Mac naming it too finds it named (`from`).
         if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
-          if (macConnected()) toldBots.clear();
-          else refreshBotJob(source, event.data?.sessionID).catch(() => {});
-        }
-        if ((!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) || macPresent()) continue;
+        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
         if (GROUP_NEWS.has(event.type)) {
           const notice = groupNotice(event);
           if (notice) tell(notice);
@@ -3477,9 +3464,8 @@ async function inConversation(ask, readEngine) {
   return { ask: conversation ? { ...ask, session: conversation.id } : ask, asker: conversation?.name ?? null };
 }
 
-// What's asked, as each comes, to your phones' notifications, while no Mac is here to tell them;
-// one that comes while a Mac is, once it's gone, if it's still asked. `tell` says whether it went.
-// Until `signal` stops it (a test's).
+// What's asked, as each comes, to your phones' notifications, once (again if it didn't go). `tell`
+// says whether it went. Until `signal` stops it (a test's).
 export async function watchAsks(tell, signal) {
   const told = new Set();
   while (!signal?.aborted) {
@@ -3488,7 +3474,7 @@ export async function watchAsks(tell, signal) {
       const open = new Set(asks.map(ask => ask.id));
       for (const id of told) if (!open.has(id)) told.delete(id);
       for (const ask of asks) {
-        if (told.has(ask.id) || macPresent()) continue;
+        if (told.has(ask.id)) continue;
         const { ask: shown, asker } = await inConversation(ask);
         if (tell(askNotice(shown, asker))) told.add(ask.id);
       }
@@ -5436,6 +5422,9 @@ async function run() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
+  // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
+  // work then): nothing reads them now.
+  for (const folder of ["present", "connected"]) fs.rmSync(path.join(RUN, folder), { recursive: true, force: true });
   // Its bots' folders' settings, as its integrations are now (after an update, say).
   try { refreshBotsKeys(); } catch {}
   const cleanUp = () => {
