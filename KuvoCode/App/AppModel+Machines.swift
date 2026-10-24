@@ -207,16 +207,17 @@ extension AppModel {
     }
 
     /// Connects again now, rather than waiting for the connection to come back by itself.
-    func reconnectNow(_ engine: MachineEngine) {
+    @discardableResult
+    func reconnectNow(_ engine: MachineEngine) -> Task<Void, Never>? {
         // Already connecting.
         switch engine.state {
-        case .starting, .downloading: return
+        case .starting, .downloading: return nil
         default: break
         }
         engine.disconnect()
         workspace.forget(engine.machine.id)
         if engine.isStopped { engine.startWanted = true }
-        connect(engine)
+        return connect(engine)
     }
 
     /// Starts engines again, so they take what they read only as they start (accounts brought over
@@ -297,7 +298,9 @@ extension AppModel {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
     }
 
-    func connect(_ engine: MachineEngine) {
+    /// Connects to `engine`'s machine: the start, and what follows it there, which a test waits for.
+    @discardableResult
+    func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
@@ -354,7 +357,7 @@ extension AppModel {
             engine.isRetrying = true
             Task { await self?.reconnect(engine) }
         }
-        Task { await start(engine) }
+        return Task { await start(engine) }
     }
 
     /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
@@ -363,7 +366,7 @@ extension AppModel {
         engine.isRetrying = true
         defer { engine.isRetrying = false }
         for delay in [3, 10, 30, 60, 120, 120, 300, 300, 300, 300, 300] {
-            try? await Task.sleep(for: .seconds(delay))
+            await MachineClock.wait(delay)
             // Removed, or connected again some other way (Try Again).
             guard machines.engine(engine.machine.id) === engine, case .failed = engine.state else { return }
             await start(engine)
@@ -397,7 +400,7 @@ extension AppModel {
         if live(engine) { await machines.runWaiting(only: engine.machine.id) }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
         for wait in [0, 2, 5, 10, 20] where live(engine) {
-            try? await Task.sleep(for: .seconds(wait))
+            await MachineClock.wait(wait)
             guard live(engine) else { break }
             if await workspace.refresh(engine) { break }
         }
@@ -433,7 +436,7 @@ extension AppModel {
             await Utilities.shareTabTidying(on: engine.machine.id)
             engine.signInSync = Task { [weak self, weak engine] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(600))
+                    await MachineClock.wait(600)
                     guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
                     await self?.syncSignIns(with: engine)
                     await self?.syncSignInFiles(with: engine)
@@ -442,7 +445,7 @@ extension AppModel {
             engine.agentSync?.cancel()
             engine.agentSync = Task { [weak self, weak engine] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(60))
+                    await MachineClock.wait(60)
                     guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
                     await AgentMail.shared.share(with: engine)
                     await AgentMail.shared.collect(from: engine)
@@ -598,7 +601,7 @@ extension AppModel {
                     Task { await self.start(engine) }
                     return
                 }
-                try? await Task.sleep(for: .seconds(wait))
+                await MachineClock.wait(wait)
                 wait = min(wait * 2, 120)
             }
         }
@@ -636,7 +639,7 @@ extension AppModel {
         for engine in machines.engines.values where engine.machine.id != machine && engine.isReady {
             engine.personalitiesSync?.cancel()
             engine.personalitiesSync = Task { [weak self, weak engine] in
-                try? await Task.sleep(for: .seconds(1))
+                await MachineClock.wait(1)
                 guard let self, let engine, !Task.isCancelled, self.live(engine) else { return }
                 await self.syncPersonalities(with: engine)
                 await self.bots.writeKit(on: engine.machine.id)

@@ -331,6 +331,22 @@ final class MachineEngine {
         // Disconnecting (Connect Now) or a newer attempt ends this one at its next step.
         let attempt = connections
         let check = { if self.connections != attempt { throw Superseded() } }
+        #if DEBUG
+        if let standIn = Self.standIn {
+            state = .starting
+            let api = await standIn(machine)
+            guard connections == attempt else { return }
+            guard let api else {
+                state = .failed("Couldn’t reach \(machine.name).")
+                return
+            }
+            self.api = api
+            catalog.api = api
+            startWanted = false
+            state = .ready
+            return
+        }
+        #endif
         var attached: RemoteServer?
         do {
             state = .starting
@@ -479,6 +495,12 @@ final class MachineEngine {
     }
 
     private struct Superseded: Error {}
+
+    #if DEBUG
+    /// For the app's tests: the engine a machine's connection reaches (nil: it can't be reached),
+    /// in place of starting one there over SSH. It has no live feed.
+    static var standIn: ((Machine) async -> OpenCodeAPI?)?
+    #endif
 
     /// A newer box whose engine didn't come up by itself: this app won't start an older one there.
     struct NewerBox: LocalizedError {
@@ -1173,6 +1195,9 @@ nonisolated enum RemoteFolder {
 nonisolated enum RemoteShell {
     /// Runs `script` with `sh` on `machine`: its output, or nil when it (or SSH) fails.
     static func run(_ script: String, on machine: String) -> Data? {
+        #if DEBUG
+        if let standIn = SSHConnection.standIn { return standIn(SSHConnection(destination: machine).address, script).map { Data($0.utf8) } }
+        #endif
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ssh")
         process.arguments = SSHConnection(destination: machine).arguments(running: script)

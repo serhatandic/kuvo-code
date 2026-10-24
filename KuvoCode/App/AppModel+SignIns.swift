@@ -280,7 +280,7 @@ extension AppModel {
     func nudgeSignIns(_ engine: MachineEngine) {
         engine.signInNudge?.cancel()
         engine.signInNudge = Task { [weak self, weak engine] in
-            try? await Task.sleep(for: .seconds(2))
+            await MachineClock.wait(2)
             guard !Task.isCancelled, let engine, engine.isReady else { return }
             await self?.syncSignIns(with: engine)
         }

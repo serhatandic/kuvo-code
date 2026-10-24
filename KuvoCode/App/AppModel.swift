@@ -508,6 +508,14 @@ final class AppModel {
         phoneLink.stop()
     }
 
+    #if DEBUG
+    /// For tests: this Mac's engine is the one at `api`, as if it had started (no feed, nothing
+    /// else connected to it).
+    func standIn(engine api: OpenCodeAPI) {
+        self.api = api
+    }
+    #endif
+
     /// The server answers 503 until it has loaded.
     private func waitUntilReady(_ api: OpenCodeAPI) async throws {
         let deadline = ContinuousClock.now + .seconds(60)
