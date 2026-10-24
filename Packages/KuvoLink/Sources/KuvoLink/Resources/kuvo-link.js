@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.41";
+export const BRIDGE_VERSION = "0.9.42";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2572,7 +2572,7 @@ export function botInstructions(kit, name, folder, personality, project, job) {
 }
 
 // A bot's job as its memory keeps it, as the Mac reads it (Bots.job(inMemory:), and the coding
-// agents' bridge's jobInMemory, all held to `Agents/test/groups-vectors.json`): its line, what
+// agents' bridge's jobInMemory, all held to `Agents/test/box-vectors.json`): its line, what
 // shows under its name, and its section, all of it; null for a memory without one.
 const spaces = text => text.replace(/^[\p{Zs}\t]+|[\p{Zs}\t]+$/gu, "");
 const trimmed = text => text.replace(/^[\p{Z}\t\n\v\f\r\u0085]+|[\p{Z}\t\n\v\f\r\u0085]+$/gu, "");
