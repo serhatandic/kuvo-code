@@ -23,7 +23,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older.
-export const BRIDGE_VERSION = "0.9.27";
+export const BRIDGE_VERSION = "0.9.28";
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
 export const LINK_FILE = path.join(RUN, "link.json");
