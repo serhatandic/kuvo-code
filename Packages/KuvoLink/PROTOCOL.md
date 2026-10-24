@@ -105,11 +105,59 @@ Pushes and other messages for a device that may not be connected use
 notification, below.
 
 A host mails another host the same way, with a relay `send` of a mail frame (`kind` 5, session
-0): a Mac mails each of its machines' bridges the phones you've paired (`{"phones": [{key, name,
-address, pairing}], "removed": [{key, pairing}], "at": <milliseconds>}`), so a phone you remove
-loses its way into every machine, reached or not. A bridge takes it from any Mac that set it up,
-each by its own `at`, as "Paired phones" says. The same mail carries the machine's peers, and peers
-mail each other, as "Peers" says.
+0): what your computers share goes as signed documents ("Documents"), and peers mail each other
+their agents and letters ("Peers").
+
+### Documents
+
+What your computers share is three kinds of document: who a Mac's boxes are (`peers`), the phones
+each box pairs and removes (`phones`), and each box's view of your personalities
+(`personalities`). Each origin signs its own; any box passes a copy on; no clock decides anything.
+
+- **Keys**: each box and Mac has a signing key (Ed25519) beside its static key: a Mac in its
+  Keychain (`sign`), a machine in `run/link.json` (`sign`, the 32-byte seed), made with its other
+  keys. A document's origin is that key's public half. Trust comes from SSH: setup gives the
+  machine the Mac's (`macSign`) and its answer gives the Mac the machine's (`sign`). A Mac's peers
+  document names each box with both its keys, so boxes learn each other's from a document they
+  already verify. A box made anew (its folder gone) is a new origin; the Mac's next setup names it.
+- **Format**: `{"d": <bytes>, "s": <signature>}`, base64url without padding. The bytes are JSON,
+  `{"v": 1, "kind", "origin", "n", "body"}`, as the origin wrote them, and the signature is over
+  `"kuvo-link doc v1\0"` and the bytes. A box checks the signature before it reads them, and keeps
+  and passes on the bytes as they are, so no one needs a canonical JSON. `n` is the version, a
+  whole number from 1 to 2^53−1, one more with each change. A document is at most 512 KB of
+  bytes. Held to `Vectors/docs.json` (KuvoLink's `Documents`, the bridge's `readDoc`).
+- **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
+  than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
+  keeps the same one. One of its own further on than it knew (it lost count) moves its count past
+  it. It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
+  `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
+  longer takes them from go.
+- **`peers`**, one per Mac: `{boxes: [{key, sign, address, name, kind: "mac"|"machine", id?}],
+  moved: [{session, key}], left: [key]}`: the Mac itself and each of its machines whose bridge
+  signs, the same document for all of them. A box's peers are every box its Macs' documents name,
+  itself left out ("Peers"). `left` names the machines that Mac removed: a box that finds itself
+  there no longer counts that Mac, as `leave` does.
+- **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
+  pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
+  lets in its own and its Macs' phones, less every pairing removed in any phones document it
+  takes, which it notes as its own removal too. A Mac with the phone link off signs none.
+- **`personalities`**, each box's view: the library (`{personalities, removed}`, "Personalities").
+  A box meets a view it takes with its own, and signs its own again if it changed; views aren't
+  passed on (each box's own already has what it took). Its own goes past 512 KB never: a change
+  that would take it there is refused.
+- **Exchange**, inside mail, as `"docs"`: `{give: [{d, s}]}`; `{part: {whole, i, of, d, s}}` for a
+  document too big for one mail (40,000 characters of `d` each, `whole` the SHA-256 of all of
+  `d`); `{have: [[origin, kind, n, h]], reply?}`, a digest of what the sender has (`h`, the first 8
+  bytes of the bytes' SHA-256, base64url). A box sends its digest to each peer as it connects to the
+  relay, and with its agents every ten minutes (so one that missed what it was given gets it then).
+  To a digest, a box gives what the sender lacks or has older (of what that box would take), and,
+  unless it's a `reply`, answers with its own digest, marked `reply`, when the sender has something
+  newer. A document it took goes on to its other peers that would take it (not back where it came
+  from, nor to its origin); one of its own that changed, to all of them. Over SSH, setup carries the
+  Mac's documents (`docs`, its own and those it has of its machines) and its answer the machine's.
+  A box doesn't give documents to a Mac that gave it no signing key.
+- **Later**: each box's agents (`{"agents"}`, "Peers") are a list of its own too, still sent as
+  they change and every ten minutes; they could become a fourth kind.
 
 ### Peers
 
@@ -117,23 +165,12 @@ Your computers talk to each other over the relay, Mac or not. A Mac connects to
 the relay when the phone link is on or it has at least one machine; a Mac on its own makes no
 connection.
 
-- **Who**: a Mac tells each of its machines its peers in setup and in its mail, `"peers": [{key,
-  address, name, kind: "mac"|"machine", id?}]` with `"peersAt"` (setup) or the mail's `at`: itself,
-  and its other machines whose bridge said `"peers": true` in setup's answer. `id` is the
-  machine's name on that Mac. A machine keeps each Mac's list (`peersFrom`), a newer one replacing
-  that Mac's last, and takes lists only from its Macs. Its peers are every list's, itself left
-  out. A machine also passes its Macs' lists on, in its agents' mail to its peer
-  machines: `"vouched": {"lists": [{mac, at, peers}]}`, each as that Mac gave it, with its `at`.
-  A box keeps a copy only for a Mac that's its own too, not dated more than a day ahead of its
-  clock, and uses one from a machine that Mac's own list names in place of its own copy of that
-  list when it's newer; the machine that passed it counts too (a Mac's list to a machine leaves
-  that machine out). So one that missed the Mac's mail (it was away) learns of a machine the Mac
-  added, and of one it dropped, with the Mac closed. Only a Mac says who a box's peers are; a
-  machine only carries its word, one hop. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and both
-  carry `moved: [{session, key}]`: conversations being moved, by the key of the computer each
-  lives on now (the one it left may still list it until it's let go). With the
-  phone link off, a Mac's setup and mail leave out `phones` and `removed`, and the machine keeps
-  the phones it has.
+- **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
+  machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
+  they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
+  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`, and the
+  peers document carries `moved`: conversations being moved, by the key of the computer each lives
+  on now (the one it left may still list it until it's let go).
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -141,7 +178,7 @@ connection.
   about?, machine?}]}}`. A box sends its bots and its 40 latest sessions (its engine's and its
   coding agents') when they change and every ten minutes. Each box keeps the newest list from
   each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
-  what it sends first (its agents; a Mac's list), and whoever gets it tells that box its agents
+  what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
   again within a minute.
   - A machine's bridge writes `run/agents.json` (what `list_agents` reads there) from its own
     agents and its peers', relay or not.
@@ -151,13 +188,8 @@ connection.
     `machine`, and takes their letters on over SSH.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
     the bridge takes when it's newer than the Mac's mail.
-- **Personalities**: `{"personalities": {personalities, removed}}`, the library as
-  `kuvo/personalities` keeps it. A machine sends its copy to the machines its Macs
-  named when it changes and every ten minutes (with `"ask"`, at once), in as many mails as it
-  takes, and meets each it gets from such a machine with its own: per personality the newest
-  change wins, a removal too; one dated more than a day ahead of its clock isn't taken. Its bots
-  whose personality changed are told what they are now. A connected Mac meets a machine's copy
-  every minute, over SSH.
+- **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
+  own, and its bots whose personality changed are told what they are now.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
   `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
@@ -190,7 +222,9 @@ connection.
   - The Mac takes each letter in `run/outbox` by renaming it `.mac-<name>` before it reads it,
     and puts back the ones it couldn't deliver, so a letter goes one way only.
 - `kuvo-link.js leave <mac>`: run when that Mac removes the machine. It stops counting that Mac,
-  forgets the peers only it named and what they told it, and leaves other Macs' lists alone.
+  forgets its documents, the peers only it named and what they told it, and leaves other Macs'
+  alone. A Mac that can't reach the machine names it in its peers document's `left`, which does
+  the same wherever it reaches it.
 
 ### Updates
 
@@ -1009,15 +1043,15 @@ once.
 On a machine the bridge keeps its state in `~/.kuvo-code/run/link.json` (mode 600):
 
 ```json
-{"relay": "wss://…", "secret": "…", "key": "<static private key>", "mac": "<the last Mac's static key>",
- "macs": ["<each Mac that set it up>"], "macAts": {"<Mac>": <its last list's at>}, "macSeen": {"<Mac>": <when it came, here>},
+{"relay": "wss://…", "secret": "…", "key": "<static private key>", "sign": "<signing key's seed>", "mac": "<the last Mac's static key>",
+ "macs": ["<each Mac that set it up>"], "macSigns": {"<Mac>": "<its signing key>"}, "macSeen": {"<Mac>": <when it came, here>},
+ "docs": {"<origin> <kind>": {"d": "…", "s": "…"}}, "own": {"<kind>": {"n", "h", "b"}}, "views": {"<origin>": {"n", "h"}},
  "phones": [{"key": "…", "name": "…", "added": 1760000000, "from": "mac", "mac": "<the Mac that listed it>", "address": "…", "pairing": "…"}],
  "removed": [{"key": "…", "pairing": "…"}]}
 ```
 
-The Mac sets the phones paired with it (`"from": "mac"`), so they reach the machine too,
-and takes a phone off when you unpair; phones paired with the machine itself (`"pair"`)
-stay. `address` is the phone's on the relay, where its notifications go: the Mac passes on
+`phones` is what its documents say ("Paired phones"): those its Macs list (`"from": "mac"`),
+and those paired with the machine itself (`"pair"`). `address` is the phone's on the relay, where its notifications go: the Mac passes on
 what it knows, and the bridge notes it each time the phone comes in. The machine's keys stay when no phones are left, so pairing again gives the same
 address. The bridge reads the file every 30 seconds: a phone taken off loses its sessions,
 and with no phones and no pairing waiting the bridge stops. The bridge notes when a phone last
@@ -1041,13 +1075,15 @@ a machine's routes that answer once (never a stream) the same way: `kuvo-link.js
 
 The personalities you make are one library on every computer: each keeps its copy (a Mac in
 its data folder, a machine in `~/.kuvo-code/bots/personalities.json`), and
-copies meet as a Mac connects to a machine (`kuvo-link.js box personalities`, over SSH) or as a
-personality changes on the Mac. Per personality, the newest change wins (`updated`, milliseconds
-since 1970, made newer than the change before it whatever the clock says); a removal over a change
-at the same moment, then the words that sort last; a removal stays noted (`removed`, the last
-500), so no copy brings it back. Held to `Vectors/personalities.json` (KuvoLink's
+copies meet box to box (each box's view is a document, "Documents") and as a Mac connects to a
+machine or changes one (`kuvo-link.js box personalities`, over SSH). Per personality a removal wins
+over any change, and stays noted (`removed`, the last 500), so no copy brings it back; otherwise
+the change counted highest: `updated` is when one was made (milliseconds since 1970), and each
+change counts on from the one before it, whatever any clock says; at the same count, the words
+that sort last. A count past 2^52 isn't taken. Held to `Vectors/personalities.json` (KuvoLink's
 `PersonalityLibraries`, the bridge's `mergePersonalities`). Kuvo Code's own presets (`preset.…`)
-aren't in it.
+aren't in it. A change that would take the library past what a document holds is refused, `400
+{"message"}`, on a Mac as on a machine.
 
 - `GET kuvo/personalities`: `{"personalities": [{id, name, description, symbol, updated}]}`, the
   ones you made, on the computer asked.
@@ -1056,8 +1092,8 @@ aren't in it.
 - `PATCH kuvo/personalities/<id>` with `{name?, description?}` changes one and answers with it;
   `DELETE` removes it. 404 for one that isn't there, or a preset.
 
-A change on one computer reaches the others as the Mac next meets them; to have it everywhere at
-once, make it on each computer you reach. A bot made on a machine can have one there at once: its
+A change on one computer reaches the others it reaches by mail at once, and the rest as they
+connect. A bot made on a machine can have one there at once: its
 `kuvo/bots/templates` lists them, told as the Mac words them (the kit's `personalityWords`).
 
 ### Paired phones
@@ -1074,12 +1110,13 @@ machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
   brings it back. Only a pairing of its own, with a new `pairing`, lets the phone in again, though
   its key is one the computer has.
 - A removal of an older pairing than the one there leaves that one.
-- A Mac's list (its setup, its mail) counts only when newer than the last one from that Mac (by
-  its `at`). It adds the phones on it that aren't removed, removes the ones it listed before and no
-  longer lists, and the removals it carries; another Mac's phones stay. One from before Macs were
-  named (no `mac`) that a Mac doesn't list goes off, not for good. A Mac the machine hasn't heard
-  from in 30 days, by its own clock, no longer counts, and its phones are as ones from before Macs
-  were named; it counts again once it sets the machine up.
+- Each box's phones document ("Documents") lists the phones paired there, and every removal it
+  knows of. A machine lets in the phones its Macs' documents list that nothing removed, beside its
+  own; a phone a Mac's document no longer lists goes off, not for good, and another Mac's phones
+  stay. A removal in any phones document a box takes is noted there too, so one removed anywhere
+  is removed everywhere, reached or not. One from before Macs were named (no `mac`) stays until a
+  Mac signs its phones. A Mac the machine hasn't heard from in 30 days (setup or any mail), by its
+  own clock, no longer counts, and its phones go; it counts again once it sets the machine up.
 
 On both, for a paired phone:
 
@@ -1089,7 +1126,7 @@ On both, for a paired phone:
   there): removes them there, itself too, and their sessions end, once the answer's on its way.
   `200 {}`, or `400 {"message"}` when it names a Mac, nothing, too many or something that isn't a
   phone's key, or the one asking isn't paired there. A removal goes to each computer the phone pairs with, Mac
-  and machines (`kuvo/hosts`); a Mac passes on the removals it has with its list.
+  and machines (`kuvo/hosts`); each also passes on the removals it has in its phones document.
 - `POST kuvo/phones/pair`: a link for another phone to pair with, as Settings › Phone shows one
   (as a QR code): `{"link": "kuvo-link://pair?…", "ends"}`, good once, until `ends` (seconds
   since 1970). On a Mac it's the phones' own, apart from the one Settings › Phone shows, so
@@ -1162,6 +1199,15 @@ before connects (the box notes one: `run/attached`).
   "current", not a failure, until a release that has one is the newest.
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
+- It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
+  the mail's `at`), without `macSign`. A box keeps that Mac's newest by its own `at` (`legacy` in
+  link.json, compared only with that Mac's earlier ones) and counts it as that Mac's peers
+  document, but never passes it on, nor gives that Mac documents. Once that Mac gives a signing key
+  in setup, its documents take the list's place. Lists a 0.9.23 bridge passed on (`vouched`) and
+  the personalities it sent (`{"personalities"}`) count for nothing.
+- It meets a machine's personalities over SSH every minute (`kuvo-link.js box personalities`,
+  the library in, the met library out), which still works the same; the bridge tells your other
+  computers what changed.
 - It notes it's connected in `run/connected/<its id>` each minute: the bridge clears `run/connected`
   (and `run/present`, which a 0.7 Mac with the phone link on wrote) as it starts. Nothing reads
   them.
