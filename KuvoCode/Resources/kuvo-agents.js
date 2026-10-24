@@ -8550,6 +8550,18 @@ function safeJSON(text) {
 }
 
 // Agents/src/sessions.ts
+function isBusy(doing) {
+  return doing.kind !== "idle" && doing.kind !== "deleting";
+}
+function onFiles(doing) {
+  return doing.kind === "keeping" || doing.kind === "reverting";
+}
+function refusesAsks(doing) {
+  return doing.kind === "stopping" || doing.kind === "deleting";
+}
+function runOf(doing) {
+  return doing.kind === "running" || doing.kind === "stopping" ? doing.run : undefined;
+}
 var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession", "acpInstructed", "cursorAgent", "cursorInstructed"];
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
 var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000 };
@@ -9078,9 +9090,6 @@ class Sessions {
   snapshots;
   titleModel;
   live = new Map;
-  removing = new Set;
-  steering = new Set;
-  cancelSoon = new Set;
   constructor(store, roster, auto, engine, policies, agentInfo, snapshots, titleModel) {
     this.store = store;
     this.roster = roster;
@@ -9106,7 +9115,7 @@ class Sessions {
   state(id) {
     let live = this.live.get(id);
     if (!live) {
-      live = { threads: new Map, permissions: new Map, forms: new Map, always: [], subagents: new Map, runs: new Map, blocks: this.policies ? undefined : [], steeredNotes: [], models: new Map, background: new Set };
+      live = { threads: new Map, doing: { kind: "idle" }, go: false, waiting: [], steering: new Map, permissions: new Map, forms: new Map, always: [], subagents: new Map, runs: new Map, blocks: this.policies ? undefined : [], models: new Map, background: new Set };
       this.live.set(id, live);
     }
     return live;
@@ -9117,19 +9126,13 @@ class Sessions {
       throw new NotFound(`No session ${id}.`);
     return record;
   }
-  isRunning(id) {
-    const turn = this.live.get(id)?.turn;
-    return Boolean(turn && !turn.isEnded) || this.busy.has(id);
+  atWork(id) {
+    const live = this.live.get(id);
+    return Boolean(live && isBusy(live.doing));
   }
-  busy = new Set;
-  async filesKept(id) {
-    const working = () => {
-      const turn = this.live.get(id)?.turn;
-      return Boolean(turn && !turn.isEnded);
-    };
-    const start = Date.now();
-    while (this.busy.has(id) && !working() && Date.now() - start < 30000)
-      await Bun.sleep(25);
+  async whenFiles(live) {
+    while (onFiles(live.doing))
+      await new Promise((resolve5) => live.waiting.push(resolve5));
   }
   notes(record) {
     const kept2 = record.agent.snapshots ?? {};
@@ -9215,7 +9218,9 @@ class Sessions {
       return;
     const open = Object.values(this.notes(record)).filter((note) => note.before && !note.files && !note.failed);
     const directory = record.session.location.directory;
-    this.busy.add(id);
+    const live = this.state(id);
+    const keeping = { kind: "keeping" };
+    live.doing = keeping;
     try {
       const now = await this.snapshots.take(directory);
       if (!now)
@@ -9227,10 +9232,10 @@ class Sessions {
         if (!note.files)
           note.failed = true;
     } finally {
-      this.busy.delete(id);
       if (this.store.get(id))
         this.store.save(id);
-      this.afterBusy(id);
+      if (live.doing === keeping)
+        this.free(id, live);
     }
   }
   create(body) {
@@ -9341,22 +9346,32 @@ class Sessions {
   }
   async remove(id) {
     const record = this.store.get(id);
-    if (!record || this.removing.has(id))
+    if (!record)
       return;
-    this.removing.add(id);
+    const live = this.state(id);
+    const doing = live.doing;
+    if (doing.kind === "deleting")
+      return;
+    live.doing = { kind: "deleting" };
+    live.go = false;
+    this.turnAwayOwn(live);
+    for (const waiting of live.waiting.splice(0))
+      waiting();
     record.agent.inbox = [];
-    await this.interrupt(id);
+    const run2 = runOf(doing);
+    if (run2)
+      await this.stop(id, live, run2);
+    else
+      await this.stopSubagents(id);
     for (const child of this.list(undefined, id))
       if (!this.shownElsewhere(child.id, id))
         await this.remove(child.id);
-    for (const thread of this.live.get(id)?.threads.values() ?? [])
+    for (const thread of live.threads.values())
       thread.close();
-    this.live.delete(id);
     for (const [provider, slot] of Object.entries(this.slots(record)))
       await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
     this.store.remove(id);
     this.live.delete(id);
-    this.removing.delete(id);
     emit("session.deleted", { sessionID: id }, record.session.location.directory);
   }
   shownElsewhere(child, except) {
@@ -9375,7 +9390,7 @@ class Sessions {
     this.store.save(id);
   }
   active() {
-    const ids = [...this.live.keys()].filter((id) => this.isRunning(id));
+    const ids = [...this.live.keys()].filter((id) => this.atWork(id));
     for (const live of this.live.values())
       for (const [child, turn] of live.subagents)
         if (!turn.isEnded)
@@ -9395,7 +9410,7 @@ class Sessions {
     const message = { type: "shell", id: messageID(event.id), time: { created: event.created }, shellID, command: text, status: "running" };
     record.messages.push(message);
     record.session.time.updated = Date.now();
-    if (this.isRunning(id))
+    if (this.atWork(id))
       record.agent.lateShells = [...record.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
     runCommand(text, directory).then((ran) => {
@@ -9412,10 +9427,10 @@ class Sessions {
   }
   async stageRevert(id, messageID2) {
     const record = this.record(id);
-    if (this.busy.has(id))
-      await this.filesKept(id);
-    if (this.isRunning(id))
-      throw new BadRequest("Stop the agent first.");
+    const live = this.state(id);
+    if (onFiles(live.doing))
+      await this.whenFiles(live);
+    this.mustBeIdle(id, live);
     const at = record.messages.findIndex((message) => message.id === messageID2 && message.type === "user");
     if (at < 0)
       throw new NotFound("No such message of yours.");
@@ -9437,8 +9452,9 @@ class Sessions {
     if (kept2 && !first?.before)
       throw new BadRequest("This message went into the turn before it: undo from that one.");
     let diffs2 = [];
+    const reverting = { kind: "reverting" };
     if (first?.before && files.size && this.snapshots) {
-      this.busy.add(id);
+      live.doing = reverting;
       if (!record.session.revert) {
         delete record.agent.revertNow;
         delete record.agent.revertAt;
@@ -9467,40 +9483,46 @@ class Sessions {
           delete record.agent.revertFiles;
         }
         this.store.save(id);
-        this.busy.delete(id);
-        this.afterBusy(id);
+        if (live.doing === reverting)
+          this.free(id, live);
         throw error;
       }
-      this.busy.delete(id);
+      if (live.doing !== reverting)
+        throw new NotFound(`No session ${id}.`);
     }
     const revert = { messageID: messageID2, files: diffs2 };
     record.session.revert = revert;
     this.store.save(id, true);
     emit("session.revert.staged", { sessionID: id, revert }, directory);
-    this.afterBusy(id);
+    if (live.doing === reverting)
+      this.free(id, live);
     return revert;
   }
   async clearRevert(id) {
     const record = this.record(id);
     if (!record.session.revert)
       return;
-    if (this.busy.has(id))
-      await this.filesKept(id);
-    if (this.isRunning(id))
-      throw new BadRequest("Stop the agent first.");
+    const live = this.state(id);
+    if (onFiles(live.doing))
+      await this.whenFiles(live);
+    this.mustBeIdle(id, live);
+    if (!record.session.revert)
+      return;
     const directory = record.session.location.directory;
     const now = record.agent.revertNow;
     const files = record.agent.revertFiles ?? [];
+    const reverting = { kind: "reverting" };
     if (now && files.length && this.snapshots) {
-      this.busy.add(id);
+      live.doing = reverting;
       try {
         await this.snapshots.restore(directory, now, files, record.agent.revertAt);
       } catch (error) {
-        this.busy.delete(id);
-        this.afterBusy(id);
+        if (live.doing === reverting)
+          this.free(id, live);
         throw error;
       }
-      this.busy.delete(id);
+      if (live.doing !== reverting)
+        throw new NotFound(`No session ${id}.`);
     }
     delete record.session.revert;
     delete record.agent.revertNow;
@@ -9508,21 +9530,14 @@ class Sessions {
     delete record.agent.revertFiles;
     this.store.save(id, true);
     emit("session.revert.cleared", { sessionID: id }, directory);
-    this.afterBusy(id);
+    if (live.doing === reverting)
+      this.free(id, live);
   }
-  afterBusy(id) {
-    if (!this.store.get(id) || this.isRunning(id))
-      return;
-    const live = this.state(id);
-    const later = live.wakeLater;
-    live.wakeLater = false;
-    if (live.adopting && this.startAdopting(id)) {
-      if (later)
-        live.resume = true;
-      return;
-    }
-    if (later)
-      this.wake(id);
+  mustBeIdle(id, live) {
+    if (live.doing.kind === "deleting")
+      throw new NotFound(`No session ${id}.`);
+    if (live.doing.kind !== "idle")
+      throw new BadRequest("Stop the agent first.");
   }
   commitRevert(id, record, live) {
     const revert = record.session.revert;
@@ -9607,35 +9622,34 @@ class Sessions {
     this.wake(id);
   }
   prompt(id, input) {
-    if (this.removing.has(id))
-      throw new NotFound(`No session ${id}.`);
     const record = this.record(id);
+    const live = this.state(id);
+    if (live.doing.kind === "deleting")
+      throw new NotFound(`No session ${id}.`);
     if (record.session.parentID)
       throw new BadRequest("This subagent works for the conversation that started it: write to it there.");
     const queue = this.queue(record);
     if (queue.some((waiting) => waiting.id === input.id) || record.messages.some((message) => message.id === input.id))
       return;
-    const running = this.live.get(id)?.running;
-    const steers = this.isRunning(id) && input.delivery !== "queue" && Boolean(running?.thread.steer);
-    const onlyBusy = this.busy.has(id) && !this.live.get(id)?.turn;
-    const idle = !this.isRunning(id) || onlyBusy;
-    const delivery = steers || idle && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
+    const doing = live.doing;
+    const into = doing.kind === "running" && input.delivery !== "queue" && doing.run.agent?.thread.steer ? doing.run : undefined;
+    const nothingRuns = doing.kind === "idle" || onFiles(doing);
+    const delivery = into || nothingRuns && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
     queue.push({ ...input, delivery });
     this.store.save(id, true);
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record.session.location.directory);
-    if (steers)
-      this.steerNow(id, input);
+    if (into)
+      this.steerNow(id, live, into, input);
     else if (delivery === "steer")
       this.wake(id);
   }
-  async steerNow(id, input) {
-    const live = this.live.get(id);
-    const running = live?.running;
-    const turn = live?.turn;
+  async steerNow(id, live, run2, input) {
+    const agent = run2.agent;
     const directory = this.store.get(id)?.session.location.directory;
-    if (!live || !running?.thread.steer || !directory)
-      return this.wake(id);
-    this.steering.add(input.id);
+    if (!agent?.thread.steer || !directory)
+      return this.setDelivery(id, input.id, "queue");
+    const handing = { cancelled: false };
+    live.steering.set(input.id, handing);
     let taken = false;
     let note;
     try {
@@ -9650,12 +9664,12 @@ class Sessions {
         }
       }
       const attached = withTextFiles(input.text, input.files.map(promptFile));
-      if (live.running === running && !this.cancelSoon.has(input.id))
-        taken = await running.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false);
+      if (live.doing.kind === "running" && live.doing.run === run2 && run2.agent === agent && !handing.cancelled) {
+        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false);
+      }
     } finally {
-      this.steering.delete(input.id);
+      live.steering.delete(input.id);
     }
-    const cancelled = this.cancelSoon.delete(input.id);
     const record = this.store.get(id);
     if (!record)
       return;
@@ -9663,13 +9677,16 @@ class Sessions {
     const at = queue.findIndex((waiting) => waiting.id === input.id);
     if (at < 0)
       return;
+    const next = !taken && !handing.cancelled && live.doing.kind !== "running" && (live.go || live.doing.kind !== "stopping" && record.session.outcome === "succeeded");
+    if (live.doing.kind === "idle" && !live.steering.size)
+      live.go = next;
     if (!taken) {
-      if (cancelled)
+      if (handing.cancelled)
         this.cancelInput(id, input.id);
-      else if (this.isRunning(id))
+      else if (next)
+        this.advance(id, live);
+      else
         this.setDelivery(id, input.id, "queue");
-      else if (record.session.outcome === "succeeded")
-        this.wake(id);
       return;
     }
     queue.splice(at, 1);
@@ -9677,9 +9694,9 @@ class Sessions {
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
     record.messages.push({ type: "user", id: input.id, time: { created: Date.now() }, text: input.text, files: attachments.length ? attachments : undefined });
     record.session.time.updated = Date.now();
-    if (note?.before && turn && live.turn === turn) {
+    if (note?.before && runOf(live.doing) === run2) {
       this.notes(record)[input.id] = note;
-      live.steeredNotes.push(note);
+      run2.steered.push(note);
     }
     this.store.save(id, true);
   }
@@ -9699,8 +9716,9 @@ class Sessions {
       this.wake(id);
   }
   cancelInput(id, inputID) {
-    if (this.steering.has(inputID)) {
-      this.cancelSoon.add(inputID);
+    const handing = this.live.get(id)?.steering.get(inputID);
+    if (handing) {
+      handing.cancelled = true;
       return;
     }
     const record = this.store.get(id);
@@ -9715,54 +9733,55 @@ class Sessions {
     emit("session.inbox.cancelled", { sessionID: id, inboxID: inputID }, record.session.location.directory);
   }
   wake(id) {
-    if (this.removing.has(id))
-      return;
-    if (this.isRunning(id)) {
-      const live = this.state(id);
-      if (!live.turn && this.busy.has(id))
-        live.wakeLater = true;
-      return;
-    }
-    const record = this.store.get(id);
-    if (!record)
-      return;
-    if (this.startAdopting(id))
-      return;
-    const queue = this.queue(record);
-    const index = queue.findIndex((input2) => input2.delivery === "steer" && !this.steering.has(input2.id));
-    if (index < 0)
-      return;
-    const [input] = queue.splice(index, 1);
-    this.start(id, input);
-  }
-  next(id, outcome) {
-    if (this.removing.has(id) || !this.store.get(id))
+    if (!this.store.get(id))
       return;
     const live = this.state(id);
-    const resume = live.resume || live.wakeLater;
-    live.resume = false;
-    live.wakeLater = false;
+    if (live.doing.kind !== "idle" && !onFiles(live.doing))
+      return;
+    live.go = true;
+    this.advance(id, live);
+  }
+  advance(id, live, ended) {
     const record = this.store.get(id);
-    if (!record || this.isRunning(id))
+    if (live.doing.kind !== "idle" || !record)
       return;
-    if (this.startAdopting(id)) {
-      live.resume = resume;
-      return;
+    const own = live.own;
+    live.own = undefined;
+    if (own) {
+      if (record.session.revert)
+        live.threads.get(own.adopt.providerID)?.turnAway?.();
+      else
+        return this.start(id, live, own);
     }
     const queue = this.queue(record);
-    const free = (input2) => !this.steering.has(input2.id);
+    const notHanded = (input2) => !live.steering.has(input2.id);
     let index = -1;
-    if (outcome === "succeeded") {
-      index = queue.findIndex((input2) => input2.delivery === "steer" && free(input2));
-      if (index < 0)
-        index = queue.findIndex(free);
-    } else if (resume) {
-      index = queue.findIndex((input2) => input2.delivery === "steer" && free(input2));
-    }
+    if (ended === "succeeded" || live.go)
+      index = queue.findIndex((input2) => input2.delivery === "steer" && notHanded(input2));
+    if (ended === "succeeded" && index < 0)
+      index = queue.findIndex(notHanded);
+    if (index >= 0 || !live.steering.size)
+      live.go = false;
     if (index < 0)
       return;
     const [input] = queue.splice(index, 1);
-    this.start(id, input);
+    this.start(id, live, input);
+  }
+  free(id, live, ended) {
+    live.doing = { kind: "idle" };
+    this.advance(id, live, ended);
+    for (const waiting of live.waiting.splice(0))
+      waiting();
+    if (live.doing.kind === "idle")
+      this.closeWhenIdle(id, live);
+  }
+  turnAwayOwn(live) {
+    const own = live?.own;
+    if (!live || !own)
+      return false;
+    live.own = undefined;
+    live.threads.get(own.adopt.providerID)?.turnAway?.();
+    return true;
   }
   async generate(id, prompt) {
     const model2 = this.record(id).session.model;
@@ -9819,23 +9838,25 @@ ${text.slice(0, 4000)}
     const title = answer.split(`
 `).map((line) => line.trim()).find(Boolean)?.replace(/^["'\u201C\u201D\u2018\u2019`*#\s]+|["'\u201C\u201D\u2018\u2019`*\s.]+$/g, "").slice(0, 80);
     const record = this.store.get(id);
-    if (!title || !record || record.session.title || this.removing.has(id))
+    if (!title || !record || record.session.title || this.live.get(id)?.doing.kind === "deleting")
       return;
     this.update(id, { title });
   }
-  async start(id, input) {
-    const live = this.state(id);
+  start(id, live, input) {
     const record = this.store.get(id);
-    if (!record)
+    if (!record || live.doing.kind !== "idle")
       return;
+    const session = record.session;
+    const run2 = { turn: new Turn(this.store, id, session.location.directory, session.model, session.agent ?? "build"), abort: new AbortController, steered: [] };
+    live.doing = { kind: "running", run: run2 };
+    clearTimeout(live.idle);
+    this.runTurn(id, live, record, run2, input);
+  }
+  async runTurn(id, live, record, run2, input) {
+    const { turn, abort } = run2;
     const session = record.session;
     const directory = session.location.directory;
     const model2 = session.model;
-    const turn = new Turn(this.store, id, directory, model2, session.agent ?? "build");
-    live.turn = turn;
-    clearTimeout(live.idle);
-    const abort = new AbortController;
-    live.abort = abort;
     this.commitRevert(id, record, live);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
@@ -9886,11 +9907,11 @@ ${text.slice(0, 4000)}
     let earlier = new Set;
     try {
       const attached = withTextFiles(input.text, input.files.map(promptFile));
-      const run2 = { text: attached.text, files: attached.files, model: model2, plan: session.agent === "plan" };
+      const message = { text: attached.text, files: attached.files, model: model2, plan: session.agent === "plan" };
       earlier = new Set(live.subagents.keys());
       if (model2.providerID !== autoProvider)
         delete record.agent.autoHeld;
-      result = input.adopt ? await this.runOn(id, record, live, input.adopt, { ...run2, model: input.adopt, adopt: true, auto: model2.providerID === autoProvider || undefined }, turn, abort.signal, input.id) : model2.providerID === autoProvider ? await this.runAuto(id, record, live, { ...run2, auto: true }, turn, abort.signal, input.id) : await this.runOn(id, record, live, model2, run2, turn, abort.signal, input.id);
+      result = input.adopt ? await this.runOn(id, record, live, run2, input.adopt, { ...message, model: input.adopt, adopt: true, auto: model2.providerID === autoProvider || undefined }, input.id) : model2.providerID === autoProvider ? await this.runAuto(id, record, live, run2, { ...message, auto: true }, input.id) : await this.runOn(id, record, live, run2, model2, message, input.id);
     } catch (error) {
       result = { outcome: "failed", error: failure(error) };
     }
@@ -9902,27 +9923,25 @@ ${text.slice(0, 4000)}
         continue;
       if (earlier.has(child) && live.background.has(child) && !childTurn.isEnded)
         continue;
-      const run2 = live.runs.get(child);
-      if (run2 && outcome !== "succeeded" && !childTurn.isEnded)
-        run2.stop?.().catch(() => {});
-      if (run2?.turn === childTurn)
-        run2.end(outcome === "failed" ? "interrupted" : outcome);
+      const subagent = live.runs.get(child);
+      if (subagent && outcome !== "succeeded" && !childTurn.isEnded)
+        subagent.stop?.().catch(() => {});
+      if (subagent?.turn === childTurn)
+        subagent.end(outcome === "failed" ? "interrupted" : outcome);
       else
         childTurn.finish(outcome === "failed" ? "interrupted" : outcome);
       live.subagents.delete(child);
       live.background.delete(child);
     }
-    if (live.last && live.last.seen === before)
-      live.last.seen = record.messages[record.messages.length - 1]?.id;
-    live.last = undefined;
+    if (run2.last && run2.last.seen === before)
+      run2.last.seen = record.messages[record.messages.length - 1]?.id;
     this.settleAsks(id, live);
-    live.running = undefined;
-    if (live.turn === turn)
-      live.turn = undefined;
-    const steered = live.steeredNotes.splice(0);
-    const turnNotes = [note, ...steered].filter((kept2) => Boolean(kept2?.before));
+    if (runOf(live.doing) !== run2)
+      return;
+    const turnNotes = [note, ...run2.steered].filter((kept2) => Boolean(kept2?.before));
     if (turnNotes.length && this.snapshots) {
-      this.busy.add(id);
+      const keeping = { kind: "keeping" };
+      live.doing = keeping;
       try {
         const after = await this.snapshots.take(directory);
         if (!after)
@@ -9933,20 +9952,18 @@ ${text.slice(0, 4000)}
         for (const kept2 of turnNotes)
           if (!kept2.files)
             kept2.failed = true;
-      } finally {
-        this.busy.delete(id);
       }
       if (this.store.get(id))
         this.store.save(id);
+      if (live.doing !== keeping)
+        return;
     }
-    this.next(id, outcome);
-    if (!this.isRunning(id))
-      this.closeWhenIdle(id, live);
+    this.free(id, live, outcome);
   }
   closeWhenIdle(id, live) {
     clearTimeout(live.idle);
     live.idle = setTimeout(() => {
-      if (this.isRunning(id) || this.live.get(id) !== live)
+      if (live.doing.kind !== "idle" || this.live.get(id) !== live)
         return;
       if ([...live.threads.values()].some((thread) => thread.keepsWorking))
         return this.closeWhenIdle(id, live);
@@ -9959,28 +9976,20 @@ ${text.slice(0, 4000)}
     const record = this.store.get(id);
     const live = this.live.get(id);
     const model2 = live?.models.get(provider);
-    const busy = live?.turn && !live.turn.isEnded && (live.running?.provider !== provider || live.abort?.signal.aborted);
-    if (!record || !live || !model2 || this.removing.has(id) || record.session.revert || busy || live.adopting)
+    if (!record || !live || !model2 || record.session.revert || live.own)
       return false;
-    live.adopting = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model2 };
-    if (!this.isRunning(id))
-      this.wake(id);
+    const doing = live.doing;
+    const now = doing.kind === "idle";
+    const later = onFiles(doing) || doing.kind === "running" && doing.run.agent?.provider === provider;
+    if (!now && !later)
+      return false;
+    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model2 };
+    this.advance(id, live);
     return true;
   }
-  startAdopting(id) {
-    const live = this.live.get(id);
-    const input = live?.adopting;
-    if (!live || !input)
-      return false;
-    live.adopting = undefined;
-    if (this.store.get(id)?.session.revert) {
-      live.threads.get(input.adopt.providerID)?.turnAway?.();
-      return false;
-    }
-    this.start(id, input);
-    return true;
-  }
-  async runOn(id, record, live, model2, input, turn, signal, userMessage2) {
+  async runOn(id, record, live, run2, model2, input, userMessage2) {
+    const { turn } = run2;
+    const signal = run2.abort.signal;
     let reached = false;
     const turnAway = () => {
       if (input.adopt && !reached)
@@ -10015,8 +10024,8 @@ ${text.slice(0, 4000)}
     turn.setModel(model2);
     let abandon;
     const abandoned = new Promise((resolve5) => abandon = () => resolve5({ outcome: "interrupted" }));
-    const running = { provider: model2.providerID, thread, abandon };
-    live.running = running;
+    const working = { provider: model2.providerID, thread, abandon };
+    run2.agent = working;
     const from = record.messages.length;
     try {
       if (thread.prepare && !input.adopt) {
@@ -10047,7 +10056,7 @@ ${text.slice(0, 4000)}
       const missedAt = result.missed?.length ? record.messages.findIndex((message) => result.missed.includes(message.id)) : -1;
       if (missedAt >= 0)
         slot.seen = record.messages[missedAt - 1]?.id;
-      live.last = slot;
+      run2.last = slot;
       return result;
     } catch (error) {
       thread.close();
@@ -10056,21 +10065,23 @@ ${text.slice(0, 4000)}
       throw error;
     } finally {
       turnAway();
-      if (live.running === running)
-        live.running = undefined;
+      if (run2.agent === working)
+        run2.agent = undefined;
       this.store.save(id, true);
     }
   }
-  async runAuto(id, record, live, input, turn, signal, userMessage2) {
+  async runAuto(id, record, live, run2, input, userMessage2) {
     const heldBefore = new Set(Array.isArray(record.agent.autoHeld) ? record.agent.autoHeld : []);
     try {
-      return await this.runAutoList(id, record, live, input, turn, signal, userMessage2, heldBefore);
+      return await this.runAutoList(id, record, live, run2, input, userMessage2, heldBefore);
     } finally {
       record.agent.autoHeld = this.auto.list(input.model.id).filter((entry) => this.auto.isHeld(entry)).map((entry) => Auto.modelKey(entry));
       this.store.save(id);
     }
   }
-  async runAutoList(id, record, live, input, turn, signal, userMessage2, heldBefore) {
+  async runAutoList(id, record, live, run2, input, userMessage2, heldBefore) {
+    const { turn } = run2;
+    const signal = run2.abort.signal;
     const tried = new Set;
     let last2;
     let note;
@@ -10100,11 +10111,11 @@ ${text.slice(0, 4000)}
         for (const [child, childTurn] of [...live.subagents]) {
           if (earlier.has(child))
             continue;
-          const run2 = live.runs.get(child);
-          if (run2 && !childTurn.isEnded)
-            run2.stop?.().catch(() => {});
-          if (run2?.turn === childTurn)
-            run2.end("interrupted");
+          const subagent = live.runs.get(child);
+          if (subagent && !childTurn.isEnded)
+            subagent.stop?.().catch(() => {});
+          if (subagent?.turn === childTurn)
+            subagent.end("interrupted");
           else
             childTurn.finish("interrupted");
           live.subagents.delete(child);
@@ -10115,7 +10126,7 @@ ${text.slice(0, 4000)}
       earlier = new Set(live.subagents.keys());
       const from = record.messages.length;
       try {
-        last2 = await this.runOn(id, record, live, model2, input, turn, signal, userMessage2);
+        last2 = await this.runOn(id, record, live, run2, model2, input, userMessage2);
       } catch (error) {
         if (signal.aborted)
           throw error;
@@ -10225,28 +10236,33 @@ ${text.slice(0, 4000)}
   }
   async interrupt(id, resume = false) {
     const live = this.live.get(id);
-    if (!live?.turn || live.turn.isEnded) {
-      if (resume) {
-        this.wake(id);
-        return false;
-      }
-      return this.stopSubagents(id);
+    const turnedAway = this.turnAwayOwn(live);
+    const run2 = live && runOf(live.doing);
+    if (live && run2) {
+      live.doing = { kind: "stopping", run: run2 };
+      live.go = resume;
+      await this.stop(id, live, run2);
+      return true;
     }
-    const turn = live.turn;
-    live.resume = resume;
-    live.abort?.abort();
+    if (resume) {
+      this.wake(id);
+      return false;
+    }
+    return await this.stopSubagents(id) || turnedAway;
+  }
+  async stop(id, live, run2) {
+    run2.abort.abort();
     this.settleAsks(id, live);
-    const running = live.running;
+    const agent = run2.agent;
     setTimeout(() => {
-      if (turn.isEnded || !running || live.running !== running)
+      if (run2.turn.isEnded || !agent || run2.agent !== agent)
         return;
-      running.thread.close();
-      if (live.threads.get(running.provider) === running.thread)
-        live.threads.delete(running.provider);
-      running.abandon();
+      agent.thread.close();
+      if (live.threads.get(agent.provider) === agent.thread)
+        live.threads.delete(agent.provider);
+      agent.abandon();
     }, timing.stopGrace);
-    await running?.thread.interrupt().catch(() => {});
-    return true;
+    await agent?.thread.interrupt().catch(() => {});
   }
   settleAsks(id, live) {
     const directory = this.store.get(id)?.session.location.directory;
@@ -10463,7 +10479,7 @@ ${live.agentPrompt}` : ""
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask);
     if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
       return "once";
-    if (turn.isEnded || live.abort?.signal.aborted)
+    if (turn.isEnded || refusesAsks(live.doing))
       return "reject";
     const request = {
       id: newID("per"),
@@ -10525,7 +10541,7 @@ ${live.agentPrompt}` : ""
   }
   askQuestion(id, live, turn, ask) {
     const session = this.record(id).session;
-    if (turn.isEnded || live.abort?.signal.aborted)
+    if (turn.isEnded || refusesAsks(live.doing))
       return Promise.resolve(null);
     const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields };
     return new Promise((resolve5) => {
@@ -10554,10 +10570,12 @@ ${live.agentPrompt}` : ""
   }
   closeAll() {
     for (const [id, live] of this.live) {
-      live.resume = false;
-      live.abort?.abort();
+      live.go = false;
+      live.own = undefined;
+      const run2 = runOf(live.doing);
+      run2?.abort.abort();
       this.settleAsks(id, live);
-      live.turn?.finish("interrupted");
+      run2?.turn.finish("interrupted");
       for (const child of live.subagents.values())
         child.finish("interrupted");
       live.subagents.clear();
@@ -13893,4 +13911,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src b623d7af0b2b546069c275d3855f7c95856a7087ed344308bee6bacb89fcb1c2
+// Built from Agents/src 4ab791e82ebdc0a6d4ea5ef87f30f4472e7730d2682f77bcc19bbf6a1a79a77e

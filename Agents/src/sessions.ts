@@ -43,23 +43,51 @@ interface Input {
   adopt?: ModelRef
 }
 
+/** A turn under way. */
+interface Run {
+  turn: Turn
+  abort: AbortController
+  /** The agent at work in it now (Auto may go through several), for Stop and for what you send partway. */
+  agent?: { provider: string; thread: Thread; abandon: () => void }
+  /** The slot of the agent that ran last in it: it sees the turn's end too. */
+  last?: Slot
+  /** What the files were before each message you sent partway through it, for Undo. */
+  steered: SnapshotNote[]
+}
+
+/**
+ * What a session is doing, one thing at a time; nothing else says so. It moves only like this:
+ *
+ * - idle → running: a message, or a turn an agent began on its own, starts (`start`)
+ * - running → stopping: Stop (`interrupt`)
+ * - running or stopping → keeping, then idle: the turn ended, and what it changed is read for Undo (`runTurn`, `free`)
+ * - idle → reverting → idle: Undo or Redo puts the files back (`stageRevert`, `clearRevert`, `free`)
+ * - idle → keeping → idle: a turn a quit cut short is read (`finishNotes`, `free`)
+ * - any → deleting: the session is being deleted (`remove`); nothing leaves it, and nothing starts
+ *
+ * What comes in meanwhile waits in the session's `own`, `go` and `waiting`, and `advance` starts
+ * what's next whenever the session is idle.
+ */
+type Doing = { kind: "idle" } | { kind: "running" | "stopping"; run: Run } | { kind: "keeping" | "reverting" } | { kind: "deleting" }
+
 interface Live {
   /** Each agent's conversation in this session, by provider. */
   threads: Map<string, Thread>
-  /** The one at work now, for Stop. */
-  running?: { provider: string; thread: Thread; abandon: () => void }
-  turn?: Turn
-  abort?: AbortController
-  /** Stopped with "resume": the next message you steered starts once it has. */
-  resume?: boolean
+  doing: Doing
+  /** A turn an agent began on its own, taken but waiting for the session to be free: it goes first. */
+  own?: Input
+  /** Start the first message you steered once nothing runs: Send Now (Stop with resume), or one sent while files were kept or put back. With nothing else to start, it waits for a message being handed to the turn (it goes if the agent turns it down). */
+  go: boolean
+  /** Undo and Redo calls waiting for the files to be kept or put back, in the order they came. */
+  waiting: (() => void)[]
+  /** Your messages being handed to the turn under way: not started meanwhile, and cancelled only once it's known the agent didn't take one. */
+  steering: Map<string, { cancelled: boolean }>
   permissions: Map<string, { request: PermissionRequest; resolve: (decision: Decision) => void; turn?: Turn }>
   forms: Map<string, { form: FormRequest; resolve: (answer: FormAnswer | null) => void }>
   /** "Always allow" answers given in this session: an action, on these patterns. */
   always: { action: string; patterns: string[] }[]
   /** Closes its agents' processes once it has been idle a while. */
   idle?: ReturnType<typeof setTimeout>
-  /** The slot of the agent that ran last in this turn: it sees the turn's end too. */
-  last?: Slot
   /** Its subagents at work, each a session of its own: their turns, by session. */
   subagents: Map<string, Turn>
   /** And their runs (to stop one), by session. */
@@ -74,14 +102,28 @@ interface Live {
   agentRules?: PermissionRule[]
   /** Which agent those are. */
   rulesFor?: string
-  /** What the files were before each message you sent partway through this turn, for Undo. */
-  steeredNotes: SnapshotNote[]
   /** The model each agent here ran last, by provider: a turn it begins on its own is on it. */
   models: Map<string, ModelRef>
-  /** A turn an agent began on its own, to start as soon as nothing else runs. */
-  adopting?: Input
-  /** Something was to start while its files were being kept or put back: it does once that's done. */
-  wakeLater?: boolean
+}
+
+/** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
+function isBusy(doing: Doing): boolean {
+  return doing.kind !== "idle" && doing.kind !== "deleting"
+}
+
+/** The files are being kept (what a turn changed) or put back (Undo, Redo). */
+function onFiles(doing: Doing): boolean {
+  return doing.kind === "keeping" || doing.kind === "reverting"
+}
+
+/** Stopping a turn, or deleting the session: nothing more is asked of you. */
+function refusesAsks(doing: Doing): boolean {
+  return doing.kind === "stopping" || doing.kind === "deleting"
+}
+
+/** The turn under way, stopped or not. */
+function runOf(doing: Doing): Run | undefined {
+  return doing.kind === "running" || doing.kind === "stopping" ? doing.run : undefined
 }
 
 /** What the bridge keeps of each agent's conversation in a session. */
@@ -690,11 +732,6 @@ function didWork(message: Message): boolean {
 
 export class Sessions {
   private live = new Map<string, Live>()
-  /** Sessions being deleted: nothing is taken or started for them any more. */
-  private removing = new Set<string>()
-  /** Messages being handed to the turn under way: not started meanwhile, and cancelled only once it's known it didn't take them. */
-  private steering = new Set<string>()
-  private cancelSoon = new Set<string>()
 
   constructor(
     private readonly store: Store,
@@ -730,7 +767,7 @@ export class Sessions {
     let live = this.live.get(id)
     if (!live) {
       // Blocks aren't known until the engine says (none, without an engine to ask).
-      live = { threads: new Map(), permissions: new Map(), forms: new Map(), always: [], subagents: new Map(), runs: new Map(), blocks: this.policies ? undefined : [], steeredNotes: [], models: new Map(), background: new Set() }
+      live = { threads: new Map(), doing: { kind: "idle" }, go: false, waiting: [], steering: new Map(), permissions: new Map(), forms: new Map(), always: [], subagents: new Map(), runs: new Map(), blocks: this.policies ? undefined : [], models: new Map(), background: new Set() }
       this.live.set(id, live)
     }
     return live
@@ -742,27 +779,19 @@ export class Sessions {
     return record
   }
 
-  private isRunning(id: string) {
-    const turn = this.live.get(id)?.turn
-    return Boolean(turn && !turn.isEnded) || this.busy.has(id)
+  private atWork(id: string) {
+    const live = this.live.get(id)
+    return Boolean(live && isBusy(live.doing))
   }
 
-  /** Sessions whose files are being kept or put back: a message waits for that as for a turn. */
-  private busy = new Set<string>()
-
   /**
-   * Until the files are kept, when that's all the session is doing (a turn just ended, or one a
-   * quit cut short is read after a restart): an undo waits for it, rather than being told to
-   * stop an agent that isn't working. (Called only then: otherwise an undo marks the session busy
-   * before anything else can start.)
+   * Once the files are kept or put back, when that's what the session is doing (a turn just
+   * ended, one a quit cut short is read after a restart, another Undo): an Undo or Redo waits its
+   * turn, rather than being told to stop an agent that isn't working. Otherwise there's nothing to
+   * wait for, and it isn't awaited: Undo takes the session at once, before anything can start.
    */
-  private async filesKept(id: string) {
-    const working = () => {
-      const turn = this.live.get(id)?.turn
-      return Boolean(turn && !turn.isEnded)
-    }
-    const start = Date.now()
-    while (this.busy.has(id) && !working() && Date.now() - start < 30_000) await Bun.sleep(25)
+  private async whenFiles(live: Live) {
+    while (onFiles(live.doing)) await new Promise<void>((resolve) => live.waiting.push(resolve))
   }
 
   /** What's kept of the project's files around each of your messages, by message. */
@@ -855,7 +884,9 @@ export class Sessions {
     if (!record || !this.snapshots) return
     const open = Object.values(this.notes(record)).filter((note) => note.before && !note.files && !note.failed)
     const directory = record.session.location.directory
-    this.busy.add(id)
+    const live = this.state(id)
+    const keeping: Doing = { kind: "keeping" }
+    live.doing = keeping
     try {
       const now = await this.snapshots.take(directory)
       if (!now) throw new Error("not kept")
@@ -863,9 +894,8 @@ export class Sessions {
     } catch {
       for (const note of open) if (!note.files) note.failed = true
     } finally {
-      this.busy.delete(id)
       if (this.store.get(id)) this.store.save(id)
-      this.afterBusy(id)
+      if (live.doing === keeping) this.free(id, live)
     }
   }
 
@@ -1000,19 +1030,25 @@ export class Sessions {
 
   async remove(id: string) {
     const record = this.store.get(id)
-    if (!record || this.removing.has(id)) return
+    if (!record) return
+    const live = this.state(id)
+    const doing = live.doing
+    if (doing.kind === "deleting") return
     // Nothing waiting starts as it stops, nor does anything sent meanwhile.
-    this.removing.add(id)
+    live.doing = { kind: "deleting" }
+    live.go = false
+    this.turnAwayOwn(live)
+    for (const waiting of live.waiting.splice(0)) waiting()
     record.agent.inbox = []
-    await this.interrupt(id)
+    const run = runOf(doing)
+    if (run) await this.stop(id, live, run)
+    else await this.stopSubagents(id)
     // Its subagents' sessions go with it, unless a fork of it shows them too.
     for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
-    for (const thread of this.live.get(id)?.threads.values() ?? []) thread.close()
-    this.live.delete(id)
+    for (const thread of live.threads.values()) thread.close()
     for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
     this.store.remove(id)
     this.live.delete(id)
-    this.removing.delete(id)
     emit("session.deleted", { sessionID: id }, record.session.location.directory)
   }
 
@@ -1033,7 +1069,7 @@ export class Sessions {
   }
 
   active(): string[] {
-    const ids = [...this.live.keys()].filter((id) => this.isRunning(id))
+    const ids = [...this.live.keys()].filter((id) => this.atWork(id))
     for (const live of this.live.values()) for (const [child, turn] of live.subagents) if (!turn.isEnded) ids.push(child)
     return ids
   }
@@ -1056,7 +1092,7 @@ export class Sessions {
     record.messages.push(message)
     record.session.time.updated = Date.now()
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
-    if (this.isRunning(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
+    if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
     void runCommand(text, directory).then((ran) => {
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
@@ -1077,8 +1113,9 @@ export class Sessions {
    */
   async stageRevert(id: string, messageID: string): Promise<NonNullable<Session["revert"]>> {
     const record = this.record(id)
-    if (this.busy.has(id)) await this.filesKept(id)
-    if (this.isRunning(id)) throw new BadRequest("Stop the agent first.")
+    const live = this.state(id)
+    if (onFiles(live.doing)) await this.whenFiles(live)
+    this.mustBeIdle(id, live)
     const at = record.messages.findIndex((message) => message.id === messageID && message.type === "user")
     if (at < 0) throw new NotFound("No such message of yours.")
     const directory = record.session.location.directory
@@ -1098,8 +1135,9 @@ export class Sessions {
     // A message taken partway through a turn (steered) before they were kept has no files of its own.
     if (kept && !first?.before) throw new BadRequest("This message went into the turn before it: undo from that one.")
     let diffs: FileDiff[] = []
+    const reverting: Doing = { kind: "reverting" }
     if (first?.before && files.size && this.snapshots) {
-      this.busy.add(id)
+      live.doing = reverting
       // What Redo would bring back from an undo that didn't happen isn't kept.
       if (!record.session.revert) {
         delete record.agent.revertNow
@@ -1129,18 +1167,17 @@ export class Sessions {
           delete record.agent.revertFiles
         }
         this.store.save(id)
-        this.busy.delete(id)
-        this.afterBusy(id)
+        if (live.doing === reverting) this.free(id, live)
         throw error
       }
-      this.busy.delete(id)
+      if (live.doing !== reverting) throw new NotFound(`No session ${id}.`)
     }
     const revert = { messageID, files: diffs }
     record.session.revert = revert
     this.store.save(id, true)
     emit("session.revert.staged", { sessionID: id, revert }, directory)
     // What you sent meanwhile goes now (and makes the undo final, as any message does).
-    this.afterBusy(id)
+    if (live.doing === reverting) this.free(id, live)
     return revert
   }
 
@@ -1148,22 +1185,24 @@ export class Sessions {
   async clearRevert(id: string) {
     const record = this.record(id)
     if (!record.session.revert) return
-    if (this.busy.has(id)) await this.filesKept(id)
-    if (this.isRunning(id)) throw new BadRequest("Stop the agent first.")
+    const live = this.state(id)
+    if (onFiles(live.doing)) await this.whenFiles(live)
+    this.mustBeIdle(id, live)
+    if (!record.session.revert) return
     const directory = record.session.location.directory
     const now = record.agent.revertNow as string | undefined
     const files = (record.agent.revertFiles as string[] | undefined) ?? []
+    const reverting: Doing = { kind: "reverting" }
     if (now && files.length && this.snapshots) {
-      this.busy.add(id)
+      live.doing = reverting
       try {
         // Kept until it has worked: a Redo that failed can be tried again.
         await this.snapshots.restore(directory, now, files, record.agent.revertAt as number | undefined)
       } catch (error) {
-        this.busy.delete(id)
-        this.afterBusy(id)
+        if (live.doing === reverting) this.free(id, live)
         throw error
       }
-      this.busy.delete(id)
+      if (live.doing !== reverting) throw new NotFound(`No session ${id}.`)
     }
     delete record.session.revert
     delete record.agent.revertNow
@@ -1171,22 +1210,13 @@ export class Sessions {
     delete record.agent.revertFiles
     this.store.save(id, true)
     emit("session.revert.cleared", { sessionID: id }, directory)
-    this.afterBusy(id)
+    if (live.doing === reverting) this.free(id, live)
   }
 
-  /** Files kept or put back: what was to start meanwhile does (not what waited before). */
-  private afterBusy(id: string) {
-    if (!this.store.get(id) || this.isRunning(id)) return
-    const live = this.state(id)
-    const later = live.wakeLater
-    live.wakeLater = false
-    // A turn its agent began on its own goes first, and what was to start after it; one turned
-    // away (an undo came first) doesn't start what waited for you.
-    if (live.adopting && this.startAdopting(id)) {
-      if (later) live.resume = true
-      return
-    }
-    if (later) this.wake(id)
+  /** Undo and Redo go only while nothing runs. */
+  private mustBeIdle(id: string, live: Live) {
+    if (live.doing.kind === "deleting") throw new NotFound(`No session ${id}.`)
+    if (live.doing.kind !== "idle") throw new BadRequest("Stop the agent first.")
   }
 
   /** An undo made final: what was taken back goes, and the agents start their conversations over, handed what's left. */
@@ -1277,25 +1307,25 @@ export class Sessions {
   }
 
   prompt(id: string, input: Input) {
-    if (this.removing.has(id)) throw new NotFound(`No session ${id}.`)
     const record = this.record(id)
+    const live = this.state(id)
+    if (live.doing.kind === "deleting") throw new NotFound(`No session ${id}.`)
     if (record.session.parentID) throw new BadRequest("This subagent works for the conversation that started it: write to it there.")
     const queue = this.queue(record)
     // Sent twice (a retry after a timeout): once is enough.
     if (queue.some((waiting) => waiting.id === input.id) || record.messages.some((message) => message.id === input.id)) return
+    const doing = live.doing
     // While a turn runs, it waits for it, unless the agent at work takes it partway (Codex does).
-    const running = this.live.get(id)?.running
-    const steers = this.isRunning(id) && input.delivery !== "queue" && Boolean(running?.thread.steer)
-    // Only files being kept or put back (no turn): it goes next, once that's done.
-    const onlyBusy = this.busy.has(id) && !this.live.get(id)?.turn
-    // While nothing runs, one to go after the turn goes now, as the engine's do (a bot's wake-up),
-    // unless others wait before it (held after a Stop).
-    const idle = !this.isRunning(id) || onlyBusy
-    const delivery: Delivery = steers || (idle && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
+    const into = doing.kind === "running" && input.delivery !== "queue" && doing.run.agent?.thread.steer ? doing.run : undefined
+    // While nothing runs (or only files are being kept or put back: it goes once that's done), one
+    // to go after the turn goes now, as the engine's do (a bot's wake-up), unless others wait
+    // before it (held after a Stop).
+    const nothingRuns = doing.kind === "idle" || onFiles(doing)
+    const delivery: Delivery = into || (nothingRuns && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
     queue.push({ ...input, delivery })
     this.store.save(id, true)
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record.session.location.directory)
-    if (steers) void this.steerNow(id, input)
+    if (into) void this.steerNow(id, live, into, input)
     else if (delivery === "steer") this.wake(id)
   }
 
@@ -1304,13 +1334,12 @@ export class Sessions {
    * can't go. One the agent takes is sent, even if its turn ends just then or you cancel it
    * meanwhile (it can't be taken back).
    */
-  private async steerNow(id: string, input: Input) {
-    const live = this.live.get(id)
-    const running = live?.running
-    const turn = live?.turn
+  private async steerNow(id: string, live: Live, run: Run, input: Input) {
+    const agent = run.agent
     const directory = this.store.get(id)?.session.location.directory
-    if (!live || !running?.thread.steer || !directory) return this.wake(id)
-    this.steering.add(input.id)
+    if (!agent?.thread.steer || !directory) return this.setDelivery(id, input.id, "queue")
+    const handing = { cancelled: false }
+    live.steering.set(input.id, handing)
     let taken = false
     let note: SnapshotNote | undefined
     try {
@@ -1326,21 +1355,29 @@ export class Sessions {
       }
       // A text file you attached goes in the message, as for the message that started the turn.
       const attached = withTextFiles(input.text, input.files.map(promptFile))
-      if (live.running === running && !this.cancelSoon.has(input.id)) taken = await running.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false)
+      // Still that turn, at work (not stopped) with that agent, and not cancelled meanwhile.
+      if (live.doing.kind === "running" && live.doing.run === run && run.agent === agent && !handing.cancelled) {
+        taken = await agent.thread.steer({ id: input.id, text: attached.text, files: attached.files }).catch(() => false)
+      }
     } finally {
-      this.steering.delete(input.id)
+      live.steering.delete(input.id)
     }
-    const cancelled = this.cancelSoon.delete(input.id)
     const record = this.store.get(id)
     if (!record) return
     const queue = this.queue(record)
     const at = queue.findIndex((waiting) => waiting.id === input.id)
+    // (Gone: the session is being deleted.)
     if (at < 0) return
+    // Its turn ended meanwhile, or is ending: it goes next as you asked (Send Now), or as after a
+    // turn that went through; otherwise it waits, held (Stop, an error). Until the turn's over and
+    // its files are kept, the turn's end starts it.
+    const next = !taken && !handing.cancelled && live.doing.kind !== "running" && (live.go || (live.doing.kind !== "stopping" && record.session.outcome === "succeeded"))
+    // A Send Now that waited for it is settled: it goes, went into the turn, or was cancelled.
+    if (live.doing.kind === "idle" && !live.steering.size) live.go = next
     if (!taken) {
-      if (cancelled) this.cancelInput(id, input.id)
-      else if (this.isRunning(id)) this.setDelivery(id, input.id, "queue")
-      // Its turn ended meanwhile: it goes next, as after any turn (one you stopped holds it).
-      else if (record.session.outcome === "succeeded") this.wake(id)
+      if (handing.cancelled) this.cancelInput(id, input.id)
+      else if (next) this.advance(id, live)
+      else this.setDelivery(id, input.id, "queue")
       return
     }
     queue.splice(at, 1)
@@ -1350,9 +1387,9 @@ export class Sessions {
     record.session.time.updated = Date.now()
     // Its own undo, while its turn is under way (what the turn changes from here on).
     // (One that couldn't be kept isn't noted: Undo from the message before covers it.)
-    if (note?.before && turn && live.turn === turn) {
+    if (note?.before && runOf(live.doing) === run) {
       this.notes(record)[input.id] = note
-      live.steeredNotes.push(note)
+      run.steered.push(note)
     }
     this.store.save(id, true)
   }
@@ -1373,8 +1410,9 @@ export class Sessions {
 
   cancelInput(id: string, inputID: string) {
     // Being handed to the agent: cancelled if it doesn't take it.
-    if (this.steering.has(inputID)) {
-      this.cancelSoon.add(inputID)
+    const handing = this.live.get(id)?.steering.get(inputID)
+    if (handing) {
+      handing.cancelled = true
       return
     }
     const record = this.store.get(id)
@@ -1387,52 +1425,65 @@ export class Sessions {
     emit("session.inbox.cancelled", { sessionID: id, inboxID: inputID }, record.session.location.directory)
   }
 
-  /** Starts the first message you steered, if nothing runs. */
+  /**
+   * Starts the first message you steered: now if nothing runs, or once the files being kept or
+   * put back are. (A turn under way decides at its end: it goes next if the turn ends on its own.)
+   */
   private wake(id: string) {
-    if (this.removing.has(id)) return
-    if (this.isRunning(id)) {
-      const live = this.state(id)
-      if (!live.turn && this.busy.has(id)) live.wakeLater = true
-      return
-    }
-    const record = this.store.get(id)
-    if (!record) return
-    if (this.startAdopting(id)) return
-    const queue = this.queue(record)
-    const index = queue.findIndex((input) => input.delivery === "steer" && !this.steering.has(input.id))
-    if (index < 0) return
-    const [input] = queue.splice(index, 1)
-    void this.start(id, input)
+    if (!this.store.get(id)) return
+    const live = this.state(id)
+    if (live.doing.kind !== "idle" && !onFiles(live.doing)) return
+    live.go = true
+    this.advance(id, live)
   }
 
-  /** After a turn: the next message, if it ended on its own (or you stopped it to send one now). */
-  private next(id: string, outcome: Outcome) {
-    if (this.removing.has(id) || !this.store.get(id)) return
-    const live = this.state(id)
-    // Asked to go while the last turn's files were being kept: as if you had resumed.
-    const resume = live.resume || live.wakeLater
-    live.resume = false
-    live.wakeLater = false
+  /**
+   * What starts next, when nothing runs: a turn an agent began on its own first, whatever came
+   * before (what you asked to start waits for it); then, after a turn that ended on its own, the
+   * next message in line, steered ones first; otherwise the first you steered, if you asked
+   * (`go`). After a Stop, or an error, nothing more starts until the app says.
+   */
+  private advance(id: string, live: Live, ended?: Outcome) {
     const record = this.store.get(id)
-    if (!record || this.isRunning(id)) return
-    // A turn its agent began on its own goes first, however the last one ended; what was to start goes after it.
-    if (this.startAdopting(id)) {
-      live.resume = resume
-      return
+    if (live.doing.kind !== "idle" || !record) return
+    const own = live.own
+    live.own = undefined
+    if (own) {
+      // An undo came first (it was being staged): taking the turn would make it final.
+      if (record.session.revert) live.threads.get(own.adopt!.providerID)?.turnAway?.()
+      else return this.start(id, live, own)
     }
     const queue = this.queue(record)
     // One being handed to the turn that just ended is settled by that (sent, or back here).
-    const free = (input: Input) => !this.steering.has(input.id)
+    const notHanded = (input: Input) => !live.steering.has(input.id)
     let index = -1
-    if (outcome === "succeeded") {
-      index = queue.findIndex((input) => input.delivery === "steer" && free(input))
-      if (index < 0) index = queue.findIndex(free)
-    } else if (resume) {
-      index = queue.findIndex((input) => input.delivery === "steer" && free(input))
-    }
+    if (ended === "succeeded" || live.go) index = queue.findIndex((input) => input.delivery === "steer" && notHanded(input))
+    if (ended === "succeeded" && index < 0) index = queue.findIndex(notHanded)
+    // (With nothing to start but one being handed, Send Now waits for it.)
+    if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
     const [input] = queue.splice(index, 1)
-    void this.start(id, input)
+    this.start(id, live, input)
+  }
+
+  /**
+   * A turn is over and what it changed is kept, or the files are put back: the session is idle,
+   * what waited goes, and Undo and Redo calls waiting go on (finding a turn if one started).
+   */
+  private free(id: string, live: Live, ended?: Outcome) {
+    live.doing = { kind: "idle" }
+    this.advance(id, live, ended)
+    for (const waiting of live.waiting.splice(0)) waiting()
+    if (live.doing.kind === "idle") this.closeWhenIdle(id, live)
+  }
+
+  /** A turn an agent began on its own, taken but not yet started: let go of (it stops). */
+  private turnAwayOwn(live: Live | undefined): boolean {
+    const own = live?.own
+    if (!live || !own) return false
+    live.own = undefined
+    live.threads.get(own.adopt!.providerID)?.turnAway?.()
+    return true
   }
 
   /**
@@ -1486,24 +1537,27 @@ export class Sessions {
       ?.replace(/^["'“”‘’`*#\s]+|["'“”‘’`*\s.]+$/g, "")
       .slice(0, 80)
     const record = this.store.get(id)
-    if (!title || !record || record.session.title || this.removing.has(id)) return
+    if (!title || !record || record.session.title || this.live.get(id)?.doing.kind === "deleting") return
     this.update(id, { title })
   }
 
-  /** Runs one message: on its model, or down your Auto list. */
-  private async start(id: string, input: Input): Promise<void> {
-    const live = this.state(id)
+  /** Starts a turn for one message (only while nothing runs): the session is running from now. */
+  private start(id: string, live: Live, input: Input) {
     const record = this.store.get(id)
-    if (!record) return
+    if (!record || live.doing.kind !== "idle") return
+    const session = record.session
+    const run: Run = { turn: new Turn(this.store, id, session.location.directory, session.model!, session.agent ?? "build"), abort: new AbortController(), steered: [] }
+    live.doing = { kind: "running", run }
+    clearTimeout(live.idle)
+    void this.runTurn(id, live, record, run, input)
+  }
+
+  /** Runs one message: on its model, or down your Auto list. */
+  private async runTurn(id: string, live: Live, record: Record_, run: Run, input: Input): Promise<void> {
+    const { turn, abort } = run
     const session = record.session
     const directory = session.location.directory
     const model = session.model!
-    // Marked as running before anything else can come in.
-    const turn = new Turn(this.store, id, directory, model, session.agent ?? "build")
-    live.turn = turn
-    clearTimeout(live.idle)
-    const abort = new AbortController()
-    live.abort = abort
     // A message after an undo makes it final: first, since the app takes away what comes from the
     // undone message on (this message too, were it there already).
     this.commitRevert(id, record, live)
@@ -1553,17 +1607,17 @@ export class Sessions {
     try {
       // A text file you attached goes in the message, as the engine puts it (the agent reads the rest).
       const attached = withTextFiles(input.text, input.files.map(promptFile))
-      const run: RunInput = { text: attached.text, files: attached.files, model, plan: session.agent === "plan" }
+      const message: RunInput = { text: attached.text, files: attached.files, model, plan: session.agent === "plan" }
       // Subagents an earlier turn sent off in the background, still at work: this turn's end
       // leaves them be.
       earlier = new Set(live.subagents.keys())
       // A message on a model you picked: what Auto held back before isn't news when it's back on.
       if (model.providerID !== autoProvider) delete record.agent.autoHeld
       result = input.adopt
-        ? await this.runOn(id, record, live, input.adopt, { ...run, model: input.adopt, adopt: true, auto: model.providerID === autoProvider || undefined }, turn, abort.signal, input.id)
+        ? await this.runOn(id, record, live, run, input.adopt, { ...message, model: input.adopt, adopt: true, auto: model.providerID === autoProvider || undefined }, input.id)
         : model.providerID === autoProvider
-          ? await this.runAuto(id, record, live, { ...run, auto: true }, turn, abort.signal, input.id)
-          : await this.runOn(id, record, live, model, run, turn, abort.signal, input.id)
+          ? await this.runAuto(id, record, live, run, { ...message, auto: true }, input.id)
+          : await this.runOn(id, record, live, run, model, message, input.id)
     } catch (error) {
       result = { outcome: "failed", error: failure(error) }
     }
@@ -1576,45 +1630,42 @@ export class Sessions {
     for (const [child, childTurn] of [...live.subagents]) {
       if (outcome === "succeeded" && live.background.has(child) && !childTurn.isEnded) continue
       if (earlier.has(child) && live.background.has(child) && !childTurn.isEnded) continue
-      const run = live.runs.get(child)
-      if (run && outcome !== "succeeded" && !childTurn.isEnded) void run.stop?.().catch(() => {})
-      if (run?.turn === childTurn) run.end(outcome === "failed" ? "interrupted" : outcome)
+      const subagent = live.runs.get(child)
+      if (subagent && outcome !== "succeeded" && !childTurn.isEnded) void subagent.stop?.().catch(() => {})
+      if (subagent?.turn === childTurn) subagent.end(outcome === "failed" ? "interrupted" : outcome)
       else childTurn.finish(outcome === "failed" ? "interrupted" : outcome)
       live.subagents.delete(child)
       live.background.delete(child)
     }
     // The agent that ended the turn knows how it ended: that's not news to hand it later.
-    if (live.last && live.last.seen === before) live.last.seen = record.messages[record.messages.length - 1]?.id
-    live.last = undefined
+    if (run.last && run.last.seen === before) run.last.seen = record.messages[record.messages.length - 1]?.id
     this.settleAsks(id, live)
-    live.running = undefined
-    if (live.turn === turn) live.turn = undefined
+    // Deleted meanwhile: nothing more for it.
+    if (runOf(live.doing) !== run) return
     // What the turn changed (the session waits for it, as for its turn), from your message and
     // from each you sent partway.
-    const steered = live.steeredNotes.splice(0)
-    const turnNotes = [note, ...steered].filter((kept): kept is SnapshotNote => Boolean(kept?.before))
+    const turnNotes = [note, ...run.steered].filter((kept): kept is SnapshotNote => Boolean(kept?.before))
     if (turnNotes.length && this.snapshots) {
-      this.busy.add(id)
+      const keeping: Doing = { kind: "keeping" }
+      live.doing = keeping
       try {
         const after = await this.snapshots.take(directory)
         if (!after) throw new Error("not kept")
         for (const kept of turnNotes) kept.files = await this.snapshots.changed(directory, kept.before!, after)
       } catch {
         for (const kept of turnNotes) if (!kept.files) kept.failed = true
-      } finally {
-        this.busy.delete(id)
       }
       if (this.store.get(id)) this.store.save(id)
+      if (live.doing !== keeping) return
     }
-    this.next(id, outcome)
-    if (!this.isRunning(id)) this.closeWhenIdle(id, live)
+    this.free(id, live, outcome)
   }
 
   /** A while after its last turn, a session's agents stop running: they go on where they left off next time. */
   private closeWhenIdle(id: string, live: Live) {
     clearTimeout(live.idle)
     live.idle = setTimeout(() => {
-      if (this.isRunning(id) || this.live.get(id) !== live) return
+      if (live.doing.kind !== "idle" || this.live.get(id) !== live) return
       // Commands it left running would end with it: later.
       if ([...live.threads.values()].some((thread) => thread.keepsWorking)) return this.closeWhenIdle(id, live)
       for (const thread of live.threads.values()) thread.close()
@@ -1631,31 +1682,23 @@ export class Sessions {
     const record = this.store.get(id)
     const live = this.live.get(id)
     const model = live?.models.get(provider)
-    // (A turn still running on this same agent is one it has finished: it begins its own only then.)
-    const busy = live?.turn && !live.turn.isEnded && (live.running?.provider !== provider || live.abort?.signal.aborted)
-    if (!record || !live || !model || this.removing.has(id) || record.session.revert || busy || live.adopting) return false
-    live.adopting = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model }
-    // Now; or once what's kept of the files is done, or the turn ending ends (they take it).
-    if (!this.isRunning(id)) this.wake(id)
-    return true
-  }
-
-  private startAdopting(id: string): boolean {
-    const live = this.live.get(id)
-    const input = live?.adopting
-    if (!live || !input) return false
-    live.adopting = undefined
-    // An undo came first (it was being staged): taking the turn would make it final.
-    if (this.store.get(id)?.session.revert) {
-      live.threads.get(input.adopt!.providerID)?.turnAway?.()
-      return false
-    }
-    void this.start(id, input)
+    if (!record || !live || !model || record.session.revert || live.own) return false
+    const doing = live.doing
+    // Taken: now, when nothing runs; or once the files are kept or put back, or the turn ending
+    // ends (a turn still running on this same agent is one it has finished: it begins its own
+    // only then). Not while another agent works, after Stop, or as the session is deleted.
+    const now = doing.kind === "idle"
+    const later = onFiles(doing) || (doing.kind === "running" && doing.run.agent?.provider === provider)
+    if (!now && !later) return false
+    live.own = { id: newID("msg"), text: note.text, files: [], delivery: "steer", synthetic: { description: note.description, metadata: note.metadata }, adopt: model }
+    this.advance(id, live)
     return true
   }
 
   /** The message on one agent's model, with what that agent hasn't seen of the conversation. */
-  private async runOn(id: string, record: Record_, live: Live, model: ModelRef, input: RunInput, turn: Turn, signal: AbortSignal, userMessage: string): Promise<RunResult> {
+  private async runOn(id: string, record: Record_, live: Live, run: Run, model: ModelRef, input: RunInput, userMessage: string): Promise<RunResult> {
+    const { turn } = run
+    const signal = run.abort.signal
     // A turn its agent began on its own, stopped before it was taken: it stops there too.
     let reached = false
     const turnAway = () => {
@@ -1694,8 +1737,8 @@ export class Sessions {
     // Given up on (it didn't stop when asked): the turn ends without it.
     let abandon!: () => void
     const abandoned = new Promise<RunResult>((resolve) => (abandon = () => resolve({ outcome: "interrupted" })))
-    const running = { provider: model.providerID, thread, abandon }
-    live.running = running
+    const working = { provider: model.providerID, thread, abandon }
+    run.agent = working
     const from = record.messages.length
     try {
       // Its conversation, ready (Stop gives up on it as on a run): one it had that couldn't be
@@ -1733,7 +1776,7 @@ export class Sessions {
       // A message you sent partway that it never got to: it's handed that, and what came after, next time.
       const missedAt = result.missed?.length ? record.messages.findIndex((message) => result.missed!.includes(message.id)) : -1
       if (missedAt >= 0) slot.seen = record.messages[missedAt - 1]?.id
-      live.last = slot
+      run.last = slot
       return result
     } catch (error) {
       // A broken conversation starts over with the next message (the agent's own may resume, and
@@ -1743,18 +1786,18 @@ export class Sessions {
       throw error
     } finally {
       turnAway()
-      if (live.running === running) live.running = undefined
+      if (run.agent === working) run.agent = undefined
       this.store.save(id, true)
     }
   }
 
   /** The message on the first model of your Auto list that isn't at a limit, and on down it while they reach theirs. */
-  private async runAuto(id: string, record: Record_, live: Live, input: RunInput, turn: Turn, signal: AbortSignal, userMessage: string): Promise<RunResult> {
+  private async runAuto(id: string, record: Record_, live: Live, run: Run, input: RunInput, userMessage: string): Promise<RunResult> {
     // Held back at a limit when this session's last message on Auto ended: one that runs this
     // one is back (its limit reset), and the session says so.
     const heldBefore = new Set(Array.isArray(record.agent.autoHeld) ? (record.agent.autoHeld as string[]) : [])
     try {
-      return await this.runAutoList(id, record, live, input, turn, signal, userMessage, heldBefore)
+      return await this.runAutoList(id, record, live, run, input, userMessage, heldBefore)
     } finally {
       record.agent.autoHeld = this.auto
         .list(input.model.id)
@@ -1764,7 +1807,9 @@ export class Sessions {
     }
   }
 
-  private async runAutoList(id: string, record: Record_, live: Live, input: RunInput, turn: Turn, signal: AbortSignal, userMessage: string, heldBefore: Set<string>): Promise<RunResult> {
+  private async runAutoList(id: string, record: Record_, live: Live, run: Run, input: RunInput, userMessage: string, heldBefore: Set<string>): Promise<RunResult> {
+    const { turn } = run
+    const signal = run.abort.signal
     const tried = new Set<string>()
     let last: RunResult | undefined
     let note: string | undefined
@@ -1790,9 +1835,9 @@ export class Sessions {
         turn.stopTools("Stopped: going on with another model.")
         for (const [child, childTurn] of [...live.subagents]) {
           if (earlier.has(child)) continue
-          const run = live.runs.get(child)
-          if (run && !childTurn.isEnded) void run.stop?.().catch(() => {})
-          if (run?.turn === childTurn) run.end("interrupted")
+          const subagent = live.runs.get(child)
+          if (subagent && !childTurn.isEnded) void subagent.stop?.().catch(() => {})
+          if (subagent?.turn === childTurn) subagent.end("interrupted")
           else childTurn.finish("interrupted")
           live.subagents.delete(child)
           live.background.delete(child)
@@ -1802,7 +1847,7 @@ export class Sessions {
       earlier = new Set(live.subagents.keys())
       const from = record.messages.length
       try {
-        last = await this.runOn(id, record, live, model, input, turn, signal, userMessage)
+        last = await this.runOn(id, record, live, run, model, input, userMessage)
       } catch (error) {
         // It couldn't start or went wrong (its process, its sign-in): as a model that failed.
         if (signal.aborted) throw error
@@ -1912,32 +1957,39 @@ export class Sessions {
 
   /**
    * Stops the turn under way. With `resume`, the message you steered goes next (Send Now);
-   * without, nothing waiting starts until the app says. Idle, `resume` starts it at once.
+   * without, nothing waiting starts until the app says. Idle, `resume` starts it at once. A turn
+   * an agent began on its own that's waiting to be taken stops too.
    */
   async interrupt(id: string, resume = false) {
     const live = this.live.get(id)
-    if (!live?.turn || live.turn.isEnded) {
-      // (Asked to start what waits: subagents at work in the background go on.)
-      if (resume) {
-        this.wake(id)
-        return false
-      }
-      return this.stopSubagents(id)
+    const turnedAway = this.turnAwayOwn(live)
+    const run = live && runOf(live.doing)
+    if (live && run) {
+      live.doing = { kind: "stopping", run }
+      live.go = resume
+      await this.stop(id, live, run)
+      return true
     }
-    const turn = live.turn
-    live.resume = resume
-    live.abort?.abort()
+    // (Asked to start what waits: subagents at work in the background go on.)
+    if (resume) {
+      this.wake(id)
+      return false
+    }
+    return (await this.stopSubagents(id)) || turnedAway
+  }
+
+  /** Stops a turn: what it asks goes, and an agent that doesn't stop has its conversation closed, the turn ending without it. */
+  private async stop(id: string, live: Live, run: Run) {
+    run.abort.abort()
     this.settleAsks(id, live)
-    const running = live.running
-    // An agent that doesn't stop: its conversation is closed, and the turn ends without it.
+    const agent = run.agent
     setTimeout(() => {
-      if (turn.isEnded || !running || live.running !== running) return
-      running.thread.close()
-      if (live.threads.get(running.provider) === running.thread) live.threads.delete(running.provider)
-      running.abandon()
+      if (run.turn.isEnded || !agent || run.agent !== agent) return
+      agent.thread.close()
+      if (live.threads.get(agent.provider) === agent.thread) live.threads.delete(agent.provider)
+      agent.abandon()
     }, timing.stopGrace)
-    await running?.thread.interrupt().catch(() => {})
-    return true
+    await agent?.thread.interrupt().catch(() => {})
   }
 
   /** Whatever's still asked of you goes once the turn is over. */
@@ -2164,7 +2216,7 @@ export class Sessions {
     // First: you answer it, unless you allowed it in this session before.
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask)
     if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask))) return "once"
-    if (turn.isEnded || live.abort?.signal.aborted) return "reject"
+    if (turn.isEnded || refusesAsks(live.doing)) return "reject"
     const request: PermissionRequest = {
       id: newID("per"),
       sessionID: id,
@@ -2223,7 +2275,7 @@ export class Sessions {
 
   private askQuestion(id: string, live: Live, turn: Turn, ask: QuestionAsk): Promise<FormAnswer | null> {
     const session = this.record(id).session
-    if (turn.isEnded || live.abort?.signal.aborted) return Promise.resolve(null)
+    if (turn.isEnded || refusesAsks(live.doing)) return Promise.resolve(null)
     const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields }
     return new Promise((resolve) => {
       live.forms.set(form.id, { form, resolve })
@@ -2253,10 +2305,12 @@ export class Sessions {
   /** The bridge is stopping: every turn ends as stopped, and every agent's conversation closes. */
   closeAll() {
     for (const [id, live] of this.live) {
-      live.resume = false
-      live.abort?.abort()
+      live.go = false
+      live.own = undefined
+      const run = runOf(live.doing)
+      run?.abort.abort()
       this.settleAsks(id, live)
-      live.turn?.finish("interrupted")
+      run?.turn.finish("interrupted")
       for (const child of live.subagents.values()) child.finish("interrupted")
       live.subagents.clear()
       for (const thread of live.threads.values()) thread.close()
