@@ -527,6 +527,12 @@ class EngineLink {
   get ready() {
     return Boolean(this.url);
   }
+  waiting = [];
+  whenReady() {
+    if (this.ready)
+      return Promise.resolve();
+    return new Promise((resolve) => this.waiting.push(resolve));
+  }
   configure(url, password) {
     const authorization = password ? "Basic " + Buffer.from(`opencode:${password}`).toString("base64") : undefined;
     if (url === this.url && authorization === this.authorization)
@@ -542,6 +548,9 @@ class EngineLink {
     for (const set of this.listeners.values())
       for (const listener of set)
         listener.reconnected();
+    if (this.url)
+      for (const resolve of this.waiting.splice(0))
+        resolve();
   }
   async request(method, path, body, timeout = 30000, directory) {
     if (!this.url)
@@ -11071,10 +11080,26 @@ The parts before yours are done. What they reported:
 
 Do your part here, with all your tools, as you would any task from the user. When it's done, end with a few lines on what you did and anything left over. That last message of yours goes to the chat as your report on its own, so don't send it anywhere; the others' parts start from it.`;
 }
-function plainError(error, provider) {
+function plainError(error, provider, place) {
   if (!/authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key/i.test(error))
     return error;
-  return `${provider ?? "Its account"} isn\u2019t signed in on this machine: sign in to it again in Settings \u203A Accounts, or choose another model.`;
+  return `${provider ?? "Its account"} isn\u2019t signed in${place ? ` on ${place}` : ""}: sign in to it again in Settings \u203A Accounts, or choose another model.`;
+}
+function isWaiting(server2, messages) {
+  const name = [...server2].map((character) => /[\p{L}\p{N}_-]/u.test(character) ? character : "_").join("");
+  for (const message of messages.slice(-8)) {
+    if (message?.type !== "assistant")
+      continue;
+    for (const block of message.content ?? []) {
+      if (block?.type !== "tool" || block.state?.status !== "running")
+        continue;
+      if (String(block.name).startsWith(name + "_"))
+        return true;
+      if (block.name === "execute" && typeof block.state.input?.code === "string" && block.state.input.code.includes(server2))
+        return true;
+    }
+  }
+  return false;
 }
 function said2(messages) {
   const found = [];
@@ -12269,10 +12294,14 @@ class Store {
 function server2(url, password) {
   const authorization = "Basic " + Buffer.from(`opencode:${password}`).toString("base64");
   return {
-    async request(method, path, body, timeout = 30000) {
+    async request(method, path, body, timeout = 30000, directory) {
       const response = await fetch(url.replace(/\/$/, "") + path, {
         method,
-        headers: { Authorization: authorization, ...body === undefined ? {} : { "Content-Type": "application/json" } },
+        headers: {
+          Authorization: authorization,
+          ...body === undefined ? {} : { "Content-Type": "application/json" },
+          ...directory ? { "x-opencode-directory": encodeURIComponent(directory) } : {}
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeout)
       });
@@ -12293,6 +12322,7 @@ function server2(url, password) {
   };
 }
 var at = (id) => "/api/session/" + encodeURIComponent(id);
+var sharedSession = "global";
 
 class SeatAPI {
   requester;
@@ -12391,6 +12421,12 @@ class SeatAPI {
   async dismiss(id, form, message) {
     await this.requester.request("DELETE", `${at(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message)}`);
   }
+  async sharedForms(directory) {
+    return (await this.requester.request("GET", at(sharedSession) + "/form", undefined, undefined, directory))?.data ?? [];
+  }
+  async dismissShared(form, directory) {
+    await this.requester.request("DELETE", `${at(sharedSession)}/form/${encodeURIComponent(form)}`, undefined, undefined, directory);
+  }
 }
 
 // Agents/src/groups/runner.ts
@@ -12431,6 +12467,12 @@ class GroupRunner {
   seatTexts = new Map;
   syncs = new Map;
   meetings;
+  get here() {
+    return this.context.place ? ` on ${this.context.place}` : "";
+  }
+  get memoryKey() {
+    return this.context.memoryKey ?? memoryKey;
+  }
   constructor(context) {
     this.context = context;
     this.chats = context.store.load();
@@ -12886,14 +12928,16 @@ class GroupRunner {
         return "absent";
       }
       const model2 = await this.model(bot);
-      if (model2 && !runsWithAgents(model2)) {
-        const account = await new SeatAPI(this.context.engine).account(model2).catch(() => {
+      if (model2 && model2.providerID !== autoProvider) {
+        const account = runsWithAgents(model2) ? await this.context.agentAccount?.(model2.providerID).catch(() => {
+          return;
+        }) : await new SeatAPI(this.context.engine).account(model2).catch(() => {
           return;
         });
         going();
         provider = account?.name;
         if (account?.signedOut) {
-          this.note(`${bot.name} couldn\u2019t answer: ${model2.id} needs a sign-in on this machine: sign in to ${account.name} in Settings \u203A Accounts, or choose another model.`, id);
+          this.note(`${bot.name} couldn\u2019t answer: ${model2.id} needs a sign-in${this.here}: sign in to ${account.name} in Settings \u203A Accounts, or choose another model.`, id);
           return "absent";
         }
       }
@@ -12965,7 +13009,7 @@ class GroupRunner {
         reconnected() {}
       });
       try {
-        await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
+        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, (messages) => {
           const now2 = activity(messages, promptID, sent);
           if (live.run !== run2 || live.speaking !== botID || now2.length === 0 || JSON.stringify(now2) === JSON.stringify(live.activity ?? []))
             return;
@@ -12992,7 +13036,7 @@ class GroupRunner {
       }
       if (!reply.text) {
         if (reply.error) {
-          this.note(`${bot.name} couldn\u2019t answer: ${plainError(reply.error, provider)}`, id);
+          this.note(`${bot.name} couldn\u2019t answer: ${plainError(reply.error, provider, this.context.place)}`, id);
           return "absent";
         }
         return "passed";
@@ -13012,7 +13056,7 @@ class GroupRunner {
       if (signal.aborted || error3 instanceof Cancelled || left())
         return "absent";
       console.error(`${botID}'s turn in ${id} failed:`, reason2(error3));
-      this.note(`${bot.name} couldn\u2019t answer: ${plainError(reason2(error3), provider)}`, id);
+      this.note(`${bot.name} couldn\u2019t answer: ${plainError(reason2(error3), provider, this.context.place)}`, id);
       return "absent";
     } finally {
       if (scratch)
@@ -13041,7 +13085,7 @@ class GroupRunner {
       this.setHeard(message.id, botID, id);
     } catch {}
   }
-  async waitForRun(seat, promptID, sent, api, signal, seen, stops) {
+  async waitForRun(seat, promptID, sent, api, signal, directory, seen, stops) {
     const pace = this.context.pace ?? 1;
     let looked = Date.now();
     let gone = 0;
@@ -13054,7 +13098,7 @@ class GroupRunner {
         await api.interrupt(seat).catch(() => {});
         throw new Cancelled;
       }
-      await this.decline(seat, api);
+      await this.decline(seat, api, directory);
       if (seen && Date.now() - looked > 1500 * pace) {
         looked = Date.now();
         const page2 = await api.messages(seat, 12).catch(() => {
@@ -13106,7 +13150,7 @@ class GroupRunner {
       }
     }
   }
-  async decline(seat, api) {
+  async decline(seat, api, directory) {
     for (const request of await api.permissions(seat).catch(() => [])) {
       if (this.declined.has(request.id))
         continue;
@@ -13118,6 +13162,18 @@ class GroupRunner {
         continue;
       this.declined.add(form.id);
       await api.dismiss(seat, form.id, "Ask the group in your reply instead.").catch(() => {});
+    }
+    const asked = (await api.sharedForms(directory).catch(() => [])).filter((form) => form?.metadata?.kind === "mcp-elicitation" && !this.declined.has(form.id));
+    if (asked.length === 0)
+      return;
+    const messages = (await api.messages(seat, 8).catch(() => {
+      return;
+    }))?.data ?? [];
+    for (const form of asked) {
+      if (!isWaiting(String(form.metadata.server ?? ""), messages))
+        continue;
+      this.declined.add(form.id);
+      await api.dismissShared(form.id, directory).catch(() => {});
     }
   }
   async reply(seat, promptID, sent, api) {
@@ -13164,7 +13220,7 @@ class GroupRunner {
       const chat = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
       await api.prompt(seat, promptID, chat + `
 ` + splitText(members.map((member) => member.name), yours), "queue");
-      await this.waitForRun(seat, promptID, sent, api, signal, undefined, () => this.state(id).asked !== epoch);
+      await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, undefined, () => this.state(id).asked !== epoch);
       const reply = await this.reply(seat, promptID, sent, api);
       const { tasks: tasks2, go } = tasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase());
       if (signal.aborted)
@@ -13619,7 +13675,7 @@ class GroupRunner {
       this.context.store.removeFile(`${folder}/${options.forgetting}.md`);
     const chats = [...this.chats.values()].filter((kept2) => kept2.status === "active" && kept2.group.members.includes(botID) && kept2.messages.length > 0).sort((a, b) => Date.parse(b.messages.at(-1)?.time ?? b.group.created) - Date.parse(a.messages.at(-1)?.time ?? a.group.created));
     if (chats.length === 0) {
-      await api.removeInstruction(bot.sessionID, memoryKey).catch(() => {});
+      await api.removeInstruction(bot.sessionID, this.memoryKey).catch(() => {});
       return;
     }
     let text2 = `You also take part in group chats in Kuvo Code, with the user and other bots. You remember them as you would a meeting: ` + `a recap of each is below, newest first, and the whole of each is in a file in "${folder}". When the user mentions one of ` + `these chats, or something talked about there, go by this, and read the file when you need more. What's marked ` + `"${bot.name}" is what you said.`;
@@ -13639,7 +13695,7 @@ class GroupRunner {
 `;
       text2 += this.recap(kept2);
     }
-    await api.setInstruction(bot.sessionID, memoryKey, text2).catch(() => {});
+    await api.setInstruction(bot.sessionID, this.memoryKey, text2).catch(() => {});
   }
   when(time) {
     const settings = this.context.store.settings();
@@ -13849,12 +13905,31 @@ function engineAgent(providerID2) {
 var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join19(home2, "snapshots")), (directory) => link2.titleModel(directory));
 var self;
 var groups;
-if (onMachine) {
+var groupFolders = onMachine ? { root: join19(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join19(machineHome, "bots"), trash: join19(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...onMachine ? [] : ["KUVO_BOTS"]])
+  delete process.env[name];
+if (groupFolders) {
   try {
-    const store2 = new GroupStore(join19(machineHome, "groups"), process.env.KUVO_BOTS ?? join19(machineHome, "bots"));
+    const store2 = new GroupStore(groupFolders.root, groupFolders.bots);
     groups = {
       store: store2,
-      runner: new GroupRunner({ store: store2, engine: link2, bridge: () => self, trash: join19(machineHome, "trash"), listen: (session, listener) => link2.listen(session, listener) })
+      runner: new GroupRunner({
+        store: store2,
+        engine: link2,
+        bridge: () => self,
+        trash: groupFolders.trash,
+        listen: (session, listener) => link2.listen(session, listener),
+        place: onMachine ? "this machine" : undefined,
+        memoryKey: groupMemoryKey,
+        agentAccount: async (provider) => {
+          const agent = roster.find(provider);
+          if (!agent)
+            return;
+          const account = await agent.account();
+          return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 };
+        }
+      })
     };
   } catch (error3) {
     console.error("group chats:", error3);
@@ -13874,11 +13949,13 @@ try {
 }
 console.log(JSON.stringify({ url: `http://127.0.0.1:${server3.port}` }));
 self = server2(`http://127.0.0.1:${server3.port}`, password);
-try {
-  groups?.runner.start();
-} catch (error3) {
-  console.error("group chats:", error3);
-}
+link2.whenReady().then(() => {
+  try {
+    groups?.runner.start();
+  } catch (error3) {
+    console.error("group chats:", error3);
+  }
+});
 var record = onMachine ? join19(machineHome, "run", "bridge.json") : undefined;
 if (record) {
   writeFileSync13(record + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
@@ -13914,4 +13991,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src fb07243d0e8a84a9ef78b8124f116ef0991d89c5f6518a119fa86a6afe758034
+// Built from Agents/src 0383f377b9cd959e086f680c101653e8d93035af02f97e6c2dacc8fe605cf04c
