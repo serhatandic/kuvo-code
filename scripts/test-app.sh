@@ -10,6 +10,14 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
+# one in memory for the tests: a test reaching the real one would wait on macOS asking whether
+# this copy, signed anew with each build, may use what an earlier build kept.
+if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' --include='*.swift' KuvoCode | grep -v '^KuvoCode/Stores/Keychain.swift:'; then
+    echo "The Keychain is reached through Keychain (KuvoCode/Stores/Keychain.swift), never directly: the tests would wait on macOS asking you." >&2
+    exit 1
+fi
+
 TEMP="${TMPDIR:-/tmp}"
 BUILD="${TEMP%/}/KuvoCodeTests-build"
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
