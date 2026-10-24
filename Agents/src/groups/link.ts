@@ -56,6 +56,20 @@ function member(bot: MachineBot) {
 /** How a bot looks when its computer didn't say (one that's older). */
 const plainLook = { color: "graphite", shape: "round", face: "calm" }
 
+/** The colors, shapes and faces a bot can have, as the apps draw them (BotLook): another is one a client can't read. */
+const looks = {
+  color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
+  shape: ["round", "squircle", "pebble", "gem", "bloom"],
+  face: ["calm", "happy", "sleepy", "wink", "curious", "bright"],
+}
+
+/** A look from another computer as a client can draw it: what isn't one it knows (a newer computer's), plain. */
+export function knownLook(look: unknown): typeof plainLook {
+  const given = look && typeof look === "object" && !Array.isArray(look) ? (look as Record<string, unknown>) : {}
+  const pick = (key: keyof typeof looks) => (typeof given[key] === "string" && looks[key].includes(given[key] as string) ? (given[key] as string) : plainLook[key])
+  return { color: pick("color"), shape: pick("shape"), face: pick("face") }
+}
+
 /**
  * A bot on another of your computers, as a chat here lists it: who it is, how it looks, its own
  * conversation there, and the computer it's on (`computer`, as its notes name it). Every field a
@@ -63,7 +77,7 @@ const plainLook = { color: "graphite", shape: "round", face: "calm" }
  * and its conversation empty when its computer didn't say.
  */
 function memberThere(bot: PeerBot, runner: GroupRunner) {
-  return { id: bot.id, name: bot.name, look: bot.look ?? plainLook, session: bot.session ?? "", directory: "", agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" }
+  return { id: bot.id, name: bot.name, look: knownLook(bot.look), session: bot.session ?? "", directory: "", agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" }
 }
 
 /** Who can be in a chat here: this computer's bots, and those of your others that take a chat's turns (`groups.seats`). */

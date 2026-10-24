@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ModelRef } from "../wire"
+import type { SeatResult } from "./seat"
 import { jobInMemory, type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
 
 /** Goes up only when what's kept changes in a way an older runner can't follow. */
@@ -109,9 +110,26 @@ export interface PeerWork {
   /** Its message in the bot's own conversation, once it went there. */
   prompt?: string
   started: string
-  /** How it went, once it did: told again until the chat's computer has it. */
+  /** Done, how it went and when: told again whenever the part is given again, for as long as it's remembered. */
   done?: boolean
+  result?: SeatResult
+  finished?: string
 }
+
+/** A turn a chat on another computer gave a bot here, as far as it got: its seat, its message there and when it went, and how it ended. */
+export interface PeerTurn {
+  /** The chat's computer, by key. */
+  host: string
+  at: number
+  seat?: string
+  agents?: boolean
+  prompt?: string
+  sent?: number
+  result?: SeatAnswerKept
+}
+
+/** How a turn ended, with the seat it ended in (`SeatAnswer` in peer.ts). */
+export type SeatAnswerKept = SeatResult & { seat?: string; agents?: boolean; replaced?: string }
 
 /** One of the machine's bots, as its folder has it. */
 export interface MachineBot extends SeatBot {
@@ -316,6 +334,16 @@ export class GroupStore {
     if (work) all[task] = work
     else delete all[task]
     write(join(this.root, "peer-work.json"), all)
+  }
+
+  /** Turns that chats on other computers gave bots here, by the turn's id: so one asked again after the bridge restarted goes on where it was. */
+  peerTurns(): Record<string, PeerTurn> {
+    const all = read(join(this.root, "peer-turns.json"))
+    return all && typeof all === "object" ? all : {}
+  }
+
+  keepPeerTurns(turns: Record<string, PeerTurn>) {
+    write(join(this.root, "peer-turns.json"), turns)
   }
 
   /** A chat's transcript in a bot's folder, for it to read (written whole, only this user can read it). */

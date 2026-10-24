@@ -80,7 +80,7 @@ test("a big one (the whole chat, for a seat new to it) goes in parts, and is put
   assert.deepEqual(link.seatPayloads({ kind: "stop", id: "trn_1" }), [{ seat: { kind: "stop", id: "trn_1" } }]);
 });
 
-test("one too big to be put together where it goes isn't sent at all: given up, and the log says so", () => {
+test("one too big to be put together where it goes isn't sent at all: given up, the bridge told, and the log says so", async () => {
   fresh();
   const sending = path.join(run, "outbox", "sending");
   fs.mkdirSync(sending, { recursive: true });
@@ -91,13 +91,15 @@ test("one too big to be put together where it goes isn't sent at all: given up, 
   const sent = [];
   const logged = [];
   const error = console.error;
+  const told = bridge();
   console.error = (...words) => logged.push(words.join(" "));
   try {
-    link.sendOutbox({ send: bytes => sent.push(bytes) }, link.readLink(), now);
+    await link.sendOutbox({ send: bytes => sent.push(bytes) }, link.readLink(), now, 0, told.ask);
   } finally {
     console.error = error;
   }
   assert.equal(sent.length, 0);
+  assert.deepEqual(told.asked.map(each => [each.route, each.body.mail.kind]), [["/gaveup", "memory"]]);
   assert.equal(fs.existsSync(path.join(sending, "sm_huge0001.json")), false, "not tried again each minute for two days");
   assert.equal(logged.length, 1);
   assert.match(logged[0], /memory for second is too big to send/);
@@ -136,10 +138,21 @@ test("who can be in a chat here from your other computers: each peer, taking a c
   const peers = link.seatPeers(link.readLink());
   assert.deepEqual(peers.boxes, [{ key: mac.pub, name: "mac", seats: false }, { key: second.pub, name: "second", seats: true }]);
   assert.deepEqual(peers.bots, [
-    { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m" },
+    { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m", look: { color: "sky", shape: "round", face: "calm" } },
     { id: "bot_far", name: "Far", job: "Watches CI", box: second.pub, session: "ses_far", look },
   ]);
   assert.ok(link.FEATURES.includes("groups.seats"), "this box takes them");
+});
+
+test("a bot that a newer computer says looks a way the apps don't draw yet is told of plain in what they don't know, so a phone can always show it", () => {
+  fresh();
+  link.takeAgents(second.peer, { at: 3, features: ["groups.seats"], list: [
+    { session: "ses_new", name: "New", kind: "bot", id: "bot_new", look: { color: "ultraviolet", shape: "gem", face: "smirk" } },
+    { session: "ses_odd", name: "Odd", kind: "bot", id: "bot_odd", look: { color: 7 } },
+  ] });
+  const looks = Object.fromEntries(link.seatPeers(link.readLink()).bots.map(bot => [bot.id, bot.look]));
+  assert.deepEqual(looks.bot_new, { color: "graphite", shape: "gem", face: "calm" });
+  assert.deepEqual(looks.bot_odd, { color: "graphite", shape: "round", face: "calm" });
 });
 
 test("what mustn't be lost goes to its computer only, each minute until it says it has it, and never through the Mac", () => {
@@ -168,4 +181,28 @@ test("what mustn't be lost goes to its computer only, each minute until it says 
   assert.ok(fs.existsSync(path.join(sending, "sm_report001.json")));
   link.letterWent(second.peer, { id: "sm_report001", ok: true });
   assert.equal(fs.existsSync(path.join(sending, "sm_report001.json")), false);
+});
+
+test("one that's had no word from its computer for two days is given up: the bridge is told, so the part it carried fails where you see it, and it goes once the bridge has heard", async () => {
+  fresh();
+  const sending = path.join(run, "outbox", "sending");
+  fs.mkdirSync(sending, { recursive: true });
+  const now = Date.now();
+  const made = now - 3 * 86_400_000;
+  const work = { kind: "work", work: { task: "gt_1", wrapUp: "gm_1", chat: "grp_1", bot: "bot_far", text: "Fix the build.", started: "2026-10-20T10:00:00Z" } };
+  fs.writeFileSync(path.join(sending, "sm_work00001.json"), JSON.stringify({ peer: second.pub, seat: work, at: made }));
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  // The bridge not running now: kept, and not sent on.
+  const down = bridge(false);
+  await link.sendOutbox(host, link.readLink(), now, 0, down.ask);
+  assert.deepEqual(down.asked, [{ method: "POST", route: "/gaveup", body: { to: second.pub, mail: work, at: made } }]);
+  assert.ok(fs.existsSync(path.join(sending, "sm_work00001.json")));
+  assert.equal(sent.length, 0);
+  // Then it is: told, and the letter goes.
+  const up = bridge();
+  await link.sendOutbox(host, link.readLink(), now + 64_000, 0, up.ask);
+  assert.deepEqual(up.asked, [{ method: "POST", route: "/gaveup", body: { to: second.pub, mail: work, at: made } }]);
+  assert.equal(fs.existsSync(path.join(sending, "sm_work00001.json")), false);
+  assert.equal(sent.length, 0, "never sent once given up");
 });
