@@ -168,7 +168,7 @@ final class BrowserAsks {
         responders[ask.id] = respond
         withAnimation(.ui) { asks.append(ask) }
         changed()
-        Notifier.shared.notify(session: tab(ask) ?? "", title: title(ask), subtitle: ask.asker, body: body(ask), push: .init(.ask, ask: ask.id))
+        Notifier.shared.notify(session: tab(ask) ?? "", title: title(ask), subtitle: ask.asker, body: body(ask), push: .init(.ask, ask: ask.id, machine: ask.machine))
         #if DEBUG
         answerForDemo(ask)
         #endif

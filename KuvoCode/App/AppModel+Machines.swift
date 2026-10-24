@@ -442,8 +442,6 @@ extension AppModel {
             engine.agentSync?.cancel()
             engine.agentSync = Task { [weak self, weak engine] in
                 while !Task.isCancelled {
-                    // This Mac is here: the machine leaves what a Mac does to it.
-                    if let engine { _ = await RemoteServer.markConnected(MachineEngine.macID, on: engine.machine.connection) }
                     try? await Task.sleep(for: .seconds(60))
                     guard let engine, self?.live(engine) == true, !Task.isCancelled else { return }
                     await AgentMail.shared.share(with: engine)
@@ -474,13 +472,7 @@ extension AppModel {
         engine.startWanted = false
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
-        // Gone from here: the machine does what a Mac does for it again, now (and nothing of this
-        // Mac's notes it's here again after).
         engine.agentSync?.cancel()
-        if engine.isReady {
-            let leaving = RemoteServer.leavingScript(MachineEngine.macID), connection = engine.machine.connection
-            Task.detached { RemoteServer.runNow(leaving, on: connection) }
-        }
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         workspace.forget(engine.machine.id)
     }
@@ -538,12 +530,9 @@ extension AppModel {
         Task { await moves.machineRemoved(id) }
     }
 
-    /// When the app quits: each machine runs on, as a box of its own, and its phone link bridge
-    /// tells your phones what happens there from now on. (A demo or test copy's stops, unless a
-    /// session there is working.)
+    /// When the app quits: each machine runs on, as a box of its own. (A demo or test copy's
+    /// stops, unless a session there is working.)
     func stopMachines() {
-        let leaving = RemoteServer.leavingScript(MachineEngine.macID)
-        var left = Set<String>()
         // Each machine it's connected to, and a demo or test copy's it reached at all: a connection
         // tried starts the box's keeper there.
         let reached = machines.engines.values.filter { engine in
@@ -552,27 +541,16 @@ extension AppModel {
             if case .preparing = engine.state { return engine.isStopped }
             return true
         }
-        // Each told at once, side by side: quitting waits a few seconds at most (one gone quiet
+        // Each stopped at once, side by side: quitting waits a few seconds at most (one gone quiet
         // after a sleep, say), not a few seconds for each.
-        var telling: [@Sendable () -> Void] = []
+        var stopping: [SSHConnection] = []
         for engine in reached {
             let busy = workspace.isRunning(on: engine.machine.id)
             engine.disconnect()
-            let connection = engine.machine.connection
-            if !leavesMachinesRunning && !busy {
-                telling.append { RemoteServer.stopNow(on: connection, first: leaving) }
-            } else {
-                telling.append { RemoteServer.runNow(leaving, on: connection) }
-            }
-            left.insert(engine.machine.id)
+            if !leavesMachinesRunning && !busy { stopping.append(engine.machine.connection) }
         }
-        // One reconnecting just now (after a sleep, say) that still takes this Mac to be there.
-        for id in phoneLink.presentOn where !left.contains(id) {
-            let connection = Machine(destination: id).connection
-            telling.append { RemoteServer.runNow(leaving, on: connection, timeout: 2) }
-        }
-        let told = telling
-        DispatchQueue.concurrentPerform(iterations: told.count) { told[$0]() }
+        let stops = stopping
+        DispatchQueue.concurrentPerform(iterations: stops.count) { RemoteServer.stopNow(on: stops[$0]) }
     }
 
     /// What a machine's engine starts with: this Mac's accounts and settings, and the browser tools

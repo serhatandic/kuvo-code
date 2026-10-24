@@ -1900,7 +1900,7 @@ final class Workspace {
                         subtitle: botName?(id) == nil ? projectName(session.location.directory) : nil,
                         body: failed ? "Stopped with an error." : reply ?? "Finished.",
                         replies: true,
-                        push: .init(failed ? .failed : isBot ? .report : .finished, machine: sessionMachines[id])
+                        push: .init(failed ? .failed : isBot ? .report : .finished, machine: sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory))
                     )
                 }
             }
@@ -2158,7 +2158,8 @@ final class Workspace {
                                    subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
                                    permission: isPermission && answerable && shown ? (session: id, request: request) : nil,
                                    question: shown ? question : nil,
-                                   push: .init(isPermission ? .permission : .question, request: (session: id, id: request), machine: sessionMachines[id], answerable: answerable && shown))
+                                   push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
+                                               machine: sessionMachines[id] ?? session.flatMap { RemoteFolder.machine(of: $0.location.directory) }, answerable: answerable && shown))
         }
     }
 

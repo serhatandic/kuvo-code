@@ -125,12 +125,7 @@ final class PhoneLink {
     private var secret: RelaySecret { identity.secret }
     @ObservationIgnored private var server: LinkServer?
     @ObservationIgnored private var running: Task<Void, Never>?
-    @ObservationIgnored private var presence: Task<Void, Never>?
-    /// When this Mac last told each machine's bridge it's here, by machine.
-    @ObservationIgnored private var markedPresent: [String: ContinuousClock.Instant] = [:]
-    /// How long that lets this Mac tell a machine's news: less than the bridge waits before it
-    /// tells it (`PRESENT_MS` in kuvo-link.js), so the two never both do, after a sleep say.
-    private static let presentFor: Duration = .seconds(120)
+    @ObservationIgnored private var keepingMachinesTold: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
     private let log = Logger(subsystem: "run.kuvo.code", category: "phone")
 
@@ -204,7 +199,7 @@ final class PhoneLink {
         guard relayWanted, running == nil, hasIdentity else { return }
         server = makeServer(endpoint: endpoint)
         running = Task { await run() }
-        keepPresent()
+        keepMachinesTold()
         #if DEBUG
         pairForDemo()
         #endif
@@ -227,8 +222,8 @@ final class PhoneLink {
     func stop() {
         let server = server, running = running
         self.running = nil
-        presence?.cancel()
-        presence = nil
+        keepingMachinesTold?.cancel()
+        keepingMachinesTold = nil
         self.server = nil
         status = .off
         // Phones hear their sessions end (see `LinkServer.closeAll`); the relay connection goes
@@ -398,40 +393,23 @@ final class PhoneLink {
             // others hear it's one of theirs.
             let now = machineHosts[machine.id]
             if now?.address != before?.address || now?.key != before?.key || now?.peers != before?.peers { Task { await tellMachines() } }
-            // Here from the start, not from the next minute: the bridge leaves this machine's news to this Mac.
-            if status == .connected, phones.contains(where: { $0.address != nil }) { await markPresent(on: machine) }
         } catch {
             log.error("Couldn't set up the phone link on a machine: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    /// Tells each connected machine's bridge, every minute, that this Mac is here and tells your
-    /// phones what happens in the machine's sessions itself: the bridge does it only while no
-    /// Mac is (`RemoteServer.markPresent`), so nothing comes twice.
-    private func keepPresent() {
-        presence?.cancel()
-        presence = Task { [weak self] in
+    /// Tells your machines your phones and their peers every 15 minutes while the relay answers
+    /// (`tellMachines`).
+    private func keepMachinesTold() {
+        keepingMachinesTold?.cancel()
+        keepingMachinesTold = Task { [weak self] in
             var minutes = 0
             while !Task.isCancelled {
-                if let self, status == .connected, phones.contains(where: { $0.address != nil }) {
-                    for engine in readyMachines() where engine.isLive { await markPresent(on: engine.machine) }
-                }
                 if minutes % 15 == 1 { await self?.tellMachines() }
                 minutes += 1
                 try? await Task.sleep(for: .seconds(60))
             }
         }
-    }
-
-    /// The machines whose bridge may still think this Mac is here (`PRESENT_MS` in kuvo-link.js),
-    /// for telling them it's gone as it quits.
-    var presentOn: [String] {
-        markedPresent.filter { .now - $0.value < .seconds(150) }.map(\.key)
-    }
-
-    private func markPresent(on machine: Machine) async {
-        let at = ContinuousClock.now
-        if await RemoteServer.markPresent(MachineEngine.macID, on: machine.connection) { markedPresent[machine.id] = at }
     }
 
     /// The phones you've paired, as a machine's bridge takes them, with the ones removed (which
@@ -854,13 +832,12 @@ final class PhoneLink {
 
     // MARK: Notifications
 
-    /// Sends `notice` to your phones' notifications, while you're away from this Mac or have the
-    /// app open on a phone (which leaves out what's on its screen): at the Mac, its own
-    /// notifications are enough. News from `machine`'s engine goes only while that machine's
-    /// bridge knows this Mac is here; otherwise the bridge has told it.
-    func push(_ notice: Notice, from machine: String? = nil) {
+    /// Sends `notice`, about this Mac's own sessions, chats or browser (a machine tells your phones
+    /// its own), to your phones' notifications, while you're away from this Mac or have the app
+    /// open on a phone (which leaves out what's on its screen): at the Mac, its own notifications
+    /// are enough.
+    func push(_ notice: Notice) {
         guard Self.isEnabled, let server, let data = try? notice.encoded() else { return }
-        if let machine, !(markedPresent[machine].map { .now - $0 < Self.presentFor } ?? false) { return }
         let phones = phones.compactMap { phone -> (key: Data, address: LinkAddress)? in
             guard let key = Data(base64URL: phone.key), let address = phone.address.flatMap(LinkAddress.init(text:)) else { return nil }
             return (key, address)

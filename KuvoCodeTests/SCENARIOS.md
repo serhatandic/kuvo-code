@@ -75,7 +75,7 @@ for Linux's tools).
 | J4 A huge file, a binary file in the changes; a command that prints a lot | ChangesDiscardTests, ChangesBinaryTests, CommandOutputTests | how much output the engine keeps (its own) |
 | K1 Settings keep what you change; its tabs | EngineSettingsFileTests, SettingsTabsTests | |
 | L42 Web search works from the start (the engine has no search chosen; every search failed) | EngineSettingsFileTests | |
-| K3, L41 Notifications, and answering from one | NotificationMaskingTests, NotificationRepliesTests | macOS showing them (Notification Center) |
+| K3, L41 Notifications, and answering from one; on your phones, each once, from the computer it happened on | NotificationMaskingTests, NotificationRepliesTests, PhoneNoticesTests; the bridge's box-work.test.js (a machine's, Mac connected or not) | macOS showing them (Notification Center) |
 | ⌘K: find a session in any project, a file in this one, or an action | CommandPaletteTests | its window and keys (UI) |
 | K2 Menu commands and shortcuts | | menus and keys (UI; the end-to-end runs check each against Settings › Keyboard Shortcuts) |
 | K4 The menu bar's usage panel: which accounts count there | UsageAccountsTests, UsageKit's own tests | the panel asking the providers' services (UsageKit's own tests, against a fake of each) |

@@ -37,9 +37,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Answers a question from its notification: the question's session, the question, its field
     /// and the answer.
     var answerQuestion: ((String, String, String, String) -> Void)?
-    /// Sends a notification to your paired phones, about a session on the machine it names, if
-    /// one (set by AppModel).
-    var toPhones: ((Notice, String?) -> Void)?
+    /// Sends a notification to your paired phones (set by AppModel).
+    var toPhones: ((Notice) -> Void)?
 
     /// What goes to your phones too, as their notification (KuvoLink's PROTOCOL.md,
     /// "Notifications"): nil for what's only about this Mac.
@@ -52,8 +51,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         var request: (session: String, id: String)?
         /// The browser ask.
         var ask: String?
-        /// The machine whose engine it happened on, which tells your phones itself while this Mac
-        /// isn't there.
+        /// The machine it happened on (its engine, its browser, a group chat that lives there): the
+        /// machine tells your phones itself, Mac connected or not, so this Mac doesn't.
         var machine: String?
 
         /// Whether its notification's buttons may answer it (see `Workspace.showsAll`).
@@ -339,7 +338,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func send(_ push: Push, session: String, title: String, subtitle: String?, body: String) {
-        guard let toPhones else { return }
+        guard let toPhones, push.machine == nil else { return }
         var data = push.group.map { ["group": $0] } ?? (session.isEmpty ? [:] : ["session": session])
         if let request = push.request {
             data["request"] = request.id
@@ -347,8 +346,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if !push.answerable { data["answerable"] = "0" }
         }
         if let ask = push.ask { data["ask"] = ask }
-        toPhones(Notice(title: title, subtitle: subtitle, body: body, category: push.category, thread: push.group ?? (session.isEmpty ? push.ask ?? "" : session), data: data),
-                 push.machine)
+        toPhones(Notice(title: title, subtitle: subtitle, body: body, category: push.category, thread: push.group ?? (session.isEmpty ? push.ask ?? "" : session), data: data))
     }
 
     /// Takes a session's notifications away once you've looked at it.

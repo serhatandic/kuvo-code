@@ -191,15 +191,15 @@ final class MachineGroups {
                 let met = try decoded(event, as: Met.self)
                 guard let last = met.last else {
                     Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, body: "The meeting came, but no one could take part.",
-                                           push: .init(.message, group: met.id))
+                                           push: .init(.message, group: met.id, machine: machine))
                     return
                 }
                 Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, subtitle: met.who.map { last.kind == .wrapUp ? "\($0)’s wrap-up" : $0 },
-                                       body: ReplyPreview.line(last.text), replies: true, push: .init(.message, group: met.id))
+                                       body: ReplyPreview.line(last.text), replies: true, push: .init(.message, group: met.id, machine: machine))
             case "kuvo.group.done":
                 let done = try decoded(event, as: Done.self)
                 Notifier.shared.notify(session: BotGroups.tabKey(done.id), title: done.name, subtitle: "\(done.who) finished its part",
-                                       body: ReplyPreview.line(done.text), replies: true, push: .init(.message, group: done.id))
+                                       body: ReplyPreview.line(done.text), replies: true, push: .init(.message, group: done.id, machine: machine))
             default:
                 break
             }
