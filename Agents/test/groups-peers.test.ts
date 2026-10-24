@@ -1,19 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
-import { RemoteHome, SeatServer, activityEvery, askAgainAfter, awayAfter, type Clock, type PeerBot, type PeerDirectory, type SeatMail } from "../src/groups/peer"
-import { GroupRunner } from "../src/groups/runner"
-import { stamp, type Group } from "../src/groups/rules"
+import { SeatServer, activityEvery, askAgainAfter, awayAfter, type Clock, type PeerBot, type SeatMail } from "../src/groups/peer"
+import { LinkDirectory, PeerPost, receive, type PeerParts } from "../src/groups/post"
+import { GroupRunner, transcriptMailBytes } from "../src/groups/runner"
+import { stamp, type Group, type GroupMessage } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
 import { Engine } from "./support/engine"
 
 // Group chats across your computers (PROTOCOL.md, "Peers": seat): a chat lives on one computer and
 // runs there, and a bot that lives on another takes its turn there, in a seat of that computer's
-// own, with only the words going between them. Here, in-memory computers on a stand-in relay, each
-// with a stand-in engine whose seats answer with their bot's next line.
+// own, with only the words going between them. Here, in-memory computers, each with its real
+// bridge parts (its post, its directory of your other computers, its seats and its chats) and a
+// stand-in engine whose seats answer with their bot's next line, on a stand-in relay that plays
+// each box's link: it follows what the post sends, and can lose, hold back, reorder and repeat it.
 
 /** Waits that look again only when something happened: a runner told something, an engine was asked something, or mail went. */
 const wakes = new Set<() => void>()
@@ -32,7 +35,7 @@ async function until(condition: () => boolean) {
   }
 }
 
-/** A clock a test moves on by hand. */
+/** A clock a test moves on by hand: what comes due goes in its order, what that sets up too. */
 class HandClock implements Clock {
   private now = 0
   private timers: { at: number; work: () => void }[] = []
@@ -45,35 +48,79 @@ class HandClock implements Clock {
     this.timers = this.timers.filter((each) => each !== timer)
   }
   advance(ms: number) {
-    this.now += ms
-    for (const timer of this.timers.filter((each) => each.at <= this.now)) {
-      this.timers = this.timers.filter((each) => each !== timer)
-      timer.work()
+    const end = this.now + ms
+    for (;;) {
+      const due = this.timers.filter((each) => each.at <= end).sort((a, b) => a.at - b.at)[0]
+      if (!due) break
+      this.timers = this.timers.filter((each) => each !== due)
+      this.now = due.at
+      due.work()
     }
+    this.now = end
   }
 }
 
-/** The relay between computers: mail from one to another, a moment later; a computer that's away gets none of it (what mustn't be lost waits for it). */
+interface Carried {
+  from: string
+  to: string
+  mail: SeatMail
+  durable: boolean
+}
+
+/**
+ * The relay, and each box's link on it: what a box's post sends goes to the box it's for. What goes
+ * now is lost when it's away (or when a test loses it); what mustn't be lost waits for a box that's
+ * away, and can be held back to come later, out of order, or come twice.
+ */
 class Relay {
   boxes = new Map<string, Box>()
   away = new Set<string>()
   /** Every mail sent, by whom to whom. */
-  sent: { from: string; to: string; mail: SeatMail; durable: boolean }[] = []
-  private waiting: { from: string; to: string; mail: SeatMail }[] = []
+  sent: Carried[] = []
+  /** Mail that goes now, lost on the way: the first that each of these matches. */
+  loses: ((each: Carried) => boolean)[] = []
+  lost: Carried[] = []
+  /** What mustn't be lost, held back while this matches it (`release` gives it), and given twice. */
+  holding?: (each: Carried) => boolean
+  held: Carried[] = []
+  twice = false
+  private waiting: Carried[] = []
 
-  send(from: string, to: string, mail: SeatMail, durable: boolean) {
-    this.sent.push({ from, to, mail: structuredClone(mail), durable })
+  carry(each: Carried) {
+    this.sent.push(structuredClone(each))
     beat()
-    if (this.away.has(to)) {
-      if (durable) this.waiting.push({ from, to, mail })
+    if (!each.durable) {
+      const lose = this.loses.findIndex((test) => test(each))
+      if (lose >= 0) {
+        this.loses.splice(lose, 1)
+        this.lost.push(each)
+        return
+      }
+      if (!this.away.has(each.to)) this.give(each)
       return
     }
-    queueMicrotask(() => this.boxes.get(to)?.receive(from, structuredClone(mail)))
+    if (this.holding?.(each)) return void this.held.push(each)
+    if (this.away.has(each.to)) return void this.waiting.push(each)
+    this.give(each)
+  }
+
+  /** What was held back, given now: as it was sent, or the other way round. */
+  release(order: "as sent" | "reversed") {
+    const held = order === "reversed" ? [...this.held].reverse() : this.held
+    this.held = []
+    this.holding = undefined
+    for (const each of held) this.give(each)
+  }
+
+  private give(each: Carried) {
+    for (let time = 0; time < (each.durable && this.twice ? 2 : 1); time++) {
+      queueMicrotask(() => this.boxes.get(each.to)?.receive(each.from, structuredClone(each.mail)))
+    }
   }
 
   back(box: string) {
     this.away.delete(box)
-    for (const each of this.waiting.filter((one) => one.to === box)) this.boxes.get(box)?.receive(each.from, each.mail)
+    for (const each of this.waiting.filter((one) => one.to === box)) this.give(each)
     this.waiting = this.waiting.filter((one) => one.to !== box)
   }
 
@@ -83,18 +130,16 @@ class Relay {
   }
 }
 
-/** One of your computers: its engine, its bots, its group chats, and what it knows of the others. */
+/** One of your computers: its engine, its bots, its group chats, and its bridge's part in chats across them. */
 class Box {
   readonly root = mkdtempSync(join(tmpdir(), "kuvo-peers-"))
   readonly engine = new Engine(beat)
   readonly store: GroupStore
   readonly runner: GroupRunner
-  readonly server: SeatServer
-  private homes = new Map<string, RemoteHome>()
-  /** Other computers' bots, as they'd say. */
-  theirs: PeerBot[] = []
-  names: Record<string, string> = {}
-  noSeats = new Set<string>()
+  readonly post: PeerPost
+  readonly directory: LinkDirectory
+  readonly parts: PeerParts
+  private following = new AbortController()
 
   constructor(
     readonly key: string,
@@ -102,29 +147,47 @@ class Box {
     readonly clock?: Clock,
   ) {
     this.store = new GroupStore(join(this.root, "groups"), join(this.root, "bots"))
-    const transport = { send: (to: string, mail: SeatMail, durable: boolean) => relay.send(key, to, mail, durable) }
-    const directory: PeerDirectory = {
-      bots: () => this.theirs,
-      name: (box) => this.names[box] ?? box,
-      takesSeats: (box) => !this.noSeats.has(box),
-      home: (box) => {
-        let home = this.homes.get(box)
-        if (!home) this.homes.set(box, (home = new RemoteHome(box, transport, () => this.names[box] ?? box, this.clock)))
-        return home
-      },
-    }
+    this.post = new PeerPost(join(this.root, "peer-outbox.json"))
+    this.directory = new LinkDirectory(this.post, clock)
     this.runner = new GroupRunner({
-      store: this.store, engine: server(this.engine.url, "x"), bridge: () => undefined, trash: join(this.root, "trash"), pace: 0.05, place: key, peers: directory,
+      store: this.store, engine: server(this.engine.url, "x"), bridge: () => undefined, trash: join(this.root, "trash"), pace: 0.05, place: key, peers: this.directory,
     })
-    this.server = new SeatServer(this.runner.seats, transport, { store: this.store, remembered: (from, memory) => this.runner.remembered(from, memory) })
+    const seats = new SeatServer(this.runner.seats, this.post, { store: this.store, remembered: (from, memory) => this.runner.remembered(from, memory) })
+    this.parts = { post: this.post, directory: this.directory, server: seats, runner: this.runner }
     relay.boxes.set(key, this)
+    void this.link()
+  }
+
+  /** The box's link: follows what its post sends, carries it on the relay, and says it has what mustn't be lost. */
+  private async link() {
+    const reader = this.post.follow(this.following.signal).body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    for (;;) {
+      const read = await reader.read().catch(() => ({ done: true as const, value: undefined }))
+      if (read.done) return
+      buffer += decoder.decode(read.value, { stream: true })
+      let end: number
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const line = JSON.parse(buffer.slice(0, end))
+        buffer = buffer.slice(end + 1)
+        if (line.durable) this.post.sent([line.id])
+        this.relay.carry({ from: this.key, to: line.to, mail: line.mail, durable: line.durable })
+      }
+    }
   }
 
   receive(from: string, mail: SeatMail) {
-    if (mail.kind === "state" || mail.kind === "result") this.homes.get(from)?.take(from, mail)
-    else if (mail.kind === "report") this.runner.reported(from, mail)
-    else this.server.take(from, mail)
+    receive(this.parts, from, mail)
     beat()
+  }
+
+  /** Who its link says your other computers and their bots are. */
+  knows(computers: { key: string; name: string; seats?: boolean; bots?: PeerBot[] }[]) {
+    this.directory.set({
+      boxes: computers.map(({ key, name, seats }) => ({ key, name, seats: seats ?? true })),
+      bots: computers.flatMap((computer) => computer.bots ?? []),
+    })
   }
 
   bot(id: string, name: string) {
@@ -137,6 +200,7 @@ class Box {
   }
 
   stop() {
+    this.following.abort()
     this.engine.stop()
     rmSync(this.root, { recursive: true, force: true })
   }
@@ -150,13 +214,20 @@ let host: Box
 let home: Box
 let unsubscribe: () => void
 
+/** The chat's computer (this Mac's stand-in, `key_mac`), with Ada; Ben lives on lokum. */
+function hostWith(clock?: Clock) {
+  const box = new Box("key_mac", relay, clock)
+  box.bot("bot_ada", "Ada")
+  box.knows([{ key: "key_lokum", name: "lokum", bots: [{ id: "bot_ben", name: "Ben", job: "Ben's job", box: "key_lokum", session: "ses_own_Ben" }] }])
+  return box
+}
+
 beforeEach(() => {
   relay = new Relay()
-  host = new Box("key_mac", relay)
   home = new Box("key_lokum", relay)
-  host.bot("bot_ada", "Ada")
-  host.theirs = [home.bot("bot_ben", "Ben")]
-  host.names = { key_lokum: "lokum" }
+  home.bot("bot_ben", "Ben")
+  home.knows([{ key: "key_mac", name: "mac" }])
+  host = hostWith()
   unsubscribe = subscribe(() => beat())
 })
 
@@ -169,6 +240,16 @@ afterEach(() => {
 
 const said = (box: Box) => box.runner.get(id)?.messages ?? []
 const over = (box: Box, done: () => boolean) => until(() => !box.runner.talk(id).discussing && done())
+const turns = () => relay.sent.filter((each) => each.mail.kind === "turn")
+
+/** The host on a clock of the test's, Ben's computer as it was. */
+function hostOnClock() {
+  relay.boxes.delete("key_mac")
+  host.stop()
+  const clock = new HandClock()
+  host = hostWith(clock)
+  return clock
+}
 
 describe("a group chat with a bot on another of your computers", () => {
   test("the bot takes its turn on its own computer, in a seat there, and its words reach the chat", async () => {
@@ -225,7 +306,7 @@ describe("a group chat with a bot on another of your computers", () => {
   test("a bot that moved to a third computer: its seat on the one it left goes, and its next turn there hears the whole chat", async () => {
     const third = new Box("key_spare", relay)
     try {
-      host.names.key_spare = "spare"
+      third.knows([{ key: "key_mac", name: "mac" }])
       host.engine.lines = { Ada: ["PASS", "PASS"] }
       home.engine.lines = { Ben: ["Hi from lokum."] }
       host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
@@ -233,7 +314,7 @@ describe("a group chat with a bot on another of your computers", () => {
       await over(host, () => said(host).some((message) => message.text === "Hi from lokum."))
       const first = host.runner.get(id)!.group.seats.bot_ben
       // It lives on the third one now.
-      host.theirs = [third.bot("bot_ben", "Ben")]
+      host.knows([{ key: "key_lokum", name: "lokum" }, { key: "key_spare", name: "spare", bots: [third.bot("bot_ben", "Ben")] }])
       third.engine.lines = { Ben: ["Hi from spare."] }
       host.runner.send(id, "Again?")
       await over(host, () => said(host).some((message) => message.text === "Hi from spare."))
@@ -246,29 +327,58 @@ describe("a group chat with a bot on another of your computers", () => {
     }
   })
 
-  test("its computer away: asked again once, then the chat says so, and goes on without it", async () => {
-    relay.boxes.delete("key_mac")
-    host.stop()
-    const clock = new HandClock()
-    host = new Box("key_mac", relay, clock)
-    host.bot("bot_ada", "Ada")
-    host.theirs = [home.bot("bot_ben", "Ben")]
-    host.names = { key_lokum: "lokum" }
+  test("its computer away: asked again while it says nothing, then the chat says so, and goes on without it", async () => {
+    const clock = hostOnClock()
     relay.away.add("key_lokum")
     host.engine.lines = { Ada: ["Hello.", "PASS"] }
     host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
     host.runner.send(id, "Anyone?")
-    await until(() => relay.sent.filter((each) => each.mail.kind === "turn").length === 1)
+    await until(() => turns().length === 1)
     clock.advance(askAgainAfter)
-    expect(relay.sent.filter((each) => each.mail.kind === "turn").length).toBe(2)
-    expect(relay.sent.filter((each) => each.mail.kind === "turn").map((each) => (each.mail as any).turn.id)).toEqual(Array(2).fill((relay.sent[0].mail as any).turn.id))
+    await until(() => turns().length === 2)
+    expect(turns().map((each) => (each.mail as any).turn.id)).toEqual(Array(2).fill((turns()[0].mail as any).turn.id))
     clock.advance(awayAfter - askAgainAfter)
     await over(host, () => said(host).some((message) => message.author === "bot_ada"))
     expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toEqual(["Ben is on lokum, which can’t be reached now, so it sat this out."])
   })
 
+  test("its words lost on the way after its computer took the turn: asked again, they're said again, and reach the chat", async () => {
+    const clock = hostOnClock()
+    relay.loses.push((each) => each.mail.kind === "result")
+    host.engine.lines = { Ada: ["PASS"] }
+    home.engine.lines = { Ben: ["Here, after all."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "Anyone?")
+    await until(() => relay.lost.length === 1)
+    // Nothing more comes; the chat asks again, by the same turn, and isn't answered twice.
+    clock.advance(askAgainAfter)
+    await over(host, () => said(host).some((message) => message.author === "bot_ben"))
+    expect(said(host).filter((message) => message.author === "bot_ben").map((message) => message.text)).toEqual(["Here, after all."])
+    const first = (turns()[0].mail as any).turn.id
+    expect(turns().filter((each) => (each.mail as any).turn.id === first).length).toBe(2)
+    expect(said(host).some((message) => message.kind === "note")).toBe(false)
+  })
+
+  test("its seat said made, but lost on the way: the chat keeps it from how the turn ended, and its next turn is there", async () => {
+    relay.loses.push((each) => each.mail.kind === "state" && each.mail.state.phase === "seated")
+    host.engine.lines = { Ada: ["PASS", "PASS"] }
+    // Ben leads: after its first word it lists who does what (nobody), in a conversation of its own for it.
+    home.engine.lines = { Ben: ["First.", "PASS", "Second."] }
+    host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
+    host.runner.send(id, "One?")
+    await over(host, () => said(host).some((message) => message.text === "First."))
+    expect(relay.lost.length).toBe(1)
+    const seat = home.engine.prompts()[0].path.split("/")[3]
+    expect(host.runner.get(id)!.group.seats.bot_ben).toBe(seat)
+    expect(host.runner.get(id)!.group.seatBoxes).toEqual({ bot_ben: "key_lokum" })
+    host.runner.send(id, "Two?")
+    await over(host, () => said(host).some((message) => message.text === "Second."))
+    expect(home.engine.seatsMade().filter((title) => title.startsWith("Ben in"))).toEqual(["Ben in Team"])
+    expect(home.engine.prompts(seat).length).toBe(2)
+  })
+
   test("a computer that doesn't take seats yet says so, rather than going without a word", async () => {
-    host.noSeats.add("key_lokum")
+    host.knows([{ key: "key_lokum", name: "lokum", seats: false, bots: [{ id: "bot_ben", name: "Ben", job: "", box: "key_lokum" }] }])
     host.engine.lines = { Ada: ["Hello.", "PASS"] }
     host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
     host.runner.send(id, "Anyone?")
@@ -286,6 +396,27 @@ describe("a group chat with a bot on another of your computers", () => {
     await until(() => relay.sent.filter((each) => each.mail.kind === "result").length === 2)
     expect(home.engine.prompts().length).toBe(1)
     expect(relay.sent.filter((each) => each.mail.kind === "result").map((each) => (each.mail as any).result.text)).toEqual(["Once.", "Once."])
+  })
+
+  test("what another computer asks of a conversation that isn't that bot's seat in that chat isn't done: nothing of it deleted or changed", async () => {
+    home.engine.lines = { Ben: ["In a seat of my own."] }
+    const turn = { id: "trn_foreign", chat: { id, name: "Team", members: [{ id: "bot_ben", name: "Ben", job: "" }] }, bot: "bot_ben", seat: "ses_own_Ben", agentsSeat: false, kind: "turn" as const, text: "Your turn." }
+    relay.forge("key_mac", "key_lokum", { kind: "turn", turn })
+    await until(() => relay.sent.some((each) => each.mail.kind === "result"))
+    // Its own conversation's rules, instructions and model as they were; it answered in a seat made for it.
+    const touched = home.engine.requests.filter((request) => request.path.startsWith("/api/session/ses_own_Ben") || request.path.startsWith("/api/experimental/session/ses_own_Ben"))
+    expect(touched.filter((request) => request.method !== "GET")).toEqual([])
+    expect(home.engine.seatsMade()).toEqual(["Ben in Team"])
+    const answer = relay.sent.find((each) => each.mail.kind === "result")!.mail as any
+    expect(answer.result).toMatchObject({ ok: true, text: "In a seat of my own.", replaced: "ses_own_Ben" })
+    const seat = answer.result.seat as string
+    // Dropping it, its own conversation, or its seat as another chat's: none goes. Its seat in this chat, as said, does.
+    relay.forge("key_mac", "key_lokum", { kind: "drop", seat: "ses_own_Ben", agents: false, bot: "bot_ben", chat: id })
+    relay.forge("key_mac", "key_lokum", { kind: "drop", seat, agents: false, bot: "bot_ben", chat: "grp_other00001" })
+    relay.forge("key_mac", "key_lokum", { kind: "drop", seat, agents: false })
+    relay.forge("key_mac", "key_lokum", { kind: "drop", seat, agents: false, bot: "bot_ben", chat: id })
+    await until(() => home.engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${seat}`))
+    expect(home.engine.requests.filter((request) => request.method === "DELETE").map((request) => request.path)).toEqual([`/api/session/${seat}`])
   })
 
   test("its part of the work is done in its own conversation on its own computer, and its report comes back to the chat", async () => {
@@ -306,6 +437,23 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(part).toContain("**Ada**: Notes written.")
     expect(relay.sent.filter((each) => each.mail.kind === "work" || each.mail.kind === "report").every((each) => each.durable)).toBe(true)
     expect(host.runner.get(id)!.messages.find((message) => message.kind === "wrapUp")!.tasks!.map((task) => task.state)).toEqual(["done", "done"])
+  }, 20_000)
+
+  test("a part given to its bot's computer before the bot moved, and before the chat's computer started again: given there again, and its report taken from there", async () => {
+    home.engine.reports = { Ben: "Build fixed." }
+    // Ben lives on spare now, as the chat's computer has heard; the part went to lokum.
+    host.knows([{ key: "key_lokum", name: "lokum" }, { key: "key_spare", name: "spare", bots: [{ id: "bot_ben", name: "Ben", job: "", box: "key_spare" }] }])
+    const wrapUp: GroupMessage = {
+      id: "gm_wrap", author: "bot_ada", text: "Ben fixes the build.", time: stamp(), kind: "wrapUp",
+      tasks: [{ id: "gt_build", bot: "bot_ben", task: "Fix the build", state: "working", started: stamp(), prompt: "peer:key_lokum" }],
+    }
+    host.runner.put(team(), [{ id: "gm_ask", text: "Ship it?", time: stamp(), kind: "message" }, wrapUp], "active", false)
+    await until(() => said(host).some((message) => message.report === "gt_build"))
+    expect(relay.sent.filter((each) => each.mail.kind === "work").map((each) => each.to)).toEqual(["key_lokum"])
+    expect(said(host).find((message) => message.report === "gt_build")).toMatchObject({ author: "bot_ben", text: "Build fixed." })
+    expect(said(host).find((message) => message.id === "gm_wrap")!.tasks![0].state).toBe("done")
+    // Given there again, it's done there once.
+    expect(home.engine.prompts("ses_own_Ben").length).toBe(1)
   }, 20_000)
 
   test("it remembers the chat in its own conversation there, beside its own computer's chats, in one instruction", async () => {
@@ -330,7 +478,56 @@ describe("a group chat with a bot on another of your computers", () => {
     home.runner.stop("grp_local00001")
   }, 20_000)
 
-  test("what it's doing goes to the chat's computer at most every 1.5 s, the latest of it", async () => {
+  test("what it remembers, come late, out of order and twice: it doesn't remember a chat it left, and the newest of each wins", async () => {
+    host.bot("bot_cy", "Cy")
+    const memoryFile = join(home.root, "bots", "bot_ben", "groups", "key_mac-grp_team000001.md")
+    // What its own conversation's instruction says now (none once it was taken away).
+    const instruction = () => {
+      const last = home.engine.requests.filter((request) => request.path === "/api/experimental/session/ses_own_Ben/instructions/entries/kuvo.groups.machine").at(-1)
+      return last?.method === "PUT" ? (last.body.value as string) : ""
+    }
+    const opening: GroupMessage[] = [{ id: "gm_1", text: "Ship it?", time: stamp(), kind: "message" }]
+    host.runner.put(team(["bot_ada", "bot_ben", "bot_cy"]), opening, "active", false)
+    host.runner.put({ ...team(["bot_ada", "bot_ben"]), id: "grp_two0000001", name: "Two" }, opening, "active", false)
+    relay.holding = (each) => each.mail.kind === "memory"
+    relay.twice = true
+    // It remembers the chat renamed, then forgets it as it's taken out; then the other chat is renamed.
+    await host.runner.update(id, { name: "Renamed" })
+    await host.runner.update(id, { members: ["bot_ada", "bot_cy"] })
+    await host.runner.update("grp_two0000001", { name: "Second" })
+    const held = relay.held.filter((each) => (each.mail as any).memory.bot === "bot_ben")
+    expect(held.map((each) => [(each.mail as any).memory.chat, Boolean((each.mail as any).memory.forget)])).toEqual([
+      [id, false], ["grp_two0000001", false],
+      [id, true],
+      ["grp_two0000001", false],
+    ])
+    // They come the other way round (the newest of the other chat last, so its taking says the rest were looked at).
+    const newest = relay.held.pop()!
+    relay.release("reversed")
+    relay.held = [newest]
+    relay.release("as sent")
+    await until(() => instruction().includes(`"Second"`))
+    expect(existsSync(memoryFile)).toBe(false)
+    expect(instruction()).not.toContain(`"Renamed"`)
+    expect(instruction()).not.toContain(`grp_team000001`)
+  }, 20_000)
+
+  test("what it's told it remembers of a long chat is its latest messages, within what mail carries", async () => {
+    const long: GroupMessage[] = Array.from({ length: 300 }, (_, index) => ({ id: `gm_${index}`, text: `Message ${index}: ` + "words ".repeat(400), time: stamp(), kind: "message" }))
+    host.runner.put(team(["bot_ada", "bot_ben"]), long, "active", false)
+    await host.runner.update(id, { name: "Long" })
+    await until(() => relay.sent.some((each) => each.mail.kind === "memory"))
+    const memory = (relay.sent.find((each) => each.mail.kind === "memory")!.mail as any).memory
+    expect(new TextEncoder().encode(memory.transcript).length).toBeLessThanOrEqual(transcriptMailBytes)
+    expect(memory.transcript).toContain("Message 299: ")
+    expect(memory.transcript).not.toContain("Message 0: ")
+    expect(memory.transcript).toContain("Earlier messages aren’t here")
+    // There, it's kept as it came.
+    const file = join(home.root, "bots", "bot_ben", "groups", "key_mac-grp_team000001.md")
+    await until(() => existsSync(file) && readFileSync(file, "utf8") === memory.transcript)
+  }, 20_000)
+
+  test("what it's doing goes to the chat's computer at most every 1.5 s, the latest of it, and asked again, only the latest is said again", async () => {
     const clock = new HandClock()
     let finish = () => {}
     const seats = {
@@ -344,11 +541,18 @@ describe("a group chat with a bot on another of your computers", () => {
     } as any
     const sent: SeatMail[] = []
     const server = new SeatServer(seats, { send: (_to, mail) => { sent.push(mail); beat() } }, undefined, clock)
-    server.take("key_mac", { kind: "turn", turn: { id: "trn_busy", chat: { id, name: "Team", members: [] }, bot: "bot_ben", kind: "turn", text: "Go." } })
+    const turn = { id: "trn_busy", chat: { id, name: "Team", members: [] }, bot: "bot_ben", kind: "turn" as const, text: "Go." }
+    server.take("key_mac", { kind: "turn", turn })
     const activities = () => sent.flatMap((mail) => (mail.kind === "state" && mail.state.phase === "activity" ? [mail.state.activity] : []))
     expect(activities()).toEqual([[{ kind: "thinking", text: "one" }]])
     clock.advance(activityEvery)
     expect(activities()).toEqual([[{ kind: "thinking", text: "one" }], [{ kind: "writing" }]])
+    sent.length = 0
+    server.take("key_mac", { kind: "turn", turn })
+    expect(sent).toEqual([
+      { kind: "state", id: "trn_busy", state: { phase: "taken" } },
+      { kind: "state", id: "trn_busy", state: { phase: "activity", activity: [{ kind: "writing" }] } },
+    ])
     finish()
     await until(() => sent.some((mail) => mail.kind === "result"))
   })
@@ -361,8 +565,8 @@ describe("a group chat with a bot on another of your computers", () => {
       host.engine.lines = { Ada: ["PASS"] }
       host.runner.put(team(["bot_ben", "bot_ada"]), [], "active", false)
       host.runner.send(id, "Go")
-      await until(() => relay.sent.some((each) => each.mail.kind === "turn"))
-      const turnID = (relay.sent.find((each) => each.mail.kind === "turn")!.mail as any).turn.id
+      await until(() => turns().length > 0)
+      const turnID = (turns()[0].mail as any).turn.id
       relay.forge("key_stranger", "key_mac", { kind: "result", id: turnID, result: { ok: true, text: "Forged words.", steps: [] } })
       await over(host, () => said(host).some((message) => message.author === "bot_ben"))
       expect(said(host).map((message) => message.text)).not.toContain("Forged words.")

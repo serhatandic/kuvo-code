@@ -12,6 +12,9 @@ import type { GroupRunner } from "./runner"
 const kinds = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"])
 export const isSeatMail = (value: any): value is SeatMail => value !== null && typeof value === "object" && kinds.has(value.kind)
 
+/** Two of what a bot remembers of a chat, for the same bot and chat. */
+const sameMemory = (one: SeatMail, other: SeatMail) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat
+
 interface Line {
   id: string
   to: string
@@ -35,6 +38,8 @@ export class PeerPost implements PeerTransport {
   send(to: string, mail: SeatMail, durable: boolean) {
     const line: Line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable }
     if (durable) {
+      // What a bot remembers of a chat, the newest only: one the link hasn't taken yet goes for it.
+      if (mail.kind === "memory") this.kept = this.kept.filter((each) => !(each.to === to && sameMemory(each.mail, mail)))
       this.kept.push(line)
       this.save()
     }
@@ -140,7 +145,7 @@ export class LinkDirectory implements PeerDirectory {
     private readonly clock: Clock = realClock,
   ) {}
 
-  /** What the link says: `{boxes: [{key, name, seats}], bots: [{id, name, job, box}]}`. False for what isn't that. */
+  /** What the link says: `{boxes: [{key, name, seats}], bots: [{id, name, job, box, session?, look?}]}`. False for what isn't that. */
   set(given: any): boolean {
     if (!given || typeof given !== "object" || !Array.isArray(given.boxes) || !Array.isArray(given.bots)) return false
     const boxes = new Map<string, { name: string; seats: boolean }>()
@@ -150,7 +155,14 @@ export class LinkDirectory implements PeerDirectory {
     this.boxes = boxes
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))
-      .map((bot: any) => ({ id: bot.id, name: bot.name, job: typeof bot.job === "string" ? bot.job : "", box: bot.box, ...(typeof bot.session === "string" ? { session: bot.session } : {}) }))
+      .map((bot: any) => ({
+        id: bot.id,
+        name: bot.name,
+        job: typeof bot.job === "string" ? bot.job : "",
+        box: bot.box,
+        ...(typeof bot.session === "string" ? { session: bot.session } : {}),
+        ...(bot.look && typeof bot.look === "object" && !Array.isArray(bot.look) ? { look: bot.look } : {}),
+      }))
     return true
   }
 

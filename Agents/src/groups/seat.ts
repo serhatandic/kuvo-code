@@ -15,6 +15,9 @@ import type { GroupStore, MachineBot } from "./store"
 /** The key of a seat's instructions. */
 export const seatKey = "kuvo.seat"
 
+/** How long a seat's run may take before it's stopped. */
+export const turnLimit = 600_000
+
 /** The chat a seat is in, as the bot's computer needs it: who's there, the lead first. */
 export interface ChatContext {
   id: string
@@ -67,7 +70,8 @@ export interface SeatHome {
   turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal): Promise<SeatResult>
   /** A message of yours to its seat at work. Whether it reached it now (from another computer, it's said later: `steered`). */
   steer(seat: string, agents: boolean, text: string, message: string): Promise<boolean>
-  drop(seat: string, agents: boolean): Promise<void>
+  /** A seat gone: `bot`'s, in `chat` (on another computer, it's checked to be that before it goes). */
+  drop(seat: string, agents: boolean, owner?: { bot: string; chat: string }): Promise<void>
 }
 
 export interface SeatContext {
@@ -179,8 +183,9 @@ export class Seats implements SeatHome {
     const agent = onAgents && model?.providerID.split("@")[0] === "cursor" ? "plan" : undefined
     const text = this.seatText(bot, chat)
     const session = await api.create(bot.directory, title, agent, model, this.rules(bot))
-    await api.setMetadata(session.id, { kuvo: { seat: { group: chat.id, bot: bot.id, ...(scratch ? { scratch: true } : {}) } } }).catch(() => {})
     try {
+      // Whose seat it is, in which chat: what a chat on another computer asks of a seat is checked against it (`owns`).
+      await api.setMetadata(session.id, { kuvo: { seat: { group: chat.id, bot: bot.id, ...(scratch ? { scratch: true } : {}) } } })
       await api.setInstruction(session.id, seatKey, text)
     } catch (error) {
       await api.delete(session.id).catch(() => {})
@@ -224,6 +229,22 @@ export class Seats implements SeatHome {
     return undefined
   }
 
+  /**
+   * Whether `seat` is `bot`'s seat in `chat`, as `make` marked it: what a chat on another computer
+   * asks of a seat here is checked against this, so it can't use or delete any other conversation.
+   * `gone` when there's no such conversation, `unknown` when it can't be read now.
+   */
+  async owns(seat: string, agents: boolean, bot: string, chat: string): Promise<"yes" | "no" | "gone" | "unknown"> {
+    const api = this.apiFor(agents)
+    if (!api) return "unknown"
+    try {
+      const marked = (await api.session(seat))?.metadata?.kuvo?.seat
+      return marked?.bot === bot && marked?.group === chat ? "yes" : "no"
+    } catch (error: any) {
+      return error?.status === 404 ? "gone" : "unknown"
+    }
+  }
+
   /** A seat (or a conversation for one question) gone, with what it gathered. */
   async drop(seat: string, agents: boolean) {
     this.seatBase.delete(seat)
@@ -233,8 +254,10 @@ export class Seats implements SeatHome {
   /**
    * One turn: its seat made or kept, what it's told sent, its run waited for, and what it said.
    * `report` hears how it goes. Stopped (`signal`), it stops where it is, mid-sentence.
+   * `checkSeat`, for a turn from another computer: the seat it names is used only when it's this
+   * bot's seat in that chat (`owns`); otherwise the bot gets a seat of its own.
    */
-  async turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal): Promise<SeatResult> {
+  async turn(turn: SeatTurn, report: (state: SeatState) => void, signal: AbortSignal, checkSeat = false): Promise<SeatResult> {
     const bot = this.bot(turn.bot)
     if (!bot) return { ok: false, why: "it doesn’t live on this computer any more." }
     const going = () => {
@@ -269,7 +292,14 @@ export class Seats implements SeatHome {
         ;({ seat, agents, api } = await this.make(bot, turn.chat, title, true))
         scratch = { seat, agents }
       } else {
-        const kept = turn.seat ? await this.keep(turn, bot) : undefined
+        let ours = Boolean(turn.seat)
+        if (turn.seat && checkSeat) {
+          const owned = await this.owns(turn.seat, turn.agentsSeat ?? false, bot.id, turn.chat.id)
+          if (owned === "unknown") throw new Error("its seat couldn’t be read")
+          ours = owned === "yes"
+          going()
+        }
+        const kept = ours ? await this.keep(turn, bot) : undefined
         going()
         if (kept) {
           ;({ seat, agents, api } = kept)
@@ -517,7 +547,7 @@ export class Seats implements SeatHome {
       } else {
         idleSince = undefined
       }
-      if (Date.now() - sent > 600_000) {
+      if (Date.now() - sent > turnLimit) {
         await api.interrupt(seat).catch(() => {})
         throw new Error("It took too long, so it was stopped.")
       }

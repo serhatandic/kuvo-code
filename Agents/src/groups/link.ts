@@ -53,9 +53,17 @@ function member(bot: MachineBot) {
   return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents }
 }
 
-/** A bot on another of your computers, as a chat here lists it: who it is, its own conversation, and the computer it's on (`computer`, as its notes name it). */
+/** How a bot looks when its computer didn't say (one that's older). */
+const plainLook = { color: "graphite", shape: "round", face: "calm" }
+
+/**
+ * A bot on another of your computers, as a chat here lists it: who it is, how it looks, its own
+ * conversation there, and the computer it's on (`computer`, as its notes name it). Every field a
+ * member of this computer's has, so a client reads both alike: its folder is there, not here (empty),
+ * and its conversation empty when its computer didn't say.
+ */
 function memberThere(bot: PeerBot, runner: GroupRunner) {
-  return { id: bot.id, name: bot.name, ...(bot.session ? { session: bot.session } : {}), agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" }
+  return { id: bot.id, name: bot.name, look: bot.look ?? plainLook, session: bot.session ?? "", directory: "", agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" }
 }
 
 /** Who can be in a chat here: this computer's bots, and those of your others that take a chat's turns (`groups.seats`). */

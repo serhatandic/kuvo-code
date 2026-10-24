@@ -192,20 +192,30 @@ describe("a computer's group chats, as a client changes them", () => {
 })
 
 describe("a computer's group chats with bots on your other computers", () => {
-  test("who can be in one: this computer's bots, then those of your others that take a chat's turns; none of one that doesn't yet", async () => {
+  test("who can be in one: this computer's bots, then those of your others that take a chat's turns, each as a client reads any bot; none of one that doesn't yet", async () => {
     const post = new PeerPost()
     const directory = new LinkDirectory(post)
     runner = new GroupRunner({ store, engine: server("http://127.0.0.1:9", "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05, peers: directory })
+    const look = { color: "sky", shape: "gem", face: "happy" }
     directory.set({
       boxes: [{ key: "key_spare", name: "spare", seats: true }, { key: "key_old", name: "old", seats: false }],
-      bots: [{ id: "bot_far", name: "Far", job: "Far's job", box: "key_spare", session: "ses_far" }, { id: "bot_older", name: "Older", job: "", box: "key_old" }],
+      bots: [
+        { id: "bot_far", name: "Far", job: "Far's job", box: "key_spare", session: "ses_far", look },
+        { id: "bot_quiet", name: "Quiet", job: "", box: "key_spare" },
+        { id: "bot_older", name: "Older", job: "", box: "key_old" },
+      ],
     })
     const bots = (await ask("GET", "joinable")).json.bots
-    expect(bots.map((each: any) => each.id)).toEqual(["bot_lb", "bot_pal", "bot_far"])
-    expect(bots[2]).toEqual({ id: "bot_far", name: "Far", session: "ses_far", agents: false, computer: "spare" })
+    expect(bots.map((each: any) => each.id)).toEqual(["bot_lb", "bot_pal", "bot_far", "bot_quiet"])
+    // Every field a bot here has, so a phone reads them alike: how it looks, its conversation (empty
+    // when its computer didn't say), its folder (there, not here: empty), and where it is.
+    expect(bots[2]).toEqual({ id: "bot_far", name: "Far", look, session: "ses_far", directory: "", agents: false, computer: "spare" })
+    expect(bots[3]).toEqual({ id: "bot_quiet", name: "Quiet", look: { color: "graphite", shape: "round", face: "calm" }, session: "", directory: "", agents: false, computer: "spare" })
     const made = await ask("POST", "", { name: "Across", members: ["bot_pal", "bot_far"] })
     expect(made.status).toBe(201)
     expect(made.json.group.members.map((each: any) => [each.id, each.computer])).toEqual([["bot_pal", undefined], ["bot_far", "spare"]])
+    expect(made.json.group.members[1]).toEqual(bots[2])
+    expect((await ask("GET", "")).json.groups.find((each: any) => each.id === made.json.group.id).members[1]).toEqual(bots[2])
     expect((await ask("POST", "", { name: "Older", members: ["bot_pal", "bot_older"] })).status).toBe(404)
   })
 })
@@ -229,14 +239,37 @@ describe("the box's link and this bridge", () => {
     post.send("key_spare", { kind: "stop", id: "trn_now" }, false)
     expect((await next()).mail).toEqual({ kind: "stop", id: "trn_now" })
     expect((await peerRoutes(parts, "POST", ["sent"], async () => ({ ids: [kept.id] }))).status).toBe(200)
-    expect(new PeerPost(file).follow).toBeDefined()
+    // Once the link has it, it isn't kept: a bridge started again has nothing of it to send.
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([])
     abort.abort()
     await reader.cancel().catch(() => {})
+    const restarted = new PeerPost(file)
+    const again = restarted.follow().body!.getReader()
+    restarted.send("key_spare", { kind: "stop", id: "trn_after" }, false)
+    expect(JSON.parse(new TextDecoder().decode((await again.read()).value).trim()).mail).toEqual({ kind: "stop", id: "trn_after" })
+    await again.cancel().catch(() => {})
     expect((await peerRoutes(parts, "POST", ["mail"], async () => ({ from: "key_spare", mail: { kind: "nonsense" } }))).status).toBe(400)
     expect((await peerRoutes(parts, "PUT", [], async () => ({ boxes: "no" }))).status).toBe(400)
     expect((await peerRoutes(parts, "PUT", [], async () => ({ boxes: [{ key: "key_spare", name: "spare", seats: true }], bots: [] }))).status).toBe(200)
     expect(directory.takesSeats("key_spare")).toBe(true)
     expect((await peerRoutes(undefined, "GET", ["mail"], async () => ({}))).status).toBe(404)
+  })
+
+  test("what a bot remembers of a chat, not yet taken by the link: only the newest is kept, across a restart too", () => {
+    const file = join(root, "peer-outbox.json")
+    const post = new PeerPost(file)
+    const memory = (chat: string, recap: string, bot = "bot_far") => ({ kind: "memory" as const, memory: { chat, bot, recap } })
+    post.send("key_spare", memory("grp_one", "older"), true)
+    post.send("key_spare", memory("grp_two", "the other chat"), true)
+    post.send("key_spare", memory("grp_one", "newer"), true)
+    post.send("key_spare", memory("grp_one", "another bot's", "bot_near"), true)
+    post.send("key_other", memory("grp_one", "another computer's"), true)
+    const kept = (JSON.parse(readFileSync(file, "utf8")) as any[]).map((line) => [line.to, line.mail.memory.chat, line.mail.memory.bot, line.mail.memory.recap])
+    expect(kept).toEqual([
+      ["key_spare", "grp_two", "bot_far", "the other chat"],
+      ["key_spare", "grp_one", "bot_far", "newer"],
+      ["key_spare", "grp_one", "bot_near", "another bot's"],
+      ["key_other", "grp_one", "bot_far", "another computer's"],
+    ])
   })
 })

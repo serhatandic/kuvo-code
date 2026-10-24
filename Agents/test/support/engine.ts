@@ -37,6 +37,8 @@ export class Engine {
   private busy = new Set<string>()
   private queued = new Map<string, { id: string }[]>()
   private deleted = new Set<string>()
+  /** Each conversation's metadata, as it was set. */
+  readonly metadata = new Map<string, any>()
 
   /** `onRequest`: told after each request is noted (what a test's wait looks again on). */
   constructor(private readonly onRequest?: () => void) {
@@ -99,7 +101,12 @@ export class Engine {
     if (this.deleted.has(session)) return Response.json({ message: "No such session." }, { status: 404 })
     if (request.method === "GET" && !what) {
       const own = session.startsWith("ses_own_") ? this.ownModels[session.slice("ses_own_".length)] : undefined
-      return ok({ id: session, model: own ?? { id: "m", providerID: "p" } })
+      return ok({ id: session, model: own ?? { id: "m", providerID: "p" }, ...(this.metadata.has(session) ? { metadata: this.metadata.get(session) } : {}) })
+    }
+    // Its metadata, as the engine keeps it (a seat's says whose it is).
+    if (request.method === "PATCH" && !what && body?.metadata) {
+      this.metadata.set(session, { ...(this.metadata.get(session) ?? {}), ...body.metadata })
+      return ok()
     }
     // Steered into a run under way: it hears it at its next step, and its run goes on.
     if (what === "prompt" && body.delivery === "steer" && this.busy.has(session)) return ok()
