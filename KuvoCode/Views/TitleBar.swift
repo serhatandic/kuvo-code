@@ -220,11 +220,11 @@ struct TabStrip: View {
 
     private func menu(for tab: TabItem) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        if let openBeside, tab.id != selection, SidebarView.draftDirectory(from: tab.id) == nil, BotGroups.groupID(fromTab: tab.id) == nil, !MainTerminals.isTerminal(tab.id) {
+        if let openBeside, tab.id != selection, TabKey(tab.id).sessionID != nil {
             items += [ActionItem("Open Beside") { openBeside(tab.id) }]
         }
         // A bot or a group chat is renamed in its editor, not here.
-        if let rename, SidebarView.draftDirectory(from: tab.id) == nil, tab.bot == nil, BotGroups.groupID(fromTab: tab.id) == nil, !MainTerminals.isTerminal(tab.id) {
+        if let rename, tab.bot == nil, TabKey(tab.id).sessionID != nil {
             items += [ActionItem("Rename…") { rename(tab.id) }, .separator()]
         }
         let others = ActionItem("Close Other Tabs") { closeAll(tab.id) }
@@ -275,7 +275,7 @@ private struct TabButton: View {
                         .offset(x: 9, y: -3)
                         .opacity(0.9)
                 }
-                TabIcon(logo: tab.logo, symbol: tab.symbol ?? (SidebarView.draftDirectory(from: tab.id) == nil ? "bubble.left" : "square.and.pencil"), bot: tab.bot, botMood: tab.botMood, group: tab.group, status: tab.status)
+                TabIcon(logo: tab.logo, symbol: tab.symbol ?? (TabKey(tab.id).draftFolder == nil ? "bubble.left" : "square.and.pencil"), bot: tab.bot, botMood: tab.botMood, group: tab.group, status: tab.status)
             }
             .padding(.trailing, behind == nil ? 0 : 9)
             Text(tab.title)

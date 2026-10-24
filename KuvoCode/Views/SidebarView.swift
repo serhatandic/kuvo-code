@@ -70,10 +70,10 @@ struct SidebarView: View {
     private static let recentCount = 8
 
     /// The selection tag of a project's not-yet-sent new session.
-    static func draftTag(_ directory: String) -> String { "draft:" + directory }
+    static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
 
     static func draftDirectory(from tag: String) -> String? {
-        tag.hasPrefix("draft:") ? String(tag.dropFirst("draft:".count)) : nil
+        TabKey(tag).draftFolder
     }
 
     var body: some View {

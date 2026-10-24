@@ -31,6 +31,9 @@ final class AppModel {
     /// The panel's browser as MCP tools for the agent.
     @ObservationIgnored private(set) lazy var browserTools = BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
     let workspace = Workspace()
+    /// The main window's tabs; one window, so one set. Stores open tabs in it, also while the
+    /// window is closed.
+    @ObservationIgnored private(set) lazy var tabs = WindowTabs(app: self)
     /// Other computers whose engines run over SSH, next to this Mac's.
     let machines = Machines()
     let usage = UsageAccounts()
@@ -111,17 +114,24 @@ final class AppModel {
     }
 
     /// Something to open from outside the window: a folder dropped on the Dock icon or opened with
-    /// Kuvo Code, or a pick from the Dock menu. The main window takes it when it's there.
+    /// Kuvo Code, a pick from the Dock menu, a notification clicked.
     enum Request: Equatable {
         case folder(String)
+        /// A session's tab, or any other's by its key (`group:<id>`).
         case session(String)
         case newSession
         /// A shared bot's file, opened in Finder: New Bot, from it.
         case bot(BotRecipe)
     }
-    var request: Request?
 
-    /// Shows the main window and hands it `request`.
+    init() {
+        // The window's own: where a fork or a move opens, and where the panel adds to a message.
+        workspace.tabs = tabs
+        utilities.addToMessage = { [weak self] in self?.tabs.addToMessage($0) }
+        utilities.attachToMessage = { [weak self] in self?.tabs.attachToMessage($0) }
+    }
+
+    /// Shows the main window, with `request` open in it.
     func open(_ request: Request) {
         #if DEBUG
         // A demo copy launched with KUVO_DEMO_BACKGROUND stays behind, so it never takes the keyboard
@@ -134,7 +144,12 @@ final class AppModel {
             openMainWindow?()
             NSApp.activate()
         }
-        self.request = request
+        switch request {
+        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
+        case .session(let id): tabs.open(TabKey(id))
+        case .newSession: tabs.newSession(in: nil)
+        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
+        }
     }
 
     private var server: ServerProcess?
