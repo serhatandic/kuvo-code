@@ -463,11 +463,12 @@ itself. A host serves:
     `…/session/<id>/fork {before}` makes a new session from a message.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and (from
   bridge 0.7.5) a machine, as Settings › Accounts has them: the phone sees and signs in to them,
-  and (from bridge 0.8.0) reads them as the app does. A machine's plans that its Mac
-  also has a key or a sign-in for that stays the same (Copilot's) follow the Mac's: each time
-  the Mac connects, its own replaces what's in use there. Change those on the Mac, or with the
-  Mac's own routes; a change made on the machine lasts for plans the Mac has none of, and for
-  sign-ins that renew themselves (ChatGPT's, GitLab's), which each machine keeps its own of.
+  and (from bridge 0.8.0) reads them as the app does. Each computer keeps its own: a new
+  machine starts with a copy of its Mac's keys and of a sign-in that stays the same (Copilot's),
+  once, and from then on what's changed on the machine (its Accounts page, or a phone there) is
+  the machine's. A sign-in that renews itself (ChatGPT's, GitLab's) is never copied: each machine
+  signs in itself. (A machine whose settings its Mac still keeps, a bridge before 0.9.12, follows
+  the Mac's each time the Mac connects.)
   - `GET api/integration` and `GET api/integration/<id>`: each plan, its ways to sign in
     (`methods`) and what it's signed in as (`connections`: label and status).
   - A key: `POST api/integration/<id>/connect/key {key, answer?}`.
@@ -490,7 +491,10 @@ itself. A host serves:
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
   settings, so this Mac's (`kuvo/config`) don't reach it (as it was when it last connected).
   `removed`: this Mac removed it (it runs on there), and `DELETE kuvo/hosts/<id>` forgets it for
-  your phones (`200 {}`; `404` for none; `409 {"message"}` for one this Mac still has).
+  your phones (`200 {}`; `404` for none; `409 {"message"}` for one this Mac still has). It's on
+  every entry, `false` too, from the Mac whose Remove leaves a machine running (and has
+  `…/uninstall`); a Mac before that leaves it out, and its `DELETE kuvo/machines/<id>`
+  uninstalls.
 - `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
   conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
   agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the

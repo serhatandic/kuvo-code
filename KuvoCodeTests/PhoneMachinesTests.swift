@@ -124,6 +124,8 @@ import Testing
         }
         let hosts = try #require(try await ask("kuvo/hosts").json["hosts"] as? [[String: Any]])
         #expect(hosts.map { "\($0["machine"] as? String ?? "") \($0["removed"] as? Bool ?? false)" } == ["box false", "gone.invalid true"])
+        // On every one, false too: a phone tells a Mac whose Remove leaves machines running by it.
+        #expect(hosts.allSatisfy { $0["removed"] is Bool })
         #expect(try await ask("kuvo/hosts/box", method: "DELETE").status == 409)
         #expect(try await ask("kuvo/hosts/gone.invalid", method: "DELETE").status == 200)
         #expect((try await ask("kuvo/hosts").json["hosts"] as? [[String: Any]])?.map { $0["machine"] as? String } == ["box"])

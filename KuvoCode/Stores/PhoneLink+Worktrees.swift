@@ -29,14 +29,25 @@ extension PhoneLink {
                 return (502, Self.message(error.localizedDescription))
             }
         case ("POST", "kuvo/worktrees/remove"):
-            guard let root = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["path"] as? String,
+            let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
+            guard let root = given["path"] as? String,
                   let (folder, tree) = workspace.worktrees.first(where: { $0.value.root == root && RemoteFolder.machine(of: $0.value.root) == nil }).map({ ($0.key, $0.value) })
             else { return (404, Data("{}".utf8)) }
             if workspace.api(forFolder: folder) == nil {
                 return (409, Self.message("This Mac's engine isn't running, so the worktree of \(tree.branch) can't be removed now."))
             }
+            // Made for a session that never started: taken back, branch and all, as the composer
+            // takes one back (not one you removed).
+            if given["forget"] as? Bool == true {
+                if workspace.sessions.contains(where: { workspace.worktrees[$0.location.directory]?.root == tree.root && workspace.isWorking($0.id) }) {
+                    return (409, Self.message("An agent is still working in the worktree of \(tree.branch), so it stays. Stop it first, then remove the worktree."))
+                }
+                await workspace.discardWorktree(folder)
+                return (200, Data("{}".utf8))
+            }
             do {
-                try await workspace.removeWorktree(folder)
+                // With changes not committed only when they're to go (`"discard": false` keeps one that has some).
+                try await workspace.removeWorktree(folder, discardingChanges: given["discard"] as? Bool != false)
                 return (200, Data("{}".utf8))
             } catch let refused as GitFailure {
                 return (409, Self.message(refused.message))
