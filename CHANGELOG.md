@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A group chat that lives on a machine can have bots from your other machines: Edit Group Chat offers them, and each takes its turn, does its part of the work and remembers the chat on its own machine, with your Mac closed too. While one's machine can't be reached, the chat says so and carries on without it.
+- A meeting you set up for a group chat on a machine is worked out on that machine's clock: one whose time passed while the editor was open comes at its next round, rather than at once.
 - Your machines keep each other up to date on which computers are yours and on your personalities with your Mac closed, signed by the computer each change came from, so none can pass on one it made up, and a computer whose clock is wrong no longer decides which change wins. A personality you delete stays deleted everywhere, and a change that would make your personalities too big to share is turned down with a message, in the bot editor and from your phone.
 - Each computer keeps its own projects, with their names and folders: your Mac's in Kuvo Code's own box beside its engine, and a machine's on the machine, so another Mac connected to it sees the same ones. The projects you have now move there the first time; the sidebar looks as it did.
 - A search with + in it, like c++, typed in the panel browser's address field searches for what you typed rather than for c.

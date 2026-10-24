@@ -14,6 +14,7 @@ import { setToolServer } from "./kuvotools"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
 import { linkRoutes } from "./groups/link"
+import { peerRoutes, type PeerParts } from "./groups/post"
 import { groupRoutes } from "./groups/routes"
 import type { GroupRunner } from "./groups/runner"
 import type { GroupStore } from "./groups/store"
@@ -27,8 +28,8 @@ export interface Context {
   link: EngineLink
   password: string
   version: string
-  /** On a machine, its group chats (groups/runner.ts); none on the Mac, which runs its own. */
-  groups?: { runner: GroupRunner; store: GroupStore }
+  /** The group chats that live on this computer (groups/runner.ts), and its part in those on your others; none where they don't run here. */
+  groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
 }
 
 const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created: number; expires: number }>()
@@ -442,6 +443,8 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)
+      // Group chats across your computers, as the box's link carries their mail (groups/post.ts).
+      if (area === "kuvo" && a === "peers") return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal)
 
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body()

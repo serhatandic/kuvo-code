@@ -894,6 +894,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "engine.restart": ["GET", "kuvo/engine/restart"],
     "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
+    // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
+    "groups.seats": ["GET", "kuvo/groups/joinable"],
     integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"],
     personalities: ["GET", "kuvo/personalities"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],

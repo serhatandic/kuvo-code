@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -162,5 +163,87 @@ import Testing
         try await groups.send("Morning.", to: made.id)
         try await until { groups.messages(in: made.id).contains { $0.text == "Morning." } && !groups.discussing.contains(made.id) }
         #expect(!groups.messages(in: made.id).contains { $0.kind == .meeting }, "it didn't meet at once")
+    }
+
+    /// Who can be in a machine's chat is what the machine says: its own bots, and those of your
+    /// other computers that take a chat's turns there, not one of a computer that doesn't yet.
+    @Test func whoCanBeInAMachinesChatIsWhatTheMachineSays() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        try bots()
+        serve(Seats(lines: [:]))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder, environment: [
+            "KUVO_GROUPS": folder.appending(path: "groups").path, "KUVO_BOTS": folder.appending(path: "bots").path, "KUVO_TRASH": folder.appending(path: "trash").path,
+        ])
+        defer { bridge.stop() }
+        let api = try #require(bridge.api)
+        let groups = BoxGroups()
+        groups.bridge = { [machine] in $0 == machine ? api : nil }
+        // Who its link says your other computers and their bots are.
+        let peers: JSONValue = .object([
+            "boxes": .array([.object(["key": .string("key_spare"), "name": .string("spare.invalid"), "seats": .bool(true)]),
+                             .object(["key": .string("key_old"), "name": .string("old.invalid"), "seats": .bool(false)])]),
+            "bots": .array([.object(["id": .string("bot_far"), "name": .string("Far"), "job": .string(""), "box": .string("key_spare")]),
+                            .object(["id": .string("bot_older"), "name": .string("Older"), "job": .string(""), "box": .string("key_old")])]),
+        ])
+        _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/peers", body: peers), as: JSONValue.self)
+
+        #expect(await groups.joinable(machine) == ["bot_ada", "bot_ben", "bot_far"])
+        #expect(await groups.joinable("away.invalid") == nil, "a machine that isn't there says nothing")
+    }
+
+    /// A phone's change to a machine's chat is answered by that machine, as when the phone asks it
+    /// directly: a bot of your other computers it says can join goes in (one this Mac doesn't list
+    /// too), and what it refuses is refused in its words.
+    @Test func aPhonesChangeToAMachinesChatIsWhatTheMachineSays() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: folder)
+            for name in ["machine-groups.json", "machine-groups"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name)) }
+        }
+        try bots()
+        serve(Seats(lines: [:]))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder, environment: [
+            "KUVO_GROUPS": folder.appending(path: "groups").path, "KUVO_BOTS": folder.appending(path: "bots").path, "KUVO_TRASH": folder.appending(path: "trash").path,
+        ])
+        defer { bridge.stop() }
+        let api = try #require(bridge.api)
+        let groups = BoxGroups()
+        groups.bridge = { [machine] in $0 == machine ? api : nil }
+        let made = BotGroup(id: "grp_crew000001", name: "Crew", members: ["bot_ada", "bot_ben"], created: .now, viewed: .now)
+        try await api.putBoxGroup(made, messages: [], held: false)
+        await groups.connected(machine)
+        let peers: JSONValue = .object([
+            "boxes": .array([.object(["key": .string("key_spare"), "name": .string("spare.invalid"), "seats": .bool(true)])]),
+            "bots": .array([.object(["id": .string("bot_far"), "name": .string("Far"), "job": .string(""), "box": .string("key_spare")])]),
+        ])
+        _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/peers", body: peers), as: JSONValue.self)
+        let link = PhoneLink()
+        let chats = GroupChats(mac: BotGroups(), machines: groups)
+        link.groups = chats
+        func change(_ body: [String: Any]) async throws -> (status: Int, message: String?) {
+            var status = 0
+            var answer = Data()
+            let request = LinkRequest(method: "PATCH", path: "kuvo/groups/\(made.id)", body: try JSONSerialization.data(withJSONObject: body))
+            for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: engine.url + "/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let data): answer += data
+                }
+            }
+            return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["message"] as? String)
+        }
+
+        let joined = try await change(["members": ["bot_ada", "bot_far"], "name": " Crew two "])
+        #expect(joined.status == 200, "\(joined)")
+        #expect(groups.group(made.id)?.members == ["bot_ada", "bot_far"], "as the machine has it now")
+        #expect(groups.group(made.id)?.name == "Crew two")
+        let stranger = try await change(["members": ["bot_ada", "bot_nobody"]])
+        #expect(stranger.status == 404 && stranger.message == "There’s no bot “bot_nobody”.", "\(stranger)")
+        let nameless = try await change(["name": " "])
+        #expect(nameless.status == 400 && nameless.message == "A group chat needs a name.", "\(nameless)")
+        #expect(groups.group(made.id)?.members == ["bot_ada", "bot_far"], "nothing changed by what was refused")
     }
 }

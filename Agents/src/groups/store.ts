@@ -47,6 +47,7 @@ const isDate = (value: unknown): value is string => typeof value === "string" &&
 export function isGroup(value: any, id: string): value is Group {
   if (!value || value.id !== id || typeof value.name !== "string" || !strings(value.members) || !isDate(value.created)) return false
   if (!stringMap(value.seats) || !stringMap(value.heard)) return false
+  if (value.seatBoxes !== undefined && !stringMap(value.seatBoxes)) return false
   if (value.purpose !== undefined && value.purpose !== null && typeof value.purpose !== "string") return false
   if (value.agentSeats !== undefined && !strings(value.agentSeats)) return false
   if (value.retracted !== undefined && value.retracted !== null && !stringMap(value.retracted)) return false
@@ -80,6 +81,36 @@ export function isMessages(value: unknown): value is GroupMessage[] {
             message.tasks.every((task: any) => task && typeof task.id === "string" && typeof task.bot === "string" && typeof task.task === "string" && states.has(task.state)))),
     )
   )
+}
+
+/** A chat on another computer, as a bot here remembers it. */
+export interface PeerMemory {
+  name: string
+  with: string[]
+  recap: string
+  /** Its transcript, in the bot's folder. */
+  file: string
+  /** When it last moved on. */
+  time: string
+  /** When its computer said this (its clock, milliseconds): what it says later is newer. */
+  at?: number
+}
+
+/** How long a chat a bot forgot is remembered as forgotten: longer than its computer's mail is sent again. */
+const forgottenFor = 3 * 86_400_000
+
+/** A part of a chat on another computer, given to a bot here. */
+export interface PeerWork {
+  /** The chat's computer, by key. */
+  host: string
+  chat: string
+  wrapUp: string
+  bot: string
+  /** Its message in the bot's own conversation, once it went there. */
+  prompt?: string
+  started: string
+  /** How it went, once it did: told again until the chat's computer has it. */
+  done?: boolean
 }
 
 /** One of the machine's bots, as its folder has it. */
@@ -230,6 +261,61 @@ export class GroupStore {
       ...(described.look !== undefined ? { look: described.look } : {}),
       ...(typeof described.created === "string" ? { created: described.created } : {}),
     }
+  }
+
+  // MARK: Chats on your other computers
+
+  /** What chats on other computers said a bot here remembers of them, by `<computer>/<chat>`. */
+  peerMemory(bot: string): Record<string, PeerMemory> {
+    const entries = this.peerEntries(bot)
+    return Object.fromEntries(Object.entries(entries).filter(([, entry]) => !entry.forgotten)) as Record<string, PeerMemory>
+  }
+
+  /** When its computer last said what a bot here remembers of a chat there (`<computer>/<chat>`), or that it forgets it: what's older is refused. */
+  peerMemoryAt(bot: string, key: string): number {
+    const at = this.peerEntries(bot)[key]?.at
+    return typeof at === "number" ? at : 0
+  }
+
+  private peerEntries(bot: string): Record<string, any> {
+    const all = read(join(this.root, "peer-memory.json"))
+    const entries = all && typeof all === "object" ? all[bot] : undefined
+    return entries && typeof entries === "object" ? entries : {}
+  }
+
+  keepPeerMemory(bot: string, key: string, memory: PeerMemory) {
+    this.changePeerMemory(bot, (entries) => (entries[key] = memory))
+  }
+
+  /** Forgotten: what comes of it later, but said before (`at`), is refused for a while. */
+  forgetPeerMemory(bot: string, key: string, at?: number) {
+    this.changePeerMemory(bot, (entries) => {
+      if (typeof at === "number" && at > 0) entries[key] = { forgotten: true, at, time: new Date().toISOString() }
+      else delete entries[key]
+    })
+  }
+
+  private changePeerMemory(bot: string, change: (entries: Record<string, any>) => void) {
+    const all = read(join(this.root, "peer-memory.json")) ?? {}
+    const entries: Record<string, any> = { ...(all[bot] ?? {}) }
+    change(entries)
+    for (const [key, entry] of Object.entries(entries)) if (entry?.forgotten && !(Date.now() - Date.parse(entry.time) < forgottenFor)) delete entries[key]
+    if (Object.keys(entries).length === 0) delete all[bot]
+    else all[bot] = entries
+    write(join(this.root, "peer-memory.json"), all)
+  }
+
+  /** Parts of chats on other computers that bots here are doing, followed until they report (across restarts), by the part's id. */
+  peerWork(): Record<string, PeerWork> {
+    const all = read(join(this.root, "peer-work.json"))
+    return all && typeof all === "object" ? all : {}
+  }
+
+  keepPeerWork(task: string, work: PeerWork | undefined) {
+    const all = this.peerWork()
+    if (work) all[task] = work
+    else delete all[task]
+    write(join(this.root, "peer-work.json"), all)
   }
 
   /** A chat's transcript in a bot's folder, for it to read (written whole, only this user can read it). */

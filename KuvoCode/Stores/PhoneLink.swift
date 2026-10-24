@@ -2092,11 +2092,29 @@ final class PhoneLink {
     /// `PATCH kuvo/groups/<id>`: its name, purpose, bots or meeting changed, as Edit Group Chat
     /// changes them: `{name?, purpose?, members?, meeting?}`, a meeting as `GivenMeeting` (null
     /// for none, an empty purpose for none). Answers 200 `{group}`, as `kuvo/groups` lists it;
-    /// 404 for no such chat, 400 for what can't be, 409 while it moves.
+    /// 404 for no such chat, 400 for what can't be, 409 while it moves. A machine's chat is the
+    /// machine's to answer: the change goes there as it came, and its answer comes back.
     func changeGroup(_ id: String, with body: Data) async -> (Int, Data) {
-        guard let groups, let bots else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
+        guard let groups else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
         guard !id.contains("/"), var group = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
         guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return (400, Self.message("That isn’t a change to a group chat.")) }
+        // One that lives on a machine: that machine answers it, with its rules (who can join, a
+        // meeting on its clock), as it does a phone that asks it.
+        if groups.machine(of: id) != nil {
+            guard let asked = try? JSONDecoder().decode(JSONValue.self, from: body) else { return (400, Self.message("That isn’t a change to a group chat.")) }
+            do {
+                try await groups.changeThere(id, asked)
+            } catch Moves.Failure.moving {
+                return (409, Self.message("That chat is moving. Try again once it’s there."))
+            } catch let refused as ServerError where [400, 404, 409].contains(refused.status) {
+                return (refused.status, Self.message(refused.message))
+            } catch {
+                return (503, Self.message(error.localizedDescription))
+            }
+            guard let changed = groups.group(id) else { return (404, Self.message("That group chat isn’t there any more.")) }
+            return (200, (try? Self.groupEncoder.encode(["group": entry(changed, in: groups)])) ?? Data())
+        }
+        guard let bots else { return (503, Self.message("Group chats aren’t ready yet. Try again in a moment.")) }
         if fields["name"] != nil {
             let name = Bots.oneLine(fields["name"] as? String ?? "")
             guard !name.isEmpty else { return (400, Self.message("A group chat needs a name.")) }
@@ -2111,12 +2129,8 @@ final class PhoneLink {
             var members: [String] = []
             for member in list where !members.contains(member) { members.append(member) }
             guard members.count >= 2 else { return (400, Self.message("A group chat needs at least two bots.")) }
+            // This Mac's chat can have any bot, as Edit Group Chat allows.
             if let missing = members.first(where: { bots.bot($0) == nil }) { return (404, Self.message("There’s no bot “\(missing)”.")) }
-            // One that lives on a machine has only bots that live there; one on this Mac, any bot,
-            // as Edit Group Chat allows.
-            if let machine = groups.machine(of: id), let stranger = members.first(where: { bots.bot($0)?.machine != machine }) {
-                return (400, Self.message("\(bots.bot(stranger)?.name ?? "That bot") doesn’t live where this chat does."))
-            }
             group.members = members
         }
         if let given = fields["meeting"] {

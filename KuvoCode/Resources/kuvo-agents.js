@@ -1,6 +1,6 @@
 // @bun
 // Agents/src/main.ts
-import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync18, renameSync as renameSync7, rmSync as rmSync12, writeFileSync as writeFileSync13 } from "fs";
+import { mkdirSync as mkdirSync15, readdirSync as readdirSync8, readFileSync as readFileSync19, renameSync as renameSync8, rmSync as rmSync12, writeFileSync as writeFileSync14 } from "fs";
 import { join as join19 } from "path";
 
 // Agents/src/accounts.ts
@@ -10959,9 +10959,6 @@ function guests(all, members, bots) {
   return mentions(ownWords2(last2.text), bots.filter((bot) => !members.includes(bot.id) && bot.id !== last2.author));
 }
 var seatBudget = 30000;
-function outgrew(size, chat) {
-  return size > seatBudget && size > 2 * Math.floor(new TextEncoder().encode(chat).length / 4);
-}
 function splitText(names, said2) {
   let text = `For the app, not the chat: list who does what next, from what was decided, one line for each bot with work, as
 &Name: what they do, with what they need to know
@@ -11326,6 +11323,8 @@ function isGroup(value, id) {
     return false;
   if (!stringMap(value.seats) || !stringMap(value.heard))
     return false;
+  if (value.seatBoxes !== undefined && !stringMap(value.seatBoxes))
+    return false;
   if (value.purpose !== undefined && value.purpose !== null && typeof value.purpose !== "string")
     return false;
   if (value.agentSeats !== undefined && !strings(value.agentSeats))
@@ -11350,6 +11349,7 @@ var states = new Set(["proposed", "waiting", "working", "done", "failed"]);
 function isMessages(value) {
   return Array.isArray(value) && value.every((message) => message && typeof message.id === "string" && typeof message.text === "string" && isDate(message.time) && kinds2.has(message.kind) && (message.author === undefined || message.author === null || typeof message.author === "string") && (message.tasks === undefined || Array.isArray(message.tasks) && message.tasks.every((task) => task && typeof task.id === "string" && typeof task.bot === "string" && typeof task.task === "string" && states.has(task.state))));
 }
+var forgottenFor = 3 * 86400000;
 var read = (file) => {
   try {
     return JSON.parse(readFileSync16(file, "utf8"));
@@ -11475,6 +11475,55 @@ class GroupStore {
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {}
     };
+  }
+  peerMemory(bot) {
+    const entries = this.peerEntries(bot);
+    return Object.fromEntries(Object.entries(entries).filter(([, entry]) => !entry.forgotten));
+  }
+  peerMemoryAt(bot, key) {
+    const at = this.peerEntries(bot)[key]?.at;
+    return typeof at === "number" ? at : 0;
+  }
+  peerEntries(bot) {
+    const all = read(join17(this.root, "peer-memory.json"));
+    const entries = all && typeof all === "object" ? all[bot] : undefined;
+    return entries && typeof entries === "object" ? entries : {};
+  }
+  keepPeerMemory(bot, key, memory) {
+    this.changePeerMemory(bot, (entries) => entries[key] = memory);
+  }
+  forgetPeerMemory(bot, key, at) {
+    this.changePeerMemory(bot, (entries) => {
+      if (typeof at === "number" && at > 0)
+        entries[key] = { forgotten: true, at, time: new Date().toISOString() };
+      else
+        delete entries[key];
+    });
+  }
+  changePeerMemory(bot, change) {
+    const all = read(join17(this.root, "peer-memory.json")) ?? {};
+    const entries = { ...all[bot] ?? {} };
+    change(entries);
+    for (const [key, entry] of Object.entries(entries))
+      if (entry?.forgotten && !(Date.now() - Date.parse(entry.time) < forgottenFor))
+        delete entries[key];
+    if (Object.keys(entries).length === 0)
+      delete all[bot];
+    else
+      all[bot] = entries;
+    write(join17(this.root, "peer-memory.json"), all);
+  }
+  peerWork() {
+    const all = read(join17(this.root, "peer-work.json"));
+    return all && typeof all === "object" ? all : {};
+  }
+  keepPeerWork(task, work) {
+    const all = this.peerWork();
+    if (work)
+      all[task] = work;
+    else
+      delete all[task];
+    write(join17(this.root, "peer-work.json"), all);
   }
   writeFile(path, contents) {
     mkdirSync13(join17(path, ".."), { recursive: true });
@@ -11766,15 +11815,29 @@ function clientMessage(message2, withSteps = true) {
 function member(bot) {
   return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents };
 }
+var plainLook = { color: "graphite", shape: "round", face: "calm" };
+function memberThere(bot, runner) {
+  return { id: bot.id, name: bot.name, look: bot.look ?? plainLook, session: bot.session ?? "", directory: "", agents: false, computer: runner.peers?.name(bot.box) ?? "another computer" };
+}
+function bots(runner, store) {
+  const here = store.allBots().sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name));
+  const ids = new Set(here.map((bot) => bot.id));
+  const there = (runner.peers?.bots() ?? []).filter((bot) => !ids.has(bot.id) && runner.peers?.takesSeats(bot.box));
+  return { here, there };
+}
+function anyMember(id, runner, store) {
+  const bot = store.bot(id);
+  if (bot)
+    return member(bot);
+  const there = runner.peers?.bots().find((each) => each.id === id);
+  return there ? memberThere(there, runner) : undefined;
+}
 function list(runner, store) {
   const groups = runner.list().filter((chat) => chat.status === "active").map(({ group, state, said: said3, fromBot }) => ({
     id: group.id,
     name: group.name,
     purpose: group.purpose,
-    members: group.members.flatMap((id) => {
-      const bot = store.bot(id);
-      return bot ? [member(bot)] : [];
-    }),
+    members: group.members.flatMap((id) => anyMember(id, runner, store) ?? []),
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
@@ -11850,14 +11913,18 @@ async function ask(runner, store, method, parts2, body = {}) {
   const value = await response.json().catch(() => ({}));
   return { status: response.status, value };
 }
-function joinable(store) {
-  return store.allBots().sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name)).map(member);
+function joinable(runner, store) {
+  const { here, there } = bots(runner, store);
+  return [...here.map(member), ...there.map((bot) => memberThere(bot, runner))];
 }
 async function linkRoutes(runner, store, method, parts2, body, signal) {
   if (!runner || !store)
     return json2({}, 404);
   const [id, action] = parts2;
-  const here = () => new Set(store.allBots().map((bot) => bot.id));
+  const here = () => {
+    const { here: here2, there } = bots(runner, store);
+    return new Set([...here2, ...there].map((bot) => bot.id));
+  };
   if (!id || id === "events") {
     if (method === "GET")
       return id ? following(() => list(runner, store), false, signal) : json2(list(runner, store));
@@ -11868,7 +11935,7 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
     return json2({}, 405);
   }
   if (id === "joinable")
-    return method === "GET" ? json2({ bots: joinable(store) }) : json2({}, 405);
+    return method === "GET" ? json2({ bots: joinable(runner, store) }) : json2({}, 405);
   if (!/^grp_[a-z0-9]+$/.test(id))
     return json2({}, 404);
   if (method === "GET" && (!action || action === "events")) {
@@ -11897,8 +11964,8 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
       const members = [...new Set(given2.members)];
       if (members.length < 2)
         return message(400, "A group chat needs at least two bots.");
-      const bots = here();
-      const missing = members.find((each) => !bots.has(each));
+      const bots2 = here();
+      const missing = members.find((each) => !bots2.has(each));
       if (missing)
         return message(404, `There\u2019s no bot \u201C${missing}\u201D.`);
       edits2.members = members;
@@ -11983,562 +12050,8 @@ async function make(runner, store, given, here) {
   return json2({ group: list(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
 }
 
-// Agents/src/server.ts
-var attempts = new Map;
-function cancelSignIns() {
-  for (const pending of attempts.values())
-    pending.attempt.cancel();
-  attempts.clear();
-}
-setInterval(() => {
-  for (const [id, pending] of attempts) {
-    if (Date.now() < pending.expires + 60000)
-      continue;
-    pending.attempt.cancel();
-    attempts.delete(id);
-  }
-}, 60000).unref?.();
-var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var located = (value) => json3({ location: { directory: process.cwd() }, data: value });
-var error2 = (status, message2) => json3({ message: message2 }, status);
-var lastSeen = new Map;
-var lastMaintained = new Map;
-async function maintainedSoon(agent, fresh) {
-  if (!agent.maintenance)
-    return;
-  let answered = false;
-  const asked = agent.maintenance(fresh).then((value2) => {
-    const changed = JSON.stringify(lastMaintained.get(agent.providerID)) !== JSON.stringify(value2);
-    lastMaintained.set(agent.providerID, value2);
-    if (answered && changed)
-      emit("integration.updated", { integrationID: agent.providerID });
-    return value2;
-  }, () => lastMaintained.get(agent.providerID));
-  const value = await Promise.race([asked, Bun.sleep(2000).then(() => lastMaintained.get(agent.providerID))]);
-  answered = true;
-  return value;
-}
-async function integration(agent, fresh = false, auto) {
-  const [account, maintained] = await Promise.all([
-    agent.account(fresh).catch((error3) => ({ installed: false, signedIn: false, message: String(error3?.message ?? error3) })),
-    maintainedSoon(agent, fresh)
-  ]);
-  const seen = JSON.stringify([account.installed, account.signedIn, account.label]);
-  const before = lastSeen.get(agent.providerID);
-  lastSeen.set(agent.providerID, seen);
-  if (before !== undefined && before !== seen) {
-    agent.forgetModels?.();
-    emit("integration.updated", { integrationID: agent.providerID });
-    if (account.signedIn && auto?.release(agent.providerID))
-      emit("kuvo.auto.updated", {});
-  }
-  return {
-    id: agent.providerID,
-    name: agent.name,
-    metadata: {
-      source: "agent",
-      agent: agent.id,
-      accountID: agent.instance.id,
-      accountLabel: agent.instance.label,
-      installed: account.installed,
-      message: account.message,
-      signInEnded: account.ended ?? false,
-      account: account.label,
-      install: agent.install,
-      signsOut: Boolean(agent.signOut),
-      version: maintained?.installed,
-      latestVersion: maintained?.latest,
-      outdated: maintained ? isOutdated(maintained) : false,
-      updateCommand: maintained?.shown,
-      updates: Boolean(agent.update && maintained?.command),
-      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely)
-    },
-    methods: agent.methods(),
-    connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : "Signed in" } }] : []
-  };
-}
-async function models(agents) {
-  const lists = await Promise.all(agents.map(async (agent) => {
-    try {
-      const account = await agent.account();
-      return account.signedIn ? await agent.models() : [];
-    } catch {
-      return [];
-    }
-  }));
-  return lists.flat();
-}
-function page(items2, url) {
-  const limit2 = Number(url.searchParams.get("limit") ?? 100) || 100;
-  const cursor = url.searchParams.get("cursor");
-  let start = 0;
-  if (cursor) {
-    const after = cursor.split(":")[1];
-    const index = items2.findIndex((item) => item.id === after);
-    start = index >= 0 ? index + 1 : items2.length;
-  }
-  const data = items2.slice(start, start + limit2);
-  const order = cursor?.split(":", 1)[0] ?? url.searchParams.get("order") ?? "desc";
-  const filter = url.searchParams.get("parentID") ?? cursor?.split(":")[2];
-  const next2 = start + limit2 < items2.length && data.length ? `${order}:${data[data.length - 1].id}${filter ? `:${filter}` : ""}` : undefined;
-  return { data, cursor: { next: next2 } };
-}
-function handler(context) {
-  const expected = "Basic " + Buffer.from(`opencode:${context.password}`).toString("base64");
-  const { sessions, roster, auto, link: link2 } = context;
-  const agentFor = (id) => roster.find(id);
-  return async (request) => {
-    if (request.headers.get("authorization") !== expected)
-      return error2(401, "Unauthorized");
-    const url = new URL(request.url);
-    const parts2 = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-    const method = request.method;
-    const body = async () => request.headers.get("content-type")?.includes("json") ? await request.json().catch(() => ({})) : {};
-    try {
-      if (parts2[0] !== "api")
-        return error2(404, "Not found");
-      const [, area, a, b, c, d, e] = parts2;
-      if (area === "info")
-        return json3({ version: context.version, pid: process.pid });
-      if (area === "event")
-        return feed();
-      if (area === "integration") {
-        if (!a) {
-          const fresh = url.searchParams.get("fresh") === "1";
-          if (fresh)
-            await refreshLoginPath();
-          return located(await Promise.all(roster.all().map((agent2) => integration(agent2, fresh, auto))));
-        }
-        const agent = agentFor(a);
-        if (!agent)
-          return error2(404, `No agent ${a}.`);
-        if (!b)
-          return located(await integration(agent, true, auto));
-        if (b === "connect" && c === "oauth") {
-          if (!d && method === "POST") {
-            const { methodID, remote } = await body();
-            if (!agent.signIn)
-              return error2(400, `${agent.name} signs in another way.`);
-            if (remote === true && !agent.signsInRemotely)
-              return error2(400, `Sign in to ${agent.name} on the computer it runs on: its page comes back there.`);
-            const attempt = await agent.signIn(methodID, { remote: remote === true });
-            const id = newID("att");
-            const created = Date.now();
-            const expires = created + 30 * 60000;
-            attempts.set(id, { agent, attempt, created, expires });
-            return located({ attemptID: id, url: attempt.url, instructions: attempt.instructions, mode: attempt.mode, acceptsCode: attempt.acceptsCode || undefined, userCode: attempt.userCode, time: { created, expires } });
-          }
-          const pending = d ? attempts.get(d) : undefined;
-          if (!pending)
-            return error2(404, "That sign-in is over. Start it again.");
-          if (method === "GET" && !e) {
-            const expired = Date.now() > pending.expires;
-            const status = expired ? { status: "expired" } : pending.attempt.status();
-            if (expired)
-              pending.attempt.cancel();
-            if (status.status !== "pending")
-              attempts.delete(d);
-            return located(status);
-          }
-          if (method === "POST" && e === "complete") {
-            const { code } = await body();
-            if (!pending.attempt.complete)
-              return error2(400, "This sign-in finishes in the browser.");
-            await pending.attempt.complete(String(code ?? ""));
-            return json3({});
-          }
-          if (method === "DELETE") {
-            pending.attempt.cancel();
-            attempts.delete(d);
-            return json3({});
-          }
-        }
-        if (b === "connect" && c === "key" && method === "POST") {
-          const { key } = await body();
-          if (!agent.signInWithKey)
-            return error2(400, `${agent.name} doesn't take a key here.`);
-          await agent.signInWithKey(String(key ?? "").trim());
-          return json3({});
-        }
-        if (b === "update" && method === "POST") {
-          if (!agent.update)
-            return error2(400, `Update ${agent.name} the way you installed it.`);
-          const result = await agent.update();
-          if (result.updated) {
-            for (const each of roster.all())
-              if (each.id === agent.id)
-                each.programUpdated?.();
-            emit("integration.updated", { integrationID: agent.providerID });
-            emit("model.updated", {});
-          }
-          return json3({ data: result });
-        }
-        if (b === "install" && method === "POST") {
-          if (!agent.installProgram)
-            return error2(400, `Install ${agent.name} the way its maker says.`);
-          const result = await agent.installProgram();
-          if (result.installed) {
-            for (const each of roster.all())
-              if (each.id === agent.id)
-                each.programUpdated?.();
-            emit("integration.updated", { integrationID: agent.providerID });
-            emit("model.updated", {});
-          }
-          return json3({ data: result });
-        }
-        if (b === "disconnect" && method === "POST") {
-          if (!agent.signOut)
-            return error2(400, `Sign out of ${agent.name} where you signed in.`);
-          await agent.signOut();
-          return json3({});
-        }
-      }
-      if (area === "model") {
-        if (a === "default")
-          return located(null);
-        return located(await models(roster.all()));
-      }
-      if (area === "agent" || area === "command" || area === "skill" || area === "mcp")
-        return located([]);
-      if (area === "provider")
-        return located([]);
-      if (area === "shell") {
-        const header2 = request.headers.get("x-opencode-directory");
-        const directory = url.searchParams.get("directory") ?? (header2 ? decodeURIComponent(header2) : undefined);
-        if (!a && method === "GET")
-          return located(shells(directory));
-        if (a && !b && method === "GET") {
-          const job = shell(a);
-          return job ? located(job) : error2(404, "No such command.");
-        }
-        if (a && b === "output" && method === "GET") {
-          const limit2 = url.searchParams.get("limit");
-          const read2 = await shellOutput(a, Number(url.searchParams.get("cursor") ?? 0) || 0, limit2 ? Number(limit2) : undefined);
-          return read2 ? located(read2) : error2(404, "No such command.");
-        }
-        if (a && !b && method === "DELETE")
-          return await stopShell(a) ? json3({}) : error2(404, "No such command.");
-      }
-      if (area === "session") {
-        if (!a) {
-          if (method === "POST")
-            return json3({ data: sessions.create(await body()) });
-          const directory = url.searchParams.get("directory") ?? undefined;
-          const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
-          const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
-          const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
-          return json3(page(ordered, url));
-        }
-        if (a === "active")
-          return json3({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
-        if (a === "import" && method === "POST")
-          return json3({ data: sessions.importSession(await body()) });
-        const id = a;
-        if (!b) {
-          if (method === "GET")
-            return json3({ data: sessions.get(id) });
-          if (method === "PATCH") {
-            sessions.update(id, await body());
-            return json3({ data: sessions.get(id) });
-          }
-          if (method === "DELETE") {
-            await sessions.remove(id);
-            return json3({});
-          }
-        }
-        switch (b) {
-          case "message": {
-            const messages = sessions.messages(id);
-            const asc = url.searchParams.get("order") === "asc" || url.searchParams.get("cursor")?.startsWith("asc");
-            const ordered = asc ? messages : [...messages].reverse();
-            if (c) {
-              const found = messages.find((message2) => message2.id === c);
-              return found ? json3({ data: found }) : error2(404, "No such message.");
-            }
-            return json3(page(ordered, url));
-          }
-          case "inbox":
-            if (method === "DELETE" && c) {
-              sessions.cancelInput(id, c);
-              return json3({});
-            }
-            if (method === "PATCH" && c) {
-              sessions.setDelivery(id, c, (await body()).delivery);
-              return json3({});
-            }
-            return json3({ data: sessions.inbox(id) });
-          case "prompt": {
-            const input = await body();
-            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json3({});
-          }
-          case "fork":
-            return json3({ data: sessions.fork(id, String((await body()).before ?? "")) });
-          case "revert":
-            if (c === "stage" && method === "POST")
-              return json3({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
-            if (!c && method === "DELETE") {
-              await sessions.clearRevert(id);
-              return json3({});
-            }
-            break;
-          case "shell":
-            if (method !== "POST")
-              break;
-            sessions.runShell(id, String((await body()).command ?? ""));
-            return json3({});
-          case "synthetic": {
-            const input = await body();
-            sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
-            return json3({});
-          }
-          case "generate": {
-            const prompt = String((await body()).prompt ?? "");
-            if (!prompt.trim())
-              throw new BadRequest("Say what to write.");
-            return json3({ data: { text: await sessions.generate(id, prompt) } });
-          }
-          case "command": {
-            const input = await body();
-            const name = String(input.name ?? "");
-            const written = String(input.text ?? "");
-            const template = name ? await link2.commandTemplate(name, sessions.get(id).location.directory) : undefined;
-            const text2 = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
-            sessions.prompt(id, { id: newID("msg"), text: text2, files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json3({});
-          }
-          case "interrupt":
-            return json3({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
-          case "model":
-            sessions.selectModel(id, (await body()).model);
-            return json3({});
-          case "agent":
-            sessions.selectAgent(id, (await body()).agent);
-            return json3({});
-          case "permission":
-            if (!c)
-              return json3({ data: id === "global" ? [] : sessions.permissions(id) });
-            if (d === "reply") {
-              const { decision } = await body();
-              sessions.replyPermission(id, c, decision);
-              return json3({});
-            }
-            break;
-          case "form":
-            if (!c)
-              return json3({ data: id === "global" ? [] : sessions.forms(id) });
-            if (d === "reply") {
-              sessions.replyForm(id, c, (await body()).answer ?? {});
-              return json3({});
-            }
-            if (method === "DELETE") {
-              sessions.replyForm(id, c, null);
-              return json3({});
-            }
-            break;
-          case "view": {
-            const { idle } = await body();
-            sessions.view(id, Number(idle) || Date.now());
-            return json3({});
-          }
-          case "diff":
-            return json3({ data: [] });
-        }
-      }
-      if (area === "kuvo" && a === "accounts") {
-        if (method === "POST" && !b) {
-          const { agent, label: label2 } = await body();
-          if (!kinds.includes(agent))
-            return error2(400, "That isn't one of the coding agents.");
-          const record = roster.accounts.add(agent, label2);
-          roster.sync();
-          const added = roster.all().find((each) => each.instance.id === record.id && each.id === agent);
-          emit("integration.updated", { integrationID: added.providerID });
-          return json3({ data: { providerID: added.providerID } });
-        }
-        const target = b ? roster.find(b) : undefined;
-        if (!target)
-          return error2(404, "No such account.");
-        if (target.instance.id === "default")
-          return error2(400, "That's the agent's own sign-in: sign out of it where you signed in.");
-        if (method === "PATCH") {
-          roster.accounts.rename(target.providerID, (await body()).label);
-          roster.sync();
-          emit("integration.updated", { integrationID: target.providerID });
-          return json3({});
-        }
-        if (method === "DELETE") {
-          sessions.forgetProvider(target.providerID);
-          await target.removeAccount?.().catch(() => {});
-          target.shutdown?.();
-          roster.accounts.remove(target.providerID);
-          roster.sync();
-          emit("integration.updated", { integrationID: target.providerID });
-          emit("model.updated", {});
-          return json3({});
-        }
-      }
-      if (area === "kuvo" && a === "groups")
-        return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
-      if (area === "kuvo" && a === "link" && b === "groups")
-        return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(4), body, request.signal);
-      if (area === "kuvo" && a === "tools" && method === "PUT") {
-        const { url: address, token, timeout } = await body();
-        setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
-        return json3({});
-      }
-      if (area === "kuvo" && a === "engine" && method === "PUT") {
-        const { url: address, password } = await body();
-        link2.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
-        return json3({});
-      }
-      if (area === "kuvo" && a === "auto") {
-        if (b === "limits" && method === "DELETE") {
-          const provider = url.searchParams.get("provider");
-          if (provider)
-            auto.release(provider);
-          else
-            auto.clearLimits();
-          emit("kuvo.auto.updated", {});
-          return json3({});
-        }
-        if (!b && method === "PUT") {
-          const { entries, lists } = await body();
-          if (Array.isArray(lists)) {
-            try {
-              auto.setLists(lists);
-            } catch (problem) {
-              return error2(400, problem.message);
-            }
-          } else if (Array.isArray(entries))
-            auto.set(entries);
-          else
-            return error2(400, "Send the lists, or the first one's entries.");
-          emit("kuvo.auto.updated", {});
-        }
-        if (!b && (method === "GET" || method === "PUT"))
-          return json3({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
-      }
-      if (area === "experimental" && a === "session" && b) {
-        const id = b;
-        if (c === "instructions" && d === "entries" && e) {
-          sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
-          return json3({});
-        }
-        if (c === "wait") {
-          while (sessions.active().includes(id))
-            await Bun.sleep(200);
-          return json3({});
-        }
-      }
-      return error2(404, "Not available for this agent.");
-    } catch (caught) {
-      if (caught instanceof NotFound)
-        return error2(404, caught.message);
-      if (caught instanceof BadRequest)
-        return error2(400, caught.message);
-      return error2(500, caught instanceof Error ? caught.message : String(caught));
-    }
-  };
-}
-function expandCommand(template, written) {
-  const all = written.trim();
-  const words = all ? all.split(/\s+/) : [];
-  const named2 = /\$ARGUMENTS|\$[1-9]/.test(template);
-  const highest = Math.max(0, ...[...template.matchAll(/\$([1-9]\d*)/g)].map((match) => Number(match[1])));
-  const filled = template.replace(/\$ARGUMENTS|\$([1-9]\d*)/g, (_, index) => {
-    if (index === undefined)
-      return all;
-    return Number(index) === highest ? words.slice(highest - 1).join(" ") : words[Number(index) - 1] ?? "";
-  });
-  return named2 || !all ? filled.trim() : `${filled.trim()}
-
-${all}`;
-}
-
-// Agents/src/store.ts
-import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync17, renameSync as renameSync6, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync12 } from "fs";
-import { join as join18 } from "path";
-
-class Store {
-  root;
-  records = new Map;
-  pending = new Map;
-  constructor(root) {
-    this.root = root;
-    mkdirSync14(root, { recursive: true });
-    for (const id of readdirSync7(root)) {
-      try {
-        const folder = join18(root, id);
-        const session = JSON.parse(readFileSync17(join18(folder, "session.json"), "utf8"));
-        let messages = [];
-        try {
-          messages = JSON.parse(readFileSync17(join18(folder, "messages.json"), "utf8"));
-        } catch {}
-        let agent = {};
-        try {
-          agent = JSON.parse(readFileSync17(join18(folder, "agent.json"), "utf8"));
-        } catch {}
-        this.records.set(session.id, { session, messages, agent });
-      } catch {}
-    }
-  }
-  all() {
-    return [...this.records.values()].map((record) => record.session);
-  }
-  get(id) {
-    return this.records.get(id);
-  }
-  writtenAt(id) {
-    try {
-      return statSync6(join18(this.root, id, "messages.json")).mtimeMs;
-    } catch {
-      return;
-    }
-  }
-  add(session) {
-    this.records.set(session.id, { session, messages: [], agent: {} });
-    this.save(session.id, true);
-  }
-  remove(id) {
-    this.records.delete(id);
-    clearTimeout(this.pending.get(id));
-    this.pending.delete(id);
-    rmSync11(join18(this.root, id), { recursive: true, force: true });
-  }
-  save(id, now = false) {
-    clearTimeout(this.pending.get(id));
-    if (now) {
-      this.pending.delete(id);
-      this.write(id);
-      return;
-    }
-    this.pending.set(id, setTimeout(() => {
-      this.pending.delete(id);
-      this.write(id);
-    }, 500));
-  }
-  flush() {
-    for (const id of [...this.pending.keys()])
-      this.save(id, true);
-  }
-  write(id) {
-    const record = this.records.get(id);
-    if (!record)
-      return;
-    const folder = join18(this.root, id);
-    mkdirSync14(folder, { recursive: true });
-    for (const [name, value] of [
-      ["session.json", record.session],
-      ["messages.json", record.messages],
-      ["agent.json", record.agent]
-    ]) {
-      const file = join18(folder, name);
-      writeFileSync12(file + ".new", JSON.stringify(value));
-      renameSync6(file + ".new", file);
-    }
-  }
-}
+// Agents/src/groups/post.ts
+import { existsSync as existsSync12, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync12 } from "fs";
 
 // Agents/src/groups/api.ts
 function server2(url, password) {
@@ -12563,9 +12076,9 @@ function server2(url, password) {
         value = text2;
       }
       if (!response.ok) {
-        const error3 = new Error(value?.message ?? `It answered ${response.status}.`);
-        error3.status = response.status;
-        throw error3;
+        const error2 = new Error(value?.message ?? `It answered ${response.status}.`);
+        error2.status = response.status;
+        throw error2;
       }
       return value;
     }
@@ -12679,9 +12192,9 @@ class SeatAPI {
   }
 }
 
-// Agents/src/groups/runner.ts
+// Agents/src/groups/seat.ts
 var seatKey = "kuvo.seat";
-var memoryKey = "kuvo.groups.machine";
+var turnLimit = 600000;
 
 class Cancelled extends Error {
 }
@@ -12698,33 +12211,1521 @@ var sleep = (ms, signal) => new Promise((done, fail) => {
   }, ms);
   signal?.addEventListener("abort", stop, { once: true });
 });
-var groupMessageID = () => "gm_" + crypto.randomUUID().toLowerCase();
-var reason2 = (error3) => String(error3?.message ?? error3 ?? "it failed").trim();
+var reason2 = (error2) => String(error2?.message ?? error2 ?? "it failed").trim();
 var runsWithAgents = (model2) => Boolean(model2 && (model2.providerID === autoProvider || parseProvider(model2.providerID)));
+
+class Seats {
+  context;
+  seatBase = new Map;
+  declined = new Set;
+  seatsChecked = new Set;
+  seatTexts = new Map;
+  constructor(context) {
+    this.context = context;
+  }
+  rulesChanged() {
+    this.seatsChecked.clear();
+  }
+  get here() {
+    return this.context.place ? ` on ${this.context.place}` : "";
+  }
+  bot(id) {
+    return this.context.store.bot(id);
+  }
+  ownAPI(bot) {
+    if (!bot.agents)
+      return new SeatAPI(this.context.engine);
+    const bridge = this.context.bridge();
+    return bridge ? new SeatAPI(bridge) : undefined;
+  }
+  apiFor(onAgents) {
+    if (!onAgents)
+      return new SeatAPI(this.context.engine);
+    const bridge = this.context.bridge();
+    return bridge ? new SeatAPI(bridge) : undefined;
+  }
+  async model(bot) {
+    const conversation = async () => (await this.ownAPI(bot)?.session(bot.sessionID).catch(() => {
+      return;
+    }))?.model;
+    if (!bot.model)
+      return conversation();
+    if (runsWithAgents(bot.model))
+      return bot.model;
+    const account = await new SeatAPI(this.context.engine).account(bot.model).catch(() => {
+      return;
+    });
+    return account?.signedOut ? await conversation() ?? bot.model : bot.model;
+  }
+  rules(bot) {
+    const settings = this.context.store.settings();
+    return seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? []);
+  }
+  seatText(bot, chat2) {
+    const settings = this.context.store.settings();
+    const asBot = (member2) => ({ id: member2.id, name: member2.name, job: member2.job, instructions: "", memoryFile: "", folder: "" });
+    const others = chat2.members.filter((member2) => member2.id !== bot.id).map(asBot);
+    const lead = chat2.members[0] ? asBot(chat2.members[0]) : undefined;
+    const personality = bot.personality ? settings?.personalities[bot.personality] : undefined;
+    const group = { id: chat2.id, name: chat2.name, purpose: chat2.purpose, members: chat2.members.map((member2) => member2.id), seats: {}, heard: {}, created: "" };
+    return seatInstructions(bot, group, others, lead, personality, settings?.identityNote ?? "");
+  }
+  async make(bot, chat2, title, scratch) {
+    const model2 = await this.model(bot);
+    const onAgents = runsWithAgents(model2);
+    const api = this.apiFor(onAgents);
+    if (!api)
+      throw new Error("the coding agents aren\u2019t running");
+    const agent = onAgents && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
+    const text2 = this.seatText(bot, chat2);
+    const session = await api.create(bot.directory, title, agent, model2, this.rules(bot));
+    try {
+      await api.setMetadata(session.id, { kuvo: { seat: { group: chat2.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } });
+      await api.setInstruction(session.id, seatKey, text2);
+    } catch (error2) {
+      await api.delete(session.id).catch(() => {});
+      throw error2;
+    }
+    this.seatTexts.set(session.id, text2);
+    this.seatsChecked.add(session.id);
+    return { seat: session.id, agents: onAgents, api };
+  }
+  async keep(turn, bot) {
+    const seat = turn.seat;
+    const agents = turn.agentsSeat ?? false;
+    const api = this.apiFor(agents);
+    if (!api)
+      return;
+    if (!this.seatsChecked.has(seat)) {
+      this.seatsChecked.add(seat);
+      await api.setPermissions(seat, this.rules(bot)).catch(() => {});
+    }
+    const text2 = this.seatText(bot, turn.chat);
+    if (this.seatTexts.get(seat) !== text2) {
+      await api.setInstruction(seat, seatKey, text2).catch(() => {});
+      this.seatTexts.set(seat, text2);
+    }
+    const model2 = await this.model(bot);
+    if (!model2)
+      return { seat, agents, api };
+    const session = await api.session(seat).catch(() => {
+      return;
+    });
+    if (!session)
+      return { seat, agents, api };
+    if (session.model?.id === model2.id && session.model?.providerID === model2.providerID)
+      return { seat, agents, api };
+    if (agents || !runsWithAgents(model2)) {
+      await api.selectModel(seat, model2).catch(() => {});
+      if (agents)
+        await api.selectAgent(seat, model2.providerID.split("@")[0] === "cursor" ? "plan" : "build").catch(() => {});
+      return { seat, agents, api };
+    }
+    await this.drop(seat, agents);
+    return;
+  }
+  async owns(seat, agents, bot, chat2) {
+    const api = this.apiFor(agents);
+    if (!api)
+      return "unknown";
+    try {
+      const marked = (await api.session(seat))?.metadata?.kuvo?.seat;
+      return marked?.bot === bot && marked?.group === chat2 ? "yes" : "no";
+    } catch (error2) {
+      return error2?.status === 404 ? "gone" : "unknown";
+    }
+  }
+  async drop(seat, agents) {
+    this.seatBase.delete(seat);
+    await this.apiFor(agents)?.delete(seat).catch(() => {});
+  }
+  async turn(turn, report, signal, checkSeat = false) {
+    const bot = this.bot(turn.bot);
+    if (!bot)
+      return { ok: false, why: "it doesn\u2019t live on this computer any more." };
+    const going = () => {
+      if (signal.aborted)
+        throw new Cancelled;
+    };
+    const ownConversation = turn.kind === "guest" || turn.kind === "split";
+    let provider;
+    let scratch;
+    try {
+      const model2 = await this.model(bot);
+      going();
+      const onAgents = !ownConversation && turn.seat ? turn.agentsSeat ?? false : runsWithAgents(model2);
+      if (onAgents && !this.context.bridge())
+        return { ok: false, why: "the coding agents aren\u2019t running." };
+      if (model2 && model2.providerID !== autoProvider) {
+        const account = runsWithAgents(model2) ? await this.context.agentAccount?.(model2.providerID).catch(() => {
+          return;
+        }) : await new SeatAPI(this.context.engine).account(model2).catch(() => {
+          return;
+        });
+        going();
+        provider = account?.name;
+        if (account?.signedOut)
+          return { ok: false, why: `${model2.id} needs a sign-in${this.here}: sign in to ${account.name} in Settings \u203A Accounts, or choose another model.` };
+      }
+      let seat;
+      let agents;
+      let api;
+      let text2 = turn.text;
+      if (ownConversation) {
+        const title = turn.kind === "guest" ? `${bot.name} asked into ${turn.chat.name}` : `${bot.name} handing out the work in ${turn.chat.name}`;
+        ({ seat, agents, api } = await this.make(bot, turn.chat, title, true));
+        scratch = { seat, agents };
+      } else {
+        let ours = Boolean(turn.seat);
+        if (turn.seat && checkSeat) {
+          const owned = await this.owns(turn.seat, turn.agentsSeat ?? false, bot.id, turn.chat.id);
+          if (owned === "unknown")
+            throw new Error("its seat couldn\u2019t be read");
+          ours = owned === "yes";
+          going();
+        }
+        const kept2 = ours ? await this.keep(turn, bot) : undefined;
+        going();
+        if (kept2) {
+          ({ seat, agents, api } = kept2);
+        } else {
+          ({ seat, agents, api } = await this.make(bot, turn.chat, `${bot.name} in ${turn.chat.name}`, false));
+          report({ phase: "seated", seat, agents, ...turn.seat ? { replaced: turn.seat } : {} });
+          if (turn.seat)
+            text2 = turn.fresh ?? turn.text;
+        }
+      }
+      going();
+      const promptID = newID("msg");
+      await api.prompt(seat, promptID, text2, "queue");
+      report({ phase: "started" });
+      const sent = Date.now();
+      let thinking = "";
+      let streamedAt = 0;
+      let shown = [];
+      const show = (now, quiet2 = 300) => {
+        if (JSON.stringify(now) === JSON.stringify(shown))
+          return;
+        const sameKind = shown[0]?.kind === now[0]?.kind;
+        if (sameKind && Date.now() - streamedAt < quiet2)
+          return;
+        shown = now;
+        streamedAt = Date.now();
+        report({ phase: "activity", activity: now });
+      };
+      const unlisten = ownConversation ? undefined : this.context.listen?.(seat, {
+        event: (event) => {
+          const data = event?.data ?? {};
+          if (event?.type === "session.reasoning.started")
+            thinking = "";
+          else if (event?.type === "session.reasoning.delta") {
+            thinking = (thinking + String(data.delta ?? "")).slice(-2000);
+            const line = thought(thinking);
+            if (line)
+              show([{ kind: "thinking", text: line }]);
+          } else if (event?.type === "session.text.started" || event?.type === "session.text.delta")
+            show([{ kind: "writing" }]);
+        },
+        reconnected() {}
+      });
+      try {
+        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, ownConversation ? undefined : (messages) => {
+          const now = activity(messages, promptID, sent);
+          if (now.length === 0 || JSON.stringify(now) === JSON.stringify(shown) || Date.now() - streamedAt < 3000)
+            return;
+          shown = now;
+          report({ phase: "activity", activity: now });
+        });
+      } finally {
+        unlisten?.();
+      }
+      const reply = await this.reply(seat, promptID, sent, api);
+      going();
+      let outgrown = false;
+      if (!ownConversation && reply.size !== undefined) {
+        const base = this.seatBase.get(seat) ?? reply.size;
+        this.seatBase.set(seat, base);
+        const grown = reply.size - base;
+        if (grown > seatBudget && grown > 2 * Math.floor((turn.chatSize ?? 0) / 4)) {
+          outgrown = true;
+          await this.drop(seat, agents);
+        }
+      }
+      if (!reply.text && reply.error)
+        return { ok: false, why: plainError(reply.error, provider, this.context.place) };
+      return { ok: true, text: reply.text, steps: reply.steps, ...outgrown ? { outgrown } : {} };
+    } catch (error2) {
+      if (signal.aborted || error2 instanceof Cancelled)
+        throw new Cancelled;
+      return { ok: false, why: plainError(reason2(error2), provider, this.context.place) };
+    } finally {
+      if (scratch)
+        this.drop(scratch.seat, scratch.agents);
+    }
+  }
+  async give(bot, text2) {
+    const api = this.ownAPI(bot);
+    if (!api)
+      throw new Error("the coding agents aren\u2019t running");
+    const promptID = newID("msg");
+    await api.prompt(bot.sessionID, promptID, text2, "queue");
+    return promptID;
+  }
+  async follow(botID, promptID, started, wanted) {
+    let misses = 0;
+    let stoppedChecks = 0;
+    for (;; ) {
+      await sleep(3000 * (this.context.pace ?? 1));
+      if (!wanted())
+        return;
+      const bot = this.bot(botID);
+      if (!bot)
+        return { ok: false, why: "the bot is gone" };
+      const api = this.ownAPI(bot);
+      if (!api)
+        continue;
+      const active = await api.active().catch(() => {
+        return;
+      });
+      if (!active || active.has(bot.sessionID))
+        continue;
+      const queued = await api.inbox(bot.sessionID).catch(() => {
+        return;
+      });
+      if (!queued)
+        continue;
+      const read2 = await this.messagesFrom(promptID, bot.sessionID, started, api);
+      if (read2.kind !== "found") {
+        if (read2.kind === "missing" && !queued.some((item) => item.id === promptID)) {
+          if (++misses >= 2)
+            return { ok: false, why: `its message was taken back before ${bot.name} read it` };
+        } else {
+          misses = 0;
+        }
+        continue;
+      }
+      misses = 0;
+      const run2 = read2.messages.slice(1);
+      let end = run2.findIndex((message2, index) => {
+        if (message2?.type !== "idle")
+          return false;
+        if (message2.outcome !== "interrupted")
+          return true;
+        return run2[index + 1]?.type === "user";
+      });
+      const lastIndex = run2.length - 1;
+      if (end < 0 && lastIndex >= 0 && run2[lastIndex]?.type === "idle" && run2[lastIndex].outcome === "interrupted") {
+        if (++stoppedChecks >= 2)
+          end = lastIndex;
+      } else {
+        stoppedChecks = 0;
+      }
+      const answered = end >= 0 || run2.some((message2) => message2?.type === "assistant" && message2.time?.completed !== undefined);
+      if (!answered)
+        continue;
+      const stillActive = await api.active().catch(() => {
+        return;
+      });
+      if (!stillActive || stillActive.has(bot.sessionID))
+        continue;
+      const found = said2(end >= 0 ? run2.slice(0, end) : run2);
+      let error2 = found.error;
+      if (error2 === undefined && end >= 0 && run2[end]?.outcome === "failed")
+        error2 = run2[end].error?.message;
+      if (!wanted())
+        return;
+      if (!found.text)
+        return { ok: false, why: error2 ?? "it stopped without saying what it did" };
+      return { ok: true, text: found.text, steps: [] };
+    }
+  }
+  async messagesFrom(promptID, session, started, api) {
+    let page;
+    try {
+      page = await api.messages(session, 80);
+    } catch {
+      return { kind: "unreadable" };
+    }
+    let messages = page.data;
+    const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000;
+    while (!messages.some((message2) => message2?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page.cursor) {
+      let older;
+      try {
+        older = await api.messages(session, 200, page.cursor);
+      } catch {
+        break;
+      }
+      if (older.data.length === 0 || messages.some((message2) => message2?.id === older.data.at(-1)?.id))
+        break;
+      messages = [...older.data, ...messages];
+      page = older;
+    }
+    const index = messages.findIndex((message2) => message2?.id === promptID);
+    return index >= 0 ? { kind: "found", messages: messages.slice(index) } : { kind: "missing" };
+  }
+  async interrupt(seat, agents) {
+    await this.apiFor(agents)?.interrupt(seat).catch(() => {});
+  }
+  async steer(seat, agents, text2, _message) {
+    const api = this.apiFor(agents);
+    if (!api || !(await api.active().catch(() => new Set)).has(seat))
+      return false;
+    try {
+      await api.prompt(seat, newID("msg"), text2, "steer");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async waitForRun(seat, promptID, sent, api, signal, directory, seen) {
+    const pace = this.context.pace ?? 1;
+    let looked = Date.now();
+    let gone = 0;
+    let missing = 0;
+    let idleSince;
+    let woken = false;
+    for (;; ) {
+      try {
+        await sleep(600 * pace, signal);
+      } catch (error2) {
+        await api.interrupt(seat).catch(() => {});
+        throw error2;
+      }
+      await this.decline(seat, api, directory);
+      if (seen && Date.now() - looked > 1500 * pace) {
+        looked = Date.now();
+        const page = await api.messages(seat, 12).catch(() => {
+          return;
+        });
+        if (page)
+          seen(page.data);
+      }
+      const active = await api.active().catch(() => {
+        return;
+      });
+      if (active && !active.has(seat)) {
+        const inbox = await api.inbox(seat).catch((error2) => error2?.status === 404 ? null : undefined);
+        if (inbox === null) {
+          if (++missing >= 3)
+            return;
+          continue;
+        }
+        missing = 0;
+        if (inbox && !inbox.some((item) => item.id === promptID)) {
+          const read2 = await api.messages(seat, 60).catch(() => {
+            return;
+          });
+          const at2 = read2 ? read2.data.findIndex((message2) => message2?.id === promptID) : -1;
+          if (at2 >= 0 ? read2.data.slice(at2 + 1).some((message2) => message2?.type === "idle") : read2 ? ++gone >= 3 : false)
+            return;
+          if (at2 >= 0)
+            gone = 0;
+          idleSince = undefined;
+        } else if (inbox) {
+          idleSince ??= Date.now();
+          if (Date.now() - idleSince > 8000 * pace) {
+            if (!woken) {
+              woken = true;
+              idleSince = Date.now();
+              await api.setDelivery(seat, promptID, "steer").catch(() => {});
+            } else {
+              await api.cancelInbox(seat, promptID).catch(() => {});
+              return;
+            }
+          }
+        }
+      } else {
+        idleSince = undefined;
+      }
+      if (Date.now() - sent > turnLimit) {
+        await api.interrupt(seat).catch(() => {});
+        throw new Error("It took too long, so it was stopped.");
+      }
+    }
+  }
+  async decline(seat, api, directory) {
+    for (const request of await api.permissions(seat).catch(() => [])) {
+      if (this.declined.has(request.id))
+        continue;
+      this.declined.add(request.id);
+      await api.reject(seat, request.id, "Nobody can approve this in a group chat. Carry on without it, or say who should do it.").catch(() => {});
+    }
+    for (const form of await api.forms(seat).catch(() => [])) {
+      if (this.declined.has(form.id))
+        continue;
+      this.declined.add(form.id);
+      await api.dismiss(seat, form.id, "Ask the group in your reply instead.").catch(() => {});
+    }
+    const asked = (await api.sharedForms(directory).catch(() => [])).filter((form) => form?.metadata?.kind === "mcp-elicitation" && !this.declined.has(form.id));
+    if (asked.length === 0)
+      return;
+    const messages = (await api.messages(seat, 8).catch(() => {
+      return;
+    }))?.data ?? [];
+    for (const form of asked) {
+      if (!isWaiting(String(form.metadata.server ?? ""), messages))
+        continue;
+      this.declined.add(form.id);
+      await api.dismissShared(form.id, directory).catch(() => {});
+    }
+  }
+  async reply(seat, promptID, sent, api) {
+    const { data } = await api.messages(seat, 60);
+    const start = data.findIndex((message2) => message2?.id === promptID);
+    const since = sent - 2000;
+    const tokens = [...data].reverse().find((message2) => message2?.type === "assistant" && message2.tokens)?.tokens;
+    const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
+    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message2) => (message2?.time?.created ?? 0) >= since)), size };
+  }
+}
+
+// Agents/src/groups/peer.ts
+var askAgainAfter = 15000;
+var awayAfter = 45000;
+var longestTurn = turnLimit + 60000;
+var realClock = { setTimeout: (work, ms) => setTimeout(work, ms), clearTimeout: (timer) => clearTimeout(timer) };
+
+class RemoteHome {
+  box;
+  transport;
+  place;
+  clock;
+  pending = new Map;
+  constructor(box, transport, place, clock = realClock) {
+    this.box = box;
+    this.transport = transport;
+    this.place = place;
+    this.clock = clock;
+  }
+  turn(turn, report, signal) {
+    return new Promise((resolve5, reject) => {
+      if (signal.aborted)
+        return reject(new Cancelled);
+      const pending = { turn, report, done: resolve5, seat: turn.seat, started: false, told: new Set };
+      const end = () => {
+        for (const timer of [pending.asking, pending.silent, pending.limit])
+          if (timer !== undefined)
+            this.clock.clearTimeout(timer);
+        this.pending.delete(turn.id);
+        signal.removeEventListener("abort", stop);
+      };
+      pending.done = (result) => {
+        end();
+        resolve5(result);
+      };
+      const stop = () => {
+        this.transport.send(this.box, { kind: "stop", id: turn.id }, false);
+        end();
+        reject(new Cancelled);
+      };
+      signal.addEventListener("abort", stop, { once: true });
+      this.pending.set(turn.id, pending);
+      this.transport.send(this.box, { kind: "turn", turn }, false);
+      this.listen(pending);
+      pending.limit = this.clock.setTimeout(() => this.away(pending), longestTurn);
+    });
+  }
+  listen(pending) {
+    if (pending.asking !== undefined)
+      this.clock.clearTimeout(pending.asking);
+    if (pending.silent !== undefined)
+      this.clock.clearTimeout(pending.silent);
+    const askAgain = () => {
+      pending.asking = this.clock.setTimeout(() => {
+        this.transport.send(this.box, { kind: "turn", turn: pending.turn }, false);
+        askAgain();
+      }, askAgainAfter);
+    };
+    askAgain();
+    pending.silent = this.clock.setTimeout(() => this.away(pending), awayAfter);
+  }
+  away(pending) {
+    this.transport.send(this.box, { kind: "stop", id: pending.turn.id }, false);
+    pending.done({ ok: false, away: true, why: `${this.place()} can\u2019t be reached now.` });
+  }
+  take(from, mail) {
+    if (from !== this.box || mail.kind !== "state" && mail.kind !== "result")
+      return;
+    const pending = this.pending.get(mail.id);
+    if (!pending)
+      return;
+    this.listen(pending);
+    if (mail.kind === "state")
+      return this.heard(pending, mail.state);
+    const { seat, agents, replaced, ...result } = mail.result;
+    if (typeof seat === "string" && seat && seat !== pending.seat) {
+      this.heard(pending, { phase: "seated", seat, agents: agents === true, ...typeof replaced === "string" && replaced ? { replaced } : {} });
+    }
+    if (result.ok && !pending.started)
+      this.heard(pending, { phase: "started" });
+    pending.done(result);
+  }
+  heard(pending, state) {
+    const said3 = JSON.stringify(state);
+    if (state.phase !== "activity") {
+      if (pending.told.has(said3))
+        return;
+      pending.told.add(said3);
+    }
+    if (state.phase === "seated")
+      pending.seat = state.seat;
+    if (state.phase === "started")
+      pending.started = true;
+    pending.report(state);
+  }
+  async steer(seat, _agents, text2, message2) {
+    const running = [...this.pending.values()].find((each) => each.seat === seat && each.told.size > 0);
+    if (running)
+      this.transport.send(this.box, { kind: "steer", id: running.turn.id, text: text2, message: message2 }, false);
+    return false;
+  }
+  async drop(seat, agents, owner) {
+    this.transport.send(this.box, { kind: "drop", seat, agents, ...owner ? { bot: owner.bot, chat: owner.chat } : {} }, true);
+  }
+  work(work) {
+    this.transport.send(this.box, { kind: "work", work }, true);
+  }
+  remember(memory) {
+    this.transport.send(this.box, { kind: "memory", memory }, true);
+  }
+}
+var rememberTurns = 86400000;
+var activityEvery = 1500;
+
+class SeatServer {
+  seats;
+  transport;
+  context;
+  clock;
+  turns = new Map;
+  following = new Set;
+  constructor(seats, transport, context, clock = realClock) {
+    this.seats = seats;
+    this.transport = transport;
+    this.context = context;
+    this.clock = clock;
+  }
+  start() {
+    for (const [task, work] of Object.entries(this.context?.store.peerWork() ?? {})) {
+      if (work.done) {
+        if (Date.now() - Date.parse(work.started) > rememberTurns)
+          this.context?.store.keepPeerWork(task, undefined);
+      } else if (work.prompt)
+        this.follow(task, work);
+      else
+        this.report(task, work, { ok: false, why: "Kuvo Code stopped before it reached the bot" });
+    }
+  }
+  async work(host, given) {
+    const store = this.context?.store;
+    if (!store || store.peerWork()[given.task])
+      return;
+    const work = { host, chat: given.chat, wrapUp: given.wrapUp, bot: given.bot, started: given.started };
+    store.keepPeerWork(given.task, work);
+    const bot = this.seats.bot(given.bot);
+    if (!bot)
+      return this.report(given.task, work, { ok: false, why: "the bot doesn\u2019t live on this computer any more" });
+    try {
+      const prompt = await this.seats.give(bot, given.text);
+      store.keepPeerWork(given.task, { ...work, prompt });
+      this.follow(given.task, { ...work, prompt });
+    } catch (error2) {
+      this.report(given.task, work, { ok: false, why: String(error2?.message ?? error2) });
+    }
+  }
+  follow(task, work) {
+    if (this.following.has(task) || !work.prompt)
+      return;
+    this.following.add(task);
+    this.seats.follow(work.bot, work.prompt, work.started, () => {
+      const now = this.context?.store.peerWork()[task];
+      return Boolean(now && !now.done);
+    }).then((result) => {
+      if (result)
+        this.report(task, work, result);
+    }).finally(() => this.following.delete(task));
+  }
+  report(task, work, result) {
+    this.transport.send(work.host, { kind: "report", task, wrapUp: work.wrapUp, chat: work.chat, result }, true);
+    this.context?.store.keepPeerWork(task, { ...work, done: true });
+  }
+  take(from, mail) {
+    switch (mail.kind) {
+      case "turn":
+        return this.turn(from, mail.turn);
+      case "stop": {
+        const running = this.turns.get(mail.id);
+        if (running?.host === from)
+          running.controller.abort();
+        return;
+      }
+      case "steer": {
+        const running = this.turns.get(mail.id);
+        const seat = running && [...running.states].reverse().find((state) => state.phase === "seated");
+        const turn = running && this.asked.get(mail.id);
+        if (!running || running.host !== from || running.result || !turn)
+          return;
+        const at2 = seat?.phase === "seated" ? seat : turn.seat ? { seat: turn.seat, agents: turn.agentsSeat ?? false } : undefined;
+        if (!at2)
+          return;
+        this.seats.steer(at2.seat, at2.agents, mail.text).then((steered) => {
+          if (steered)
+            this.send(from, mail.id, { phase: "steered", message: mail.message });
+        });
+        return;
+      }
+      case "drop":
+        this.drop(mail);
+        return;
+      case "work":
+        this.work(from, mail.work);
+        return;
+      case "memory":
+        this.context?.remembered(from, mail.memory);
+        return;
+    }
+  }
+  async drop(mail) {
+    if (typeof mail.bot !== "string" || typeof mail.chat !== "string")
+      return;
+    if (await this.seats.owns(mail.seat, mail.agents, mail.bot, mail.chat) === "yes")
+      await this.seats.drop(mail.seat, mail.agents);
+  }
+  asked = new Map;
+  send(to, id, state) {
+    const running = this.turns.get(id);
+    if (running && !running.result) {
+      if (state.phase === "activity")
+        running.states = running.states.filter((each) => each.phase !== "activity");
+      running.states.push(state);
+    }
+    this.transport.send(to, { kind: "state", id, state }, false);
+  }
+  turn(host, turn) {
+    const now = Date.now();
+    for (const [id, running2] of this.turns)
+      if (running2.result && now - running2.at > rememberTurns)
+        this.turns.delete(id);
+    const known = this.turns.get(turn.id);
+    if (known) {
+      if (known.host !== host)
+        return;
+      if (known.result)
+        this.transport.send(host, { kind: "result", id: turn.id, result: known.result }, false);
+      else
+        for (const state of known.states)
+          this.transport.send(host, { kind: "state", id: turn.id, state }, false);
+      return;
+    }
+    const running = { host, controller: new AbortController, states: [], at: now };
+    this.turns.set(turn.id, running);
+    this.asked.set(turn.id, turn);
+    let latest;
+    let timer;
+    let last2 = 0;
+    const flush = () => {
+      timer = undefined;
+      if (!latest || running.result)
+        return;
+      last2 = Date.now();
+      const state = latest;
+      latest = undefined;
+      this.send(host, turn.id, state);
+    };
+    const report = (state) => {
+      if (state.phase !== "activity")
+        return this.send(host, turn.id, state);
+      latest = state;
+      if (timer !== undefined)
+        return;
+      const wait = Math.max(0, activityEvery - (Date.now() - last2));
+      if (wait === 0)
+        flush();
+      else
+        timer = this.clock.setTimeout(flush, wait);
+    };
+    this.send(host, turn.id, { phase: "taken" });
+    this.seats.turn(turn, report, running.controller.signal, true).catch((error2) => error2 instanceof Cancelled ? { ok: false, why: "it was stopped." } : { ok: false, why: String(error2?.message ?? error2) }).then((result) => {
+      if (timer !== undefined)
+        this.clock.clearTimeout(timer);
+      const seated = [...running.states].reverse().find((state) => state.phase === "seated");
+      running.result = seated?.phase === "seated" ? { ...result, seat: seated.seat, agents: seated.agents, ...seated.replaced ? { replaced: seated.replaced } : {} } : result;
+      running.states = [];
+      running.at = Date.now();
+      this.asked.delete(turn.id);
+      if (!running.controller.signal.aborted)
+        this.transport.send(host, { kind: "result", id: turn.id, result: running.result }, false);
+    });
+  }
+}
+
+// Agents/src/groups/post.ts
+var kinds3 = new Set(["turn", "state", "result", "steer", "stop", "drop", "work", "report", "memory"]);
+var isSeatMail = (value) => value !== null && typeof value === "object" && kinds3.has(value.kind);
+var sameMemory = (one, other) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat;
+
+class PeerPost {
+  file;
+  followers = new Set;
+  kept;
+  constructor(file) {
+    this.file = file;
+    let kept2 = [];
+    try {
+      if (file && existsSync12(file))
+        kept2 = JSON.parse(readFileSync17(file, "utf8"));
+    } catch {}
+    this.kept = Array.isArray(kept2) ? kept2.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
+  }
+  send(to, mail, durable) {
+    const line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable };
+    if (durable) {
+      if (mail.kind === "memory")
+        this.kept = this.kept.filter((each) => !(each.to === to && sameMemory(each.mail, mail)));
+      this.kept.push(line);
+      this.save();
+    }
+    for (const follower of this.followers)
+      follower(line);
+  }
+  sent(ids) {
+    const before = this.kept.length;
+    this.kept = this.kept.filter((line) => !ids.includes(line.id));
+    if (this.kept.length !== before)
+      this.save();
+  }
+  save() {
+    if (!this.file)
+      return;
+    try {
+      writeFileSync12(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
+      renameSync6(this.file + ".new", this.file);
+    } catch {}
+  }
+  follow(signal) {
+    const encoder = new TextEncoder;
+    let stop = () => {};
+    const stream = new ReadableStream({
+      start: (controller) => {
+        const write2 = (line) => {
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify(line) + `
+`));
+          } catch {
+            stop();
+          }
+        };
+        stop = () => {
+          this.followers.delete(write2);
+          signal?.removeEventListener("abort", stop);
+        };
+        signal?.addEventListener("abort", stop, { once: true });
+        for (const line of this.kept)
+          write2(line);
+        this.followers.add(write2);
+      },
+      cancel: () => stop()
+    });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
+  }
+  get followed() {
+    return this.followers.size > 0;
+  }
+}
+function receive(parts2, from, mail) {
+  if (mail.kind === "state" || mail.kind === "result")
+    parts2.directory.existing(from)?.take(from, mail);
+  else if (mail.kind === "report")
+    parts2.runner.reported(from, mail);
+  else
+    parts2.server.take(from, mail);
+}
+var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+async function peerRoutes(parts2, method, path, body, signal) {
+  if (!parts2)
+    return json3({ message: "Group chats don't run here." }, 404);
+  const [what] = path;
+  if (what === "mail" && method === "GET")
+    return parts2.post.follow(signal);
+  if (what === "mail" && method === "POST") {
+    const given = await body().catch(() => {
+      return;
+    });
+    if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
+      return json3({ message: "That isn't group chat mail." }, 400);
+    receive(parts2, given.from, given.mail);
+    return json3({});
+  }
+  if (what === "sent" && method === "POST") {
+    const given = await body().catch(() => {
+      return;
+    });
+    if (!Array.isArray(given?.ids) || !given.ids.every((id) => typeof id === "string"))
+      return json3({ message: "Those aren't mail." }, 400);
+    parts2.post.sent(given.ids);
+    return json3({});
+  }
+  if (!what && method === "PUT")
+    return parts2.directory.set(await body().catch(() => {
+      return;
+    })) ? json3({}) : json3({ message: "That isn't who your computers are." }, 400);
+  return json3({ message: "Not found" }, 404);
+}
+
+class LinkDirectory {
+  transport;
+  clock;
+  boxes = new Map;
+  listed = [];
+  homes = new Map;
+  constructor(transport, clock = realClock) {
+    this.transport = transport;
+    this.clock = clock;
+  }
+  set(given) {
+    if (!given || typeof given !== "object" || !Array.isArray(given.boxes) || !Array.isArray(given.bots))
+      return false;
+    const boxes = new Map;
+    for (const box of given.boxes) {
+      if (box && typeof box.key === "string" && box.key)
+        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
+    }
+    this.boxes = boxes;
+    this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
+      id: bot.id,
+      name: bot.name,
+      job: typeof bot.job === "string" ? bot.job : "",
+      box: bot.box,
+      ...typeof bot.session === "string" ? { session: bot.session } : {},
+      ...bot.look && typeof bot.look === "object" && !Array.isArray(bot.look) ? { look: bot.look } : {}
+    }));
+    return true;
+  }
+  bots() {
+    return this.listed;
+  }
+  name(box) {
+    return this.boxes.get(box)?.name ?? "another computer";
+  }
+  takesSeats(box) {
+    return this.boxes.get(box)?.seats === true;
+  }
+  home(box) {
+    let home2 = this.homes.get(box);
+    if (!home2)
+      this.homes.set(box, home2 = new RemoteHome(box, this.transport, () => this.name(box), this.clock));
+    return home2;
+  }
+  existing(box) {
+    return this.homes.get(box);
+  }
+}
+
+// Agents/src/server.ts
+var attempts = new Map;
+function cancelSignIns() {
+  for (const pending of attempts.values())
+    pending.attempt.cancel();
+  attempts.clear();
+}
+setInterval(() => {
+  for (const [id, pending] of attempts) {
+    if (Date.now() < pending.expires + 60000)
+      continue;
+    pending.attempt.cancel();
+    attempts.delete(id);
+  }
+}, 60000).unref?.();
+var json4 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var located = (value) => json4({ location: { directory: process.cwd() }, data: value });
+var error2 = (status, message2) => json4({ message: message2 }, status);
+var lastSeen = new Map;
+var lastMaintained = new Map;
+async function maintainedSoon(agent, fresh) {
+  if (!agent.maintenance)
+    return;
+  let answered = false;
+  const asked = agent.maintenance(fresh).then((value2) => {
+    const changed = JSON.stringify(lastMaintained.get(agent.providerID)) !== JSON.stringify(value2);
+    lastMaintained.set(agent.providerID, value2);
+    if (answered && changed)
+      emit("integration.updated", { integrationID: agent.providerID });
+    return value2;
+  }, () => lastMaintained.get(agent.providerID));
+  const value = await Promise.race([asked, Bun.sleep(2000).then(() => lastMaintained.get(agent.providerID))]);
+  answered = true;
+  return value;
+}
+async function integration(agent, fresh = false, auto) {
+  const [account, maintained] = await Promise.all([
+    agent.account(fresh).catch((error3) => ({ installed: false, signedIn: false, message: String(error3?.message ?? error3) })),
+    maintainedSoon(agent, fresh)
+  ]);
+  const seen = JSON.stringify([account.installed, account.signedIn, account.label]);
+  const before = lastSeen.get(agent.providerID);
+  lastSeen.set(agent.providerID, seen);
+  if (before !== undefined && before !== seen) {
+    agent.forgetModels?.();
+    emit("integration.updated", { integrationID: agent.providerID });
+    if (account.signedIn && auto?.release(agent.providerID))
+      emit("kuvo.auto.updated", {});
+  }
+  return {
+    id: agent.providerID,
+    name: agent.name,
+    metadata: {
+      source: "agent",
+      agent: agent.id,
+      accountID: agent.instance.id,
+      accountLabel: agent.instance.label,
+      installed: account.installed,
+      message: account.message,
+      signInEnded: account.ended ?? false,
+      account: account.label,
+      install: agent.install,
+      signsOut: Boolean(agent.signOut),
+      version: maintained?.installed,
+      latestVersion: maintained?.latest,
+      outdated: maintained ? isOutdated(maintained) : false,
+      updateCommand: maintained?.shown,
+      updates: Boolean(agent.update && maintained?.command),
+      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely)
+    },
+    methods: agent.methods(),
+    connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : "Signed in" } }] : []
+  };
+}
+async function models(agents) {
+  const lists = await Promise.all(agents.map(async (agent) => {
+    try {
+      const account = await agent.account();
+      return account.signedIn ? await agent.models() : [];
+    } catch {
+      return [];
+    }
+  }));
+  return lists.flat();
+}
+function page(items2, url) {
+  const limit2 = Number(url.searchParams.get("limit") ?? 100) || 100;
+  const cursor = url.searchParams.get("cursor");
+  let start = 0;
+  if (cursor) {
+    const after = cursor.split(":")[1];
+    const index = items2.findIndex((item) => item.id === after);
+    start = index >= 0 ? index + 1 : items2.length;
+  }
+  const data = items2.slice(start, start + limit2);
+  const order = cursor?.split(":", 1)[0] ?? url.searchParams.get("order") ?? "desc";
+  const filter = url.searchParams.get("parentID") ?? cursor?.split(":")[2];
+  const next2 = start + limit2 < items2.length && data.length ? `${order}:${data[data.length - 1].id}${filter ? `:${filter}` : ""}` : undefined;
+  return { data, cursor: { next: next2 } };
+}
+function handler(context) {
+  const expected = "Basic " + Buffer.from(`opencode:${context.password}`).toString("base64");
+  const { sessions, roster, auto, link: link2 } = context;
+  const agentFor = (id) => roster.find(id);
+  return async (request) => {
+    if (request.headers.get("authorization") !== expected)
+      return error2(401, "Unauthorized");
+    const url = new URL(request.url);
+    const parts2 = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    const method = request.method;
+    const body = async () => request.headers.get("content-type")?.includes("json") ? await request.json().catch(() => ({})) : {};
+    try {
+      if (parts2[0] !== "api")
+        return error2(404, "Not found");
+      const [, area, a, b, c, d, e] = parts2;
+      if (area === "info")
+        return json4({ version: context.version, pid: process.pid });
+      if (area === "event")
+        return feed();
+      if (area === "integration") {
+        if (!a) {
+          const fresh = url.searchParams.get("fresh") === "1";
+          if (fresh)
+            await refreshLoginPath();
+          return located(await Promise.all(roster.all().map((agent2) => integration(agent2, fresh, auto))));
+        }
+        const agent = agentFor(a);
+        if (!agent)
+          return error2(404, `No agent ${a}.`);
+        if (!b)
+          return located(await integration(agent, true, auto));
+        if (b === "connect" && c === "oauth") {
+          if (!d && method === "POST") {
+            const { methodID, remote } = await body();
+            if (!agent.signIn)
+              return error2(400, `${agent.name} signs in another way.`);
+            if (remote === true && !agent.signsInRemotely)
+              return error2(400, `Sign in to ${agent.name} on the computer it runs on: its page comes back there.`);
+            const attempt = await agent.signIn(methodID, { remote: remote === true });
+            const id = newID("att");
+            const created = Date.now();
+            const expires = created + 30 * 60000;
+            attempts.set(id, { agent, attempt, created, expires });
+            return located({ attemptID: id, url: attempt.url, instructions: attempt.instructions, mode: attempt.mode, acceptsCode: attempt.acceptsCode || undefined, userCode: attempt.userCode, time: { created, expires } });
+          }
+          const pending = d ? attempts.get(d) : undefined;
+          if (!pending)
+            return error2(404, "That sign-in is over. Start it again.");
+          if (method === "GET" && !e) {
+            const expired = Date.now() > pending.expires;
+            const status = expired ? { status: "expired" } : pending.attempt.status();
+            if (expired)
+              pending.attempt.cancel();
+            if (status.status !== "pending")
+              attempts.delete(d);
+            return located(status);
+          }
+          if (method === "POST" && e === "complete") {
+            const { code } = await body();
+            if (!pending.attempt.complete)
+              return error2(400, "This sign-in finishes in the browser.");
+            await pending.attempt.complete(String(code ?? ""));
+            return json4({});
+          }
+          if (method === "DELETE") {
+            pending.attempt.cancel();
+            attempts.delete(d);
+            return json4({});
+          }
+        }
+        if (b === "connect" && c === "key" && method === "POST") {
+          const { key } = await body();
+          if (!agent.signInWithKey)
+            return error2(400, `${agent.name} doesn't take a key here.`);
+          await agent.signInWithKey(String(key ?? "").trim());
+          return json4({});
+        }
+        if (b === "update" && method === "POST") {
+          if (!agent.update)
+            return error2(400, `Update ${agent.name} the way you installed it.`);
+          const result = await agent.update();
+          if (result.updated) {
+            for (const each of roster.all())
+              if (each.id === agent.id)
+                each.programUpdated?.();
+            emit("integration.updated", { integrationID: agent.providerID });
+            emit("model.updated", {});
+          }
+          return json4({ data: result });
+        }
+        if (b === "install" && method === "POST") {
+          if (!agent.installProgram)
+            return error2(400, `Install ${agent.name} the way its maker says.`);
+          const result = await agent.installProgram();
+          if (result.installed) {
+            for (const each of roster.all())
+              if (each.id === agent.id)
+                each.programUpdated?.();
+            emit("integration.updated", { integrationID: agent.providerID });
+            emit("model.updated", {});
+          }
+          return json4({ data: result });
+        }
+        if (b === "disconnect" && method === "POST") {
+          if (!agent.signOut)
+            return error2(400, `Sign out of ${agent.name} where you signed in.`);
+          await agent.signOut();
+          return json4({});
+        }
+      }
+      if (area === "model") {
+        if (a === "default")
+          return located(null);
+        return located(await models(roster.all()));
+      }
+      if (area === "agent" || area === "command" || area === "skill" || area === "mcp")
+        return located([]);
+      if (area === "provider")
+        return located([]);
+      if (area === "shell") {
+        const header2 = request.headers.get("x-opencode-directory");
+        const directory = url.searchParams.get("directory") ?? (header2 ? decodeURIComponent(header2) : undefined);
+        if (!a && method === "GET")
+          return located(shells(directory));
+        if (a && !b && method === "GET") {
+          const job = shell(a);
+          return job ? located(job) : error2(404, "No such command.");
+        }
+        if (a && b === "output" && method === "GET") {
+          const limit2 = url.searchParams.get("limit");
+          const read2 = await shellOutput(a, Number(url.searchParams.get("cursor") ?? 0) || 0, limit2 ? Number(limit2) : undefined);
+          return read2 ? located(read2) : error2(404, "No such command.");
+        }
+        if (a && !b && method === "DELETE")
+          return await stopShell(a) ? json4({}) : error2(404, "No such command.");
+      }
+      if (area === "session") {
+        if (!a) {
+          if (method === "POST")
+            return json4({ data: sessions.create(await body()) });
+          const directory = url.searchParams.get("directory") ?? undefined;
+          const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
+          const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
+          const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
+          return json4(page(ordered, url));
+        }
+        if (a === "active")
+          return json4({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
+        if (a === "import" && method === "POST")
+          return json4({ data: sessions.importSession(await body()) });
+        const id = a;
+        if (!b) {
+          if (method === "GET")
+            return json4({ data: sessions.get(id) });
+          if (method === "PATCH") {
+            sessions.update(id, await body());
+            return json4({ data: sessions.get(id) });
+          }
+          if (method === "DELETE") {
+            await sessions.remove(id);
+            return json4({});
+          }
+        }
+        switch (b) {
+          case "message": {
+            const messages = sessions.messages(id);
+            const asc = url.searchParams.get("order") === "asc" || url.searchParams.get("cursor")?.startsWith("asc");
+            const ordered = asc ? messages : [...messages].reverse();
+            if (c) {
+              const found = messages.find((message2) => message2.id === c);
+              return found ? json4({ data: found }) : error2(404, "No such message.");
+            }
+            return json4(page(ordered, url));
+          }
+          case "inbox":
+            if (method === "DELETE" && c) {
+              sessions.cancelInput(id, c);
+              return json4({});
+            }
+            if (method === "PATCH" && c) {
+              sessions.setDelivery(id, c, (await body()).delivery);
+              return json4({});
+            }
+            return json4({ data: sessions.inbox(id) });
+          case "prompt": {
+            const input = await body();
+            sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
+            return json4({});
+          }
+          case "fork":
+            return json4({ data: sessions.fork(id, String((await body()).before ?? "")) });
+          case "revert":
+            if (c === "stage" && method === "POST")
+              return json4({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
+            if (!c && method === "DELETE") {
+              await sessions.clearRevert(id);
+              return json4({});
+            }
+            break;
+          case "shell":
+            if (method !== "POST")
+              break;
+            sessions.runShell(id, String((await body()).command ?? ""));
+            return json4({});
+          case "synthetic": {
+            const input = await body();
+            sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
+            return json4({});
+          }
+          case "generate": {
+            const prompt = String((await body()).prompt ?? "");
+            if (!prompt.trim())
+              throw new BadRequest("Say what to write.");
+            return json4({ data: { text: await sessions.generate(id, prompt) } });
+          }
+          case "command": {
+            const input = await body();
+            const name = String(input.name ?? "");
+            const written = String(input.text ?? "");
+            const template = name ? await link2.commandTemplate(name, sessions.get(id).location.directory) : undefined;
+            const text2 = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
+            sessions.prompt(id, { id: newID("msg"), text: text2, files: input.files ?? [], delivery: input.delivery ?? "steer" });
+            return json4({});
+          }
+          case "interrupt":
+            return json4({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
+          case "model":
+            sessions.selectModel(id, (await body()).model);
+            return json4({});
+          case "agent":
+            sessions.selectAgent(id, (await body()).agent);
+            return json4({});
+          case "permission":
+            if (!c)
+              return json4({ data: id === "global" ? [] : sessions.permissions(id) });
+            if (d === "reply") {
+              const { decision } = await body();
+              sessions.replyPermission(id, c, decision);
+              return json4({});
+            }
+            break;
+          case "form":
+            if (!c)
+              return json4({ data: id === "global" ? [] : sessions.forms(id) });
+            if (d === "reply") {
+              sessions.replyForm(id, c, (await body()).answer ?? {});
+              return json4({});
+            }
+            if (method === "DELETE") {
+              sessions.replyForm(id, c, null);
+              return json4({});
+            }
+            break;
+          case "view": {
+            const { idle } = await body();
+            sessions.view(id, Number(idle) || Date.now());
+            return json4({});
+          }
+          case "diff":
+            return json4({ data: [] });
+        }
+      }
+      if (area === "kuvo" && a === "accounts") {
+        if (method === "POST" && !b) {
+          const { agent, label: label2 } = await body();
+          if (!kinds.includes(agent))
+            return error2(400, "That isn't one of the coding agents.");
+          const record = roster.accounts.add(agent, label2);
+          roster.sync();
+          const added = roster.all().find((each) => each.instance.id === record.id && each.id === agent);
+          emit("integration.updated", { integrationID: added.providerID });
+          return json4({ data: { providerID: added.providerID } });
+        }
+        const target = b ? roster.find(b) : undefined;
+        if (!target)
+          return error2(404, "No such account.");
+        if (target.instance.id === "default")
+          return error2(400, "That's the agent's own sign-in: sign out of it where you signed in.");
+        if (method === "PATCH") {
+          roster.accounts.rename(target.providerID, (await body()).label);
+          roster.sync();
+          emit("integration.updated", { integrationID: target.providerID });
+          return json4({});
+        }
+        if (method === "DELETE") {
+          sessions.forgetProvider(target.providerID);
+          await target.removeAccount?.().catch(() => {});
+          target.shutdown?.();
+          roster.accounts.remove(target.providerID);
+          roster.sync();
+          emit("integration.updated", { integrationID: target.providerID });
+          emit("model.updated", {});
+          return json4({});
+        }
+      }
+      if (area === "kuvo" && a === "groups")
+        return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
+      if (area === "kuvo" && a === "link" && b === "groups")
+        return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(4), body, request.signal);
+      if (area === "kuvo" && a === "peers")
+        return await peerRoutes(context.groups?.peers, method, parts2.slice(3), body, request.signal);
+      if (area === "kuvo" && a === "tools" && method === "PUT") {
+        const { url: address, token, timeout } = await body();
+        setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
+        return json4({});
+      }
+      if (area === "kuvo" && a === "engine" && method === "PUT") {
+        const { url: address, password } = await body();
+        link2.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
+        return json4({});
+      }
+      if (area === "kuvo" && a === "auto") {
+        if (b === "limits" && method === "DELETE") {
+          const provider = url.searchParams.get("provider");
+          if (provider)
+            auto.release(provider);
+          else
+            auto.clearLimits();
+          emit("kuvo.auto.updated", {});
+          return json4({});
+        }
+        if (!b && method === "PUT") {
+          const { entries, lists } = await body();
+          if (Array.isArray(lists)) {
+            try {
+              auto.setLists(lists);
+            } catch (problem) {
+              return error2(400, problem.message);
+            }
+          } else if (Array.isArray(entries))
+            auto.set(entries);
+          else
+            return error2(400, "Send the lists, or the first one's entries.");
+          emit("kuvo.auto.updated", {});
+        }
+        if (!b && (method === "GET" || method === "PUT"))
+          return json4({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+      }
+      if (area === "experimental" && a === "session" && b) {
+        const id = b;
+        if (c === "instructions" && d === "entries" && e) {
+          sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
+          return json4({});
+        }
+        if (c === "wait") {
+          while (sessions.active().includes(id))
+            await Bun.sleep(200);
+          return json4({});
+        }
+      }
+      return error2(404, "Not available for this agent.");
+    } catch (caught) {
+      if (caught instanceof NotFound)
+        return error2(404, caught.message);
+      if (caught instanceof BadRequest)
+        return error2(400, caught.message);
+      return error2(500, caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+}
+function expandCommand(template, written) {
+  const all = written.trim();
+  const words = all ? all.split(/\s+/) : [];
+  const named2 = /\$ARGUMENTS|\$[1-9]/.test(template);
+  const highest = Math.max(0, ...[...template.matchAll(/\$([1-9]\d*)/g)].map((match) => Number(match[1])));
+  const filled = template.replace(/\$ARGUMENTS|\$([1-9]\d*)/g, (_, index) => {
+    if (index === undefined)
+      return all;
+    return Number(index) === highest ? words.slice(highest - 1).join(" ") : words[Number(index) - 1] ?? "";
+  });
+  return named2 || !all ? filled.trim() : `${filled.trim()}
+
+${all}`;
+}
+
+// Agents/src/store.ts
+import { mkdirSync as mkdirSync14, readdirSync as readdirSync7, readFileSync as readFileSync18, renameSync as renameSync7, rmSync as rmSync11, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
+import { join as join18 } from "path";
+
+class Store {
+  root;
+  records = new Map;
+  pending = new Map;
+  constructor(root) {
+    this.root = root;
+    mkdirSync14(root, { recursive: true });
+    for (const id of readdirSync7(root)) {
+      try {
+        const folder = join18(root, id);
+        const session = JSON.parse(readFileSync18(join18(folder, "session.json"), "utf8"));
+        let messages = [];
+        try {
+          messages = JSON.parse(readFileSync18(join18(folder, "messages.json"), "utf8"));
+        } catch {}
+        let agent = {};
+        try {
+          agent = JSON.parse(readFileSync18(join18(folder, "agent.json"), "utf8"));
+        } catch {}
+        this.records.set(session.id, { session, messages, agent });
+      } catch {}
+    }
+  }
+  all() {
+    return [...this.records.values()].map((record) => record.session);
+  }
+  get(id) {
+    return this.records.get(id);
+  }
+  writtenAt(id) {
+    try {
+      return statSync6(join18(this.root, id, "messages.json")).mtimeMs;
+    } catch {
+      return;
+    }
+  }
+  add(session) {
+    this.records.set(session.id, { session, messages: [], agent: {} });
+    this.save(session.id, true);
+  }
+  remove(id) {
+    this.records.delete(id);
+    clearTimeout(this.pending.get(id));
+    this.pending.delete(id);
+    rmSync11(join18(this.root, id), { recursive: true, force: true });
+  }
+  save(id, now = false) {
+    clearTimeout(this.pending.get(id));
+    if (now) {
+      this.pending.delete(id);
+      this.write(id);
+      return;
+    }
+    this.pending.set(id, setTimeout(() => {
+      this.pending.delete(id);
+      this.write(id);
+    }, 500));
+  }
+  flush() {
+    for (const id of [...this.pending.keys()])
+      this.save(id, true);
+  }
+  write(id) {
+    const record = this.records.get(id);
+    if (!record)
+      return;
+    const folder = join18(this.root, id);
+    mkdirSync14(folder, { recursive: true });
+    for (const [name, value] of [
+      ["session.json", record.session],
+      ["messages.json", record.messages],
+      ["agent.json", record.agent]
+    ]) {
+      const file = join18(folder, name);
+      writeFileSync13(file + ".new", JSON.stringify(value));
+      renameSync7(file + ".new", file);
+    }
+  }
+}
+
+// Agents/src/groups/runner.ts
+var memoryKey = "kuvo.groups.machine";
+var recapMailBytes = 24000;
+var transcriptMailBytes = 200000;
+function prefixBytes(text2, most) {
+  const bytes = new TextEncoder().encode(text2);
+  if (bytes.length <= most)
+    return text2;
+  return new TextDecoder().decode(bytes.subarray(0, Math.max(0, most))).replace(/\uFFFD+$/, "");
+}
+var groupMessageID = () => "gm_" + crypto.randomUUID().toLowerCase();
+var turnID = () => "trn_" + crypto.randomUUID().toLowerCase();
+var reason3 = (error3) => String(error3?.message ?? error3 ?? "it failed").trim();
+function either(...signals) {
+  const controller = new AbortController;
+  const stop = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted)
+      stop();
+    else
+      signal.addEventListener("abort", stop, { once: true });
+  }
+  return { signal: controller.signal, done: () => signals.forEach((signal) => signal.removeEventListener("abort", stop)) };
+}
 
 class GroupRunner {
   context;
   chats;
   live = new Map;
-  seatBase = new Map;
   runs = 0;
   following = new Set;
-  declined = new Set;
-  seatsChecked = new Set;
+  seats;
   rulesChanged() {
-    this.seatsChecked.clear();
+    this.seats.rulesChanged();
   }
-  seatTexts = new Map;
   syncs = new Map;
   meetings;
-  get here() {
-    return this.context.place ? ` on ${this.context.place}` : "";
+  get peers() {
+    return this.context.peers;
   }
   get memoryKey() {
     return this.context.memoryKey ?? memoryKey;
   }
   constructor(context) {
     this.context = context;
+    this.seats = new Seats(context);
     this.chats = context.store.load();
     for (const [id, kept2] of this.chats) {
       if (kept2.talking) {
@@ -12735,7 +13736,7 @@ class GroupRunner {
       try {
         this.keepAwake(id);
       } catch (error3) {
-        console.error(`${id}:`, reason2(error3));
+        console.error(`${id}:`, reason3(error3));
       }
     }
   }
@@ -12768,14 +13769,14 @@ class GroupRunner {
   }
   list() {
     return [...this.chats.values()].map((kept2) => {
-      const said3 = kept2.messages.filter((message2) => message2.kind !== "note");
+      const said4 = kept2.messages.filter((message2) => message2.kind !== "note");
       return {
         group: kept2.group,
         status: kept2.status,
         state: this.talk(kept2.group.id),
         last: kept2.messages.at(-1),
-        said: said3.at(-1),
-        fromBot: said3.filter((message2) => message2.author !== undefined).at(-1)
+        said: said4.at(-1),
+        fromBot: said4.filter((message2) => message2.author !== undefined).at(-1)
       };
     });
   }
@@ -12790,8 +13791,25 @@ class GroupRunner {
   bot(id) {
     return id ? this.context.store.bot(id) : undefined;
   }
+  member(id) {
+    if (!id)
+      return;
+    const here = this.bot(id);
+    if (here)
+      return { id: here.id, name: here.name, job: here.job };
+    const there = this.context.peers?.bots().find((bot) => bot.id === id);
+    return there && { id: there.id, name: there.name, job: there.job, box: there.box };
+  }
+  everyone() {
+    const here = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name, job: bot.job }));
+    const ids = new Set(here.map((bot) => bot.id));
+    return [...here, ...(this.context.peers?.bots() ?? []).filter((bot) => !ids.has(bot.id))];
+  }
+  home(box) {
+    return box && this.context.peers ? this.context.peers.home(box) : this.seats;
+  }
   name(author) {
-    return author === undefined ? "User" : this.bot(author)?.name ?? "A bot that left";
+    return author === undefined ? "User" : this.member(author)?.name ?? "A bot that left";
   }
   changed(id) {
     const kept2 = this.chats.get(id);
@@ -12935,6 +13953,7 @@ class GroupRunner {
     this.append(message2, id);
     const live = this.state(id);
     live.asked++;
+    live.splitStop?.();
     live.paused = false;
     if (live.speaking)
       this.steer(live.speaking, id, message2);
@@ -12949,6 +13968,7 @@ class GroupRunner {
     const message2 = this.append({ id: groupMessageID(), text: topic, time: stamp2(), kind: "meeting" }, id);
     const live = this.state(id);
     live.asked++;
+    live.splitStop?.();
     live.paused = false;
     live.meeting = message2.id;
     if (live.speaking)
@@ -13007,13 +14027,6 @@ class GroupRunner {
     live.abort = undefined;
     live.run = undefined;
     live.paused = false;
-    for (const speaker of [live.speaking, live.splitting]) {
-      const kept2 = this.chats.get(id);
-      const seat = speaker ? kept2?.group.seats[speaker] : undefined;
-      const bot = this.bot(speaker);
-      if (seat && bot && kept2)
-        this.seatAPI(bot, kept2.group, seat).then((api) => api?.interrupt(seat).catch(() => {}));
-    }
     live.speaking = undefined;
     live.activity = undefined;
     live.splitting = undefined;
@@ -13082,18 +14095,18 @@ class GroupRunner {
       }
       const names = new Map;
       for (const member2 of kept3.group.members) {
-        const bot = this.bot(member2);
+        const bot = this.member(member2);
         if (bot)
           names.set(member2, bot.name);
       }
       const members = kept3.group.members.filter((member2) => names.has(member2) && !absent.has(member2));
-      const bots = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }));
+      const bots2 = this.everyone().map((bot) => ({ id: bot.id, name: bot.name }));
       let named2;
       for (let index = begun;index < kept3.messages.length && !named2; index++) {
         const message2 = kept3.messages[index];
         if (message2.kind === "note")
           continue;
-        const guest = guests(kept3.messages.slice(0, index + 1), kept3.group.members, bots).find((bot) => !guested.has(message2.id + "/" + bot));
+        const guest = guests(kept3.messages.slice(0, index + 1), kept3.group.members, bots2).find((bot) => !guested.has(message2.id + "/" + bot));
         if (guest)
           named2 = { message: message2, guest };
       }
@@ -13136,7 +14149,7 @@ class GroupRunner {
     }
     const kept2 = this.chat(id);
     const lead = kept2?.group.members[0];
-    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept2 || !lead || !this.bot(lead))
+    if (signal.aborted || saidCount === 0 || live.asked !== epoch || !kept2 || !lead || !this.member(lead) || absent.has(lead))
       return epoch;
     if (saidCount >= (live.meeting !== undefined ? 2 : 3) && kept2.group.members.length >= 2) {
       const before = kept2.messages.at(-1)?.id;
@@ -13153,164 +14166,94 @@ class GroupRunner {
   }
   async turn(botID, id, signal, wrapUp = false, namedIn) {
     const guest = namedIn !== undefined;
-    const bot = this.bot(botID);
+    const bot = this.member(botID);
     if (!bot)
       return "absent";
     const live = this.state(id);
     live.speaking = botID;
     const run2 = live.run;
     this.told(id);
-    const going = () => {
-      if (signal.aborted)
-        throw new Cancelled;
-    };
     const left = () => !guest && !this.chat(id)?.group.members.includes(botID);
-    let scratch;
-    let provider;
+    const own = new AbortController;
+    const stopped = either(signal, own.signal);
     try {
       const kept2 = this.chat(id);
       if (!kept2)
         return "absent";
-      const first = await this.seatAPI(bot, kept2.group, kept2.group.seats[botID]);
-      going();
-      if (!first) {
-        this.note(`${bot.name} couldn\u2019t answer: the coding agents aren\u2019t running.`, id);
-        return "absent";
-      }
-      const model2 = await this.model(bot);
-      if (model2 && model2.providerID !== autoProvider) {
-        const account = runsWithAgents(model2) ? await this.context.agentAccount?.(model2.providerID).catch(() => {
-          return;
-        }) : await new SeatAPI(this.context.engine).account(model2).catch(() => {
-          return;
-        });
-        going();
-        provider = account?.name;
-        if (account?.signedOut) {
-          this.note(`${bot.name} couldn\u2019t answer: ${model2.id} needs a sign-in${this.here}: sign in to ${account.name} in Settings \u203A Accounts, or choose another model.`, id);
-          return "absent";
-        }
-      }
-      let seat;
-      let isNew;
-      if (guest) {
-        seat = await this.scratch(bot, kept2.group, first, `${bot.name} asked into ${kept2.group.name}`);
-        scratch = { seat, api: first };
-        isNew = true;
-      } else {
-        ({ seat, isNew } = await this.seat(bot, id, first));
-      }
-      going();
-      const current = this.chat(id);
-      if (!current)
-        return "absent";
-      const api = guest ? first : await this.seatAPI(bot, current.group, seat);
-      going();
-      if (!api) {
-        this.note(`${bot.name} couldn\u2019t answer: the coding agents aren\u2019t running.`, id);
-        return "absent";
-      }
-      const all = [...current.messages];
-      const heard = current.group.heard[botID];
+      const all = [...kept2.messages];
+      const heard = kept2.group.heard[botID];
       const start = heard ? all.findIndex((message2) => message2.id === heard) + 1 : 0;
       const unheard = all.slice(start).filter((message2) => message2.author !== botID && message2.kind !== "note");
-      const promptID = newID("msg");
-      const retracted = guest ? undefined : current.group.retracted?.[botID];
+      const retracted = guest ? undefined : kept2.group.retracted?.[botID];
       const name = (author) => this.name(author);
-      const prompt = guest ? guestText(botID, current.group, all, namedIn?.author, name) : isNew ? seatStartText(botID, current.group, all, wrapUp, name, named2(all)) : turnText(botID, current.group, unheard, wrapUp, name, named2(unheard));
-      await api.prompt(seat, promptID, prompt, "queue");
-      going();
-      const last2 = all.at(-1);
-      if (last2 && !guest)
-        this.setHeard(last2.id, botID, id);
-      const now = this.chat(id)?.group;
-      if (now && retracted !== undefined && now.retracted?.[botID] === retracted) {
-        delete now.retracted[botID];
-        if (Object.keys(now.retracted).length === 0)
-          now.retracted = undefined;
+      const peers = this.context.peers;
+      if (bot.box && peers && !peers.takesSeats(bot.box)) {
+        this.note(`${bot.name} is on ${peers.name(bot.box)}, which needs an update to take part.`, id);
+        return "absent";
+      }
+      let seat = guest ? undefined : kept2.group.seats[botID];
+      if (seat && (kept2.group.seatBoxes?.[botID] ?? undefined) !== bot.box) {
+        this.home(kept2.group.seatBoxes?.[botID]).drop(seat, kept2.group.agentSeats?.includes(seat) ?? false, { bot: botID, chat: id });
+        delete kept2.group.seats[botID];
+        delete kept2.group.heard[botID];
+        if (kept2.group.seatBoxes)
+          delete kept2.group.seatBoxes[botID];
+        if (kept2.group.agentSeats?.includes(seat))
+          kept2.group.agentSeats = kept2.group.agentSeats.filter((each) => each !== seat);
         this.changed(id);
+        seat = undefined;
       }
-      const sent = Date.now();
-      let thinking = "";
-      let streamedAt = 0;
-      const show = (now2) => {
-        if (live.run !== run2 || live.speaking !== botID || JSON.stringify(now2) === JSON.stringify(live.activity ?? []))
-          return;
-        const sameKind = live.activity?.[0]?.kind === now2[0]?.kind;
-        if (sameKind && Date.now() - streamedAt < 300)
-          return;
-        live.activity = now2;
-        streamedAt = Date.now();
-        this.told(id);
-      };
-      const unlisten = this.context.listen?.(seat, {
-        event: (event) => {
-          const data = event?.data ?? {};
-          if (event?.type === "session.reasoning.started")
-            thinking = "";
-          else if (event?.type === "session.reasoning.delta") {
-            thinking = (thinking + String(data.delta ?? "")).slice(-2000);
-            const line = thought(thinking);
-            if (line)
-              show([{ kind: "thinking", text: line }]);
-          } else if (event?.type === "session.text.started" || event?.type === "session.text.delta")
-            show([{ kind: "writing" }]);
-        },
-        reconnected() {}
-      });
-      try {
-        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, (messages) => {
-          const now2 = activity(messages, promptID, sent);
-          if (live.run !== run2 || live.speaking !== botID || now2.length === 0 || JSON.stringify(now2) === JSON.stringify(live.activity ?? []))
-            return;
-          if (Date.now() - streamedAt < 3000)
-            return;
-          live.activity = now2;
-          this.told(id);
-        });
-      } finally {
-        unlisten?.();
-      }
+      const fresh = guest ? undefined : seatStartText(botID, kept2.group, all, wrapUp, name, named2(all));
+      const text2 = guest ? guestText(botID, kept2.group, all, namedIn?.author, name) : seat ? turnText(botID, kept2.group, unheard, wrapUp, name, named2(unheard)) : fresh;
+      const last2 = all.at(-1);
+      const home2 = this.home(bot.box);
+      const result = await home2.turn({
+        id: turnID(),
+        chat: this.context_(kept2.group),
+        bot: botID,
+        ...seat ? { seat, agentsSeat: kept2.group.agentSeats?.includes(seat) ?? false, fresh } : {},
+        kind: guest ? "guest" : wrapUp ? "wrapUp" : "turn",
+        text: text2,
+        ...guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept2.group, all, name)).length }
+      }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run: run2, last: last2?.id, retracted, own }), stopped.signal);
       if (left())
         return "absent";
-      const reply = await this.reply(seat, promptID, sent, api);
-      going();
-      if (!guest && reply.size !== undefined) {
-        const base = this.seatBase.get(seat) ?? reply.size;
-        this.seatBase.set(seat, base);
-        const grown = reply.size - base;
-        if (grown > seatBudget && outgrew(grown, chatText(botID, current.group, this.chat(id)?.messages ?? all, name))) {
-          this.seatBase.delete(seat);
-          await this.startOver(botID, id);
+      if (!result.ok) {
+        this.note(result.away && bot.box && peers ? `${bot.name} is on ${peers.name(bot.box)}, which can\u2019t be reached now, so it sat this out.` : `${bot.name} couldn\u2019t answer: ${result.why}`, id);
+        return "absent";
+      }
+      if (result.outgrown) {
+        const now = this.chat(id);
+        const went = now?.group.seats[botID];
+        if (now && went) {
+          delete now.group.seats[botID];
+          delete now.group.heard[botID];
+          if (now.group.agentSeats?.includes(went))
+            now.group.agentSeats = now.group.agentSeats.filter((each) => each !== went);
+          this.changed(id);
         }
       }
-      if (!reply.text) {
-        if (reply.error) {
-          this.note(`${bot.name} couldn\u2019t answer: ${plainError(reply.error, provider, this.context.place)}`, id);
-          return "absent";
-        }
+      if (!result.text)
         return "passed";
-      }
-      if (!wrapUp && isPass(reply.text))
+      if (!wrapUp && isPass(result.text))
         return "passed";
       this.append({
         id: groupMessageID(),
         author: botID,
-        text: ampersands(reply.text, this.context.store.allBots().map((each) => each.name)),
+        text: ampersands(result.text, this.everyone().map((each) => each.name)),
         time: stamp2(),
         kind: wrapUp ? "wrapUp" : "message",
-        ...reply.steps.length ? { steps: reply.steps.map(trimmed) } : {}
+        ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
       }, id);
       return "said";
     } catch (error3) {
-      if (signal.aborted || error3 instanceof Cancelled || left())
+      if (signal.aborted || own.signal.aborted || error3 instanceof Cancelled || left())
         return "absent";
-      console.error(`${botID}'s turn in ${id} failed:`, reason2(error3));
-      this.note(`${bot.name} couldn\u2019t answer: ${plainError(reason2(error3), provider, this.context.place)}`, id);
+      console.error(`${botID}'s turn in ${id} failed:`, reason3(error3));
+      this.note(`${bot.name} couldn\u2019t answer: ${reason3(error3)}`, id);
       return "absent";
     } finally {
-      if (scratch)
-        scratch.api.delete(scratch.seat).catch(() => {});
+      stopped.done();
       if (live.speaking === botID && live.run === run2) {
         live.speaking = undefined;
         live.activity = undefined;
@@ -13318,132 +14261,89 @@ class GroupRunner {
       this.told(id);
     }
   }
+  context_(group) {
+    return {
+      id: group.id,
+      name: group.name,
+      ...group.purpose ? { purpose: group.purpose } : {},
+      members: group.members.flatMap((member2) => {
+        const bot = this.member(member2);
+        return bot ? [{ id: bot.id, name: bot.name, job: bot.job }] : [];
+      })
+    };
+  }
+  heardOf(state, turn) {
+    if (state.phase === "taken")
+      return;
+    const { id, botID } = turn;
+    const live = this.state(id);
+    if (state.phase === "activity") {
+      if (live.run !== turn.run || live.speaking !== botID || JSON.stringify(state.activity) === JSON.stringify(live.activity ?? []))
+        return;
+      live.activity = state.activity;
+      this.told(id);
+      return;
+    }
+    if (state.phase === "steered") {
+      this.setHeard(state.message, botID, id);
+      return;
+    }
+    if (turn.guest)
+      return;
+    if (state.phase === "seated") {
+      const now = this.chat(id);
+      if (!now || !now.group.members.includes(botID)) {
+        this.home(turn.box).drop(state.seat, state.agents, { bot: botID, chat: id });
+        turn.own.abort();
+        return;
+      }
+      if (state.replaced) {
+        if (now.group.agentSeats?.includes(state.replaced))
+          now.group.agentSeats = now.group.agentSeats.filter((each) => each !== state.replaced);
+        delete now.group.heard[botID];
+      }
+      now.group.seats[botID] = state.seat;
+      if (turn.box)
+        now.group.seatBoxes = { ...now.group.seatBoxes ?? {}, [botID]: turn.box };
+      else if (now.group.seatBoxes?.[botID]) {
+        delete now.group.seatBoxes[botID];
+        if (Object.keys(now.group.seatBoxes).length === 0)
+          delete now.group.seatBoxes;
+      }
+      if (state.agents)
+        now.group.agentSeats = [...new Set([...now.group.agentSeats ?? [], state.seat])];
+      this.changed(id);
+      return;
+    }
+    if (turn.last)
+      this.setHeard(turn.last, botID, id);
+    const group = this.chat(id)?.group;
+    if (group && turn.retracted !== undefined && group.retracted?.[botID] === turn.retracted) {
+      delete group.retracted[botID];
+      if (Object.keys(group.retracted).length === 0)
+        group.retracted = undefined;
+      this.changed(id);
+    }
+  }
   async steer(botID, id, message2) {
     const kept2 = this.chat(id);
-    const bot = this.bot(botID);
     const seat = kept2?.group.seats[botID];
+    const bot = this.member(botID);
     if (!kept2 || !bot || !seat)
-      return;
-    const api = await this.seatAPI(bot, kept2.group, seat);
-    if (!api || !(await api.active().catch(() => new Set)).has(seat))
       return;
     const text2 = "The user, just now: " + message2.text + (message2.named ? `
 
 ` + message2.named : "");
-    try {
-      await api.prompt(seat, newID("msg"), text2, "steer");
+    if (await this.home(bot.box).steer(seat, kept2.group.agentSeats?.includes(seat) ?? false, text2, message2.id))
       this.setHeard(message2.id, botID, id);
-    } catch {}
-  }
-  async waitForRun(seat, promptID, sent, api, signal, directory, seen, stops) {
-    const pace = this.context.pace ?? 1;
-    let looked = Date.now();
-    let gone = 0;
-    let missing = 0;
-    let idleSince;
-    let woken = false;
-    for (;; ) {
-      await sleep(600 * pace, signal);
-      if (stops?.()) {
-        await api.interrupt(seat).catch(() => {});
-        throw new Cancelled;
-      }
-      await this.decline(seat, api, directory);
-      if (seen && Date.now() - looked > 1500 * pace) {
-        looked = Date.now();
-        const page2 = await api.messages(seat, 12).catch(() => {
-          return;
-        });
-        if (page2)
-          seen(page2.data);
-      }
-      const active = await api.active().catch(() => {
-        return;
-      });
-      if (active && !active.has(seat)) {
-        const inbox = await api.inbox(seat).catch((error3) => error3?.status === 404 ? null : undefined);
-        if (inbox === null) {
-          if (++missing >= 3)
-            return;
-          continue;
-        }
-        missing = 0;
-        if (inbox && !inbox.some((item) => item.id === promptID)) {
-          const read2 = await api.messages(seat, 60).catch(() => {
-            return;
-          });
-          const at2 = read2 ? read2.data.findIndex((message2) => message2?.id === promptID) : -1;
-          if (at2 >= 0 ? read2.data.slice(at2 + 1).some((message2) => message2?.type === "idle") : read2 ? ++gone >= 3 : false)
-            return;
-          if (at2 >= 0)
-            gone = 0;
-          idleSince = undefined;
-        } else if (inbox) {
-          idleSince ??= Date.now();
-          if (Date.now() - idleSince > 8000 * pace) {
-            if (!woken) {
-              woken = true;
-              idleSince = Date.now();
-              await api.setDelivery(seat, promptID, "steer").catch(() => {});
-            } else {
-              await api.cancelInbox(seat, promptID).catch(() => {});
-              return;
-            }
-          }
-        }
-      } else {
-        idleSince = undefined;
-      }
-      if (Date.now() - sent > 600000) {
-        await api.interrupt(seat).catch(() => {});
-        throw new Error("It took too long, so it was stopped.");
-      }
-    }
-  }
-  async decline(seat, api, directory) {
-    for (const request of await api.permissions(seat).catch(() => [])) {
-      if (this.declined.has(request.id))
-        continue;
-      this.declined.add(request.id);
-      await api.reject(seat, request.id, "Nobody can approve this in a group chat. Carry on without it, or say who should do it.").catch(() => {});
-    }
-    for (const form of await api.forms(seat).catch(() => [])) {
-      if (this.declined.has(form.id))
-        continue;
-      this.declined.add(form.id);
-      await api.dismiss(seat, form.id, "Ask the group in your reply instead.").catch(() => {});
-    }
-    const asked = (await api.sharedForms(directory).catch(() => [])).filter((form) => form?.metadata?.kind === "mcp-elicitation" && !this.declined.has(form.id));
-    if (asked.length === 0)
-      return;
-    const messages = (await api.messages(seat, 8).catch(() => {
-      return;
-    }))?.data ?? [];
-    for (const form of asked) {
-      if (!isWaiting(String(form.metadata.server ?? ""), messages))
-        continue;
-      this.declined.add(form.id);
-      await api.dismissShared(form.id, directory).catch(() => {});
-    }
-  }
-  async reply(seat, promptID, sent, api) {
-    const { data } = await api.messages(seat, 60);
-    const start = data.findIndex((message2) => message2?.id === promptID);
-    const since = sent - 2000;
-    const tokens = [...data].reverse().find((message2) => message2?.type === "assistant" && message2.tokens)?.tokens;
-    const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
-    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message2) => (message2?.time?.created ?? 0) >= since)), size };
   }
   async splitWork(wrapUpID, id, lead, signal) {
     const kept2 = this.chat(id);
-    const bot = this.bot(lead);
-    if (!kept2 || !bot)
-      return;
-    const api = await this.seatAPI(bot, kept2.group, kept2.group.seats[lead]);
-    if (!api)
+    const bot = this.member(lead);
+    if (!kept2 || !bot || bot.box && this.context.peers && !this.context.peers.takesSeats(bot.box))
       return;
     const members = kept2.group.members.flatMap((member2) => {
-      const found2 = this.bot(member2);
+      const found2 = this.member(member2);
       return found2 ? [{ id: member2, name: found2.name }] : [];
     });
     const all = kept2.messages;
@@ -13458,23 +14358,25 @@ class GroupRunner {
       }
     }
     const yours = all.slice(begin, end).filter((message2) => message2.author === undefined && message2.kind === "message").slice(-6).map((message2) => [...new Intl.Segmenter().segment(ownWords2(message2.text))].slice(0, 800).map((part) => part.segment).join(""));
-    const promptID = newID("msg");
     const live = this.state(id);
     const epoch = live.asked;
     live.splitting = lead;
     this.told(id);
-    const sent = Date.now();
-    let seat;
+    const newer = new AbortController;
+    const stopSplit = () => newer.abort();
+    live.splitStop = stopSplit;
+    const stopped = either(signal, newer.signal);
     try {
-      seat = await this.scratch(bot, kept2.group, api, `${bot.name} handing out the work in ${kept2.group.name}`);
       const chat2 = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
-      await api.prompt(seat, promptID, chat2 + `
-` + splitText(members.map((member2) => member2.name), yours), "queue");
-      await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, undefined, () => this.state(id).asked !== epoch);
-      const reply = await this.reply(seat, promptID, sent, api);
-      const { tasks: tasks2, go } = tasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase());
-      if (signal.aborted)
+      const result = await this.home(bot.box).turn({ id: turnID(), chat: this.context_(kept2.group), bot: lead, kind: "split", text: chat2 + `
+` + splitText(members.map((member2) => member2.name), yours) }, () => {}, stopped.signal);
+      if (signal.aborted || newer.signal.aborted)
         return;
+      if (!result.ok) {
+        this.note(`${bot.name} couldn\u2019t hand out the work: ${result.why}`, id);
+        return;
+      }
+      const { tasks: tasks2, go } = tasks(result.text, members, () => "gt_" + crypto.randomUUID().toLowerCase());
       if (tasks2.length === 0) {
         if (go)
           this.note(`${bot.name} didn\u2019t say who does what, so no parts were handed out.`, id);
@@ -13486,10 +14388,11 @@ class GroupRunner {
     } catch (error3) {
       if (signal.aborted || error3 instanceof Cancelled)
         return;
-      this.note(`${bot.name} couldn\u2019t hand out the work: ${reason2(error3)}`, id);
+      this.note(`${bot.name} couldn\u2019t hand out the work: ${reason3(error3)}`, id);
     } finally {
-      if (seat)
-        api.delete(seat).catch(() => {});
+      stopped.done();
+      if (live.splitStop === stopSplit)
+        live.splitStop = undefined;
       if (live.splitting === lead)
         live.splitting = undefined;
       this.told(id);
@@ -13523,7 +14426,7 @@ class GroupRunner {
         const first = tasks2.filter((other) => other.id !== task.id && (task.after ?? []).includes(other.bot));
         const failed2 = first.find((other) => other.state === "failed");
         if (failed2) {
-          this.fail(task.id, wrapUpID, id, `${this.bot(failed2.bot)?.name ?? "the bot before it"} couldn\u2019t finish its part first`, false);
+          this.fail(task.id, wrapUpID, id, `${this.member(failed2.bot)?.name ?? "the bot before it"} couldn\u2019t finish its part first`, false);
         } else if (first.every((other) => other.state === "done")) {
           this.changeTask(task.id, wrapUpID, id, (part) => part.state = "working");
           this.handSoon(task.id, wrapUpID, id);
@@ -13554,148 +14457,88 @@ class GroupRunner {
     this.hand(taskID, wrapUpID, id).catch((error3) => console.error("group chat part:", error3)).finally(() => this.following.delete(taskID));
   }
   ownAPI(bot) {
-    if (!bot.agents)
-      return new SeatAPI(this.context.engine);
-    const bridge = this.context.bridge();
-    return bridge ? new SeatAPI(bridge) : undefined;
+    return this.seats.ownAPI(bot);
   }
   async hand(taskID, wrapUpID, id) {
+    const task = this.taskState(taskID, wrapUpID, id);
+    const text2 = this.partText(taskID, wrapUpID, id);
+    if (!task || text2 === undefined)
+      return;
+    const bot = this.member(task.bot);
+    if (!bot)
+      return this.fail(taskID, wrapUpID, id, "the bot is gone");
+    const peers = this.context.peers;
+    if (bot.box && peers) {
+      if (!peers.takesSeats(bot.box))
+        return this.fail(taskID, wrapUpID, id, `${peers.name(bot.box)} needs an update to take part`);
+      peers.home(bot.box).work({ task: taskID, wrapUp: wrapUpID, chat: id, bot: bot.id, text: text2, started: task.started ?? stamp2() });
+      this.changeTask(taskID, wrapUpID, id, (part) => part.prompt = `peer:${bot.box}`);
+      return;
+    }
+    const own = this.bot(task.bot);
+    if (!own)
+      return this.fail(taskID, wrapUpID, id, "the bot is gone");
+    try {
+      const promptID = await this.seats.give(own, text2);
+      this.changeTask(taskID, wrapUpID, id, (part) => part.prompt = promptID);
+      await this.awaitReport(taskID, wrapUpID, id);
+    } catch (error3) {
+      this.fail(taskID, wrapUpID, id, reason3(error3));
+    }
+  }
+  partText(taskID, wrapUpID, id) {
     const kept2 = this.chat(id);
     const wrapUp = kept2?.messages.find((message2) => message2.id === wrapUpID);
     const task = wrapUp?.tasks?.find((part) => part.id === taskID);
     if (!kept2 || !wrapUp || !task)
       return;
-    const bot = this.bot(task.bot);
-    if (!bot)
-      return this.fail(taskID, wrapUpID, id, "the bot is gone");
-    const api = this.ownAPI(bot);
-    if (!api)
-      return this.fail(taskID, wrapUpID, id, "the coding agents aren\u2019t running");
     const before = (wrapUp.tasks ?? []).filter((part) => (task.after ?? []).includes(part.bot)).flatMap((part) => {
       const report = [...kept2.messages].reverse().find((message2) => message2.report === part.id);
       return report ? [{ name: this.name(part.bot), report: report.text }] : [];
     });
-    const promptID = newID("msg");
-    try {
-      const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message");
-      await api.prompt(bot.sessionID, promptID, compose(task, kept2.group, wrapUp, from, before), "queue");
-      this.changeTask(taskID, wrapUpID, id, (part) => part.prompt = promptID);
-      await this.awaitReport(taskID, wrapUpID, id);
-    } catch (error3) {
-      this.fail(taskID, wrapUpID, id, reason2(error3));
-    }
+    const from = this.name(wrapUp.author) + (wrapUp.kind === "wrapUp" ? "'s wrap-up" : "'s last message");
+    return compose(task, kept2.group, wrapUp, from, before);
   }
   taskState(taskID, wrapUpID, id) {
     return this.chat(id)?.messages.find((message2) => message2.id === wrapUpID)?.tasks?.find((task) => task.id === taskID);
   }
   async awaitReport(taskID, wrapUpID, id) {
-    let misses = 0;
-    let stoppedChecks = 0;
-    for (;; ) {
-      await sleep(3000 * (this.context.pace ?? 1));
-      const task = this.taskState(taskID, wrapUpID, id);
-      if (!task || task.state !== "working")
-        return;
-      const bot = this.bot(task.bot);
-      if (!bot || !task.prompt)
-        return this.fail(taskID, wrapUpID, id, "the bot is gone");
-      const api = this.ownAPI(bot);
-      if (!api)
-        continue;
-      const active = await api.active().catch(() => {
-        return;
-      });
-      if (!active || active.has(bot.sessionID))
-        continue;
-      const queued = await api.inbox(bot.sessionID).catch(() => {
-        return;
-      });
-      if (!queued)
-        continue;
-      const read2 = await this.messagesFrom(task.prompt, bot.sessionID, task.started, api);
-      if (read2.kind !== "found") {
-        if (read2.kind === "missing" && !queued.some((item) => item.id === task.prompt)) {
-          if (++misses >= 2)
-            return this.fail(taskID, wrapUpID, id, `its message was taken back before ${bot.name} read it`);
-        } else {
-          misses = 0;
-        }
-        continue;
-      }
-      misses = 0;
-      const run2 = read2.messages.slice(1);
-      let end = run2.findIndex((message2, index) => {
-        if (message2?.type !== "idle")
-          return false;
-        if (message2.outcome !== "interrupted")
-          return true;
-        return run2[index + 1]?.type === "user";
-      });
-      const lastIndex = run2.length - 1;
-      if (end < 0 && lastIndex >= 0 && run2[lastIndex]?.type === "idle" && run2[lastIndex].outcome === "interrupted") {
-        if (++stoppedChecks >= 2)
-          end = lastIndex;
-      } else {
-        stoppedChecks = 0;
-      }
-      const answered = end >= 0 || run2.some((message2) => message2?.type === "assistant" && message2.time?.completed !== undefined);
-      if (!answered)
-        continue;
-      const stillActive = await api.active().catch(() => {
-        return;
-      });
-      if (!stillActive || stillActive.has(bot.sessionID))
-        continue;
-      const found = said2(end >= 0 ? run2.slice(0, end) : run2);
-      let error3 = found.error;
-      if (error3 === undefined && end >= 0 && run2[end]?.outcome === "failed")
-        error3 = run2[end].error?.message;
-      if (this.taskState(taskID, wrapUpID, id)?.state !== "working")
-        return;
-      if (!found.text)
-        return this.fail(taskID, wrapUpID, id, error3 ?? "it stopped without saying what it did");
-      this.changeTask(taskID, wrapUpID, id, (part) => {
-        part.state = "done";
-        part.finished = stamp2();
-      });
-      this.append({ id: groupMessageID(), author: bot.id, text: found.text, time: stamp2(), kind: "message", report: taskID }, id);
-      this.startReady(wrapUpID, id);
-      const kept2 = this.chats.get(id);
-      if (kept2)
-        emit("kuvo.group.done", { id, name: kept2.group.name, bot: bot.id, who: bot.name, text: found.text });
+    const task = this.taskState(taskID, wrapUpID, id);
+    if (!task || task.state !== "working")
       return;
-    }
+    if (!task.prompt || !this.bot(task.bot))
+      return this.fail(taskID, wrapUpID, id, "the bot is gone");
+    const result = await this.seats.follow(task.bot, task.prompt, task.started, () => this.taskState(taskID, wrapUpID, id)?.state === "working");
+    if (result)
+      this.finish(taskID, wrapUpID, id, task.bot, result);
   }
-  async messagesFrom(promptID, session, started, api) {
-    let page2;
-    try {
-      page2 = await api.messages(session, 80);
-    } catch {
-      return { kind: "unreadable" };
-    }
-    let messages = page2.data;
-    const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000;
-    while (!messages.some((message2) => message2?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page2.cursor) {
-      let older;
-      try {
-        older = await api.messages(session, 200, page2.cursor);
-      } catch {
-        break;
-      }
-      if (older.data.length === 0 || messages.some((message2) => message2?.id === older.data.at(-1)?.id))
-        break;
-      messages = [...older.data, ...messages];
-      page2 = older;
-    }
-    const index = messages.findIndex((message2) => message2?.id === promptID);
-    return index >= 0 ? { kind: "found", messages: messages.slice(index) } : { kind: "missing" };
+  finish(taskID, wrapUpID, id, botID, result) {
+    if (this.taskState(taskID, wrapUpID, id)?.state !== "working")
+      return;
+    if (!result.ok)
+      return this.fail(taskID, wrapUpID, id, result.why);
+    this.changeTask(taskID, wrapUpID, id, (part) => {
+      part.state = "done";
+      part.finished = stamp2();
+    });
+    this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp2(), kind: "message", report: taskID }, id);
+    this.startReady(wrapUpID, id);
+    const kept2 = this.chats.get(id);
+    if (kept2)
+      emit("kuvo.group.done", { id, name: kept2.group.name, bot: botID, who: this.name(botID), text: result.text });
+  }
+  reported(from, report) {
+    const task = this.taskState(report.task, report.wrapUp, report.chat);
+    if (!task || task.prompt !== `peer:${from}`)
+      return;
+    this.finish(report.task, report.wrapUp, report.chat, task.bot, report.result);
   }
   fail(taskID, wrapUpID, id, why, thenOthers = true) {
     this.changeTask(taskID, wrapUpID, id, (part) => {
       part.state = "failed";
       part.finished = stamp2();
     });
-    const who = this.bot(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot";
+    const who = this.member(this.taskState(taskID, wrapUpID, id)?.bot)?.name ?? "A bot";
     const reasonText = trim(why).replace(/^\.+|\.+$/g, "");
     this.note(`${who} couldn\u2019t do its part: ${reasonText}.`, id);
     if (thenOthers)
@@ -13709,7 +14552,12 @@ class GroupRunner {
         for (const task of message2.tasks ?? []) {
           if (task.state !== "working" || this.following.has(task.id))
             continue;
-          if (!task.prompt) {
+          if (task.prompt?.startsWith("peer:")) {
+            const text2 = this.partText(task.id, message2.id, id);
+            const box = task.prompt.slice("peer:".length);
+            if (text2 && this.context.peers)
+              this.context.peers.home(box).work({ task: task.id, wrapUp: message2.id, chat: id, bot: task.bot, text: text2, started: task.started ?? stamp2() });
+          } else if (!task.prompt) {
             this.fail(task.id, message2.id, id, "Kuvo Code stopped before it reached the bot");
           } else {
             this.following.add(task.id);
@@ -13765,155 +14613,34 @@ class GroupRunner {
           kept2.group.meeting = undefined;
         }
       } catch (error3) {
-        console.error(`${id}'s meeting:`, reason2(error3));
+        console.error(`${id}'s meeting:`, reason3(error3));
         kept2.group.meeting = undefined;
       }
       this.changed(id);
       this.meet(id, meeting.topic);
     }
   }
-  async seatAPI(bot, group, seat) {
-    let onAgents;
-    if (seat)
-      onAgents = group.agentSeats?.includes(seat) ?? false;
-    else
-      onAgents = runsWithAgents(await this.model(bot));
-    if (!onAgents)
-      return new SeatAPI(this.context.engine);
-    const bridge = this.context.bridge();
-    return bridge ? new SeatAPI(bridge) : undefined;
-  }
-  async model(bot) {
-    const conversation = async () => (await this.ownAPI(bot)?.session(bot.sessionID).catch(() => {
-      return;
-    }))?.model;
-    if (!bot.model)
-      return conversation();
-    if (runsWithAgents(bot.model))
-      return bot.model;
-    const account = await new SeatAPI(this.context.engine).account(bot.model).catch(() => {
-      return;
-    });
-    return account?.signedOut ? await conversation() ?? bot.model : bot.model;
-  }
-  async seat(bot, id, api) {
-    const kept2 = this.chat(id);
-    if (!kept2)
-      throw new Cancelled;
-    const same = () => this.chat(id) === kept2;
-    const settings = this.context.store.settings();
-    const rules = seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? []);
-    const text2 = this.seatText(bot, kept2.group);
-    const existing = kept2.group.seats[bot.id];
-    if (existing) {
-      if (!this.seatsChecked.has(existing)) {
-        this.seatsChecked.add(existing);
-        await api.setPermissions(existing, rules).catch(() => {});
-      }
-      if (this.seatTexts.get(existing) !== text2) {
-        await api.setInstruction(existing, seatKey, text2).catch(() => {});
-        this.seatTexts.set(existing, text2);
-      }
-      if (await this.keepModel(existing, bot, id, api))
-        return { seat: existing, isNew: false };
-    }
-    if (!same())
-      throw new Cancelled;
-    const current = kept2;
-    const model2 = await this.model(bot);
-    const onAgents = runsWithAgents(model2);
-    const seatAPI = onAgents ? this.context.bridge() ? new SeatAPI(this.context.bridge()) : undefined : new SeatAPI(this.context.engine);
-    if (!seatAPI)
-      throw new Error("the coding agents aren\u2019t running");
-    const agent = onAgents && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
-    const session = await seatAPI.create(bot.directory, `${bot.name} in ${current.group.name}`, agent, model2, rules);
-    await seatAPI.setMetadata(session.id, { kuvo: { seat: { group: id, bot: bot.id } } }).catch(() => {});
-    await seatAPI.setInstruction(session.id, seatKey, text2);
-    this.seatTexts.set(session.id, text2);
-    this.seatsChecked.add(session.id);
-    const after = kept2;
-    if (!same() || !after.group.members.includes(bot.id)) {
-      await seatAPI.delete(session.id).catch(() => {});
-      throw new Cancelled;
-    }
-    after.group.seats[bot.id] = session.id;
-    if (onAgents)
-      after.group.agentSeats = [...new Set([...after.group.agentSeats ?? [], session.id])];
-    this.changed(id);
-    return { seat: session.id, isNew: true };
-  }
-  async startOver(botID, id) {
-    const kept2 = this.chat(id);
-    const seat = kept2?.group.seats[botID];
-    if (!kept2 || !seat)
-      return;
-    await this.deleteSeat(seat, kept2.group, botID);
-    if (kept2.group.seats[botID] !== seat)
-      return;
-    delete kept2.group.seats[botID];
-    delete kept2.group.heard[botID];
-    this.changed(id);
-  }
-  async scratch(bot, group, api, title) {
-    const settings = this.context.store.settings();
-    const rules = seatRules(bot.folder, settings?.askFirst ?? false, settings?.denies ?? []);
-    const model2 = await this.model(bot);
-    const agent = runsWithAgents(model2) && model2?.providerID.split("@")[0] === "cursor" ? "plan" : undefined;
-    const session = await api.create(bot.directory, title, agent, model2, rules);
-    await api.setMetadata(session.id, { kuvo: { seat: { group: group.id, bot: bot.id, scratch: true } } }).catch(() => {});
-    try {
-      await api.setInstruction(session.id, seatKey, this.seatText(bot, group));
-    } catch (error3) {
-      await api.delete(session.id).catch(() => {});
-      throw error3;
-    }
-    return session.id;
-  }
-  seatText(bot, group) {
-    const settings = this.context.store.settings();
-    const others = group.members.filter((member2) => member2 !== bot.id).flatMap((member2) => this.bot(member2) ?? []);
-    const lead = this.bot(group.members[0]);
-    const personality = bot.personality ? settings?.personalities[bot.personality] : undefined;
-    return seatInstructions(bot, group, others, lead, personality, settings?.identityNote ?? "");
-  }
-  async keepModel(seat, bot, id, api) {
-    const model2 = await this.model(bot);
-    if (!model2)
-      return true;
-    const session = await api.session(seat).catch(() => {
-      return;
-    });
-    if (!session)
-      return true;
-    if (session.model?.id === model2.id && session.model?.providerID === model2.providerID)
-      return true;
-    const kept2 = this.chat(id);
-    if (!kept2)
-      return true;
-    const onSeatAgents = kept2.group.agentSeats?.includes(seat) ?? false;
-    if (onSeatAgents || !runsWithAgents(model2)) {
-      await api.selectModel(seat, model2).catch(() => {});
-      if (onSeatAgents)
-        await api.selectAgent(seat, model2.providerID.split("@")[0] === "cursor" ? "plan" : "build").catch(() => {});
-      return true;
-    }
-    await this.deleteSeat(seat, kept2.group, bot.id);
-    delete kept2.group.seats[bot.id];
-    delete kept2.group.heard[bot.id];
-    this.changed(id);
-    return false;
-  }
   async deleteSeat(seat, group, botID) {
-    const bot = this.bot(botID);
-    const api = bot ? await this.seatAPI(bot, group, seat) : new SeatAPI(this.context.engine);
-    await api?.delete(seat).catch(() => {});
+    await this.home(group.seatBoxes?.[botID]).drop(seat, group.agentSeats?.includes(seat) ?? false, { bot: botID, chat: group.id });
     const kept2 = this.chats.get(group.id);
-    if (kept2?.group.agentSeats?.includes(seat)) {
+    if (!kept2)
+      return;
+    let changed = false;
+    if (kept2.group.agentSeats?.includes(seat)) {
       kept2.group.agentSeats = kept2.group.agentSeats.filter((each) => each !== seat);
-      this.changed(group.id);
+      changed = true;
     }
+    if (kept2.group.seatBoxes?.[botID] && kept2.group.seats[botID] !== seat) {
+      delete kept2.group.seatBoxes[botID];
+      changed = true;
+    }
+    if (changed)
+      this.changed(group.id);
   }
   async remember(botID, options = {}) {
+    const member2 = this.member(botID);
+    if (member2?.box && this.context.peers)
+      return this.rememberThere(botID, member2.box, options);
     const bot = this.bot(botID);
     if (!bot)
       return;
@@ -13923,29 +14650,85 @@ class GroupRunner {
     const folder = bot.folder + "/groups";
     if (options.forgetting)
       this.context.store.removeFile(`${folder}/${options.forgetting}.md`);
-    const chats = [...this.chats.values()].filter((kept2) => kept2.status === "active" && kept2.group.members.includes(botID) && kept2.messages.length > 0).sort((a, b) => Date.parse(b.messages.at(-1)?.time ?? b.group.created) - Date.parse(a.messages.at(-1)?.time ?? a.group.created));
-    if (chats.length === 0) {
-      await api.removeInstruction(bot.sessionID, this.memoryKey).catch(() => {});
-      return;
-    }
-    let text2 = `You also take part in group chats in Kuvo Code, with the user and other bots. You remember them as you would a meeting: ` + `a recap of each is below, newest first, and the whole of each is in a file in "${folder}". When the user mentions one of ` + `these chats, or something talked about there, go by this, and read the file when you need more. What's marked ` + `"${bot.name}" is what you said.`;
-    for (const [index, kept2] of chats.entries()) {
+    const chats = [...this.chats.values()].filter((kept2) => kept2.status === "active" && kept2.group.members.includes(botID) && kept2.messages.length > 0).map((kept2) => {
       const file = `${folder}/${kept2.group.id}.md`;
       if (!options.changed || options.changed === kept2.group.id) {
         try {
           this.context.store.writeFile(file, this.transcript(kept2));
         } catch {}
       }
-      if (index >= 4)
-        continue;
-      const others = kept2.group.members.filter((member2) => member2 !== botID).flatMap((member2) => this.bot(member2)?.name ?? []);
+      const others = kept2.group.members.filter((member3) => member3 !== botID).flatMap((member3) => this.member(member3)?.name ?? []);
+      return { name: kept2.group.name, others, file, recap: () => this.recap(kept2), time: Date.parse(kept2.messages.at(-1)?.time ?? kept2.group.created) };
+    });
+    const elsewhere = Object.values(this.context.store.peerMemory(botID)).map((entry) => ({ name: entry.name, others: entry.with, file: entry.file, recap: () => entry.recap, time: Date.parse(entry.time) }));
+    const all = [...chats, ...elsewhere].sort((a, b) => b.time - a.time);
+    if (all.length === 0) {
+      await api.removeInstruction(bot.sessionID, this.memoryKey).catch(() => {});
+      return;
+    }
+    let text2 = `You also take part in group chats in Kuvo Code, with the user and other bots. You remember them as you would a meeting: ` + `a recap of each is below, newest first, and the whole of each is in a file in "${folder}". When the user mentions one of ` + `these chats, or something talked about there, go by this, and read the file when you need more. What's marked ` + `"${bot.name}" is what you said.`;
+    for (const chat2 of all.slice(0, 4)) {
       text2 += `
 
-## "${kept2.group.name}"${others.length ? " with " + others.join(", ") : ""}, in ${file}
+## "${chat2.name}"${chat2.others.length ? " with " + chat2.others.join(", ") : ""}, in ${chat2.file}
 `;
-      text2 += this.recap(kept2);
+      text2 += chat2.recap();
     }
     await api.setInstruction(bot.sessionID, this.memoryKey, text2).catch(() => {});
+  }
+  rememberThere(botID, box, options) {
+    if (!this.context.peers.takesSeats(box))
+      return;
+    const home2 = this.context.peers.home(box);
+    if (options.forgetting)
+      home2.remember({ chat: options.forgetting, bot: botID, at: this.memoryTime(), forget: true });
+    for (const kept2 of this.chats.values()) {
+      if (kept2.status !== "active" || !kept2.group.members.includes(botID) || kept2.messages.length === 0)
+        continue;
+      if (options.changed && options.changed !== kept2.group.id)
+        continue;
+      home2.remember({
+        chat: kept2.group.id,
+        bot: botID,
+        at: this.memoryTime(),
+        name: kept2.group.name,
+        with: kept2.group.members.filter((member2) => member2 !== botID).flatMap((member2) => this.member(member2)?.name ?? []),
+        recap: prefixBytes(this.recap(kept2), recapMailBytes),
+        transcript: this.transcript(kept2, transcriptMailBytes),
+        time: kept2.messages.at(-1)?.time ?? kept2.group.created
+      });
+    }
+  }
+  lastMemory = 0;
+  memoryTime() {
+    this.lastMemory = Math.max(Date.now(), this.lastMemory + 1);
+    return this.lastMemory;
+  }
+  async remembered(from, memory) {
+    const bot = this.bot(memory.bot);
+    if (!bot || !/^grp_[a-z0-9]+$/.test(memory.chat))
+      return;
+    const key = `${from}/${memory.chat}`;
+    if (typeof memory.at === "number" && memory.at <= this.context.store.peerMemoryAt(bot.id, key))
+      return;
+    const file = `${bot.folder}/groups/${peerPrefix(from)}-${memory.chat}.md`;
+    if (memory.forget) {
+      this.context.store.removeFile(file);
+      this.context.store.forgetPeerMemory(bot.id, key, memory.at);
+    } else {
+      try {
+        this.context.store.writeFile(file, memory.transcript ?? "");
+      } catch {}
+      this.context.store.keepPeerMemory(bot.id, key, {
+        name: memory.name ?? "",
+        with: memory.with ?? [],
+        recap: memory.recap ?? "",
+        file,
+        time: memory.time ?? stamp2(),
+        ...typeof memory.at === "number" ? { at: memory.at } : {}
+      });
+    }
+    await this.remember(bot.id);
   }
   when(time) {
     const settings = this.context.store.settings();
@@ -13981,25 +14764,37 @@ class GroupRunner {
     }).join(`
 `);
   }
-  transcript(kept2) {
-    const names = kept2.group.members.flatMap((member2) => this.bot(member2)?.name ?? []);
-    let text2 = `# ${kept2.group.name}
+  transcript(kept2, most = Infinity) {
+    const names = kept2.group.members.flatMap((member2) => this.member(member2)?.name ?? []);
+    const head = `# ${kept2.group.name}
 
 A group chat in Kuvo Code between the user and ${names.join(", ")}.
 `;
-    for (const message2 of kept2.messages) {
-      if (message2.kind === "note")
-        text2 += `
+    const entries = kept2.messages.map((message2) => message2.kind === "note" ? `
 _${message2.text}_
-`;
-      else
-        text2 += `
+` : `
 **${label(message2, (author) => this.name(author))}** \xB7 ${this.when(message2.time)}
 
 ${message2.text}
+`);
+    if (most === Infinity)
+      return head + entries.join("");
+    const encoder = new TextEncoder;
+    const left = `
+_Earlier messages aren\u2019t here: this is the latest of the chat._
 `;
+    let size = encoder.encode(head + left).length;
+    let from = entries.length;
+    while (from > 0) {
+      const next2 = encoder.encode(entries[from - 1]).length;
+      if (size + next2 > most)
+        break;
+      size += next2;
+      from--;
     }
-    return text2;
+    if (from === entries.length && entries.length > 0)
+      return head + left + prefixBytes(entries.at(-1), most - size);
+    return head + (from > 0 ? left : "") + entries.slice(from).join("");
   }
   rememberSoon(id) {
     const pending = this.syncs.get(id);
@@ -14063,6 +14858,7 @@ ${message2.text}
     this.context.store.saveGroup(kept2);
   }
 }
+var peerPrefix = (key) => key.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8);
 function named2(unheard) {
   const blocks = unheard.slice(-40).filter((message2) => message2.author === undefined).map((message2) => message2.named).filter((block) => typeof block === "string" && block.length > 0);
   if (blocks.length <= 1)
@@ -14124,7 +14920,7 @@ try {
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
 delete process.env.OPENCODE_PASSWORD;
-process.on("unhandledRejection", (reason3) => console.error("unhandled:", reason3));
+process.on("unhandledRejection", (reason4) => console.error("unhandled:", reason4));
 process.on("uncaughtException", (error3) => {
   console.error("uncaught:", error3);
   process.exit(1);
@@ -14162,25 +14958,27 @@ for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...on
 if (groupFolders) {
   try {
     const store2 = new GroupStore(groupFolders.root, groupFolders.bots);
-    groups = {
+    const post = new PeerPost(join19(groupFolders.root, "peer-outbox.json"));
+    const directory = new LinkDirectory(post);
+    const runner = new GroupRunner({
       store: store2,
-      runner: new GroupRunner({
-        store: store2,
-        engine: link2,
-        bridge: () => self,
-        trash: groupFolders.trash,
-        listen: (session, listener) => link2.listen(session, listener),
-        place: onMachine ? "this machine" : undefined,
-        memoryKey: groupMemoryKey,
-        agentAccount: async (provider) => {
-          const agent = roster.find(provider);
-          if (!agent)
-            return;
-          const account = await agent.account();
-          return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 };
-        }
-      })
-    };
+      engine: link2,
+      bridge: () => self,
+      trash: groupFolders.trash,
+      listen: (session, listener) => link2.listen(session, listener),
+      place: onMachine ? "this machine" : undefined,
+      memoryKey: groupMemoryKey,
+      agentAccount: async (provider) => {
+        const agent = roster.find(provider);
+        if (!agent)
+          return;
+        const account = await agent.account();
+        return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 };
+      },
+      peers: directory
+    });
+    const server3 = new SeatServer(runner.seats, post, { store: store2, remembered: (from, memory) => runner.remembered(from, memory) });
+    groups = { store: store2, runner, peers: { post, directory, server: server3, runner } };
   } catch (error3) {
     console.error("group chats:", error3);
   }
@@ -14202,14 +15000,15 @@ self = server2(`http://127.0.0.1:${server3.port}`, password);
 link2.whenReady().then(() => {
   try {
     groups?.runner.start();
+    groups?.peers.server.start();
   } catch (error3) {
     console.error("group chats:", error3);
   }
 });
 var record = onMachine ? join19(machineHome, "run", "bridge.json") : undefined;
 if (record) {
-  writeFileSync13(record + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
-  renameSync7(record + ".new", record);
+  writeFileSync14(record + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
+  renameSync8(record + ".new", record);
 }
 var stopping = false;
 function stop() {
@@ -14218,7 +15017,7 @@ function stop() {
   stopping = true;
   cancelSignIns();
   try {
-    if (record && JSON.parse(readFileSync18(record, "utf8")).pid === process.pid)
+    if (record && JSON.parse(readFileSync19(record, "utf8")).pid === process.pid)
       rmSync12(record, { force: true });
   } catch {}
   sessions.closeAll();
@@ -14241,4 +15040,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 103e4157ef4d040366a7e32d52959c73eb3c7b956f4f62a20cb5fb186567dd7f
+// Built from Agents/src fd10a2adff71d699f4af5db0786bda85a594853f15c5c63a1c8dec9c81eb7a95

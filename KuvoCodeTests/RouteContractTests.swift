@@ -353,9 +353,10 @@ final class MacBox {
             default: .signIn(username: given["username"] as? Bool ?? true, password: given["password"] as? Bool ?? true)
             }
             app?.browserAsks.add(.init(id: string("id"), kind: kind, host: string("host"), machine: nil), respond: { _ in })
-        case "agentsBridge":
+        case "agentsBridge", "peers":
             // This Mac runs its group chats itself, and its coding agents' bridge isn't one this
-            // suite stands in for: nothing to give.
+            // suite stands in for (nor are your other computers, whose bots join its chats from D1b
+            // step 4): nothing to give.
             break
         default:
             throw TestFailure("\(at): no fixture “\(kind)”")

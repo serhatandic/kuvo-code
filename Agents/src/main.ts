@@ -26,6 +26,8 @@ import { refreshLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
+import { SeatServer } from "./groups/peer"
+import { LinkDirectory, PeerPost, type PeerParts } from "./groups/post"
 import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
 
@@ -123,7 +125,7 @@ const sessions = new Sessions(
 // KUVO_TRASH), once it does (until then the app runs its own). One that fails to start leaves the
 // rest of the bridge as it is.
 let self: ReturnType<typeof requester> | undefined
-let groups: { runner: GroupRunner; store: GroupStore } | undefined
+let groups: { runner: GroupRunner; store: GroupStore; peers: PeerParts } | undefined
 const groupFolders = onMachine
   ? { root: join(machineHome!, "groups"), bots: process.env.KUVO_BOTS ?? join(machineHome!, "bots"), trash: join(machineHome!, "trash") }
   : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH
@@ -135,25 +137,28 @@ for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...(o
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots)
-    groups = {
+    // Its bots in chats on your other computers, and theirs in chats here, through the box's link.
+    const post = new PeerPost(join(groupFolders.root, "peer-outbox.json"))
+    const directory = new LinkDirectory(post)
+    const runner = new GroupRunner({
       store,
-      runner: new GroupRunner({
-        store,
-        engine: link,
-        bridge: () => self,
-        trash: groupFolders.trash,
-        listen: (session, listener) => link.listen(session, listener),
-        place: onMachine ? "this machine" : undefined,
-        memoryKey: groupMemoryKey,
-        // A coding agent's own account, as Settings › Accounts shows it: one with a way to sign in, not signed in.
-        agentAccount: async (provider) => {
-          const agent = roster.find(provider)
-          if (!agent) return undefined
-          const account = await agent.account()
-          return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 }
-        },
-      }),
-    }
+      engine: link,
+      bridge: () => self,
+      trash: groupFolders.trash,
+      listen: (session, listener) => link.listen(session, listener),
+      place: onMachine ? "this machine" : undefined,
+      memoryKey: groupMemoryKey,
+      // A coding agent's own account, as Settings › Accounts shows it: one with a way to sign in, not signed in.
+      agentAccount: async (provider) => {
+        const agent = roster.find(provider)
+        if (!agent) return undefined
+        const account = await agent.account()
+        return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 }
+      },
+      peers: directory,
+    })
+    const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) })
+    groups = { store, runner, peers: { post, directory, server, runner } }
   } catch (error) {
     console.error("group chats:", error)
   }
@@ -179,6 +184,7 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 void link.whenReady().then(() => {
   try {
     groups?.runner.start()
+    groups?.peers.server.start()
   } catch (error) {
     console.error("group chats:", error)
   }
