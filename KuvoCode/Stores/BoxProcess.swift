@@ -61,7 +61,7 @@ final class BoxProcess {
         defer { isStarting = false }
         self.runtime = (runtime, environment, arguments)
         guard let script = Self.script else {
-            failure = "This Mac's box is missing from the app."
+            failure = "Kuvo Code’s background service is missing from the app. Install Kuvo Code again."
             return
         }
         var env = environment

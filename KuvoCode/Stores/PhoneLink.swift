@@ -1155,7 +1155,7 @@ final class PhoneLink {
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-            continuation.yield(.body(Self.message("This Mac’s box isn’t running. Try again in a moment.")))
+            continuation.yield(.body(Self.message("Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")))
             continuation.finish()
         }
     }

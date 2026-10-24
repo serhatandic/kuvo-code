@@ -669,7 +669,7 @@ final class Workspace {
         // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
         // their sessions are archived there with the rest.
         guard await takeWorktrees(from: box) != nil else {
-            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "This Mac’s box isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
+            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
         switch status {
@@ -1034,7 +1034,7 @@ final class Workspace {
     /// A request to `box`'s routes (`boxes`): its answer, or what it said when it said no
     /// (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ box: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
-        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "This Mac’s box isn’t running." : "\(box) isn’t connected.") }
+        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t running." : "\(box) isn’t connected.") }
         let (status, data) = try await client.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) })
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(Answer.self, from: data)
