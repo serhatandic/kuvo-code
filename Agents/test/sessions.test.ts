@@ -2462,6 +2462,71 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(sessions.inbox(id)).toHaveLength(0)
   })
 
+  test("Stop while a message is being handed to the turn: one the agent turns away waits, and Send Now on another starts that one", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const answers: ((taken: boolean) => void)[] = []
+    a.threads[0].steer = () => new Promise((resolve) => answers.push(resolve))
+    send(id, "turned away")
+    await drain()
+    const stopping = sessions.interrupt(id)
+    answers[0](false)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    expect(sessions.inbox(id).map((item) => [item.payload.text, item.delivery])).toEqual([["turned away", "queue"]])
+    const picked = send(id, "picked", "queue")
+    sessions.setDelivery(id, picked, "steer")
+    await drain()
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "picked"])
+  })
+
+  test("Send Now for a message you then cancel as it's handed starts nothing later, even after a turn that fails", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const answers: ((taken: boolean) => void)[] = []
+    a.threads[0].steer = () => new Promise((resolve) => answers.push(resolve))
+    const handed = send(id, "never mind")
+    await drain()
+    const stopping = sessions.interrupt(id, true)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    sessions.cancelInput(id, handed)
+    answers[0](false)
+    await drain()
+    expect(sessions.inbox(id)).toHaveLength(0)
+    // The agent carries on by itself; a message you steer meanwhile waits, and its failing starts nothing.
+    expect(own()).toBe(true)
+    await drain()
+    const held = send(id, "held", "queue")
+    sessions.setDelivery(id, held, "steer")
+    ends[1]({ outcome: "failed", error: { type: "agent", message: "broke" } })
+    await drain()
+    expect(a.runs).toHaveLength(2)
+    expect(sessions.inbox(id).map((item) => item.payload.text)).toEqual(["held"])
+  })
+
+  test("Send Now as the agent carries on by itself starts your message rather than its turn", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const picked = send(id, "picked")
+    sessions.setDelivery(id, picked, "steer")
+    expect(own()).toBe(true)
+    const stopping = sessions.interrupt(id, true)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    expect(a.threads[0].turnedAway).toBe(1)
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "picked"])
+  })
+
   test("Send Now while the stopped turn's files are kept starts the message you picked once they are", async () => {
     const snapshots = withSteps()
     const ends = heldRuns()

@@ -76,7 +76,7 @@ interface Live {
   doing: Doing
   /** A turn an agent began on its own, taken but waiting for the session to be free: it goes first. */
   own?: Input
-  /** Start the first message you steered once nothing runs: Send Now (Stop with resume), or one sent while files were kept or put back. */
+  /** Start the first message you steered once nothing runs: Send Now (Stop with resume), or one sent while files were kept or put back. With nothing else to start, it waits for a message being handed to the turn (it goes if the agent turns it down). */
   go: boolean
   /** Undo and Redo calls waiting for the files to be kept or put back, in the order they came. */
   waiting: (() => void)[]
@@ -117,7 +117,7 @@ function onFiles(doing: Doing): boolean {
 }
 
 /** Stopping a turn, or deleting the session: nothing more is asked of you. */
-function stopping(doing: Doing): boolean {
+function refusesAsks(doing: Doing): boolean {
   return doing.kind === "stopping" || doing.kind === "deleting"
 }
 
@@ -779,7 +779,7 @@ export class Sessions {
     return record
   }
 
-  private isBusy(id: string) {
+  private atWork(id: string) {
     const live = this.live.get(id)
     return Boolean(live && isBusy(live.doing))
   }
@@ -1069,7 +1069,7 @@ export class Sessions {
   }
 
   active(): string[] {
-    const ids = [...this.live.keys()].filter((id) => this.isBusy(id))
+    const ids = [...this.live.keys()].filter((id) => this.atWork(id))
     for (const live of this.live.values()) for (const [child, turn] of live.subagents) if (!turn.isEnded) ids.push(child)
     return ids
   }
@@ -1092,7 +1092,7 @@ export class Sessions {
     record.messages.push(message)
     record.session.time.updated = Date.now()
     // Run while an agent works: it hasn't seen it when its turn ends, and gets it with your next message.
-    if (this.isBusy(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
+    if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
     void runCommand(text, directory).then((ran) => {
       message.status = ran.code === 0 && !ran.timedOut ? "completed" : "failed"
@@ -1320,8 +1320,8 @@ export class Sessions {
     // While nothing runs (or only files are being kept or put back: it goes once that's done), one
     // to go after the turn goes now, as the engine's do (a bot's wake-up), unless others wait
     // before it (held after a Stop).
-    const free = doing.kind === "idle" || onFiles(doing)
-    const delivery: Delivery = into || (free && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
+    const nothingRuns = doing.kind === "idle" || onFiles(doing)
+    const delivery: Delivery = into || (nothingRuns && (input.delivery !== "queue" || !queue.length)) ? "steer" : "queue"
     queue.push({ ...input, delivery })
     this.store.save(id, true)
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record.session.location.directory)
@@ -1337,7 +1337,7 @@ export class Sessions {
   private async steerNow(id: string, live: Live, run: Run, input: Input) {
     const agent = run.agent
     const directory = this.store.get(id)?.session.location.directory
-    if (!agent?.thread.steer || !directory) return
+    if (!agent?.thread.steer || !directory) return this.setDelivery(id, input.id, "queue")
     const handing = { cancelled: false }
     live.steering.set(input.id, handing)
     let taken = false
@@ -1368,18 +1368,18 @@ export class Sessions {
     const at = queue.findIndex((waiting) => waiting.id === input.id)
     // (Gone: the session is being deleted.)
     if (at < 0) return
+    // Its turn ended meanwhile, or is ending: it goes next as you asked (Send Now), or as after a
+    // turn that went through; otherwise it waits, held (Stop, an error). Until the turn's over and
+    // its files are kept, the turn's end starts it.
+    const next = !taken && !handing.cancelled && live.doing.kind !== "running" && (live.go || (live.doing.kind !== "stopping" && record.session.outcome === "succeeded"))
+    // A Send Now that waited for it is settled: it goes, went into the turn, or was cancelled.
+    if (live.doing.kind === "idle" && !live.steering.size) live.go = next
     if (!taken) {
-      if (handing.cancelled) return this.cancelInput(id, input.id)
-      // It waits for the turn, which goes on.
-      if (live.doing.kind === "running") return this.setDelivery(id, input.id, "queue")
-      // Its turn ended meanwhile, or is ending: it goes next, as after any turn, or as you asked
-      // with Send Now (one you stopped holds it). Until the turn's over and its files are kept,
-      // the turn's end starts it.
-      if (live.doing.kind === "idle" && record.session.outcome === "succeeded") live.go = true
-      return this.advance(id, live)
+      if (handing.cancelled) this.cancelInput(id, input.id)
+      else if (next) this.advance(id, live)
+      else this.setDelivery(id, input.id, "queue")
+      return
     }
-    // Into the turn: a Send Now that waited for it is done.
-    if (live.doing.kind === "idle" && !live.steering.size) live.go = false
     queue.splice(at, 1)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
@@ -1455,10 +1455,10 @@ export class Sessions {
     }
     const queue = this.queue(record)
     // One being handed to the turn that just ended is settled by that (sent, or back here).
-    const free = (input: Input) => !live.steering.has(input.id)
+    const notHanded = (input: Input) => !live.steering.has(input.id)
     let index = -1
-    if (ended === "succeeded" || live.go) index = queue.findIndex((input) => input.delivery === "steer" && free(input))
-    if (ended === "succeeded" && index < 0) index = queue.findIndex(free)
+    if (ended === "succeeded" || live.go) index = queue.findIndex((input) => input.delivery === "steer" && notHanded(input))
+    if (ended === "succeeded" && index < 0) index = queue.findIndex(notHanded)
     // (With nothing to start but one being handed, Send Now waits for it.)
     if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
@@ -2216,7 +2216,7 @@ export class Sessions {
     // First: you answer it, unless you allowed it in this session before.
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask)
     if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask))) return "once"
-    if (turn.isEnded || stopping(live.doing)) return "reject"
+    if (turn.isEnded || refusesAsks(live.doing)) return "reject"
     const request: PermissionRequest = {
       id: newID("per"),
       sessionID: id,
@@ -2275,7 +2275,7 @@ export class Sessions {
 
   private askQuestion(id: string, live: Live, turn: Turn, ask: QuestionAsk): Promise<FormAnswer | null> {
     const session = this.record(id).session
-    if (turn.isEnded || stopping(live.doing)) return Promise.resolve(null)
+    if (turn.isEnded || refusesAsks(live.doing)) return Promise.resolve(null)
     const form: FormRequest = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields }
     return new Promise((resolve) => {
       live.forms.set(form.id, { form, resolve })

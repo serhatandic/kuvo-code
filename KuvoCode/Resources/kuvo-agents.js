@@ -8556,7 +8556,7 @@ function isBusy(doing) {
 function onFiles(doing) {
   return doing.kind === "keeping" || doing.kind === "reverting";
 }
-function stopping(doing) {
+function refusesAsks(doing) {
   return doing.kind === "stopping" || doing.kind === "deleting";
 }
 function runOf(doing) {
@@ -9126,7 +9126,7 @@ class Sessions {
       throw new NotFound(`No session ${id}.`);
     return record;
   }
-  isBusy(id) {
+  atWork(id) {
     const live = this.live.get(id);
     return Boolean(live && isBusy(live.doing));
   }
@@ -9390,7 +9390,7 @@ class Sessions {
     this.store.save(id);
   }
   active() {
-    const ids = [...this.live.keys()].filter((id) => this.isBusy(id));
+    const ids = [...this.live.keys()].filter((id) => this.atWork(id));
     for (const live of this.live.values())
       for (const [child, turn] of live.subagents)
         if (!turn.isEnded)
@@ -9410,7 +9410,7 @@ class Sessions {
     const message = { type: "shell", id: messageID(event.id), time: { created: event.created }, shellID, command: text, status: "running" };
     record.messages.push(message);
     record.session.time.updated = Date.now();
-    if (this.isBusy(id))
+    if (this.atWork(id))
       record.agent.lateShells = [...record.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
     runCommand(text, directory).then((ran) => {
@@ -9633,8 +9633,8 @@ class Sessions {
       return;
     const doing = live.doing;
     const into = doing.kind === "running" && input.delivery !== "queue" && doing.run.agent?.thread.steer ? doing.run : undefined;
-    const free = doing.kind === "idle" || onFiles(doing);
-    const delivery = into || free && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
+    const nothingRuns = doing.kind === "idle" || onFiles(doing);
+    const delivery = into || nothingRuns && (input.delivery !== "queue" || !queue.length) ? "steer" : "queue";
     queue.push({ ...input, delivery });
     this.store.save(id, true);
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "user", payload: { text: input.text, files: input.files }, delivery } }, record.session.location.directory);
@@ -9647,7 +9647,7 @@ class Sessions {
     const agent = run2.agent;
     const directory = this.store.get(id)?.session.location.directory;
     if (!agent?.thread.steer || !directory)
-      return;
+      return this.setDelivery(id, input.id, "queue");
     const handing = { cancelled: false };
     live.steering.set(input.id, handing);
     let taken = false;
@@ -9677,17 +9677,18 @@ class Sessions {
     const at = queue.findIndex((waiting) => waiting.id === input.id);
     if (at < 0)
       return;
+    const next = !taken && !handing.cancelled && live.doing.kind !== "running" && (live.go || live.doing.kind !== "stopping" && record.session.outcome === "succeeded");
+    if (live.doing.kind === "idle" && !live.steering.size)
+      live.go = next;
     if (!taken) {
       if (handing.cancelled)
-        return this.cancelInput(id, input.id);
-      if (live.doing.kind === "running")
-        return this.setDelivery(id, input.id, "queue");
-      if (live.doing.kind === "idle" && record.session.outcome === "succeeded")
-        live.go = true;
-      return this.advance(id, live);
+        this.cancelInput(id, input.id);
+      else if (next)
+        this.advance(id, live);
+      else
+        this.setDelivery(id, input.id, "queue");
+      return;
     }
-    if (live.doing.kind === "idle" && !live.steering.size)
-      live.go = false;
     queue.splice(at, 1);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
@@ -9753,12 +9754,12 @@ class Sessions {
         return this.start(id, live, own);
     }
     const queue = this.queue(record);
-    const free = (input2) => !live.steering.has(input2.id);
+    const notHanded = (input2) => !live.steering.has(input2.id);
     let index = -1;
     if (ended === "succeeded" || live.go)
-      index = queue.findIndex((input2) => input2.delivery === "steer" && free(input2));
+      index = queue.findIndex((input2) => input2.delivery === "steer" && notHanded(input2));
     if (ended === "succeeded" && index < 0)
-      index = queue.findIndex(free);
+      index = queue.findIndex(notHanded);
     if (index >= 0 || !live.steering.size)
       live.go = false;
     if (index < 0)
@@ -10478,7 +10479,7 @@ ${live.agentPrompt}` : ""
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask);
     if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
       return "once";
-    if (turn.isEnded || stopping(live.doing))
+    if (turn.isEnded || refusesAsks(live.doing))
       return "reject";
     const request = {
       id: newID("per"),
@@ -10540,7 +10541,7 @@ ${live.agentPrompt}` : ""
   }
   askQuestion(id, live, turn, ask) {
     const session = this.record(id).session;
-    if (turn.isEnded || stopping(live.doing))
+    if (turn.isEnded || refusesAsks(live.doing))
       return Promise.resolve(null);
     const form = { id: newID("frm"), sessionID: id, title: ask.title, metadata: { kind: "question" }, fields: ask.fields };
     return new Promise((resolve5) => {
@@ -13880,11 +13881,11 @@ if (record) {
   writeFileSync13(record + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
   renameSync7(record + ".new", record);
 }
-var stopping2 = false;
+var stopping = false;
 function stop() {
-  if (stopping2)
+  if (stopping)
     return;
-  stopping2 = true;
+  stopping = true;
   cancelSignIns();
   try {
     if (record && JSON.parse(readFileSync18(record, "utf8")).pid === process.pid)
@@ -13910,4 +13911,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 2ab3c05173fb876d111de70626dcba272bea957d317e370de52cd838dee11699
+// Built from Agents/src 4ab791e82ebdc0a6d4ea5ef87f30f4472e7730d2682f77bcc19bbf6a1a79a77e
