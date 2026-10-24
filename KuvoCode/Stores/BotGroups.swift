@@ -400,10 +400,10 @@ final class BotGroups {
 
     // MARK: Tabs
 
-    static func tabKey(_ id: String) -> String { "group:" + id }
+    static func tabKey(_ id: String) -> String { TabKey.group(id).text }
 
     static func groupID(fromTab key: String) -> String? {
-        key.hasPrefix("group:") ? String(key.dropFirst("group:".count)) : nil
+        TabKey(key).groupID
     }
 
     // MARK: Making, changing, deleting
