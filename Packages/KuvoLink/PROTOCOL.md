@@ -41,6 +41,32 @@ One WebSocket per device, binary messages, first byte the kind:
 | `0x04` register | phone | JSON | `{"token", "environment": "sandbox"\|"production", "topic", "senders": [address]}`: send pushes to this APNs token, only from these addresses. Kept for 90 days; the phone sends it again whenever it connects. |
 | `0x05` push | host | `to(16) payload` | Push `payload` (a mail frame, below) to `to`'s phone. |
 | `0x06` pushed | relay | `to(16) status(1)` | 0 sent, 1 no phone registered, 2 not one of its senders, 3 Apple refused. |
+| `0x07` gone | relay | `address(16) reason(1)` | The device at `address`, which you sent something to on its current connection, has a new connection (0, replaced) or none (1, left). Whatever sessions you had with it are over. |
+
+Known kinds keep their lengths, and a device skips a kind it doesn't know once it's welcomed, so a
+new kind goes only after welcome. A device never sends `0x07`.
+
+**Gone.** The relay keeps, for each connection, the devices that sent it something on that connection
+(at most 1,024) and the connections it sent to (at most 256); past either, nothing more is recorded.
+A connection's own sends to its address (a bridge checking its connection) and sends that come back
+unreachable record nothing. When a connection stops being the one at its address (a hello with the
+same address replaces it, or it closes), each device it recorded hears `gone` once, and both lists
+are cleared: a device is recorded again only by sending again. `gone` isn't queued or repeated: a
+device that wasn't connected misses it, and needs no repeat, because losing its own relay connection
+ends all its sessions anyway. What a replaced connection still sends as it closes is dropped, so no
+frame from the old connection follows a `gone`. The relay sends every `gone` for a hello before it
+reads anything from the new connection, so a device hears `gone` before anything the new connection
+sends. A device ends its sessions with that address: a phone's streams fail (replaced is "closed",
+left is "offline"), and a handshake still on its way starts over under a new session number, since it
+may have reached the new connection. A host drops that phone's sessions, as on `unreachable`. A
+connection that dies without closing stays listed until the relay's pings notice, up to about a
+minute, which is why a phone still checks on a request that goes unanswered (below).
+
+**A host never forgets a session while its relay connection stays up.** It ends one only with the
+phone told (a close), or by the phone's own doing (a close, a new handshake from the same phone, the
+phone unreachable or gone). A host's sessions end with its relay connection, which the relay tells
+the phones about. Phones count on this, and don't check a quiet session before sending on it: a frame
+that comes on a session the host doesn't have is answered with a close all the same.
 
 `payload` is at most 65,600 bytes. The relay closes a connection that sends anything else
 (4000), a wrong secret (4001), far too much too fast (4003), or one too many from the same
@@ -394,7 +420,7 @@ like HTTP:
 | `{"t": "res", "id": 7, "s": 200, "h": {"content-type": "…"}, "end": false}` | The response's status and headers, with the first piece of its body. |
 | `{"t": "data", "id": 7, "end": false}` | More body. Event streams (`api/event`) go on until cancelled. |
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
-| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings before sending on a session that's been quiet (a host started again since closes the session, and the phone opens a new one before anything's lost), and while a request waits with nothing from the host (no answer ends the session). Answer at once. |
+| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session. A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
