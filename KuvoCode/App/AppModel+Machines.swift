@@ -552,21 +552,26 @@ extension AppModel {
             if case .preparing = engine.state { return engine.isStopped }
             return true
         }
+        // Each told at once, side by side: quitting waits a few seconds at most, however many
+        // there are (one gone quiet after a sleep, say).
+        var told: [@Sendable () -> Void] = []
         for engine in reached {
             let busy = workspace.isRunning(on: engine.machine.id)
             engine.disconnect()
+            let connection = engine.machine.connection
             if !leavesMachinesRunning && !busy {
-                RemoteServer.stopNow(on: engine.machine.connection, first: leaving)
-            } else if !leaving.isEmpty {
-                RemoteServer.runNow(leaving, on: engine.machine.connection)
+                told.append { RemoteServer.stopNow(on: connection, first: leaving) }
+            } else {
+                told.append { RemoteServer.runNow(leaving, on: connection) }
             }
             left.insert(engine.machine.id)
         }
         // One reconnecting just now (after a sleep, say) that still takes this Mac to be there.
-        guard !leaving.isEmpty else { return }
         for id in phoneLink.presentOn where !left.contains(id) {
-            RemoteServer.runNow(leaving, on: Machine(destination: id).connection, timeout: 2)
+            let connection = Machine(destination: id).connection
+            told.append { RemoteServer.runNow(leaving, on: connection, timeout: 2) }
         }
+        DispatchQueue.concurrentPerform(iterations: told.count) { told[$0]() }
     }
 
     /// What a machine's engine starts with: this Mac's accounts and settings, and the browser tools
