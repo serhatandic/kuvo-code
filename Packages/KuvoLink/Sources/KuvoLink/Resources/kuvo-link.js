@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.36";
+export const BRIDGE_VERSION = "0.9.39";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -4803,8 +4803,16 @@ const fitsAgent = agent => isObject(agent) && typeof agent.session === "string" 
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
 // A bot's `id` too (`bot_…`, as group chats name their members), and how it looks (`look`: color,
 // shape, face), so a chat on another computer can have it and show it.
-const keptLook = look => (isObject(look) && ["color", "shape", "face"].every(key => typeof look[key] === "string" && look[key].length > 0 && look[key].length <= 40)
-  ? { color: look.color, shape: look.shape, face: look.face } : undefined);
+// Only colors, shapes and faces the apps draw (BotLook): another (a newer computer's) is the plain
+// one's, so a phone can always read it.
+const LOOKS = {
+  color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
+  shape: ["round", "squircle", "pebble", "gem", "bloom"],
+  face: ["calm", "happy", "sleepy", "wink", "curious", "bright"],
+};
+const PLAIN_LOOK = { color: "graphite", shape: "round", face: "calm" };
+const keptLook = look => (isObject(look)
+  ? Object.fromEntries(Object.keys(LOOKS).map(key => [key, LOOKS[key].includes(look[key]) ? look[key] : PLAIN_LOOK[key]])) : undefined);
 const keptAgent = ({ session, name, kind, project, about, machine, id, look }) => ({ session, name: plainName(name).slice(0, 200), kind,
   ...(kind === "bot" && typeof id === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(id) ? { id } : {}),
   ...(kind === "bot" && keptLook(look) ? { look: keptLook(look) } : {}),

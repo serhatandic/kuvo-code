@@ -138,10 +138,21 @@ test("who can be in a chat here from your other computers: each peer, taking a c
   const peers = link.seatPeers(link.readLink());
   assert.deepEqual(peers.boxes, [{ key: mac.pub, name: "mac", seats: false }, { key: second.pub, name: "second", seats: true }]);
   assert.deepEqual(peers.bots, [
-    { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m" },
+    { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m", look: { color: "sky", shape: "round", face: "calm" } },
     { id: "bot_far", name: "Far", job: "Watches CI", box: second.pub, session: "ses_far", look },
   ]);
   assert.ok(link.FEATURES.includes("groups.seats"), "this box takes them");
+});
+
+test("a bot that a newer computer says looks a way the apps don't draw yet is told of plain in what they don't know, so a phone can always show it", () => {
+  fresh();
+  link.takeAgents(second.peer, { at: 3, features: ["groups.seats"], list: [
+    { session: "ses_new", name: "New", kind: "bot", id: "bot_new", look: { color: "ultraviolet", shape: "gem", face: "smirk" } },
+    { session: "ses_odd", name: "Odd", kind: "bot", id: "bot_odd", look: { color: 7 } },
+  ] });
+  const looks = Object.fromEntries(link.seatPeers(link.readLink()).bots.map(bot => [bot.id, bot.look]));
+  assert.deepEqual(looks.bot_new, { color: "graphite", shape: "gem", face: "calm" });
+  assert.deepEqual(looks.bot_odd, { color: "graphite", shape: "round", face: "calm" });
 });
 
 test("what mustn't be lost goes to its computer only, each minute until it says it has it, and never through the Mac", () => {
