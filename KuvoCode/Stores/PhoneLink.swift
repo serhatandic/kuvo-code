@@ -749,7 +749,7 @@ final class PhoneLink {
         if request.path.hasPrefix("kuvo/groups/"), request.method.uppercased() == "DELETE" {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
-                    let (status, body) = await link?.deleteGroup(String(request.path.dropFirst("kuvo/groups/".count))) ?? (503, Self.message("Group chats aren’t ready yet. Try again in a moment."))
+                    let (status, body) = await link?.deleteGroup(String(request.path.split(separator: "?").first?.dropFirst("kuvo/groups/".count) ?? "")) ?? (503, Self.message("Group chats aren’t ready yet. Try again in a moment."))
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()

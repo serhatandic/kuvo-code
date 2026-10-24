@@ -205,7 +205,7 @@ import Testing
 
         #expect(try await delete(mine.id).status == 200)
         #expect(app.chats.group(mine.id) == nil)
-        #expect(try await delete("grp_box0000001").status == 200)
+        #expect(try await delete("grp_box0000001?from=phone").status == 200)
         #expect(!held.has("grp_box0000001") && app.chats.group("grp_box0000001") == nil)
         // Gone already: as good as deleted.
         #expect(try await delete("grp_box0000001").status == 200)
