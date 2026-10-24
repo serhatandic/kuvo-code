@@ -6,8 +6,11 @@ import Network
 /// request is answered as StubWeb answers one in this process, then the connection closes.
 nonisolated extension StubWeb {
     /// Listens on 127.0.0.1:`port` until `stopListening`; what it's asked goes to the same
-    /// routes and handlers as a request here.
-    static func listen(port: UInt16) throws {
+    /// routes and handlers as a request here. Throws when it can't (the port's taken), rather
+    /// than waiting for it.
+    static func listen(port: UInt16) async throws {
+        // The last test's listener there, closed first.
+        await closing.withLock { $0.removeValue(forKey: port) }?.value
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
         parameters.allowLocalEndpointReuse = true
@@ -16,22 +19,43 @@ nonisolated extension StubWeb {
             connection.start(queue: .global())
             read(connection, port: port, so: Data())
         }
-        let ready = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { state in
-            switch state {
-            case .ready, .failed, .cancelled: ready.signal()
-            default: break
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let once = Guarded(false)
+            @Sendable func finish(_ error: Error?) {
+                guard once.withLock({ done in defer { done = true }; return !done }) else { return }
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready: finish(nil)
+                case .failed(let error), .waiting(let error):
+                    listener.cancel()
+                    finish(error)
+                case .cancelled: finish(TestFailure("The stand-in's port \(port) closed before it listened."))
+                default: break
+                }
+            }
+            listener.start(queue: .global())
         }
-        listener.start(queue: .global())
-        ready.wait()
         listening.withLock { $0[port] = listener }
     }
 
+    /// Stops listening; the port is free again once it's closed, which the next `listen` there
+    /// waits for.
     static func stopListening(port: UInt16) {
-        listening.withLock { $0.removeValue(forKey: port) }?.cancel()
+        guard let listener = listening.withLock({ $0.removeValue(forKey: port) }) else { return }
+        let closed = Task {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                listener.stateUpdateHandler = { state in
+                    if case .cancelled = state { continuation.resume() }
+                }
+                listener.cancel()
+            }
+        }
+        closing.withLock { $0[port] = closed }
     }
 
+    private static let closing = Guarded<[UInt16: Task<Void, Never>]>([:])
     private static let listening = Guarded<[UInt16: NWListener]>([:])
 
     /// Reads until the request is whole (its head, and as much body as it says), then answers.

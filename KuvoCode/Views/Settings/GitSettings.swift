@@ -88,7 +88,7 @@ struct WorktreesSettings: View {
                 if trees.isEmpty && reading {
                     Spinner(size: 16).frame(maxWidth: .infinity)
                 } else if trees.isEmpty && unreached {
-                    Text(box.machine == nil ? "Your worktrees show once Kuvo Code has started." : "\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
+                    Text(box.machine == nil ? "This Mac’s worktrees show once its engine is running." : "\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
                         .foregroundStyle(.secondary)
                 } else if trees.isEmpty {
                     Text("None yet. Choose Worktree in a new session’s composer to give it one.")
@@ -125,7 +125,7 @@ struct WorktreesSettings: View {
                 if let failure {
                     Text(failure).foregroundStyle(.red)
                 } else if unreached && !trees.isEmpty {
-                    Text(box.machine == nil ? "These are your worktrees as they were when Kuvo Code last read them." : "\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
+                    Text(box.machine == nil ? "This Mac’s engine isn’t running, so these are its worktrees as they were last read." : "\(app.name(of: box)) isn’t connected, so these are its worktrees as it last said.")
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Removing one deletes its folder and anything in it that isn’t committed. Its branch stays if it isn’t merged yet.")
@@ -135,7 +135,8 @@ struct WorktreesSettings: View {
         }
         // This computer's as its box keeps them now (one made there from a phone, say), with the
         // room each takes there.
-        .task(id: box.machine) {
+        // Again once this Mac's box is up, if it wasn't when the page opened.
+        .task(id: "\(box.machine ?? BoxClient.mac) \(app.box.endpoint != nil)") {
             reading = true
             let read = await workspace.takeWorktrees(from: box.machine ?? BoxClient.mac, sizes: true)
             reading = false

@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "worktrees",
+  "skills", "update", "wakes", "wakes.edit", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -971,6 +971,16 @@ export async function answerBotKeys(method, requestPath, body, engine, file = IN
 // listed and removed here, from a Mac (through `box route`) or a phone, with the Mac closed too.
 
 const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
+// The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
+const BRANCH_PREFIX_FILE = path.join(K, "box", "git.json");
+const branchPrefix = () => {
+  try {
+    const kept = JSON.parse(fs.readFileSync(BRANCH_PREFIX_FILE, "utf8")).branchPrefix;
+    return typeof kept === "string" ? kept : "kuvo/";
+  } catch {
+    return "kuvo/";
+  }
+};
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
 /** git in `folder`: what it printed (trimmed), or null when it failed. */
@@ -1167,16 +1177,22 @@ function freeBranch(folder, name) {
   return null;
 }
 
-// Cyrillic letters in Latin ones, as ICU writes them without their marks: "Исправить вход" is
-// ispravit-vhod.
-const CYRILLIC = Object.fromEntries([..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) =>
-  [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]));
+// Cyrillic and Greek letters in Latin ones, as ICU writes them without their marks: "Исправить
+// вход" is ispravit-vhod, "Διόρθωση σύνδεσης" diorthose-syndeses.
+const LATIN = Object.fromEntries([
+  ...[..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((letter, at) =>
+    [letter, ["a", "b", "v", "g", "d", "e", "e", "z", "z", "i", "j", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "c", "c", "s", "s", "", "y", "", "e", "u", "a", "i", "i", "e", "g"][at]]),
+  ...[..."αβγδεζηθικλμνξοπρσςτυφχψω"].map((letter, at) =>
+    [letter, ["a", "b", "g", "d", "e", "z", "e", "th", "i", "k", "l", "m", "n", "x", "o", "p", "r", "s", "s", "t", "y", "ph", "ch", "ps", "o"][at]]),
+]);
+const inLatin = text => [...text].map(letter => LATIN[letter] ?? letter).join("");
 
 /** A branch name made from a title, in Latin letters without their marks: "Trim note titles" is
- * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi, "Исправить вход" ispravit-vhod. */
+ * trim-note-titles, "Giriş düzeltmesi" giris-duzeltmesi, "Исправить вход" ispravit-vhod. A title
+ * in other letters (Chinese, Arabic) names none: its branch keeps the name it was made with. */
 export function branchSlug(title, limit = 40) {
-  const latin = [...String(title).toLowerCase()].map(letter => CYRILLIC[letter] ?? letter).join("")
-    .normalize("NFKD").replace(/\p{M}/gu, "").replace(/ı/g, "i");
+  // Whole letters first (й is j, not i), then those that came apart from their marks (ό).
+  const latin = inLatin(inLatin(String(title).toLowerCase()).normalize("NFKD")).replace(/\p{M}/gu, "").replace(/ı/g, "i");
   let name = "";
   for (const word of latin.split(/[^\p{L}\p{N}]+/u)) {
     const ascii = [...word].filter(character => character.charCodeAt(0) < 128).join("");
@@ -1306,7 +1322,10 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const project = body?.project;
     if (typeof project !== "string" || !path.isAbsolute(project) || !fs.existsSync(project)) return { status: 400, value: message("Send the project's folder on this machine as {\"project\"}.") };
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
-    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : "kuvo/";
+    // What its branch's name starts with: as given, and kept for a client that doesn't say (a
+    // phone), so one made from there starts as yours do.
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : branchPrefix();
+    if (typeof body?.branchPrefix === "string" && body.branchPrefix !== branchPrefix()) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: body.branchPrefix }));
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
@@ -1336,7 +1355,8 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const absolute = folder => typeof folder === "string" && path.isAbsolute(folder);
     if (!absolute(given.project) || !absolute(given.root) || !absolute(given.folder) || typeof given.branch !== "string" || !given.branch) return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
     if (!fs.existsSync(given.root)) return { status: 404, value: message("That worktree isn't on this machine any more.") };
-    updateWorktrees(list => [...list.filter(each => each.root !== given.root), given]);
+    // One it has already stays as it keeps it (its branch to be named, say).
+    updateWorktrees(list => (list.some(each => each.root === given.root) ? list : [...list, given]));
     return { status: 200, value: {} };
   }
   const tree = list.find(each => each.root === body?.path);

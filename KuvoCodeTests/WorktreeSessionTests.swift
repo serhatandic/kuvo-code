@@ -249,6 +249,47 @@ import Testing
         #expect(workspace.projectDirectory(folder) == folder, "not one you removed")
     }
 
+    /// One a phone made, once its session has a title: named after it by the box, as yours are,
+    /// and shown so here.
+    @Test func aPhonesWorktreeIsNamedAfterItsSession() async throws {
+        defer { done() }
+        let link = PhoneLink()
+        link.workspace = workspace
+        let following = Task { await workspace.followWorktrees() }
+        defer { following.cancel() }
+        let made = try await ask(link, "kuvo/worktrees", method: "POST", body: ["project": repository.path])
+        let folder = try #require(made.json["folder"] as? String)
+        engineState.add(["id": "ses_phone", "projectID": "prj_shop", "cost": 0, "agent": "build", "title": "",
+                         "tokens": ["input": 0, "output": 0, "reasoning": 0, "cache": ["read": 0, "write": 0]],
+                         "time": ["created": Date.now.timeIntervalSince1970 * 1000, "updated": Date.now.timeIntervalSince1970 * 1000],
+                         "location": ["directory": folder]])
+        workspace.handle(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "type": "session.created", "created": 1, "data": ["sessionID": "ses_phone"]])))
+        await workspace.reloading["ses_phone"]?.value
+        try await until { workspace.worktrees[folder] != nil }
+
+        try renamed("ses_phone", "Fix the login")
+        try await until { workspace.worktrees[folder]?.branch == "kuvo/fix-the-login" }
+        #expect(try git("symbolic-ref", "--short", "HEAD", in: folder) == "kuvo/fix-the-login")
+        engineState.remove("ses_phone")
+        _ = try await ask(link, "kuvo/worktrees/remove", method: "POST", body: ["path": made.json["root"] as? String ?? "", "forget": true])
+    }
+
+    /// One removed from a phone with an archived session in it: brought back here, the session is
+    /// still its project's.
+    @Test func anArchivedSessionKeepsItsProjectWhenAPhoneRemovesItsWorktree() async throws {
+        defer { done() }
+        let link = PhoneLink()
+        link.workspace = workspace
+        let following = Task { await workspace.followWorktrees() }
+        defer { following.cancel() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        let root = try #require(workspace.worktrees[folder]?.root)
+        #expect(try await ask(link, "kuvo/worktrees/remove", method: "POST", body: ["path": root]).status == 200)
+        try await until { workspace.worktrees[folder] == nil }
+        #expect(workspace.projectDirectory(folder) == workspace.folderPath(repository.path))
+    }
+
     @Test func aPhoneListsAndRemovesWorktrees() async throws {
         defer { done() }
         let link = PhoneLink()

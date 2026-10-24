@@ -666,8 +666,11 @@ final class Workspace {
         let box = Self.box(of: directory)
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
         guard Self.keepsProjects(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
-        // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't).
-        await takeWorktrees(from: box)
+        // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
+        // their sessions are archived there with the rest.
+        guard await takeWorktrees(from: box) != nil else {
+            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "This Mac’s box isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
+        }
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
         switch status {
         case 200:
@@ -854,6 +857,9 @@ final class Workspace {
         return true
     }
 
+    /// This Mac's worktrees are followed from its box now (`followWorktrees`).
+    @ObservationIgnored private var followingWorktrees = false
+
     /// Worktrees whose new name was read once their session had a title.
     @ObservationIgnored private var namesRead: Set<String> = []
 
@@ -863,7 +869,6 @@ final class Workspace {
     private func nameBranch(of session: Session) {
         let folder = session.location.directory
         guard let tree = worktrees[folder], let title = session.title, !title.isEmpty,
-              tree.branch == GitPreferences.branchPrefix + (tree.root as NSString).lastPathComponent,
               namesRead.insert(tree.root).inserted else { return }
         Task {
             // Not read (its box didn't answer): read again with the session's next change.
@@ -937,12 +942,20 @@ final class Workspace {
                 return nil
             }
         }
-        take(records, from: box)
+        // While this Mac follows its own, only what it's told changes them: an answer read before
+        // a change since would undo it.
+        if box != BoxClient.mac || !followingWorktrees { take(records, from: box) }
         return Dictionary(records.compactMap { record in record.size.map { (Self.here(record.root, on: box), $0) } }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// `records` as `box`'s worktrees, here, in place of what was known of them.
+    /// `records` as `box`'s worktrees, here, in place of what was known of them. One that's gone
+    /// with sessions in it (removed from a phone) is noted as removed, so an archived one brought
+    /// back is still its project's.
     private func take(_ records: [BoxWorktree], from box: String) {
+        let roots = Set(records.map { Self.here($0.root, on: box) })
+        let gone = worktrees.filter { Self.box(of: $0.value.root) == box && !roots.contains($0.value.root) }
+        for (folder, tree) in gone where sessions.contains(where: { $0.location.directory == folder }) { removedWorktrees[folder] = tree.project }
+        if !gone.isEmpty { UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees") }
         var mine = worktrees.filter { Self.box(of: $0.value.root) != box }
         for record in records {
             let tree = Worktree(project: Self.here(record.project, on: box), root: Self.here(record.root, on: box), branch: record.branch, base: record.base)
@@ -965,9 +978,11 @@ final class Workspace {
                 do {
                     for try await line in client.follow("kuvo/worktrees/events") {
                         guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
+                        followingWorktrees = true
                         take(listed.worktrees, from: BoxClient.mac)
                     }
                 } catch {}
+                followingWorktrees = false
             }
             // The box restarted, or isn't up yet: followed again in a moment.
             try? await Task.sleep(for: .seconds(2))

@@ -1198,7 +1198,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "wakes", "wakes.edit", "worktrees",
+        "wakes", "wakes.edit", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]

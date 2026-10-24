@@ -742,7 +742,7 @@ host serves:
     now named first; `made`, the branch one made there started on, and `prefix`, what its name
     starts with.
   - `GET kuvo/worktrees/events`: `application/x-ndjson`, `{worktrees}` as `?records=1` has them,
-    now and again each time they change (from 0.9.35).
+    now and again each time they change (`worktrees.events` in `features`: a box that has it keeps and names its worktrees itself, a Mac's included).
   - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
     anything in it not committed (`"discard": false`: one with changes stays, `409`); its branch
     stays unless it's merged (`"forget": true`: it goes anyway, for one made for a session that

@@ -27,7 +27,7 @@ final class TestBox {
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
-        try StubWeb.listen(port: enginePort)
+        try await StubWeb.listen(port: enginePort)
         await process.start(node: node)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }
         StubWeb.letThrough(port: endpoint.url.port ?? 0)
