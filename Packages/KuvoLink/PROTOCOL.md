@@ -128,15 +128,16 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   bytes. Held to `Vectors/docs.json` (KuvoLink's `Documents`, the bridge's `readDoc`).
 - **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
-  keeps the same one. One of its own further on than it knew (it lost count) moves its count past
-  it. It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
+  keeps the same one. One of its own further on than it knew (it lost count), by a document or a
+  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
   `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
   longer takes them from go.
 - **`peers`**, one per Mac: `{boxes: [{key, sign, address, name, kind: "mac"|"machine", id?}],
   moved: [{session, key}], left: [key]}`: the Mac itself and each of its machines whose bridge
   signs, the same document for all of them. A box's peers are every box its Macs' documents name,
-  itself left out ("Peers"). `left` names the machines that Mac removed: a box that finds itself
-  there no longer counts that Mac, as `leave` does.
+  itself left out ("Peers"). `left` names the machines that Mac removed (never one it still has,
+  under another name): a box that finds itself there and no longer among `boxes` stops counting
+  that Mac, as `leave` does. The Mac mails it to a machine as it removes it, once.
 - **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
   pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
   lets in its own and its Macs' phones, less every pairing removed in any phones document it
@@ -223,8 +224,8 @@ connection.
     and puts back the ones it couldn't deliver, so a letter goes one way only.
 - `kuvo-link.js leave <mac>`: run when that Mac removes the machine. It stops counting that Mac,
   forgets its documents, the peers only it named and what they told it, and leaves other Macs'
-  alone. A Mac that can't reach the machine names it in its peers document's `left`, which does
-  the same wherever it reaches it.
+  alone. A Mac that can't reach the machine names it in its peers document's `left`, and mails it
+  that document once; one that never gets it lets that Mac go after 30 days ("Paired phones").
 
 ### Updates
 
@@ -1077,7 +1078,8 @@ The personalities you make are one library on every computer: each keeps its cop
 its data folder, a machine in `~/.kuvo-code/bots/personalities.json`), and
 copies meet box to box (each box's view is a document, "Documents") and as a Mac connects to a
 machine or changes one (`kuvo-link.js box personalities`, over SSH). Per personality a removal wins
-over any change, and stays noted (`removed`, the last 500), so no copy brings it back; otherwise
+over any change, and stays noted (`removed`, counted past its last change, or the time it was
+removed if that's later; the 500 highest kept), so no copy brings it back; otherwise
 the change counted highest: `updated` is when one was made (milliseconds since 1970), and each
 change counts on from the one before it, whatever any clock says; at the same count, the words
 that sort last. A count past 2^52 isn't taken. Held to `Vectors/personalities.json` (KuvoLink's
@@ -1206,8 +1208,9 @@ before connects (the box notes one: `run/attached`).
   in setup, its documents take the list's place. Lists a 0.9.23 bridge passed on (`vouched`) and
   the personalities it sent (`{"personalities"}`) count for nothing.
 - It meets a machine's personalities over SSH every minute (`kuvo-link.js box personalities`,
-  the library in, the met library out), which still works the same; the bridge tells your other
-  computers what changed.
+  the library in, the met library out), which still works; the bridge tells your other computers
+  what changed. It still lets the newest change win over a removal, so a personality removed
+  elsewhere that it changes afterwards stays on that Mac alone, until it updates.
 - It notes it's connected in `run/connected/<its id>` each minute: the bridge clears `run/connected`
   (and `run/present`, which a 0.7 Mac with the phone link on wrote) as it starts. Nothing reads
   them.

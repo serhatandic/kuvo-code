@@ -28,10 +28,10 @@ import Testing
     }
 
     /// A PhoneLink with a file of its own: `phones` paired here, `machines` set up.
-    private func link(phones: [[String: Any]] = [], machines: [Machine]) throws -> (PhoneLink, URL) {
+    private func link(phones: [[String: Any]] = [], machines: [Machine], also: [String: [String: Any]] = [:]) throws -> (PhoneLink, URL) {
         let file = AppInfo.testRoot.appending(path: "PhoneDocuments/\(UUID().uuidString).json")
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let saved: [String: Any] = ["phones": phones, "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) })]
+        let saved: [String: Any] = ["phones": phones, "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) }).merging(also) { $1 }]
         try JSONSerialization.data(withJSONObject: saved).write(to: file)
         return (PhoneLink(file: file, identity: (LinkKey(), RelaySecret())), file)
     }
@@ -94,6 +94,27 @@ import Testing
         let after = try peers()
         #expect((after["boxes"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["lab.invalid"])
         #expect(after["left"] as? [String] == [shed.x25519.publicBytes.base64URL])
+    }
+
+    @Test func oneComputerUnderTwoNamesStaysWhenOneNameIsForgotten() throws {
+        let lab = Machine(id: "lab.invalid")
+        let (link, file) = try link(machines: [lab], also: ["lab-alias.invalid": lab.host])
+        defer { try? FileManager.default.removeItem(at: file) }
+        // Folded into the other (Settings › Machines: two names for one computer).
+        link.forget(machine: "lab-alias.invalid")
+        let peers = body(try #require(link.allDocuments().first { Documents.read($0)?.kind == "peers" }))
+        #expect((peers["boxes"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["lab.invalid"])
+        #expect(peers["left"] as? [String] == [], "still one of this Mac's, so not told to let it go")
+    }
+
+    @Test func aDigestCantPushThisMacsCountPastWhatItCanCountOnFrom() throws {
+        let lab = Machine(id: "lab.invalid")
+        let (link, file) = try link(machines: [lab])
+        defer { try? FileManager.default.removeItem(at: file) }
+        let first = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
+        link.takeDocuments(["have": [[first.origin, "peers", Int.max, "x"], [first.origin, "phones", 9_007_199_254_740_991, "x"]]], from: lab.id)
+        let now = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
+        #expect(now.n == first.n)
     }
 
     @Test func aMacThatLostCountMovesPastWhatAMachineHas() throws {

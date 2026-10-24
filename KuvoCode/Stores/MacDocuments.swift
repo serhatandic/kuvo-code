@@ -28,6 +28,8 @@ struct MacDocuments: Codable, Equatable {
     var left: [String] = []
 
     static let mostLeft = 64
+    /// A version no higher than this, so the next one is always one a box takes.
+    static let mostCount = 4_503_599_627_370_496
 
     /// This Mac's own document of `kind` with `body`, signed with `key`: the version it has, or the
     /// next when `body` changed.
@@ -55,6 +57,7 @@ struct MacDocuments: Codable, Equatable {
     mutating func take(_ envelope: Documents.Envelope, machines: Set<String>, origin: String) -> (doc: Documents.Document, mine: Bool)? {
         guard let doc = Documents.read(envelope) else { return nil }
         if doc.origin == origin {
+            guard doc.n <= Self.mostCount else { return nil }
             let had = own[doc.kind]
             if let had, doc.n < had.n || (doc.n == had.n && doc.h == had.h) { return nil }
             own[doc.kind] = Own(n: max(doc.n, had?.n ?? 0), h: doc.h, b: Documents.bodyHash(doc.body))
@@ -83,7 +86,7 @@ struct MacDocuments: Codable, Equatable {
     /// One of this Mac's own a machine's digest says is further on than this Mac knew (it lost
     /// count): the next one goes past it.
     mutating func catchUp(_ kind: String, to n: Int) {
-        guard n > (own[kind]?.n ?? 0) else { return }
+        guard n <= Self.mostCount, n > (own[kind]?.n ?? 0) else { return }
         own[kind] = Own(n: n, h: "", b: "")
     }
 

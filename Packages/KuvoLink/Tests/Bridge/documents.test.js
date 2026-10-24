@@ -368,3 +368,33 @@ test("boxes that each changed things while apart end up the same, whatever order
   assert.deepEqual(boxes[0].state.library.personalities.map(each => each.name).sort(), ["From b", "From c", "From d"]);
   for (const box of boxes.slice(0, 3)) assert.deepEqual(link.readDoc(box.state.link.docs[`${boxes[3].entry.sign} phones`])?.body.phones.map(phone => phone.key), [phoneKey("d")], box.name);
 });
+
+test("a Mac lets a machine go only by a document that names it in `left` and no longer among its boxes", () => {
+  const m = mac(), b = machine("b"), c = machine("c");
+  const doc = m.peers([b, c]);
+  setUp(b, m, [doc]);
+  setUp(c, m, [doc]);
+  // The same machine under two names on the Mac, one of them forgotten: still one of its boxes.
+  link.docsWork(b.state, m.entry, { give: [m.peers([b, c], { left: [b.entry.key] })] });
+  assert.deepEqual(link.macsOf(b.state.link), [m.entry.key]);
+  assert.deepEqual(names(b), ["Mac", "c"]);
+  // Removed: it lets the Mac go, and what it said.
+  link.docsWork(b.state, m.entry, { give: [m.peers([c], { left: [b.entry.key] })] });
+  assert.deepEqual(link.macsOf(b.state.link), []);
+  assert.deepEqual(names(b), []);
+});
+
+test("a digest can't push a box's count past what its documents can count on from", () => {
+  const m = mac(), b = machine("b"), c = machine("c");
+  const net = relay([b, c]);
+  const doc = m.peers([b, c]);
+  setUp(b, m, [doc]);
+  setUp(c, m, [doc]);
+  // C claims B's phones are at the last version there is.
+  link.docsWork(b.state, c.entry, { have: [[b.entry.sign, "phones", Number.MAX_SAFE_INTEGER, "x"]] });
+  b.state.link.phones.push({ key: phoneKey("one"), name: "one", added: 1, from: "pair", pairing: "one" });
+  net.changed(b);
+  const held = link.readDoc(c.state.link.docs[`${b.entry.sign} phones`]);
+  assert.ok(held && held.n < 2 ** 52);
+  assert.equal(held.body.phones.length, 1);
+});

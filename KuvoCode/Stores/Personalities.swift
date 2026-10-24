@@ -133,8 +133,9 @@ final class Personalities {
     func delete(_ personality: Personality) {
         guard let kept = custom.first(where: { $0.id == personality.id }) else { return }
         custom.removeAll { $0.id == personality.id }
-        // Newest first, as every copy keeps them.
-        removed.insert(Removal(id: personality.id, removed: (kept.updated ?? 0) + 1), at: 0)
+        // Newest first, as every copy keeps them: counted past its last change, and among removals,
+        // the newest are the ones kept.
+        removed.insert(Removal(id: personality.id, removed: max(Self.now, (kept.updated ?? 0) + 1)), at: 0)
         save()
         onChange()
     }

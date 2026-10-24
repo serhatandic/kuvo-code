@@ -147,9 +147,14 @@ struct BotEditor: View {
             // A shared bot's personality, found here (or added) once, not at every redraw.
             if isNew, !adoptedRecipe, let recipe {
                 adoptedRecipe = true
-                if personality == nil, let found = recipe.personalityHere() {
-                    personality = found.id
-                    if found.added { addedPersonality = found.id }
+                do {
+                    if personality == nil, let found = try recipe.personalityHere() {
+                        personality = found.id
+                        if found.added { addedPersonality = found.id }
+                    }
+                } catch {
+                    // Yours are full: it starts without one, and says why.
+                    failure = "Its personality, “\(recipe.personality?.name ?? "")”, didn’t fit in yours. Shorten or remove one of yours, then pick one for it."
                 }
             }
             // The model it talks on: one picked for it whose account you've signed out of (none
@@ -780,12 +785,12 @@ private struct PersonalityPicker: View {
                 WellRow(isActive: draftFocus == .name) {
                     Image(systemName: "person.crop.circle")
                 } content: {
-                    TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0 }), prompt: Text("Name, like Night Owl"))
+                    TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0; refusal = nil }), prompt: Text("Name, like Night Owl"))
                         .textFieldStyle(.plain)
                         .focused($draftFocus, equals: .name)
                 }
                 WellDivider()
-                TextField("How it talks", text: Binding(get: { draft?.description ?? "" }, set: { draft?.description = $0 }),
+                TextField("How it talks", text: Binding(get: { draft?.description ?? "" }, set: { draft?.description = $0; refusal = nil }),
                           prompt: Text("How it talks, like Quiet and precise. Explains with examples, and asks before assuming."), axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(2...10)
@@ -843,6 +848,7 @@ private struct PersonalityPicker: View {
             }
         } catch {
             refusal = error.localizedDescription
+            AccessibilityNotification.Announcement(error.localizedDescription).post()
             return
         }
         self.draft = nil

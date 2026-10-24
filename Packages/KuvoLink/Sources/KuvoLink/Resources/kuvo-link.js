@@ -3852,7 +3852,8 @@ export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE,
       const kept = library.personalities.find(each => each.id === id);
       if (!kept) return library;
       found = kept;
-      return { personalities: library.personalities.filter(each => each.id !== id), removed: [...library.removed, { id, removed: kept.updated + 1 }] };
+      // Counted past its last change; among removals, the newest are the ones kept.
+      return { personalities: library.personalities.filter(each => each.id !== id), removed: [...library.removed, { id, removed: Math.max(now, kept.updated + 1) }] };
     }, file, lock);
     if (found) noteDocsChanged();
     return found ? [200, {}] : [404, {}];
@@ -4448,7 +4449,7 @@ export function takeDoc(link, envelope) {
   const doc = readDoc(envelope);
   if (!doc || !takesFrom(link, doc.origin, doc.kind)) return null;
   if (doc.origin === ownSign(link)) {
-    if (doc.kind === "peers") return null;
+    if (doc.kind === "peers" || doc.n > MOST_COUNT) return null;
     const had = link.own?.[doc.kind];
     if (had && (doc.n < had.n || (doc.n === had.n && doc.h === had.h))) return null;
     link.own = { ...(link.own ?? {}), [doc.kind]: { n: Math.max(doc.n, had?.n ?? 0), h: doc.h, b: bodyHash(doc.body) } };
@@ -4602,7 +4603,8 @@ export function docsWork(state, sender, docs) {
   for (const doc of took) {
     if (doc.kind !== "peers") continue;
     const mac = macsOf(link).find(each => macSign(link, each) === doc.origin);
-    if (mac && Array.isArray(doc.body.left) && doc.body.left.includes(own)) left.push(mac);
+    const named = Array.isArray(doc.body.boxes) && doc.body.boxes.some(box => box?.key === own);
+    if (mac && !named && Array.isArray(doc.body.left) && doc.body.left.includes(own)) left.push(mac);
   }
   for (const mac of left) leaveMac(link, mac);
   pruneDocs(link);
@@ -4620,7 +4622,7 @@ export function docsWork(state, sender, docs) {
     // One of this box's own further on than it knew (it lost count): its next one goes past it.
     for (const kind of ["phones", "personalities"]) {
       const there = self && theirs.get(docKey(self, kind));
-      if (there && there.n > (link.own?.[kind]?.n ?? 0)) link.own = { ...(link.own ?? {}), [kind]: { n: there.n, h: there.h, b: "" } };
+      if (there && there.n <= MOST_COUNT && there.n > (link.own?.[kind]?.n ?? 0)) link.own = { ...(link.own ?? {}), [kind]: { n: there.n, h: there.h, b: "" } };
     }
     const senderSign = sender.sign ?? macSign(link, sender.key);
     const behind = (key, n, h) => {
@@ -5138,7 +5140,8 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
     if (!ask && last && last.json === json && now - last.at < 600_000) continue;
-    if (have === null) have = currentDigest();
+    // Not as it connects: `docsChanged` greets each with its digest then.
+    if (have === null) have = ask ? false : currentDigest();
     const docs = peer.sign && have ? { docs: { have } } : {};
     // As many as fit in one mail: the first (bots, then the latest sessions) first.
     let bytes = null, sent = [];

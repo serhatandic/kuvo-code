@@ -388,6 +388,8 @@ final class PhoneLink {
                 var macID = MachineEngine.macID
             }
             let settings = folder.appending(path: "setup.json")
+            // Set up again: no longer one this Mac removed.
+            if let known = machineHosts[machine.id]?.key { documents.added(machine: known) }
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: key.publicBytes.base64URL, macSign: Documents.origin(of: signing),
                                            docs: allDocuments(), id: machine.id)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
@@ -503,7 +505,13 @@ final class PhoneLink {
         documents.removed(machine: host.key)
         documents.prune(machines: machineSigns)
         save()
-        Task { await tellMachines() }
+        Task {
+            await tellMachines()
+            // It hears it too, once, while this Mac still knows where it is: it lets this Mac go.
+            guard let server, status == .connected, host.sign != nil, !machineHosts.values.contains(where: { $0.key == host.key }),
+                  let peers = refreshDocuments().own.first(where: { Documents.read($0)?.kind == "peers" }) else { return }
+            await send(["docs": ["give": [peers.json]]], to: host, server: server)
+        }
     }
 
     // MARK: Documents
@@ -531,7 +539,9 @@ final class PhoneLink {
         struct Body: Encodable { var boxes: [Peer]; var moved: [Moved]; var left: [String] }
         let me = Peer(key: key.publicBytes.base64URL, sign: Documents.origin(of: signing), address: secret.address.bytes.base64URL, name: Self.computerName, kind: "mac", id: nil)
         let machines = documentMachines.map { Peer(key: $0.host.key, sign: $0.host.sign ?? "", address: $0.host.address, name: $0.host.name, kind: "machine", id: $0.id) }
-        return (try? Self.canonical.encode(Body(boxes: [me] + machines, moved: moved, left: documents.left))) ?? Data("{}".utf8)
+        // Never one that's still one of its machines (the same computer, under another name).
+        let current = Set(machineHosts.values.map(\.key))
+        return (try? Self.canonical.encode(Body(boxes: [me] + machines, moved: moved, left: documents.left.filter { !current.contains($0) }))) ?? Data("{}".utf8)
     }
 
     /// The phones you've paired here, and every removal this Mac knows of; none while the phone link
@@ -617,7 +627,7 @@ final class PhoneLink {
         if let have = docs["have"] as? [[Any]] {
             var theirs: [String: (n: Int, h: String)] = [:]
             for entry in have.prefix(512) where entry.count >= 3 {
-                guard let o = entry[0] as? String, let kind = entry[1] as? String, let n = entry[2] as? Int else { continue }
+                guard let o = entry[0] as? String, let kind = entry[1] as? String, let n = entry[2] as? Int, n >= 0, n <= MacDocuments.mostCount else { continue }
                 theirs["\(o) \(kind)"] = (n, entry.count > 3 ? entry[3] as? String ?? "" : "")
             }
             // One of this Mac's own further on than it knew (it lost count): its next goes past it.
