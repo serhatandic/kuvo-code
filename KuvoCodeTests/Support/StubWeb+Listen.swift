@@ -44,6 +44,8 @@ nonisolated extension StubWeb {
     /// waits for.
     static func stopListening(port: UInt16) {
         guard let listener = listening.withLock({ $0.removeValue(forKey: port) }) else { return }
+        // Closed already (it failed, and was cancelled then): nothing to wait for.
+        if case .cancelled = listener.state { return }
         let closed = Task {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 listener.stateUpdateHandler = { state in

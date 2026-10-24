@@ -1361,8 +1361,8 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
     // What its branch's name starts with: as given, and kept for a client that doesn't say (a
     // phone), so one made from there starts as yours do.
-    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : branchPrefix();
-    if (typeof body?.branchPrefix === "string" && body.branchPrefix !== branchPrefix()) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: body.branchPrefix }));
+    const kept = branchPrefix();
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : kept;
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
@@ -1381,6 +1381,8 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message("Its branch couldn't be made.") };
     }
+    // The prefix it was made with, kept for a client that gives none, once a branch with it was made.
+    if (prefix !== kept) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
     const tree = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...(base ? { base } : {}), made: branch, prefix };
     updateWorktrees(list => [...list.filter(each => each.root !== root), tree]);
     return { status: 200, value: tree };

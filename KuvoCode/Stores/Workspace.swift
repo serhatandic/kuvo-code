@@ -813,10 +813,20 @@ final class Workspace {
         guard !reading || (boxes != nil && !folders.contains(folder) && !Self.isChat(folder) && !Self.isBotFolder(folder)) else { return }
         tellingWorktree[session.id] = Task {
             defer { tellingWorktree[session.id] = nil }
-            if reading { await takeWorktrees(from: BoxClient.mac) }
+            if reading { await learnWorktree(at: folder) }
             guard let tree = worktrees[folder], let api = api(for: session) else { return }
             try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
         }
+    }
+
+    /// The worktree this Mac's box keeps at `folder`, read from it and added here: just that one,
+    /// so a read that crossed a change the box is telling this Mac about doesn't undo it.
+    private func learnWorktree(at folder: String) async {
+        struct Listed: Decodable { var worktrees: [BoxWorktree] }
+        guard let listed: Listed = try? await onBox(BoxClient.mac, "GET", "kuvo/worktrees?records=1", nil),
+              let record = listed.worktrees.first(where: { $0.folder ?? $0.root == folder }), worktrees[folder] == nil else { return }
+        worktrees[folder] = Worktree(project: record.project, root: record.root, branch: record.branch, base: record.base)
+        saveWorktrees()
     }
 
     /// (As a machine's bridge says it to a session there: with the checkout's path on it.)
@@ -937,6 +947,9 @@ final class Workspace {
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
             } catch let refusal as BoxRefusal where refusal.status == 404 {
                 // Not there any more: it goes here too.
+            } catch let refusal as BoxRefusal where refusal.status < 500 {
+                // Not one it takes (as kept here it doesn't make sense there): it stays here, as it was.
+                continue
             } catch {
                 // Not asked: kept as it was, for next time.
                 return nil
