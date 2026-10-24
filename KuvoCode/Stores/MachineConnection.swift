@@ -10,7 +10,7 @@ final class MachineConnection {
 
     private var tasks: [String: Task<Void, Never>] = [:]
     /// It closed: nothing more starts for it.
-    private(set) var hasEnded = false
+    private var hasEnded = false
 
     /// Runs `work` for as long as the connection lasts. One already running under `name` (a sync
     /// asked for again) ends first.

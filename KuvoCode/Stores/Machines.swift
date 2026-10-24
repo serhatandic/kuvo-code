@@ -87,6 +87,8 @@ final class MachineEngine {
     @ObservationIgnored private var isStopping = false
     /// The connection while it's up, which what runs for it runs in (`MachineConnection`).
     @ObservationIgnored private(set) var activeConnection: MachineConnection?
+    /// It left this Mac (removed, or found to be another machine here): it never connects again.
+    @ObservationIgnored private(set) var isRetired = false
     /// Copying its sign-ins, now or last: the next waits for it.
     @ObservationIgnored var signInTurn: Task<Void, Never>?
     /// Events for the stores that span every machine (sessions); the catalog takes its own.
@@ -321,6 +323,8 @@ final class MachineEngine {
         case .preparing, .failed: break
         case .downloading, .starting, .ready: return nil
         }
+        // One that left this Mac, from a retry or a start over that came after: nothing goes there.
+        guard !isRetired else { return nil }
         isStopping = false
         // Disconnecting (Connect Now) or a newer attempt ends this one at its next step.
         let attempt = connections
@@ -498,11 +502,18 @@ final class MachineEngine {
         return connection
     }
 
-    /// Ends what runs for the connection (`MachineConnection`), leaving it open: a machine being
-    /// uninstalled is signed out through it first.
+    /// Ends what runs for the connection (`MachineConnection`), leaving it open.
     func endConnection() {
         activeConnection?.end()
         activeConnection = nil
+    }
+
+    /// It leaves this Mac: what runs for its connection ends, and it never connects again. Its
+    /// connection stays open until it's closed (a machine being uninstalled is signed out through
+    /// it first).
+    func retire() {
+        isRetired = true
+        endConnection()
     }
 
     private struct Superseded: Error {}
@@ -1018,6 +1029,7 @@ final class Machines {
         list[index] = merged
         engines[machine]?.update(merged)
         // Its connection goes; the engine there goes on, as this one's.
+        engines[duplicate]?.retire()
         engines[duplicate]?.browser.reset()
         engines[duplicate]?.disconnect()
         engines[duplicate] = nil
@@ -1039,6 +1051,8 @@ final class Machines {
     /// `uninstall` also stops its engine there and deletes the sign-ins and keys it keeps, and how
     /// it starts after a restart (its sessions stay, for when it's added again).
     func remove(_ id: String, uninstall: Bool) {
+        // Nothing more goes there for its connection, nor does it connect again.
+        engines[id]?.retire()
         if !uninstall {
             engines[id]?.disconnect()
         } else if let engine = engines[id] {
@@ -1050,8 +1064,6 @@ final class Machines {
                 } else {
                     // A removal under way: added again meanwhile, it waits (see `waitForRemoval`).
                     removing.insert(id)
-                    // Nothing more goes there for its connection, which stays open to sign it out.
-                    engine.endConnection()
                     Task { [weak self] in
                         let forgotten = await engine.forgetAccounts()
                         await engine.shutDown()

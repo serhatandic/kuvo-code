@@ -10,7 +10,7 @@ import Testing
 /// stubbed (StubEngine), SSH to them answers nothing and is noted (`SSHConnection.standIn`), and
 /// the time between syncs is the test's own (TestClock).
 @MainActor
-@Suite(.serialized) struct MachineConnectionTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct MachineConnectionTests {
     let app = AppModel()
     let machine: StubEngine
     let mac: FakeEngine
@@ -121,6 +121,39 @@ import Testing
         try await eventually { ssh.scripts(to: two).dropFirst(sentThere).contains { $0.contains("box personalities") } }
         #expect(ssh.scripts(to: two).dropFirst(sentThere).contains { $0.contains("box personalities") }, "the one still connected gets its round")
         #expect(Array(ssh.scripts(to: one).dropFirst(sent)) == [], "nothing went to the one disconnected")
+    }
+
+    /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
+    /// doesn't connect again, and nothing more goes there.
+    @Test func removedWhileItsEngineStartsOverItDoesntConnectAgain() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        // What starting it over sends there, held until it's removed.
+        let gate = Gate()
+        let sending = Gate()
+        defer { gate.open() }
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if address == id {
+                sending.open()
+                gate.wait()
+            }
+            return nil
+        }
+        let restart = app.restartEngine(engine)
+        try await eventually { sending.isOpen }
+        #expect(sending.isOpen, "it began starting over")
+        let sent = ssh.scripts(to: id).count
+        let asked = machine.asked.count
+        app.removeMachine(id)
+        gate.open()
+        await restart.value
+        #expect(!engine.isReady, "it didn't connect again")
+        #expect(Array(ssh.scripts(to: id).dropFirst(sent)) == [], "nothing went to it over SSH once it was removed")
+        #expect(Array(machine.asked.dropFirst(asked)) == [], "nor to its engine")
+        #expect(clock.waits == [], "no syncs run for it")
     }
 
     // MARK: Helpers

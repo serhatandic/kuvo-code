@@ -284,12 +284,13 @@ extension AppModel {
     }
 
     /// Starts a machine's engine over (its Settings › Engine), and connects to it again.
-    func restartEngine(_ engine: MachineEngine) {
+    @discardableResult
+    func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
         workspace.forget(engine.machine.id)
-        Task {
+        return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection)
-            connect(engine)
+            await connect(engine).value
         }
     }
 
@@ -458,7 +459,7 @@ extension AppModel {
         engine.startWanted = false
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
-        // What runs for its connection ends now, also while a test copy's stops.
+        // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         workspace.forget(engine.machine.id)
