@@ -1729,7 +1729,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* json(status, value);
     }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
-    if (/^kuvo\/worktrees(\/(remove|rename|record))?$/.test(route)) {
+    if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
       const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
@@ -2439,7 +2439,8 @@ export function readKit() {
   const read = file => {
     try {
       const kit = JSON.parse(textOf(file) ?? "");
-      return kit?.kuvo === 1 && Array.isArray(kit.templates) && Array.isArray(kit.personalities) && typeof kit.instructions === "string" ? kit : null;
+      return kit?.kuvo === 1 && Array.isArray(kit.templates) && Array.isArray(kit.personalities)
+        && ["instructions", "jobInstructions", "personalityWords"].every(words => typeof kit[words] === "string") ? kit : null;
     } catch {
       return null;
     }
@@ -2505,11 +2506,9 @@ async function call(target, method, route, body, signal, folder) {
 }
 
 // What a bot is told, from the kit's words with its own name, folder, personality and project,
-// and its job as its memory has it (`jobInMemory`), for one that has one; null when the kit, from
-// a Mac before Kuvo Code had its words for that, can't say it.
+// and its job as its memory has it (`jobInMemory`), for one that has one.
 export function botInstructions(kit, name, folder, personality, project, job) {
   const working = Boolean(job?.section);
-  if (working && typeof kit.jobInstructions !== "string") return null;
   let text = (working ? kit.jobInstructions : kit.instructions).replaceAll("⟦name⟧", () => name).replaceAll("⟦folder⟧", () => folder);
   text = personality ? text.replace("⟦personality⟧", () => personality) : text.replace("\n⟦personality⟧\n", "");
   if (project) text = text.replace(`\n\n${kit.identityNote}`, () => `\n\n${kit.projectNote}\n\n${kit.identityNote}`);
@@ -2686,7 +2685,7 @@ export async function refreshBotJob(target, sessionID) {
   }
   const personality = botPersonalities(kit).find(each => each.id === here.described.personality)?.instruction;
   const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, job);
-  if (told === null || toldBots.get(sessionID) === told) return;
+  if (toldBots.get(sessionID) === told) return;
   await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries/kuvo.bot`, { value: told });
   toldBots.set(sessionID, told);
 }
@@ -2881,7 +2880,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
       const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
       const personality = personalities.find(each => each.id === changed.personality)?.instruction;
       const told = botInstructions(kit, changed.name, here.folder, personality, described.project, job);
-      if (told !== null && await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).then(() => true, () => false)) toldBots.set(here.session, told);
+      if (await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).then(() => true, () => false)) toldBots.set(here.session, told);
     }
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
@@ -3819,7 +3818,6 @@ export async function retellBots(ids, readEngine = readEngineFile, readBridge = 
     if (!target?.port) continue;
     const personality = personalities.find(each => each.id === here.described.personality)?.instruction;
     const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? ""));
-    if (told === null) continue;
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(here.session)}/instructions/entries/kuvo.bot`, { value: told })
       .then(() => toldBots.set(here.session, told), () => {});
   }
@@ -3866,12 +3864,12 @@ export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE,
 // The personalities a bot made here can have: the kit's presets, then the library's, each with
 // what the bot is told (`personalityWords`, as the Mac words it).
 export function botPersonalities(kit, library = readPersonalities()) {
-  const words = typeof kit.personalityWords === "string" ? kit.personalityWords : "Your personality: ⟦name⟧. ⟦description⟧";
-  const told = each => words.replaceAll("⟦name⟧", each.name).replaceAll("⟦description⟧", each.description);
+  const told = each => kit.personalityWords.replaceAll("⟦name⟧", each.name).replaceAll("⟦description⟧", each.description);
   const presets = kit.personalities.filter(each => !each.custom);
-  // A kit from before the library: its own, until the library has them.
-  const older = kit.personalities.filter(each => each.custom && !library.personalities.some(mine => mine.id === each.id) && !library.removed.some(gone => gone.id === each.id));
-  return [...presets, ...older, ...library.personalities.map(each => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
+  // Ones you made that a Mac's kit lists and this copy of the library hasn't had yet: the kit's,
+  // until the library has them.
+  const fromKit = kit.personalities.filter(each => each.custom && !library.personalities.some(mine => mine.id === each.id) && !library.removed.some(gone => gone.id === each.id));
+  return [...presets, ...fromKit, ...library.personalities.map(each => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
 }
 
 // ---- This machine's own settings (PROTOCOL.md, "kuvo/config") ----
@@ -4208,7 +4206,7 @@ const MOST_KEPT = 256;
 export const macsOf = link => [...new Set([...(Array.isArray(link?.macs) ? link.macs : []), ...(typeof link?.mac === "string" ? [link.mac] : [])])];
 
 // When a Mac's last list came (its own clock, milliseconds).
-const lastFrom = (link, mac) => link.macAts?.[mac] ?? (mac === link.mac ? link.macAt ?? 0 : 0);
+const lastFrom = (link, mac) => link.macAts?.[mac] ?? 0;
 
 // A Mac this machine hasn't heard from in 30 days, by its own clock (gone, or its key made anew):
 // it no longer sets the list, and the phones it listed are as ones from before Macs were named,
@@ -5902,7 +5900,7 @@ async function setup() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    console.error("setup takes JSON on stdin: {relay, name, phones: [{key, name, address}]}");
+    console.error("setup takes JSON on stdin: {relay, name, mac, at, phones?: [{key, name, address, pairing}], peers, …}");
     process.exit(2);
   }
   const phones = Array.isArray(input.phones) ? input.phones : [];
@@ -5915,13 +5913,12 @@ async function setup() {
     // The Mac's key, which a phone list it mails later must come from, and its list, unless one it
     // sent later came first (by mail, as this was on its way).
     const at = typeof input.at === "number" ? input.at : 0;
-    const by = mac ?? next.mac;
-    // Its phones, when it gives them (with the phone link off it gives none, and changes none).
-    if (Array.isArray(input.phones) && (!by || at > lastFrom(next, by))) {
-      takeMacList(next, phones, input.removed, by);
-      if (by) next.macAts = { ...(next.macAts ?? {}), [by]: at };
-    }
     if (mac) {
+      // Its phones, when it gives them (with the phone link off it gives none, and changes none).
+      if (Array.isArray(input.phones) && at > lastFrom(next, mac)) {
+        takeMacList(next, phones, input.removed, mac);
+        next.macAts = { ...(next.macAts ?? {}), [mac]: at };
+      }
       next.mac = mac;
       next.macs = [...new Set([...macsOf(next), mac])];
       forgetOldMacs(next, mac);

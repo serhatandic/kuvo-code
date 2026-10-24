@@ -192,8 +192,13 @@ test("a Mac reading the machine's worktrees as their session gets its title find
   assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout", "never kuvo/speed-up-checkout-2");
   assert.equal(git(project, "branch", "--list", "kuvo/speed-up-checkout-2"), "");
   assert.deepEqual(told.slice(toldBefore).map(each => each.url), ["/api/experimental/session/ses_titled/instructions/entries/kuvo.worktree"], "its session told the new name once");
-  // No one else names it: a Mac's rename is no longer taken.
-  assert.equal((await ask("POST", "kuvo/worktrees/rename", { path: made.root, branch: "kuvo/other" })).status, 404);
+  // No one else names it: the rename a Mac on 0.8.0-beta.1 still asks for through `box route` is
+  // turned away (it reads the machine's records again then), and the name stays.
+  const handle = link.engineHandler(() => atEngine, {}, () => null);
+  let refused = 0;
+  for await (const part of handle({ method: "POST", path: "kuvo/worktrees/rename", headers: {}, body: Buffer.from(JSON.stringify({ path: made.root, from: "kuvo/speed-up-checkout", branch: "kuvo/other" })) }, {}, undefined)) refused ||= part.head?.status ?? 0;
+  assert.ok(refused >= 400, `answered ${refused}`);
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout");
   sessions.splice(sessions.findIndex(each => each.id === "ses_titled"), 1);
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });

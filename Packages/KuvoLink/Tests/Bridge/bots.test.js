@@ -287,6 +287,9 @@ const kit = {
   startingModel: { id: "big-pickle", providerID: "opencode" },
   projects: [{ directory: "/home/me/app", name: "app" }],
   instructions: "You are ⟦name⟧, one of the user's bots.\n\n⟦personality⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
+  // What a bot with a job is told (Bots.MachineKit.jobInstructions), and of a personality you made.
+  jobInstructions: "You are ⟦name⟧, one of the user's bots: ⟦job⟧.\n\n⟦personality⟧\n\nYour job, as your memory has it:\n⟦jobDetails⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
+  personalityWords: "Your personality: ⟦name⟧. ⟦description⟧",
   projectNote: "You work in one of the user's projects.",
   identityNote: "Who sets what.",
   memory: "# ⟦name⟧'s memory\n",
@@ -477,12 +480,6 @@ test("a bot's job is read from its memory as the Mac reads it", () => {
   }
 });
 
-// The kit as a Mac with words for a bot that has a job gives it (Bots.MachineKit.jobInstructions).
-const jobKit = {
-  ...kit,
-  jobInstructions: "You are ⟦name⟧, one of the user's bots: ⟦job⟧.\n\n⟦personality⟧\n\nYour job, as your memory has it:\n⟦jobDetails⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
-};
-
 // What a phone's change asked of the conversation, by what it did there.
 const told = (asked, session) => ({
   title: asked.find(each => each.method === "PATCH" && each.url === `/api/session/${session}`)?.body?.title,
@@ -491,7 +488,7 @@ const told = (asked, session) => ({
 });
 
 test("with the Mac closed, a bot here is changed from a phone as Edit Bot changes it, and its conversation told", async () => {
-  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");
   write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the build.\nTells you when it breaks.\n\n## Notes\nnone\n");
   const engine = await makingEngine(["opencode", "anthropic"]);
@@ -538,7 +535,7 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
 });
 
 test("a change that can't be is said, and nothing changes", async () => {
-  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");
   const engine = await makingEngine(["opencode"]);
   try {
@@ -572,22 +569,6 @@ test("a change that can't be is said, and nothing changes", async () => {
     const moving = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "X" });
     assert.equal(moving.status, 409);
     assert.match(moving.json.message, /moving/);
-  } finally {
-    engine.close();
-  }
-});
-
-test("a bot with a job, changed where the Mac's kit has no words for one, is told its name later", async () => {
-  write(path.join(bots, "kit.json"), JSON.stringify(kit));
-  const folder = bot("bot_scout00001");
-  write(path.join(folder, "MEMORY.md"), "## Job\nWatches the build\n");
-  const engine = await makingEngine();
-  try {
-    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
-    assert.equal((await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { name: "Scout Prime" })).status, 200);
-    const asked = told(engine.asked, "ses_bot_scout00001");
-    assert.equal(asked.title, "Scout Prime");
-    assert.equal(asked.instructions, undefined, "not told it has no job: the Mac tells it as it next connects");
   } finally {
     engine.close();
   }
@@ -643,7 +624,7 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
 });
 
 test("with no Mac there, a bot whose run ended has its job read from its memory: its description and what it's told follow, once", async () => {
-  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");
   write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
   const engine = await fakeEngine();
@@ -702,7 +683,7 @@ test("a machine makes bots with its release's words where they're newer than a M
 test("with a Mac connected, a bot here whose run ended still has its job read from its memory, by the machine", async () => {
   // What a connected Mac of an earlier version leaves each minute: a note that it's there.
   write(path.join(home, "run", "connected", "mac_1"), "");
-  write(path.join(bots, "kit.json"), JSON.stringify(jobKit));
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const folder = bot("bot_scout00001");
   write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
   const engine = await fakeEngine();

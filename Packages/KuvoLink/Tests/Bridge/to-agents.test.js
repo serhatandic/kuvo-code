@@ -101,7 +101,7 @@ test("a conversation goes on with the coding agents whole, with what was waiting
 test("a bot's conversation becomes the new one, marked and told as its own, and the engine's goes", async () => {
   write(path.join(home, "bots", "kit.json"), JSON.stringify({
     kuvo: 1, templates: [], personalities: [], looks: { colors: [], shapes: [], faces: [] }, startingModel: sonnet, projects: [],
-    instructions: "You are ⟦name⟧, one of the user's bots.⟦personality⟧ Memory: \"⟦folder⟧/MEMORY.md\".", projectNote: "", identityNote: "", memory: "", greeting: "", rules: [], timeZone: "UTC",
+    instructions: "You are ⟦name⟧, one of the user's bots.⟦personality⟧ Memory: \"⟦folder⟧/MEMORY.md\".", jobInstructions: "You are ⟦name⟧: ⟦job⟧.⟦personality⟧ ⟦jobDetails⟧", personalityWords: "Your personality: ⟦name⟧. ⟦description⟧", projectNote: "", identityNote: "", memory: "", greeting: "", rules: [], timeZone: "UTC",
   }));
   const folder = path.join(home, "bots", "bot_scout00001");
   write(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: {}, model: { id: "big-pickle", providerID: "opencode" }, created: "2026-10-01T09:00:00Z", updated: "2026-10-01T09:00:00Z" }));

@@ -557,7 +557,7 @@ test("the self-test passes here", () => {
 
 test("setup keeps the machine's keys and its own phones, starts the bridge, and stops it with no phones left", async () => {
   const { spawnSync } = await import("node:child_process");
-  const [A, B, C] = ["A", "B", "C"].map(shaped);
+  const [A, B, C, MAC] = ["A", "B", "C", "Mac"].map(shaped);
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-setup-"));
   fs.mkdirSync(path.join(folder, "workspace"));
   const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
@@ -568,7 +568,7 @@ test("setup keeps the machine's keys and its own phones, starts the bridge, and 
   const pidFile = path.join(folder, "run", "link.pid");
   try {
     // A relay nobody listens on: the bridge keeps trying, which is all this needs.
-    const first = setup({ relay: "ws://127.0.0.1:9", name: "test", phones: [{ key: A, name: "A" }] });
+    const first = setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 1, phones: [{ key: A, name: "A" }] });
     assert.match(first.address, /^[A-Za-z0-9_-]{22}$/);
     // The file exists briefly before its PID is written; setup also needs its version file.
     let pid = 0;
@@ -585,7 +585,7 @@ test("setup keeps the machine's keys and its own phones, starts the bridge, and 
     process.kill(pid, 0);
 
     // Its keys stay; the phones are what the Mac says now; the same bridge carries on.
-    const second = setup({ relay: "ws://127.0.0.1:9", name: "test", phones: [{ key: A, name: "A" }, { key: B, name: "B" }] });
+    const second = setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 2, phones: [{ key: A, name: "A" }, { key: B, name: "B" }] });
     assert.deepEqual(second, first);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(folder, "run", "link.json"), "utf8")).phones.map(p => p.key), [A, B]);
     assert.equal(Number(fs.readFileSync(pidFile, "utf8")), pid);
@@ -594,7 +594,7 @@ test("setup keeps the machine's keys and its own phones, starts the bridge, and 
     const linkFile = path.join(folder, "run", "link.json");
     const saved = JSON.parse(fs.readFileSync(linkFile, "utf8"));
     fs.writeFileSync(linkFile, JSON.stringify({ ...saved, phones: [...saved.phones, { key: C, name: "C", added: 1, from: "pair" }] }));
-    setup({ relay: "ws://127.0.0.1:9", name: "test", phones: [{ key: B, name: "B" }] });
+    setup({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, at: 3, phones: [{ key: B, name: "B" }] });
     assert.deepEqual(JSON.parse(fs.readFileSync(linkFile, "utf8")).phones.map(p => p.key), [B, C]);
 
     // Nothing left to answer: the bridge stops, and the machine keeps its keys; no phone keeps
@@ -602,7 +602,7 @@ test("setup keeps the machine's keys and its own phones, starts the bridge, and 
     const seen = path.join(folder, "run", "link.seen");
     fs.writeFileSync(seen, "");
     fs.writeFileSync(linkFile, JSON.stringify({ ...saved, phones: [] }));
-    assert.deepEqual(setup({ relay: "ws://127.0.0.1:9", phones: [] }), {});
+    assert.deepEqual(setup({ relay: "ws://127.0.0.1:9", mac: MAC, at: 4, phones: [] }), {});
     const kept = JSON.parse(fs.readFileSync(linkFile, "utf8"));
     assert.equal(kept.secret, saved.secret);
     assert.deepEqual(kept.phones, []);
@@ -715,7 +715,7 @@ test("a phone list a Mac mails through the relay is taken from the Macs that set
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   link.writeLink({
     secret: crypto.randomBytes(32).toString("base64url"), key: machine.toString("base64url"), relay: "wss://relay.test", name: "m",
-    mac: k(link.publicOf(mac)), macs: [k(link.publicOf(mac)), k(link.publicOf(other))], macAt: 1000,
+    mac: k(link.publicOf(mac)), macs: [k(link.publicOf(mac)), k(link.publicOf(other))], macAts: { [k(link.publicOf(mac))]: 1000 },
     phones: [{ key: k(lost), name: "Lost iPhone", added: 1, from: "mac", mac: k(link.publicOf(mac)) }, { key: k(own), name: "Paired here", added: 2, from: "pair" }],
   });
   const mail = (from, phones, at) => link.sealOneWay(Buffer.from(JSON.stringify({ phones, at })), from, link.publicOf(machine)).message;

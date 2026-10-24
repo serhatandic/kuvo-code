@@ -368,7 +368,7 @@ test("your personalities go box to box with no Mac: each machine tells the other
   fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: {}, personality: "custom.calm", created: "2026-10-01T09:00:00Z" }));
   fs.writeFileSync(path.join(folder, "session"), "ses_scout");
   fs.writeFileSync(path.join(home, "bots", "kit.json"), JSON.stringify({ kuvo: 1, templates: [], personalities: [], looks: {}, projects: [], rules: [],
-    instructions: "You are ⟦name⟧.\n⟦personality⟧\nMemory: ⟦folder⟧.", projectNote: "", identityNote: "", memory: "", greeting: "", timeZone: "UTC" }));
+    instructions: "You are ⟦name⟧.\n⟦personality⟧\nMemory: ⟦folder⟧.", jobInstructions: "You are ⟦name⟧: ⟦job⟧.\n⟦personality⟧\n⟦jobDetails⟧\nMemory: ⟦folder⟧.", personalityWords: "Your personality: ⟦name⟧. ⟦description⟧", projectNote: "", identityNote: "", memory: "", greeting: "", timeZone: "UTC" }));
   const told = [];
   const server = http.createServer((request, response) => {
     let body = "";
