@@ -1042,28 +1042,40 @@ async function sessionsHere(engine, signal) {
 
 const inside = (folder, root) => folder === root || folder?.startsWith(root + "/");
 
-/** `tree`'s branch, still `from`, named `to` (or `to-2` and so on): its new name, or why not. */
-function renameWorktree(tree, from, to) {
-  // Named already (by a Mac, a phone or this box, whichever came first): left as it is.
-  if (tree.branch !== from) return { status: 409, value: { message: `It's called ${tree.branch} now.` } };
-  if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return { status: 409, value: { message: `${tree.branch} has been pushed, so it keeps its name.` } };
+/** `tree`'s branch named `to` (or `to-2` and so on), unless it's been pushed: whether it was. */
+function renameWorktree(tree, to) {
+  if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return false;
   const name = freeBranch(tree.root, to);
-  if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) return { status: 409, value: { message: "It couldn't be renamed." } };
+  if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) return false;
   updateWorktrees(list => list.map(each => (each.root === tree.root ? { ...each, branch: name } : each)));
-  return { status: 200, value: { branch: name } };
+  return true;
 }
 
-/** With no Mac here to do it, a worktree made here is named after its session once that has a
- * title, as a Mac names it: one still on the branch it was made on, and not pushed. */
+/** A worktree made here, named after its session once that has a title (this box names its own,
+ * Mac connected or not; a Mac names only its own): one still on the branch it was made on, and
+ * not pushed. Its session is told the new name, as it was told the one before. */
 export async function nameWorktreeBranch(engine, sessionID) {
   if (typeof sessionID !== "string") return;
   const session = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`))?.data;
   const folder = session?.location?.directory ?? session?.directory;
+  // Read now, after the wait: what another naming did meanwhile shows.
   const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
   const slug = branchSlug(session?.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug) return;
-  // Told its branch's new name, as it was told the one before.
-  if (renameWorktree(tree, tree.made, (tree.prefix ?? "") + slug).status === 200) await tellWorktree(engine, sessionID);
+  if (renameWorktree(tree, (tree.prefix ?? "") + slug)) await tellWorktree(engine, sessionID);
+}
+
+/** The worktrees made here whose session has a title by now, named: as they're read, so a reader
+ * never sees one before this box named it (it heard of the title a moment later, or wasn't
+ * running then). */
+async function nameDueWorktrees(engine, signal) {
+  const due = readWorktrees().filter(tree => tree.made && tree.branch === tree.made);
+  if (!due.length || !engine?.port) return;
+  const { sessions } = await sessionsHere(engine, signal);
+  for (const tree of due) {
+    const titled = sessions.find(session => (session.location?.directory ?? session.directory) === (tree.folder ?? tree.root) && branchSlug(session.title ?? ""));
+    if (titled) await nameWorktreeBranch(engine, titled.id).catch(() => {});
+  }
 }
 
 /** A session just made in one of this box's worktrees (by a phone, in one it asked for here):
@@ -1084,8 +1096,12 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
   const message = text => ({ message: text });
   const list = readWorktrees();
   if (route === "kuvo/worktrees" && method === "GET") {
-    // As a Mac reads them as it connects: at once, without what git says.
-    if (/(^|[?&])records=1(&|$)/.test(requestPath.split("?")[1] ?? "")) return { status: 200, value: { worktrees: list } };
+    // As a Mac reads them (as it connects, and as a session in one gets its title): without what
+    // git says, their branches named.
+    if (/(^|[?&])records=1(&|$)/.test(requestPath.split("?")[1] ?? "")) {
+      await nameDueWorktrees(engine, signal);
+      return { status: 200, value: { worktrees: readWorktrees() } };
+    }
     const { sessions, active } = await sessionsHere(engine, signal);
     const worktrees = [];
     for (const tree of list) {
@@ -1147,12 +1163,6 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
   }
   const tree = list.find(each => each.root === body?.path);
   if (!tree) return { status: 404, value: message("That worktree isn't on this machine any more.") };
-  if (route === "kuvo/worktrees/rename") {
-    // Named after its session once that has a title, unless it's been pushed; `from`: only if
-    // it's still called that.
-    if (typeof body?.branch !== "string" || !body.branch.trim()) return { status: 400, value: message("Send the branch's new name as {\"branch\"}.") };
-    return renameWorktree(tree, typeof body?.from === "string" ? body.from : tree.branch, body.branch.trim());
-  }
   if (route === "kuvo/worktrees/remove") {
     // Not while an agent works there; with changes not committed only when they're to go.
     const { sessions, active } = await sessionsHere(engine, signal);

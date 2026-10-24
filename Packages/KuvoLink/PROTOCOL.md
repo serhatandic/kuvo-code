@@ -660,9 +660,10 @@ itself. A host serves:
     different names and stay two machines.
 - Settings › Worktrees: the git worktrees sessions run in, each computer its own (a Mac for its
   own; a machine's bridge from 0.9.23 for the machine's, kept in `~/.kuvo-code/box/worktrees.json`,
-  with the Mac closed too). A Mac makes, names and removes a machine's through the machine's
-  routes (`box route`), and reads them from it as it connects. With no Mac there, a machine names
-  a worktree it made after its session once that has a title, as a Mac does.
+  with the Mac closed too). A Mac makes and removes a machine's through the machine's routes
+  (`box route`), and reads them from it. Each computer names its own worktrees' branches after
+  their session once that has a title: a machine (from 0.9.24) whether a Mac is connected or not,
+  and a Mac never a machine's.
   - `GET kuvo/worktrees` → `{"worktrees": [{path, folder, project, projectName, branch, base?,
     sessions, working, uncommitted?, ahead?, size?}]}`: `path` is the worktree's folder, `folder`
     where its session runs (the project's place in its repository), `project` its project's,
@@ -671,8 +672,9 @@ itself. A host serves:
     not committed, which go when it's removed; `ahead`, commits `base` doesn't have, whose branch
     stays when it's removed. `size` in bytes. Where new ones go is `kuvo/config`'s
     `worktree.directory`. On a machine, `?records=1` → `{"worktrees": [{project, root, folder,
-    branch, base?, made?, prefix?}]}`, as it keeps them, at once (without asking git); `made`, the
-    branch one made there started on, and `prefix`, what its name starts with.
+    branch, base?, made?, prefix?}]}`, as it keeps them (without asking git), any whose session
+    has a title by now named first; `made`, the branch one made there started on, and `prefix`,
+    what its name starts with.
   - `POST kuvo/worktrees/remove {"path", "discard"?}` removes it as Remove… does: its folder and
     anything in it not committed (`"discard": false`: one with changes stays, `409`); its branch
     stays unless it's merged (`"forget": true`: it goes anyway, for one made for a session that
@@ -685,10 +687,8 @@ itself. A host serves:
     own prefix, from Settings › Git); make the session in `folder`, and the computer tells it it
     works in a worktree (a Mac's from this version, a machine's bridge from 0.9.23). `400` for a
     project that isn't a folder there, `409 {"message"}` when it isn't in a git repository, `503`
-    while the engine isn't running. On a machine: `POST kuvo/worktrees/rename
-    {"path", "branch", "from"?}` names its branch (once its session has a title; `409` once it's
-    pushed, or when it isn't called `from` any more: named already) → `{"branch"}`, the name it
-    got; `POST kuvo/worktrees/record {project, root, folder?, branch, base?}` keeps one a Mac
+    while the engine isn't running. On a machine (0.9.23 also took a Mac's `POST
+    kuvo/worktrees/rename`, gone from 0.9.24: it names them itself): `POST kuvo/worktrees/record {project, root, folder?, branch, base?}` keeps one a Mac
     made there before machines kept their own (`404` when it isn't there any more).
 - On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
   awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake

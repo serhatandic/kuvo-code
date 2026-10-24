@@ -1,6 +1,6 @@
 // A machine's worktrees, kept by the machine itself and answered for with the Mac closed: one
-// made for a session on a branch of its own, named after the session (by a Mac, or by the machine
-// with no Mac there), listed with what to know before removing it, and removed (not while an
+// made for a session on a branch of its own, named after the session by the machine (Mac
+// connected or not), listed with what to know before removing it, and removed (not while an
 // agent works there). Real git; the engine is a stand-in that makes and removes worktrees with
 // git, as it does.
 import { test, after } from "node:test";
@@ -77,14 +77,9 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.equal(branch, `kuvo/${path.basename(root)}`);
   assert.equal(folder, root);
   assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), branch);
-  sessions.push({ id: "ses_tree", location: { directory: root } });
-
-  const renamed = await ask("POST", "kuvo/worktrees/rename", { path: root, from: branch, branch: "kuvo/fix-the-total" });
-  assert.deepEqual(renamed.value, { branch: "kuvo/fix-the-total" });
+  sessions.push({ id: "ses_tree", title: "Fix the total", location: { directory: root } });
+  await link.nameWorktreeBranch(atEngine, "ses_tree");
   assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-total");
-  // The same rename asked twice (the session's title came twice): the second finds it named.
-  assert.equal((await ask("POST", "kuvo/worktrees/rename", { path: root, from: branch, branch: "kuvo/fix-the-total" })).status, 409);
-  assert.equal(git(root, "symbolic-ref", "--short", "HEAD"), "kuvo/fix-the-total", "never kuvo/fix-the-total-2");
 
   fs.writeFileSync(path.join(root, "a.txt"), "a\n");
   git(root, "add", "-A");
@@ -123,6 +118,7 @@ test("made for a session on a branch of its own, named after it, listed with wha
 test("a session a phone makes in a worktree it asked for is told it works there", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project })).value;
   sessions.push({ id: "ses_phone", location: { directory: made.folder } });
+  told.length = 0;
   await link.tellWorktree(atEngine, "ses_phone");
   assert.deepEqual(told.map(each => each.url), ["/api/experimental/session/ses_phone/instructions/entries/kuvo.worktree"]);
   assert.match(told[0].value, new RegExp(`on the branch ${made.branch}, .* checkout at ${project} `));
@@ -136,7 +132,7 @@ test("a session a phone makes in a worktree it asked for is told it works there"
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
-test("with no Mac there, the machine names a branch after its session's title, once, and only one it made", async () => {
+test("the machine names a branch after its session's title, once, and only one it made", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "me/" })).value;
   sessions.push({ id: "ses_named", title: "Giriş düzeltmesi", location: { directory: made.folder } });
   await link.nameWorktreeBranch(atEngine, "ses_named");
@@ -172,4 +168,23 @@ test("one a Mac made before the machine kept them is kept from then on; a folder
   fs.mkdirSync(plain);
   assert.equal((await ask("POST", "kuvo/worktrees", { project: plain })).status, 409);
   assert.equal((await ask("POST", "kuvo/worktrees", { project: "relative/path" })).status, 400);
+});
+
+test("a Mac reading the machine's worktrees as their session gets its title finds the branch named, once, by the machine", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_titled", title: "Speed up checkout", location: { directory: made.folder } });
+  const toldBefore = told.length;
+  // The Mac's read comes before the machine heard of the title: named as it's read.
+  const [record] = (await ask("GET", "kuvo/worktrees?records=1")).value.worktrees.filter(each => each.root === made.root);
+  assert.equal(record.branch, "kuvo/speed-up-checkout");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout");
+  // The title's event, handled after: named already, so nothing more.
+  await link.nameWorktreeBranch(atEngine, "ses_titled");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), "kuvo/speed-up-checkout", "never kuvo/speed-up-checkout-2");
+  assert.equal(git(project, "branch", "--list", "kuvo/speed-up-checkout-2"), "");
+  assert.deepEqual(told.slice(toldBefore).map(each => each.url), ["/api/experimental/session/ses_titled/instructions/entries/kuvo.worktree"], "its session told the new name once");
+  // No one else names it: a Mac's rename is no longer taken.
+  assert.equal((await ask("POST", "kuvo/worktrees/rename", { path: made.root, branch: "kuvo/other" })).status, 404);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_titled"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
