@@ -1828,15 +1828,15 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
   };
 }
 
-// The engine here started, stopped or started over by the box's own tool (`bin/kuvo-start`, as
-// the Mac has it do): `start` after a stop, `stop` until it's started again (from anywhere), and
-// `restart`. This bridge stays up through each. A start or restart is answered at once (202), and
-// the phone sees it come up as `kuvo/info` says (`running`, `started`); a stop once it's done.
+// The engine here started, or started over, by the box's own tool (`bin/kuvo-start`, as the Mac
+// has it do): `start` for one an older Mac's Stop left down (until it's started, from anywhere),
+// and `restart`. This bridge stays up through each. Answered at once (202), and the phone sees it
+// come up as `kuvo/info` says (`running`, `started`).
 export async function engineControl(command) {
   const start = path.join(K, "bin", "kuvo-start");
   if (!fs.existsSync(start)) return { status: 409, message: "Kuvo Code hasn't set this machine up yet." };
   // Started from a Mac once, which keeps how (`run/launch.env`) and what starts it (`bin/kuvo-launch`).
-  if (command !== "stop" && ![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
+  if (![path.join(K, "bin", "kuvo-launch"), path.join(RUN, "launch.env")].every(file => fs.existsSync(file))) {
     return { status: 409, message: "Start it once from Kuvo Code on your Mac." };
   }
   // Not with what runs this bridge (the engine's runtime as Bun), which would make `opencode
@@ -1846,29 +1846,6 @@ export async function engineControl(command) {
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   const workspace = path.join(K, "workspace");
   const options = { cwd: fs.existsSync(workspace) ? workspace : K, env: environment };
-  if (command === "stop") {
-    // Answered once it's down; one that takes over a minute (a start under way, which it waits
-    // for) goes on by itself, never cut off halfway.
-    let child;
-    try {
-      child = spawn("sh", [start, "stop"], { ...options, detached: true, stdio: ["ignore", "ignore", "pipe"] });
-    } catch {
-      return { status: 503, message: "It couldn't be stopped." };
-    }
-    let said = "";
-    child.stderr.on("data", data => { said += data; });
-    const status = await new Promise(resolve => {
-      const timer = setTimeout(() => resolve(null), 60_000);
-      child.on("exit", code => { clearTimeout(timer); resolve(code); });
-      child.on("error", () => { clearTimeout(timer); resolve(-1); });
-    });
-    if (status === null) {
-      child.stderr.destroy();
-      child.unref();
-      return { status: 202 };
-    }
-    return status === 0 ? { status: 200 } : { status: 503, message: said.trim() || "It couldn't be stopped." };
-  }
   try {
     const child = spawn("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
     lastToolRun = { child, ended: new Promise(resolve => { child.on("exit", resolve); child.on("error", resolve); }) };
@@ -1980,9 +1957,9 @@ export function engineConnect(readEngine = readEngineFile) {
   };
 }
 
-// When a phone last used this machine, in `run/link.seen`: while one has in the last week, the
-// engine stays up for it (the bridge's timer, and the Mac leaving it running as it quits), so the
-// machine's sessions and bots are there whenever it asks; a phone lost or unpaired elsewhere
+// When a phone last used this machine, in `run/link.seen`: a Mac with Kuvo Code 0.7 or before
+// leaves the engine running as it quits while one has in the last week (later ones always do), so
+// the machine's sessions and bots are there whenever it asks; a phone lost or unpaired elsewhere
 // stops keeping it after that.
 export const SEEN_FILE = path.join(RUN, "link.seen");
 export const KEEP_FOR = 7 * 24 * 60 * 60_000;
