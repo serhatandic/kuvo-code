@@ -195,8 +195,15 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
     private var draining = false
     private var queue: [RelayMessage] = []
     private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// Each link frame the phone sent (held or not), by kind and where to.
+    private var sent: [(kind: LinkFrame.Kind, to: LinkAddress)] = []
 
     init(_ base: MemoryRelay.Connection) { self.base = base }
+
+    /// How many frames of `kind` the phone has sent to `address`.
+    func sent(_ kind: LinkFrame.Kind, to address: LinkAddress) -> Int {
+        lock.withLock { sent.count { $0.kind == kind && $0.to == address } }
+    }
 
     var address: LinkAddress { base.address }
     var messages: AsyncStream<RelayMessage> { base.messages }
@@ -225,6 +232,7 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
 
     func send(_ message: RelayMessage) {
         let now = lock.withLock {
+            if case .send(let to, let payload) = message, let frame = try? LinkFrame(payload) { sent.append((frame.kind, to)) }
             if held || draining || !queue.isEmpty { queue.append(message); return false }
             return true
         }
@@ -497,24 +505,40 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         let hostKey = LinkKey(), hostSecret = RelaySecret()
         let hello = HostHello(kind: .mac, name: "Test Mac", app: "0.0.1", engine: "2.0.30")
         let (asked, asking) = AsyncStream<Void>.makeStream()
+        let oldAnswers = Gate()
+        defer { oldAnswers.open() }
         let old = LinkServer(key: hostKey, hello: hello, authorize: { _, _, _ in
             asking.yield()
-            await Gate().wait()
+            await oldAnswers.wait()
             return true
         }, handle: echo)
         let first = relay.connect(hostSecret)
         Task { await old.serve(first) }
-        let client = await phone(on: relay, clock: ManualClock())
+        // Another computer the phone listens to, whose leaving shows when the phone has taken in
+        // what the relay said before it.
+        let events = Events()
+        let other = TestHost(relay: relay, handle: events.handle)
+        let gate = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            let connection = GatedConnection(relay.connect(secret))
+            gate.value = connection
+            return connection
+        }
+        await client.setClockForTesting(ManualClock().link)
+        var stream = try await listen(client, to: try await client.pair(other.link))
         let host = PairedHost(address: hostSecret.address, key: hostKey.publicBytes, name: "", kind: .mac)
         let sending = Task { try await collect(client.send(LinkRequest(path: "api/info"), to: host)) }
+        defer { sending.cancel() }
         for await _ in asked { break }
 
         let new = LinkServer(key: hostKey, hello: hello, authorize: { _, _, _ in true }, handle: echo)
         let second = relay.connect(hostSecret)
         Task { await new.serve(second) }
-        // Hung on the old host, the time limit ends the wait and the test fails.
-        let status = try await withTaskCancellationHandler { try await sending.value.status } onCancel: { sending.cancel() }
-        #expect(status == 200)
+        other.connection.close()
+        await #expect(throws: LinkError.hostOffline) { _ = try await stream.next() }
+        // By then the phone has heard the host was replaced, and sent its handshake again.
+        try #require(gate.value?.sent(.handshake1, to: hostSecret.address) == 2)
+        #expect(try await sending.value.status == 200)
     }
 
     /// The phone was asleep (its own relay connection gone) while the Mac started again: it heard
@@ -727,6 +751,10 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         let big = randomBytes(1_300_000)
         let uploading = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/upload", body: big), to: paired)) }
         for _ in 0..<3 { await clock.advance(by: Link.answerWithin) }
+        // The last wait's check has run (it waits again), and no ping went: only the request's pieces.
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        let pieces = LinkMessage.pieces(.init(t: .req, id: 1, m: "POST", p: "api/upload", h: [:]), body: big, end: true).count
+        #expect(gate.value?.sent(.transport, to: host.secret.address) == pieces)
         gate.value?.release()
         #expect(try await uploading.value.body == big)
     }

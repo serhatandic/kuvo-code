@@ -160,9 +160,9 @@ public actor LinkClient {
         var waiting: [CheckedContinuation<Void, Error>] = []
         /// When the host last said anything on it.
         var lastHeard: ContinuousClock.Instant
-        /// Who waits on a check that the host's still there (see `checkAnswer`), while one's under
-        /// way; which check it is, for its timeout.
-        var checking: [CheckedContinuation<Void, Error>]?
+        /// Whether a check that the host's still there (see `checkAnswer`) is under way; which check
+        /// it is, for its timeout.
+        var checking = false
         var check = 0
         /// Requests sent that have no answer yet.
         var unanswered: Set<Int> = []
@@ -337,8 +337,7 @@ public actor LinkClient {
         if sessions[address] === session { sessions[address] = nil }
         for waiter in session.waiting { waiter.resume(throwing: error) }
         session.waiting = []
-        for waiter in session.checking ?? [] { waiter.resume(throwing: error) }
-        session.checking = nil
+        session.checking = false
         session.unanswered = []
         for stream in session.streams.values { stream.finish(throwing: error) }
         session.streams = [:]
@@ -393,9 +392,9 @@ public actor LinkClient {
     /// Pings the host on a session, unless a ping's already on its way: its answer, or the host
     /// closing a session it doesn't have, says whether it's still there; no answer in time ends it.
     private func startCheck(_ session: Session) throws {
-        guard session.checking == nil else { return }
+        guard !session.checking else { return }
         try seal(LinkMessage(.init(t: .ping)), in: session)
-        session.checking = []
+        session.checking = true
         session.check += 1
         timeCheck(session.check, on: session)
     }
@@ -438,14 +437,12 @@ public actor LinkClient {
         #if DEBUG
         for watcher in heardWatchers { watcher.yield() }
         #endif
-        guard let waiters = session.checking else { return }
-        session.checking = nil
-        for waiter in waiters { waiter.resume() }
+        session.checking = false
     }
 
     /// No answer to a check in time: the session's gone, whatever was on it with it.
     private func checkTimedOut(_ session: Session, check: Int) {
-        guard session.checking != nil, session.check == check else { return }
+        guard session.checking, session.check == check else { return }
         end(session, with: .timedOut)
     }
 

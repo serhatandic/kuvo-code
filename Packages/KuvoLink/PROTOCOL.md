@@ -41,7 +41,7 @@ One WebSocket per device, binary messages, first byte the kind:
 | `0x04` register | phone | JSON | `{"token", "environment": "sandbox"\|"production", "topic", "senders": [address]}`: send pushes to this APNs token, only from these addresses. Kept for 90 days; the phone sends it again whenever it connects. |
 | `0x05` push | host | `to(16) payload` | Push `payload` (a mail frame, below) to `to`'s phone. |
 | `0x06` pushed | relay | `to(16) status(1)` | 0 sent, 1 no phone registered, 2 not one of its senders, 3 Apple refused. |
-| `0x07` gone | relay | `address(16) reason(1)` | The device at `address`, which you sent something to on its current connection, has a new connection (0, replaced) or none (1, left). Whatever sessions you had with it are over. |
+| `0x07` gone | relay | `address(16) reason(1)` | The device at `address`, which you sent something to on its current connection, has a new connection (0, replaced) or none (1, left; any other reason reads as left). Whatever sessions you had with it are over. |
 
 Known kinds keep their lengths, and a device skips a kind it doesn't know once it's welcomed, so a
 new kind goes only after welcome. A device never sends `0x07`.
@@ -67,6 +67,12 @@ phone told (a close), or by the phone's own doing (a close, a new handshake from
 phone unreachable or gone). A host's sessions end with its relay connection, which the relay tells
 the phones about. Phones count on this, and don't check a quiet session before sending on it: a frame
 that comes on a session the host doesn't have is answered with a close all the same.
+
+**Deploy order.** The relay that sends `gone` goes out first, before any phone build with this
+KuvoLink ships. Behind a relay from before it, such a phone still works but isn't told: a stream that
+only listens doesn't end when its host starts again, and the first request after a host restart fails
+once with "closed" (the host closes the session it doesn't know), the next one opening a new session.
+Older phones keep checking quiet sessions, and skip `gone`.
 
 `payload` is at most 65,600 bytes. The relay closes a connection that sends anything else
 (4000), a wrong secret (4001), far too much too fast (4003), or one too many from the same
