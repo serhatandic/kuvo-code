@@ -189,10 +189,14 @@ is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource) runs with the
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
 JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
-Group chats that live on a machine run in the agents bridge there (`Agents/src/groups`), by the
-same rules as the Mac's `BotGroups`. After changing those rules on either side, run
-`./scripts/group-vectors.sh` (it writes `Agents/test/groups-vectors.json` from the Swift side),
-then `cd Agents && bun test`.
+Group chats run in each computer's agents bridge (`Agents/src/groups`), this Mac's as a
+machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
+their rules. Their own tests are the bridge's (`cd Agents && bun test`). What the app still reads
+the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
+quotes) is held to `Agents/test/box-vectors.json`: after changing one on either side, run
+`./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
+Until this Mac's box process holds the relay connection, `SeatRelay` carries this Mac's group
+chats' mail to your machines over the phone link's connection, by `kuvo-link.js`'s rules.
 
 It's off until the iPhone app is out: `defaults write run.kuvo.code phoneLink -bool true` (or
 `KUVO_DEMO_PHONE=1`) turns it on, with Settings › Phone, and `phoneLink.relay` points it at a
