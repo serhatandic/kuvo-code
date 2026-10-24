@@ -312,11 +312,9 @@ final class Bots {
     /// kept as it is now: its job may have changed in its memory while Edit Bot was open.
     /// `time`: when it was changed (on its machine, for a change taken in from there).
     func update(_ edited: Bot, at time: Date = .now) async {
-        // Moving to another computer: the edit comes once it's there (for ten minutes at most: a
-        // move cut short whose other computer doesn't answer keeps it here, where it's saved).
-        for _ in 0..<600 where Moves.isFrozen(edited.id) {
-            do { try await Task.sleep(for: .seconds(1)) } catch { break }
-        }
+        // Moving to another computer: the edit comes once it's there (a move cut short whose
+        // other computer doesn't answer keeps it here, where it's saved).
+        try? await Deliveries.settled(edited.id)
         guard let index = list.firstIndex(where: { $0.id == edited.id }) else { return }
         let old = list[index]
         var bot = old

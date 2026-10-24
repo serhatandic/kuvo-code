@@ -8,8 +8,9 @@ import os
 /// same IDs.
 ///
 /// While it moves, nothing goes to it (`isFrozen`): what you send stays in the composer, agents'
-/// messages wait, its wake-ups are held. Its conversation is copied once it's settled, and read
-/// again right before it switches: what reached it meanwhile (a wake-up on its way) goes along.
+/// messages wait (`Deliveries`), its wake-ups are held. Its conversation is copied once it's
+/// settled, and read again right before it switches: what reached it meanwhile (a wake-up on its
+/// way) goes along.
 /// Nothing of the original is touched until the copy is set up where it's going. Then the app
 /// switches to the copy, and the original goes: its conversation from its engine, its folder to
 /// the trash where it was (the Mac's Trash, or Kuvo Code's trash folder on its machine), with
@@ -27,8 +28,10 @@ final class Moves {
     private let log = Logger(subsystem: "run.kuvo.code", category: "moves")
 
     /// Conversations moving now (a bot's, a chat's, their subagents') and the bots moving: nothing
-    /// goes to them until they're where they're going.
-    private(set) static var frozen: Set<String> = []
+    /// goes to them until they're where they're going; what waited goes then (`Deliveries`).
+    private(set) static var frozen: Set<String> = [] {
+        didSet { Deliveries.movesChanged() }
+    }
     /// A bot whose move was cut short after it switched, before the bot itself went over to its
     /// copy: nothing goes to it where it was (it would be lost with the original) until it's there.
     private(set) static var pending: Set<String> = []
