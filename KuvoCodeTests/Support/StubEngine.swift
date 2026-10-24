@@ -89,7 +89,8 @@ nonisolated final class StubEngine: @unchecked Sendable {
         return try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": id, "type": type, "created": Date().timeIntervalSince1970 * 1000, "data": data]))
     }
 
-    private func answer(_ request: URLRequest, _ data: Data) -> StubWeb.Answer {
+    /// What it answers `request`, as at its address (`StubWeb`) or at a real one (`listen`).
+    func answer(_ request: URLRequest, _ data: Data) -> StubWeb.Answer {
         let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
         let query = Dictionary((components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }) { first, _ in first }
         let method = request.httpMethod ?? "GET"

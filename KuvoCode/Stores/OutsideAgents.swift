@@ -140,6 +140,8 @@ final class OutsideAgents {
 
     /// Where the bridge keeps its sessions, the agents' SDKs and its cache.
     static var home: URL { AppInfo.supportDirectory.appending(path: "agents") }
+    /// This one's (a test's bridge keeps its own).
+    @ObservationIgnored var home = OutsideAgents.home
 
     /// The bridge's script: KUVO_AGENTS_SCRIPT's (a checkout's `Agents/src/main.ts`) in a debug
     /// build, else the app's own.
@@ -167,18 +169,18 @@ final class OutsideAgents {
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
-        env["KUVO_AGENTS_HOME"] = Self.home.path
+        env["KUVO_AGENTS_HOME"] = home.path
         // Its temporary files (and the agents'), in the app's own temporary folder.
         let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "agents")
         env["TMPDIR"] = temporary.path + "/"
         do {
-            try FileManager.default.createDirectory(at: Self.home, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
             let server = try await ServerProcess.start(
                 executable: engine,
                 arguments: ["run", script.path],
                 environment: env,
-                directory: Self.home,
+                directory: home,
                 onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
             )
             self.server = server

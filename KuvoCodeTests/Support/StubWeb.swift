@@ -19,6 +19,9 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
     /// Answers for every address under a prefix, from the whole request (its method and body).
     nonisolated(unsafe) private static var handlers: [(prefix: String, answer: @Sendable (URLRequest, Data) -> Answer)] = []
     nonisolated(unsafe) private static var hosts: Set<String> = []
+    /// Whether an address on those hosts that nothing here answers for goes out as it is, to a
+    /// real server a test started (the agents bridge), rather than answering 404.
+    nonisolated(unsafe) private static var real = false
     nonisolated(unsafe) private(set) static var asked: [String] = []
 
     /// Starts answering for `hosts`, with nothing registered yet.
@@ -29,9 +32,15 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
             requestRoutes = [:]
             handlers = []
             asked = []
+            real = false
             Self.hosts = hosts
         }
         URLProtocol.registerClass(StubWeb.self)
+    }
+
+    /// From now on, what nothing here answers for reaches the real server at its address.
+    static func letUnansweredThrough() {
+        lock.withLock { real = true }
     }
 
     static func stop() {
@@ -68,8 +77,16 @@ nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
-        guard let host = request.url?.host() else { return false }
-        return lock.withLock { hosts.contains(host) }
+        guard let url = request.url, let host = url.host() else { return false }
+        return lock.withLock {
+            guard hosts.contains(host) else { return false }
+            guard real else { return true }
+            var bare = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            bare?.query = nil
+            let address = bare?.string ?? ""
+            return answers[url.absoluteString] != nil || routes[address] != nil || requestRoutes[address] != nil
+                || handlers.contains { url.absoluteString.hasPrefix($0.prefix) }
+        }
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

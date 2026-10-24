@@ -17,6 +17,14 @@ set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS
     APP_BUNDLE_ID=run.kuvo.code.tests CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 if [ -n "${ONLY:-}" ]; then set -- "$@" -only-testing:"$ONLY"; fi
 
+# The Bun that runs the agents bridge the app ships, for the tests that run it for real: `bun` on
+# PATH, else the engine Kuvo Code installed (Bun, as the app runs it). Passed to the tests as
+# KUVO_TEST_BUN (xcodebuild hands TEST_RUNNER_ variables on).
+if [ -z "${KUVO_TEST_BUN:-}" ]; then
+    KUVO_TEST_BUN=$(command -v bun 2>/dev/null || ls -d "$HOME/Library/Application Support/run.kuvo.code/engine/"*/opencode 2>/dev/null | tail -n 1 || true)
+fi
+export TEST_RUNNER_KUVO_TEST_BUN="${KUVO_TEST_BUN:-}"
+
 # What the test copy keeps under its own bundle ID (settings, caches, website data): gone before
 # a run, so each starts clean, and after it.
 clean() {

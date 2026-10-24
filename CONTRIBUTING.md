@@ -95,6 +95,9 @@ as they'd use your settings, and a copy built under Desktop or Documents waits o
 privacy prompt while tests run.
 `ONLY=KuvoCodeTests/ChangesDiscardTests` runs one suite. Test what people see
 happen, with the app's real parts; leave out what only restates the code.
+Some run the agents bridge the app ships for real (`RealBridge`, with a stand-in
+engine that listens on a loopback port): the script gives them a Bun
+(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine Kuvo Code downloaded).
 
 Recorded engine responses in `Tests/OpenCodeKitTests/Fixtures` drive most of
 OpenCodeKit's tests. `LiveServerTests` run against a real binary when
