@@ -1465,8 +1465,15 @@ const isSkillFolder = name => typeof name === "string" && name.length > 0 && nam
 
 /** A skill's name from what's typed, as Settings makes it (SkillFile.name). */
 export function skillName(text) {
-  const words = String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
+  // Composed first (an "é" typed as "e" and a mark is one letter, left out whole), as Settings does.
+  const words = String(text).normalize("NFC").toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
   return words.join("-").slice(0, 64).replace(/-+$/, "");
+}
+
+/** The skills folder's own folders (not hidden), by name: what a new skill's name mustn't take,
+ * whether its engine lists it or not. */
+function skillFolders() {
+  return listOf(SKILLS).filter(name => !name.startsWith(".") && (() => { try { return fs.statSync(path.join(SKILLS, name)).isDirectory(); } catch { return false; } })()).sort();
 }
 
 /** Skills installed from GitHub, by their folder's name, with where they came from. */
@@ -1550,6 +1557,35 @@ export async function skillsIn(repository) {
   return { skills, partial: tree.truncated === true };
 }
 
+/** What skills' SKILL.md files say they are, by repository, branch and folder, kept while the box
+ * runs: a collection's are read once, however often it's opened or a phone asks for one. */
+const skillAbouts = new Map();
+/** At most this many read from GitHub at once, the rest waiting their turn, so a big collection
+ * never holds up an install or another client's request. */
+const ABOUT_READS = 16;
+let aboutReading = 0;
+const aboutWaiting = [];
+
+/** What a skill's SKILL.md says it is: `{name?, description?}`, `{}` when GitHub doesn't say. */
+async function aboutSkill(repository, folder) {
+  const key = `${repository.id.toLowerCase()}@${repository.branch}:${folder}`;
+  if (skillAbouts.has(key)) return skillAbouts.get(key);
+  if (aboutReading >= ABOUT_READS) await new Promise(resolve => aboutWaiting.push(resolve));
+  aboutReading++;
+  try {
+    if (skillAbouts.has(key)) return skillAbouts.get(key);
+    const response = await github(rawURL(repository, folder ? `${folder}/SKILL.md` : "SKILL.md"), false).catch(() => null);
+    if (response?.status !== 200) return {};
+    const about = skillAbout(await response.text());
+    if (skillAbouts.size > 5_000) skillAbouts.clear();
+    skillAbouts.set(key, about);
+    return about;
+  } finally {
+    aboutReading--;
+    aboutWaiting.shift()?.();
+  }
+}
+
 const rawURL = (repository, file) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
 
 /** The front matter's name and description. */
@@ -1609,7 +1645,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
   try {
     if (parts[1] === "skills" && parts.length === 2) {
       if (method !== "GET") return { status: 405, value: {} };
-      return { status: 200, value: { folder: SKILLS, github: skillSources() } };
+      return { status: 200, value: { folder: SKILLS, folders: skillFolders(), github: skillSources() } };
     }
     if (parts[1] === "skills" && parts.length === 3) {
       const name = parts[2];
@@ -1668,7 +1704,9 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         const repository = await skillRepository(parts[2], parts[3]);
         const { skills, partial } = await skillsIn(repository);
         const { branch, ...shown } = repository;
-        return { status: 200, value: { repository: shown, skills, partial } };
+        // Each with what its SKILL.md says it is, so a client shows them without asking for each.
+        const described = await Promise.all(skills.map(async skill => ({ ...skill, about: await aboutSkill(repository, skill.path) })));
+        return { status: 200, value: { repository: shown, skills: described, partial } };
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
         const repository = await skillRepository(parts[2], parts[3]);
@@ -1676,8 +1714,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         const pair = query.split("&").find(each => each.startsWith("path="));
         let at = "";
         try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn't a path.") }; }
-        const response = await github(rawURL(repository, at ? `${at}/SKILL.md` : "SKILL.md"), false).catch(() => null);
-        return { status: 200, value: response?.status === 200 ? skillAbout(await response.text()) : {} };
+        return { status: 200, value: await aboutSkill(repository, at) };
       }
     }
     return { status: 404, value: {} };

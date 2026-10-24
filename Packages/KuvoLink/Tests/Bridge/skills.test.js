@@ -78,7 +78,7 @@ const ask = (method, route, body) => link.answerSkills(method, route, body, engi
 
 test("a skill written, read, changed and put away in the machine's trash; a new one never over another, and named as Settings names one", async () => {
   const text = "---\nname: release-notes\ndescription: Writes the release notes\n---\nKeep them short.\n";
-  assert.deepEqual(await ask("GET", "kuvo/skills"), { status: 200, value: { folder: skills, github: {} } });
+  assert.deepEqual(await ask("GET", "kuvo/skills"), { status: 200, value: { folder: skills, folders: [], github: {} } });
   assert.equal((await ask("PUT", "kuvo/skills/release-notes", { text, new: true })).status, 200);
   assert.equal(fs.readFileSync(path.join(skills, "release-notes", "SKILL.md"), "utf8"), text);
   assert.deepEqual(await ask("GET", "kuvo/skills/release-notes"), { status: 200, value: { text } });
@@ -93,6 +93,22 @@ test("a skill written, read, changed and put away in the machine's trash; a new 
   assert.equal((await ask("GET", "kuvo/skills/release-notes")).status, 404);
   // A name the engine lists already (another tool's skill) isn't taken either.
   assert.equal((await ask("PUT", "kuvo/skills/pdf-forms", { text, new: true })).status, 409);
+  // A folder the engine doesn't list (no SKILL.md yet) is named too, so a client flags its name as
+  // it's typed; hidden ones (an install under way) and files aren't.
+  fs.mkdirSync(path.join(skills, "half-made"), { recursive: true });
+  fs.mkdirSync(path.join(skills, ".pdf.kuvo-new-1"), { recursive: true });
+  fs.writeFileSync(path.join(skills, "notes.txt"), "");
+  assert.deepEqual((await ask("GET", "kuvo/skills")).value.folders, ["half-made"]);
+  assert.equal((await ask("PUT", "kuvo/skills/half-made", { text, new: true })).status, 409);
+  fs.rmSync(path.join(skills, "half-made"), { recursive: true });
+  fs.rmSync(path.join(skills, ".pdf.kuvo-new-1"), { recursive: true });
+  fs.rmSync(path.join(skills, "notes.txt"));
+});
+
+test("a skill's name from what's typed, as Settings previews it (the shared vector)", () => {
+  const vector = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/names/skill-names.json", import.meta.url), "utf8"));
+  assert.ok(vector.cases.length > 8);
+  for (const { typed, name } of vector.cases) assert.equal(link.skillName(typed), name, JSON.stringify(typed));
 });
 
 test("one written long ago is kept in the trash 30 days from when it's put away", async () => {
@@ -109,10 +125,12 @@ test("GitHub's collections, listed, described and installed from by the machine 
   assert.ok(library.value.repositories.some(each => each.id === "anthropics/skills"));
   const listing = await ask("GET", "kuvo/skill-library/acme/skills");
   assert.equal(listing.status, 200);
+  // Each with what its SKILL.md says it is, read once.
   assert.deepEqual(listing.value.skills, [
-    { name: "c++", path: "skills/c++", files: ["skills/c++/SKILL.md", "skills/c++/a.cpp", "skills/c++/b.cpp"] },
-    { name: "pdf", path: "skills/pdf", files: ["skills/pdf/SKILL.md", "skills/pdf/fill.py"] },
+    { name: "c++", path: "skills/c++", files: ["skills/c++/SKILL.md", "skills/c++/a.cpp", "skills/c++/b.cpp"], about: { name: "c++", description: "Writes C++" } },
+    { name: "pdf", path: "skills/pdf", files: ["skills/pdf/SKILL.md", "skills/pdf/fill.py"], about: { name: "pdf", description: "Fills PDF forms" } },
   ]);
+  await ask("GET", "kuvo/skill-library/acme/skills");
   assert.equal(listing.value.partial, false);
   assert.deepEqual((await ask("GET", "kuvo/skill-library/acme/skills/about?path=skills%2Fpdf")).value, { name: "pdf", description: "Fills PDF forms" });
   // A "+" as written, as the Mac reads it.
@@ -126,8 +144,10 @@ test("GitHub's collections, listed, described and installed from by the machine 
   assert.equal((await ask("GET", "kuvo/skill-library/acme/missing")).status, 404);
   // As it came, not edited.
   assert.equal((await ask("PUT", "kuvo/skills/pdf", { text: "---\nname: pdf\n---\nMine now.\n" })).status, 409);
-  // Looked up on GitHub once, however many of its skills are described.
+  // Looked up on GitHub once, however many of its skills are described, and each SKILL.md read once
+  // however often it's listed or asked for (the install fetches its files anew).
   assert.equal(asked.filter(url => url === "/repos/acme/skills").length, 1);
+  assert.equal(asked.filter(url => url === "/acme/skills/main/skills/c%2B%2B/SKILL.md").length, 1);
 
   // Two installs of one at once (a double tap): one installs it whole, the other is told it's there.
   const both = await Promise.all([1, 2].map(() => ask("POST", "kuvo/skill-library/install", { repository: "acme/skills", path: "skills/c++" })));
@@ -147,7 +167,7 @@ test("a collection's skills, each listed once with its own files; a repository t
   assert.equal(mixed.value.partial, true, "GitHub cut a very big one's list short");
 
   const one = await ask("GET", "kuvo/skill-library/acme/one");
-  assert.deepEqual(one.value.skills, [{ name: "one", path: "", files: ["SKILL.md", "reference.md"] }]);
+  assert.deepEqual(one.value.skills, [{ name: "one", path: "", files: ["SKILL.md", "reference.md"], about: {} }]);
 
   const busy = await ask("GET", "kuvo/skill-library/acme/busy");
   assert.equal(busy.status, 503);

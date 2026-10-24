@@ -1,0 +1,61 @@
+{
+  "about": "A new skill's name from what's typed: Settings › Skills previews it (SkillFile.name, Swift) and every box checks it (skillName, kuvo-link.js). Both read these cases (SkillsOnBoxTests, skills.test.js), so the two can't drift: words of a to z and digits, lowercase, joined by single hyphens, letters of other scripts left out whole, at most 64 characters, never ending in a hyphen.",
+  "cases": [
+    {
+      "typed": "release-notes",
+      "name": "release-notes"
+    },
+    {
+      "typed": "Release Notes",
+      "name": "release-notes"
+    },
+    {
+      "typed": "  PDF   forms!! ",
+      "name": "pdf-forms"
+    },
+    {
+      "typed": "snake_case and--dashes",
+      "name": "snake-case-and-dashes"
+    },
+    {
+      "typed": "2026 notes",
+      "name": "2026-notes"
+    },
+    {
+      "typed": "Привет мир",
+      "name": ""
+    },
+    {
+      "typed": "Café au lait",
+      "name": "caf-au-lait"
+    },
+    {
+      "typed": "Cafe\u0301 au lait",
+      "name": "caf-au-lait"
+    },
+    {
+      "typed": "ÄBC",
+      "name": "bc"
+    },
+    {
+      "typed": "émoji 😀 test",
+      "name": "moji-test"
+    },
+    {
+      "typed": "٣ files",
+      "name": "files"
+    },
+    {
+      "typed": "c++ helper",
+      "name": "c-helper"
+    },
+    {
+      "typed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "typed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

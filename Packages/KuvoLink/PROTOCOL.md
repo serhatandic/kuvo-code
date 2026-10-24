@@ -795,8 +795,10 @@ host serves:
   too; this Mac's box's, the app's engine's own, where a Mac has always kept them, named to it as
   `KUVO_ENGINE_CONFIG`). Every client, the Mac app too, reaches them through these routes. Its
   engine lists them (`api/skill`) and finds a change within a moment.
-  - `GET kuvo/skills` → `{"folder", "github": {"<name>": {repository, path}}}`: the folder as its
-    engine names skills' paths in it, and which skills came from GitHub (the rest you added).
+  - `GET kuvo/skills` → `{"folder", "folders", "github": {"<name>": {repository, path}}}`: the
+    folder as its engine names skills' paths in it, the folders in it by name (not hidden ones),
+    whether its engine lists them or not, which a new skill can't take, and which skills came from
+    GitHub (the rest you added).
   - `kuvo/skills/<name>` (its folder's name): `GET` → `{"text"}`, its SKILL.md; `PUT {"text",
     "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
     hyphens, and `409 {"message"}` when the name is taken, by a folder there or a skill the engine
@@ -808,9 +810,11 @@ host serves:
     this Mac's box, and adds a skill through the box it's for): `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
     kuvo/skill-library/<owner>/<name>` (any repository on GitHub) → `{"repository", "skills":
-    [{name, path, files}], "partial"}` (`partial`: GitHub cut a very big one's list short); `GET
-    kuvo/skill-library/<owner>/<name>/about?path=<path>` → `{name?, description?}` from a skill's
-    SKILL.md, asked for as each one shows (a big collection has hundreds); `POST
+    [{name, path, files, about: {name?, description?}}], "partial"}`, each with what its SKILL.md
+    says it is (`partial`: GitHub cut a very big one's list short); `GET
+    kuvo/skill-library/<owner>/<name>/about?path=<path>` → `{name?, description?}`, one skill's.
+    A box reads SKILL.md files from GitHub a few at a time, and keeps what they say while it runs,
+    so a big collection (hundreds) never holds up another request; `POST
     kuvo/skill-library/install {"repository": "owner/name", "path"}` → `{"name"}`, installed
     under its folder's name. Errors are `{"message"}`: 404 for a repository or skill there isn't,
     409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be

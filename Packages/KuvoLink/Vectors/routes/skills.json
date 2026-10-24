@@ -2,11 +2,11 @@
   "about": "kuvo/skills and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: SkillsOnBoxTests (this Mac's box, as the app reaches it) and skills.test.js cover those, each against its own stand-in.",
   "scenarios": [
     {
-      "name": "the skills folder, and which skills came from GitHub",
+      "name": "the skills folder, its folders, and which skills came from GitHub",
       "steps": [
         { "given": { "skill": { "name": "release-notes", "text": "---\nname: release-notes\ndescription: Writes the release notes\n---\nKeep them short.\n" } } },
         { "given": { "skill": { "name": "pdf", "text": "---\nname: pdf\n---\nPDFs.\n", "github": { "repository": "anthropics/skills", "path": "skills/pdf" } } } },
-        { "send": "GET kuvo/skills", "expect": { "status": 200, "json": { "folder": "{{skills}}", "github": { "pdf": { "repository": "anthropics/skills", "path": "skills/pdf" }, "release-notes": "<absent>" } } } }
+        { "send": "GET kuvo/skills", "expect": { "status": 200, "json": { "folder": "{{skills}}", "folders": ["pdf", "release-notes"], "github": { "pdf": { "repository": "anthropics/skills", "path": "skills/pdf" }, "release-notes": "<absent>" } } } }
       ]
     },
     {
