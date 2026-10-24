@@ -1031,11 +1031,13 @@ export function boxProjects(kit, file = PROJECTS_FILE) {
 
 /** The list as `change` makes it, read again just before, under its lock. */
 export function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
-  return locked(lock, () => {
+  const projects = locked(lock, () => {
     const projects = change(readProjects(file));
     writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
     return projects;
   });
+  for (const tell of projectFollowers) tell();
+  return projects;
 }
 
 /** A project as it's kept: its name only when it's not the folder's, a command only when there
@@ -1109,16 +1111,7 @@ export async function* answerProjects(request, readEngine = readEngineFile, read
   if (route === "kuvo/projects/events") {
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    let last = "";
-    while (!signal?.aborted) {
-      const line = JSON.stringify(listed());
-      if (line !== last) {
-        yield { body: Buffer.from(line + "\n") };
-        last = line;
-      }
-      await new Promise(done => setTimeout(done, 1000));
-    }
-    return;
+    return yield* followed(listed, projectFollowers, signal);
   }
   if (route !== "kuvo/projects") return yield* json(404, {});
   if (method === "GET") return yield* json(200, listed());
@@ -1166,6 +1159,44 @@ export function readWorktrees() {
  * beside each other, each in a process of its own. */
 function updateWorktrees(change) {
   writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()) }, null, 2));
+  for (const tell of worktreeFollowers) tell();
+}
+
+// Those following this box's worktrees (`kuvo/worktrees/events`), told of each change made here.
+const worktreeFollowers = new Set();
+// Those following its projects (`kuvo/projects/events`).
+const projectFollowers = new Set();
+
+/** What `read` says, a line now and one for each change after, in order: each change this process
+ * makes as it's made (`followers` are told), and what another made, looked for each second. */
+async function* followed(read, followers, signal) {
+  const queue = [JSON.stringify(read())];
+  let wake = null;
+  const told = () => {
+    queue.push(JSON.stringify(read()));
+    wake?.();
+  };
+  followers.add(told);
+  try {
+    let last = "";
+    while (!signal?.aborted) {
+      while (queue.length) {
+        const line = queue.shift();
+        if (line !== last) {
+          yield { body: Buffer.from(line + "\n") };
+          last = line;
+        }
+      }
+      await new Promise(done => {
+        wake = done;
+        setTimeout(done, 1000);
+      });
+      wake = null;
+      queue.push(JSON.stringify(read()));
+    }
+  } finally {
+    followers.delete(told);
+  }
 }
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
@@ -1918,16 +1949,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/worktrees/events") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-      let last = "";
-      while (!signal?.aborted) {
-        const line = JSON.stringify({ worktrees: readWorktrees() });
-        if (line !== last) {
-          yield { body: Buffer.from(line + "\n") };
-          last = line;
-        }
-        await new Promise(done => setTimeout(done, 1000));
-      }
-      return;
+      return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
     }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
     if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {

@@ -272,3 +272,20 @@ test("one a phone asks for starts with the prefix a Mac last gave, and a Mac's o
   for (const made of [mine, phones]) assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
   await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" }).then(made => ask("POST", "kuvo/worktrees/remove", { path: made.value.root, forget: true }));
 });
+
+test("one made and removed at once: a follower is told of both, in order", { timeout: 10_000 }, async () => {
+  const handle = link.engineHandler(() => atEngine, { name: "box" }, () => null);
+  const abort = new AbortController();
+  const seen = [];
+  let made;
+  for await (const part of handle({ method: "GET", path: "kuvo/worktrees/events", headers: {}, body: Buffer.alloc(0) }, {}, abort.signal)) {
+    if (!part.body) continue;
+    seen.push(JSON.parse(part.body.toString()).worktrees.some(tree => tree.root === made?.root));
+    if (seen.length === 1) {
+      made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+      assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+    }
+    if (seen.length === 3) abort.abort();
+  }
+  assert.deepEqual(seen, [false, true, false]);
+});
