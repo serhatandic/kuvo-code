@@ -4,26 +4,23 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Making bots and group chats from a phone, as New Bot and New Group Chat make them: what New
-/// Bot offers (templates, personalities, looks, the model it starts with in each place, your
-/// projects); a bot from scratch writes first, one from a template waits with its job for the
-/// phone's composer; a chat of two of them; and what's missing or unknown said in words. The
-/// engine is stubbed.
+/// Making bots from a phone, as New Bot makes them: what New Bot offers (templates,
+/// personalities, looks, the model it starts with in each place, your projects); a bot from
+/// scratch writes first, one from a template waits with its job for the phone's composer; and
+/// what's missing or unknown said in words. The engine is stubbed. (A phone's group chats on this
+/// Mac are its bridge's: RealBridgeGroupTests.)
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneBotsTests {
     let engine = StubEngine(port: 47996)
     let app = AppModel()
     let link = PhoneLink()
     let botsFile = AppInfo.supportDirectory.appending(path: "bots.json")
-    let groupsFile = AppInfo.supportDirectory.appending(path: "groups.json")
 
     init() {
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
         app.workspace.api = engine.api
         link.bots = app.bots
-        link.groups = app.chats
         link.workspace = app.workspace
         engine.list([])
         engine.on("PATCH", "/api/session/*", json: [:])
@@ -41,7 +38,6 @@ import Testing
         engine.stop()
         for bot in app.bots.list { try? FileManager.default.removeItem(atPath: bot.folder) }
         try? FileManager.default.removeItem(at: botsFile)
-        try? FileManager.default.removeItem(at: groupsFile)
     }
 
     private func ask(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]?) {
@@ -158,72 +154,6 @@ import Testing
         #expect(app.bots.list.isEmpty, "nothing made")
     }
 
-    @Test func aGroupChatOfTwo() async throws {
-        defer { done() }
-        await app.workspace.refresh()
-        let ada = try await app.bots.create(name: "Ada", look: .random(), model: nil, machine: nil, project: nil)
-        let ben = try await app.bots.create(name: "Ben", look: .random(), model: nil, machine: nil, project: nil)
-        let made = try await ask("kuvo/groups", method: "POST", body: ["name": "Release", "members": [ada.id, ben.id, ada.id], "purpose": "  Ship 1.0  "])
-        #expect(made.status == 201)
-        let group = try #require(made.json?["group"] as? [String: Any])
-        #expect(group["name"] as? String == "Release" && group["purpose"] as? String == "Ship 1.0")
-        #expect((group["members"] as? [[String: Any]])?.map { $0["id"] as? String } == [ada.id, ben.id])
-        #expect(app.groups.list.map(\.name) == ["Release"])
-        // Listed as the phone lists the rest.
-        let listed = try #require(try await ask("kuvo/groups").json?["groups"] as? [[String: Any]])
-        #expect(listed.map { $0["id"] as? String } == [group["id"] as? String])
-
-        let one = try await ask("kuvo/groups", method: "POST", body: ["name": "Solo", "members": [ada.id]])
-        #expect(one.status == 400 && message(one) == "A group chat needs at least two bots.")
-        let unnamed = try await ask("kuvo/groups", method: "POST", body: ["name": " ", "members": [ada.id, ben.id]])
-        #expect(unnamed.status == 400)
-        let unknown = try await ask("kuvo/groups", method: "POST", body: ["name": "Who", "members": [ada.id, "bot_gone000001"]])
-        #expect(unknown.status == 404 && message(unknown) == "There’s no bot “bot_gone000001”.")
-        #expect(app.groups.list.count == 1)
-    }
-
-    /// A group chat made and changed from a phone, its meeting set up as Edit Group Chat sets it
-    /// up: a weekly one at a time to come, kept; one that comes back, its time passed, on to its
-    /// next round; a one-off past, or a repeat there isn't, refused.
-    @Test func aGroupChatsMeetingFromAPhone() async throws {
-        defer { done() }
-        await app.workspace.refresh()
-        let ada = try await app.bots.create(name: "Ada", look: .random(), model: nil, machine: nil, project: nil)
-        let ben = try await app.bots.create(name: "Ben", look: .random(), model: nil, machine: nil, project: nil)
-        let nextWeek = Date.now.addingTimeInterval(86_400 * 7).timeIntervalSince1970.rounded()
-        let made = try await ask("kuvo/groups", method: "POST", body: ["name": "Standup", "members": [ada.id, ben.id],
-                                                                      "meeting": ["next": nextWeek, "every": "1w", "topic": " "]])
-        #expect(made.status == 201)
-        let id = try #require((made.json?["group"] as? [String: Any])?["id"] as? String)
-        let meeting = try #require(app.groups.group(id)?.meeting)
-        // To the minute.
-        #expect(meeting.next.timeIntervalSince1970 == (nextWeek / 60).rounded(.down) * 60 && meeting.every == "1w")
-        #expect(meeting.topic == BotGroup.Meeting.defaultTopic)
-        #expect(meeting.weekday == Calendar.current.component(.weekday, from: meeting.next))
-
-        let past = Date.now.addingTimeInterval(-3600).timeIntervalSince1970
-        #expect(try await ask("kuvo/groups", method: "POST", body: ["name": "Late", "members": [ada.id, ben.id], "meeting": ["next": past]]).status == 400)
-        #expect(try await ask("kuvo/groups", method: "POST", body: ["name": "Odd", "members": [ada.id, ben.id], "meeting": ["next": nextWeek, "every": "1y"]]).status == 400)
-        #expect(app.groups.list.count == 1)
-
-        // Changed: a daily one whose time passed comes back at its next round; the name and
-        // purpose go with it, and an empty purpose is none.
-        let changed = try await ask("kuvo/groups/\(id)", method: "PATCH", body: ["name": "Daily", "purpose": "Ship", "meeting": ["next": past, "every": "1d", "topic": "Where are we?"]])
-        #expect(changed.status == 200)
-        #expect((changed.json?["group"] as? [String: Any])?["name"] as? String == "Daily")
-        let daily = try #require(app.groups.group(id)?.meeting)
-        #expect(daily.next > .now && daily.every == "1d" && daily.topic == "Where are we?")
-        #expect(app.groups.group(id)?.purpose == "Ship")
-        #expect(try await ask("kuvo/groups/\(id)", method: "PATCH", body: ["purpose": "", "meeting": NSNull()]).status == 200)
-        #expect(app.groups.group(id)?.meeting == nil && app.groups.group(id)?.purpose == nil)
-
-        #expect(try await ask("kuvo/groups/\(id)", method: "PATCH", body: ["members": [ada.id]]).status == 400)
-        #expect(try await ask("kuvo/groups/\(id)", method: "PATCH", body: ["name": " "]).status == 400)
-        // One that isn't there says so, apart from an older Mac's answer to a route it doesn't know.
-        let gone = try await ask("kuvo/groups/grp_none000001", method: "PATCH", body: ["name": "X"])
-        #expect(gone.status == 404 && gone.json?["message"] as? String == "That group chat isn’t there any more.")
-    }
-
     /// The models known, as Edit Bot offers them: Luna's account signed out of, Sol's signed in.
     private func knowModels() async {
         func model(_ id: String, _ provider: String, _ name: String) -> [String: Any] {
@@ -310,8 +240,8 @@ import Testing
         #expect(app.bots.bot(ada.id)?.name == "Renamed")
     }
 
-    /// Deleted from a phone as Delete Bot… deletes it: gone from the list and its group chat, its
-    /// conversation deleted, its folder in the Trash.
+    /// Deleted from a phone as Delete Bot… deletes it: gone from the list, its conversation
+    /// deleted, its folder in the Trash.
     @Test func aBotDeletedFromAPhone() async throws {
         defer { done() }
         engine.on("DELETE", "/api/session/*", json: [:])
@@ -319,14 +249,12 @@ import Testing
         let ada = try await app.bots.create(name: "Ada", look: .random(), model: nil, machine: nil, project: nil)
         let ben = try await app.bots.create(name: "Ben", look: .random(), model: nil, machine: nil, project: nil)
         let cy = try await app.bots.create(name: "Cy", look: .random(), model: nil, machine: nil, project: nil)
-        let group = app.groups.create(name: "Release", purpose: nil, members: [ada.id, ben.id, cy.id], meeting: nil)
 
         let deleted = try await ask("kuvo/bots/\(ada.id)", method: "DELETE")
         #expect(deleted.status == 200 && deleted.json?.isEmpty == true)
         #expect(app.bots.bot(ada.id) == nil && Bots().list.map(\.id) == [ben.id, cy.id])
         #expect(engine.requests("DELETE", "/api/session/\(ada.sessionID)").count == 1, "its conversation is deleted")
         #expect(!FileManager.default.fileExists(atPath: ada.folder), "its folder went to the Trash")
-        #expect(app.groups.group(group.id)?.members == [ben.id, cy.id])
         let listed = try #require(try await ask("kuvo/bots").json?["bots"] as? [[String: Any]])
         #expect(listed.map { $0["id"] as? String } == [ben.id, cy.id])
         #expect(try await ask("kuvo/bots/\(ada.id)", method: "DELETE").status == 404)

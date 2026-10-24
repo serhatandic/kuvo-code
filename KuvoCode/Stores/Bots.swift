@@ -132,6 +132,16 @@ final class Bots {
     /// Those that run with the coding agents.
     var agentSessionIDs: Set<String> { Set(list.filter { $0.agents == true }.map(\.sessionID)) }
 
+    /// The model a bot talks on, as its editor shows it: the one picked for it in Edit Bot while
+    /// that can run where it lives; otherwise (its account signed out of, which takes its models
+    /// away, so Edit Bot shows none) what its own conversation is on now, as its group chats do.
+    func talkingModel(of bot: Bot) -> ModelRef? {
+        let conversation = app?.workspace.session(bot.sessionID)?.model
+        guard let picked = bot.model else { return conversation }
+        let catalog = bot.machine.flatMap { app?.machines.engine($0)?.catalog } ?? app?.catalog
+        return catalog?.isUnavailable(picked) == true ? (conversation ?? picked) : picked
+    }
+
     /// What a bot's conversation runs on: the coding agents' bridge where it lives (this Mac's, or
     /// its machine's), or its folder's engine.
     func api(for bot: Bot) -> OpenCodeAPI? {
@@ -405,8 +415,6 @@ final class Bots {
                 left.remove("model")
             }
         }
-        if !all.isDisjoint(with: ["instructions", "name"]) { await app?.groups.botChanged(bot) }
-        if all.contains("model") { await app?.groups.modelChanged(of: bot) }
         // As the list is now: an edit made meanwhile stays on it.
         waiting = waitingEdits
         let still = Set(waiting[id] ?? []).subtracting(all).union(left)
@@ -460,7 +468,6 @@ final class Bots {
     /// What this Mac keeps of a bot that's gone (deleted here, or on its machine from a phone):
     /// its place in the list and its group chats, its wake-ups, tabs, conversation and keys.
     private func forget(_ bot: Bot) async {
-        await app?.groups.remove(bot)
         await app?.boxGroups.remove(bot)
         list.removeAll { $0.id == bot.id }
         described[bot.id] = nil
@@ -751,7 +758,6 @@ final class Bots {
             save()
             guard bot.job != old.job || bot.instructions != old.instructions else { continue }
             noteSent(Self.instructions(for: bot), to: bot)
-            await app?.groups.botChanged(bot)
         }
     }
 
@@ -905,7 +911,6 @@ final class Bots {
             }
             if api(for: bot) != nil { await tell(id) }
         }
-        await app?.groups.catchUp()
         // Machines' bots: their jobs as their memories there have them now, before they're told.
         let machines = Set(list.filter { !synced.contains($0.id) && api(for: $0) != nil }.compactMap(\.machine))
         for machine in machines.sorted() { await takeJobs(on: machine) }

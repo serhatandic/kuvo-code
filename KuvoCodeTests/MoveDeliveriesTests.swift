@@ -36,7 +36,7 @@ import Testing
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
+        app.boxGroups.app = app
         app.moves.app = app
         app.workspace.api = mac.api
         let boxAPI = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: box.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
@@ -248,30 +248,6 @@ import Testing
         #expect(Drafts(defaults: .standard)[session].isEmpty, "once it's gone, it isn't put back")
     }
 
-    /// A bot whose move was cut short after it switched (the app quit), before it went over to its
-    /// copy, takes nothing where it was until that's finished: its turn in a group chat is sat
-    /// out, and nothing goes to an engine for it.
-    @Test func aBotCutShortSitsOutItsTurnUntilItsThere() async throws {
-        defer { Self.clean(); mac.stop() }
-        let id = "bot_deliver004", session = "ses_deliver4"
-        let original = try bot(id, session: session, in: Bots.root)
-        try Data(Moves.hold.utf8).write(to: original.appending(path: "paused"))
-        let record: [String: Any] = ["kind": "bot", "id": id, "sessions": [session], "original": original.path, "to": machine,
-                                     "copy": boxRoot.appending(path: "bots/\(id)").path, "wasPaused": false, "stage": "switched"]
-        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
-        let app = app()
-        // The machine away: the move can't be finished yet.
-        app.workspace.machineAPI = { _ in nil }
-        await app.moves.recover()
-        let group = app.groups.create(name: "Crew", members: [id])
-
-        app.groups.send("Where are we?", to: group.id)
-        try await until { app.groups.messages(in: group.id).contains { $0.kind == .note } && !app.groups.discussing.contains(group.id) }
-
-        #expect(app.groups.messages(in: group.id).contains { $0.kind == .note && $0.text.contains("sat this out") })
-        #expect(mac.asked.allSatisfy { !$0.hasPrefix("POST") }, "nothing went to an engine for it: \(mac.asked)")
-        app.groups.stop(group.id)
-    }
 }
 
 /// A machine whose first step waits at `waypoint`.

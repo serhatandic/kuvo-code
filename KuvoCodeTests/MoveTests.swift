@@ -36,7 +36,7 @@ import Testing
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
+        app.boxGroups.app = app
         app.moves.app = app
         app.workspace.api = mac.api
         let boxAPI = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: box.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: "box"))

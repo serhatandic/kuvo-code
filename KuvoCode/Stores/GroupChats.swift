@@ -1,60 +1,52 @@
 import Foundation
 import OpenCodeKit
 
-/// Every group chat, wherever it lives, as the window and the phone show them: this Mac's
-/// (`BotGroups`, which runs them) and your machines' (`BoxGroups`, which their machines run).
-/// What you do in one goes to where it lives.
+/// Every group chat, wherever it lives, as the window shows them: each computer's, which that
+/// computer's bridge runs (`BoxGroups`). What you do in one goes to where it lives, and what it
+/// can't take comes back to you here: your words to the composer, and why.
 @MainActor @Observable
 final class GroupChats {
-    let mac: BotGroups
-    let machines: BoxGroups
+    let boxes: BoxGroups
 
-    init(mac: BotGroups, machines: BoxGroups) {
-        self.mac = mac
-        self.machines = machines
+    init(boxes: BoxGroups) {
+        self.boxes = boxes
     }
 
-    /// One that lives on a machine: not this Mac's (while both have it, as it moves, this Mac's is the one).
-    private func onMachine(_ id: String) -> Bool { machines.has(id) && mac.group(id) == nil }
-    /// The machine a group chat lives on; nil for this Mac's.
-    func machine(of id: String) -> String? { onMachine(id) ? machines.chats.first { $0.group.id == id }?.machine : nil }
-    private var machineChats: [BoxGroups.Chat] { machines.chats.filter { mac.group($0.group.id) == nil } }
-
-    var list: [BotGroup] { mac.list + machineChats.map(\.group) }
-    var speaking: [String: String] { mac.speaking.merging(machines.speaking.filter { onMachine($0.key) }) { first, _ in first } }
+    var list: [BotGroup] { boxes.shown.map(\.group) }
+    var speaking: [String: String] { boxes.speaking }
     /// What the bot talking is doing, by chat (see `GroupActivity`).
-    var activity: [String: [GroupActivity]] { mac.activity.merging(machines.activity.filter { onMachine($0.key) }) { first, _ in first } }
-    var discussing: Set<String> { mac.discussing.union(machines.discussing.filter(onMachine)) }
-    var paused: Set<String> { mac.paused.union(machines.paused.filter(onMachine)) }
-    var seatIDs: Set<String> { mac.seatIDs.union(machines.seatIDs) }
+    var activity: [String: [GroupActivity]] { boxes.activity }
+    var discussing: Set<String> { boxes.discussing }
+    var paused: Set<String> { boxes.paused }
+    var seatIDs: Set<String> { boxes.seatIDs }
 
-    func group(_ id: String?) -> BotGroup? { mac.group(id) ?? machines.group(id) }
-    func group(seat: String) -> BotGroup? { mac.group(seat: seat) ?? machines.group(seat: seat) }
-    func messages(in id: String) -> [GroupMessage] { onMachine(id) ? machines.messages(in: id) : mac.messages(in: id) }
+    func group(_ id: String?) -> BotGroup? { boxes.group(id) }
+    func group(seat: String) -> BotGroup? { boxes.group(seat: seat) }
+    func messages(in id: String) -> [GroupMessage] { boxes.messages(in: id) }
     /// The machine a chat lives on; nil for this Mac.
-    func machine(of id: String?) -> String? { id.flatMap { onMachine($0) ? machines.machine(of: $0) : nil } }
-    func isUnread(_ group: BotGroup) -> Bool { onMachine(group.id) ? machines.isUnread(group) : mac.isUnread(group) }
-    func name(of author: String?) -> String { mac.name(of: author) }
+    func machine(of id: String?) -> String? { boxes.machine(of: id) }
+    func isUnread(_ group: BotGroup) -> Bool { boxes.isUnread(group) }
 
+    /// Whether you can reach a chat where it lives now (see `BoxGroups.Reach`).
+    func reach(_ id: String) -> BoxGroups.Reach { boxes.reach(id) }
     /// The machine a chat lives on while you can't reach it there: what you write waits.
-    func unreachable(_ id: String) -> String? { onMachine(id) ? machines.unreachable(id) : nil }
+    func unreachable(_ id: String) -> String? { boxes.unreachable(id) }
+    /// This Mac's group chats: running, starting, or stopped.
+    var macReach: BoxGroups.Reach { boxes.macReach }
 
-    func markViewed(_ id: String) {
-        if onMachine(id) { machines.markViewed(id) } else { mac.markViewed(id) }
-    }
+    func markViewed(_ id: String) { boxes.markViewed(id) }
 
-    /// Your message, unless it's moving (it waits then, where it was written). To a chat on a
-    /// machine it goes there, and back in the composer (with why) if it can't. Whether it went.
+    /// Your message, where the chat lives; back in the composer (with why) if it can't go. Whether
+    /// it went on its way (not while its computer can't be reached: it waits in the composer).
     @discardableResult
     func send(_ text: String, to id: String) -> Bool {
-        guard !Moves.isFrozen(id) else { return false }
-        guard onMachine(id) else {
-            mac.send(text, to: id)
-            return true
-        }
+        // Held for a move (its computer's status): it waits too, until it's where it's going.
+        guard boxes.reach(id) == .ready, boxes.chat(id)?.held != true else { return false }
+        // Who it names with & is worked out where it lives: this Mac's box from the list as it is now.
+        if boxes.machine(of: id) == nil { AgentMail.shared.writeBoxDirectory() }
         Task {
             do {
-                try await machines.send(text, to: id)
+                try await boxes.send(text, to: id)
             } catch {
                 let key = BotGroups.tabKey(id)
                 let draft = Drafts.shared[key].text
@@ -65,73 +57,31 @@ final class GroupChats {
         return true
     }
 
-    /// The same, once it's there: for the phone, which says what came of it.
-    func sendNow(_ text: String, to id: String) async -> Bool {
-        guard !Moves.isFrozen(id) else { return false }
-        guard onMachine(id) else {
-            mac.send(text, to: id)
-            return true
-        }
-        return (try? await machines.send(text, to: id)) != nil
-    }
-
-    func stop(_ id: String) {
-        if onMachine(id) { machines.stop(id) } else { mac.stop(id) }
-    }
-
-    func keepGoing(_ id: String) {
-        if onMachine(id) { machines.keepGoing(id) } else { mac.keepGoing(id) }
-    }
-
-    func startWork(_ wrapUpID: String, in id: String) {
-        if onMachine(id) { machines.startWork(wrapUpID, in: id) } else { mac.startWork(wrapUpID, in: id) }
-    }
+    func stop(_ id: String) { boxes.stop(id) }
+    func keepGoing(_ id: String) { boxes.keepGoing(id) }
+    func startWork(_ wrapUpID: String, in id: String) { boxes.startWork(wrapUpID, in: id) }
 
     /// Takes the chat back to before one of your messages; its words, for the composer.
     func undo(from messageID: String, in id: String) async -> String? {
-        guard !Moves.isFrozen(id) else { return nil }
-        return onMachine(id) ? await machines.undo(from: messageID, in: id) : mac.undo(from: messageID, in: id)
+        await boxes.undo(from: messageID, in: id)
     }
 
-    /// A change from elsewhere (a phone) to a chat on a machine, as it was asked: that machine
-    /// decides what it can be. What stops it is said there, not here.
-    func changeThere(_ id: String, _ fields: JSONValue) async throws {
-        guard !Moves.isFrozen(id) else { throw Moves.Failure.moving }
-        try await machines.edit(id, fields)
-    }
-
-    /// Who can be in a chat, as the computer it lives on says; nil for this Mac's (any bot), or
-    /// when its machine can't say now.
-    func joinable(for id: String) async -> [String]? {
-        guard let machine = machine(of: id) else { return nil }
-        return await machines.joinable(machine)
+    /// Who can be in a chat on a computer (nil: this Mac), as it says; nil when it can't say now.
+    func joinable(on machine: String?) async -> [String]? {
+        await boxes.joinable(machine)
     }
 
     /// A new chat, on this Mac.
-    func create(name: String, purpose: String? = nil, members: [String], meeting: BotGroup.Meeting? = nil) -> BotGroup {
-        mac.create(name: name, purpose: purpose, members: members, meeting: meeting)
+    func create(name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async throws -> BotGroup {
+        try await boxes.create(name: name, purpose: purpose, members: members, meeting: meeting)
     }
 
-    func update(_ edited: BotGroup) async {
-        do { try await change(edited) } catch { Modal.show(error) }
-    }
-
-    /// As `update`, for a change from elsewhere (a phone): what stops it is said there, not here.
-    func change(_ edited: BotGroup) async throws {
-        // Moving: what you changed would be left behind.
-        guard !Moves.isFrozen(edited.id) else { throw Moves.Failure.moving }
-        guard onMachine(edited.id) else { return await mac.update(edited) }
-        try await machines.update(edited)
+    /// Its name, purpose, bots or meeting changed, where it lives; what stops it is said.
+    func update(_ id: String, name: String, purpose: String?, members: [String], meeting: BoxGroups.MeetingPlan?) async {
+        do { try await boxes.update(id, name: name, purpose: purpose, members: members, meeting: meeting) } catch { Modal.show(error) }
     }
 
     func delete(_ group: BotGroup) async {
-        do { try await deleteNow(group) } catch { Modal.show(error) }
-    }
-
-    /// As `delete`, for one deleted from elsewhere (a phone): what stops it is said there, not here.
-    func deleteNow(_ group: BotGroup) async throws {
-        guard !Moves.isFrozen(group.id) else { throw Moves.Failure.moving }
-        guard onMachine(group.id) else { return await mac.delete(group) }
-        try await machines.delete(group)
+        do { try await boxes.delete(group) } catch { Modal.show(error) }
     }
 }

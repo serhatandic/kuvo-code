@@ -58,6 +58,8 @@ final class Moves {
         case workUnderWay(chat: String)
         /// A machine whose engine started before it could run group chats.
         case notYet(machine: String)
+        /// This Mac's group chats aren't running (starting, or stopped).
+        case macGroupsDown
         /// Something sent to one that's moving.
         case moving
         var errorDescription: String? {
@@ -75,6 +77,7 @@ final class Moves {
             case .notYet(let machine): "\(machine) can take group chats once its engine starts over, when nothing runs there. Try again then."
             case .inBoxGroup(let name, let chat, let machine): "\(name) is in “\(chat)”, which lives on \(machine) with its bots. Move the chat to this Mac first, or take \(name) out of it."
             case .moving: "It’s moving to another computer. Try again once it’s there."
+            case .macGroupsDown: "Group chats on this Mac aren’t running right now. Try again once they are."
             }
         }
     }
@@ -241,12 +244,11 @@ final class Moves {
         Analytics.shared.track("bot_moved", ["to": machine == nil ? "mac" : "machine"])
     }
 
-    /// From here on the bot lives where it went: its group chats' seats, its row and tabs, its
-    /// record, and its keys there (read where it was, given where it is; those where it was go as
-    /// the move finishes).
+    /// From here on the bot lives where it went: its row and tabs, its record, and its keys there
+    /// (read where it was, given where it is; those where it was go as the move finishes). Its group
+    /// chats find it where it is at its next turn, and its seat where it was goes then.
     private func switchBot(_ bot: Bot, record: Record, sessions: [Session], target: OpenCodeAPI) async {
         guard let app, let folder = record.copy, let session = sessions.first else { return }
-        await app.groups.botMoving(bot)
         let keys = await BotKeys.carried(bot, app: app) ?? [:]
         app.workspace.moved(sessions, api: target)
         await app.bots.moved(bot.id, to: record.to, folder: folder, session: session, api: target)
@@ -325,8 +327,8 @@ final class Moves {
         guard let app, underWay[id] == nil, let asked = app.chats.group(id) else { return }
         let name = "“\(asked.name)”"
         try await finishEarlier(id, name: name)
-        // Where it lives: this Mac while it has it (a copy left on a machine isn't the one).
-        let from = app.groups.group(id) == nil ? app.boxGroups.machine(of: id) : nil
+        // Where it lives: the computer that has it started (a copy left elsewhere isn't the one).
+        let from = app.boxGroups.machine(of: id)
         guard from != machine, let group = app.chats.group(id) else { return }
         if app.chats.discussing.contains(id) { throw Failure.working(name) }
         if app.chats.messages(in: id).contains(where: { $0.tasks?.contains { $0.state == .working || $0.state == .waiting } == true }) {
@@ -338,16 +340,14 @@ final class Moves {
             if let moving = group.members.first(where: { underWay[$0] != nil }), let bot = app.bots.bot(moving) { throw Failure.working(bot.name) }
             guard app.boxGroups.reachable(machine) else { throw Failure.notConnected(placeName(machine)) }
             guard app.boxGroups.running.contains(machine) else { throw Failure.notYet(machine: placeName(machine)) }
-        } else if let from, !app.boxGroups.reachable(from) {
-            throw Failure.notConnected(placeName(from))
+        } else if !app.boxGroups.reachable(nil) {
+            throw Failure.macGroupsDown
         }
+        if let from, !app.boxGroups.reachable(from) { throw Failure.notConnected(placeName(from)) }
         var record = Record(kind: .group, id: id, sessions: [], from: from, to: machine, original: nil, copy: nil, wasPaused: true, stage: .copying)
+        // Nothing reaches it meanwhile: it's held where it is (its computer's status) and where it goes.
         underWay[id] = .some(machine)
-        Self.frozen.insert(id)
-        defer {
-            underWay[id] = nil
-            Self.frozen.remove(id)
-        }
+        defer { underWay[id] = nil }
         save(record)
         do {
             let held = try await groupHome(from, in: app).hold(id)
@@ -390,7 +390,7 @@ final class Moves {
 
     /// The group chats of the computer a move names (nil: this Mac), the same steps either way.
     private func groupHome(_ machine: String?, in app: AppModel) -> GroupHome {
-        machine.map { MachineGroupHome(machine: $0, groups: app.boxGroups) } ?? app.groups
+        BoxGroupHome(machine: machine, groups: app.boxGroups)
     }
 
     /// A group chat's move to or from a machine you removed meanwhile: nothing's left to do there

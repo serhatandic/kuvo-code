@@ -120,8 +120,6 @@ extension AppModel {
             guard let session = ask.session else { return nil }
             return self?.chats.group(seat: session).map { BotGroups.tabKey($0.id) } ?? session
         }
-        // A group chat's bot at work: what it's thinking, under its name.
-        workspace.onUnshownStream = { [weak self] event in self?.groups.streamed(event) }
         // A sign-in that couldn't be renewed: marked in Accounts and the sidebar, where it was.
         workspace.onSignInEnded = { [weak self] provider, machine, ended in
             guard let self else { return }
@@ -623,6 +621,8 @@ extension AppModel {
     func personalitiesChanged(except machine: String? = nil) {
         // Every machine hears it by mail too, connected or not (PROTOCOL.md, "Documents").
         Task { await phoneLink.tellMachines() }
+        // This Mac's group chats, what each personality tells a bot.
+        Task { await boxGroups.giveSettings(to: nil) }
         for engine in machines.engines.values where engine.machine.id != machine {
             // A moment on, the last change's round only.
             engine.activeConnection?.run("personalities") { [weak self] in

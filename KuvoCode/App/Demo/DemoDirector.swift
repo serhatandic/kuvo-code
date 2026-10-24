@@ -270,7 +270,13 @@ enum DemoDirector {
         let members = (parts.count > 1 ? parts[1] : "").split(separator: ",").compactMap { member in
             app.bots.list.first { $0.name == member.trimmingCharacters(in: .whitespaces) }?.id
         }
-        let group = groups.list.first { $0.name == name } ?? groups.create(name: name, members: members)
+        // A new one on this Mac once its group chats run.
+        if !groups.list.contains(where: { $0.name == name }) {
+            await DemoWait.until("this Mac's group chats (KUVO_DEMO_GROUP)", limit: .seconds(180)) { groups.macReach == .ready }
+        }
+        var made = groups.list.first { $0.name == name }
+        if made == nil { made = try? await groups.create(name: name, purpose: nil, members: members, meeting: nil) }
+        guard let group = made else { return print("KUVO_DEMO_GROUP: \(name) couldn't be made") }
         app.tabs.open(.group(group.id))
         if environment["KUVO_DEMO_EDIT_GROUP"] != nil { app.tabs.openGroupEditor(group: group) }
         // KUVO_DEMO_GROUP_UNDO=<seconds>: then undoes from your last message there, into the composer.
@@ -285,8 +291,10 @@ enum DemoDirector {
         // group chats), or to this Mac when empty, before its message goes.
         if let place = environment["KUVO_DEMO_MOVE_GROUP"], groups.machine(of: group.id) != (place.isEmpty ? nil : place) {
             let machine = place.isEmpty ? nil : place
-            let ends = [machine, groups.machine(of: group.id)].compactMap { $0 }
-            await DemoWait.until("group chats running on \(ends) (KUVO_DEMO_MOVE_GROUP)", limit: .seconds(180)) { ends.allSatisfy(app.boxGroups.running.contains) }
+            let ends = [machine, groups.machine(of: group.id)]
+            await DemoWait.until("group chats running on \(ends) (KUVO_DEMO_MOVE_GROUP)", limit: .seconds(180)) {
+                ends.allSatisfy { $0.map(app.boxGroups.running.contains) ?? app.boxGroups.reachable(nil) }
+            }
             do {
                 try await app.moves.move(group: group.id, to: machine)
                 print("KUVO_DEMO_MOVE_GROUP moved \(group.name)")
@@ -296,8 +304,8 @@ enum DemoDirector {
         }
         guard parts.count > 2, !parts[2].isEmpty else { return }
         guard await DemoWait.until("the engine (KUVO_DEMO_GROUP)", limit: DemoWait.unbounded, { app.api != nil }) else { return }
-        // One on a machine: once it's reached there, as its composer waits.
-        await DemoWait.until("the group chat's machine (KUVO_DEMO_GROUP)", limit: .seconds(180)) { groups.unreachable(group.id) == nil }
+        // Once it's reached where it lives, as its composer waits.
+        await DemoWait.until("the group chat's computer (KUVO_DEMO_GROUP)", limit: .seconds(180)) { groups.reach(group.id) == .ready }
         await DemoWait.pause(.beforeSending)
         groups.send(parts[2], to: group.id)
         // KUVO_DEMO_GROUP_LATER=<seconds>|<message>: another message, sent while they talk.

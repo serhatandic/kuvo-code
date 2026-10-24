@@ -11485,7 +11485,8 @@ class GroupStore {
       personality: typeof described.personality === "string" ? described.personality : undefined,
       agents: text(join17(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
-      ...typeof described.created === "string" ? { created: described.created } : {}
+      ...typeof described.created === "string" ? { created: described.created } : {},
+      ...text(join17(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -13374,6 +13375,10 @@ class GroupRunner {
       const peers = this.context.peers;
       if (bot.box && peers && !peers.takesSeats(bot.box)) {
         this.note(`${bot.name} is on ${peers.name(bot.box)}, which needs an update to take part.`, id);
+        return "absent";
+      }
+      if (!bot.box && this.bot(botID)?.moving) {
+        this.note(`${bot.name} is moving to another computer, so it sat this out.`, id);
         return "absent";
       }
       let seat = guest ? undefined : kept2.group.seats[botID];
@@ -15479,4 +15484,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 548e87acad3f3fba47b69602005e026f1735aaef6434b7a8580af829db908d32
+// Built from Agents/src aef503a53a1361a23d7a232cf06ad653cf74e42db83ad2798e13095967b6c6c5
