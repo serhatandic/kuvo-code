@@ -128,9 +128,10 @@ agent_routes = [{"path": p, "allowed": a, "method": m} for p, a, m in [
 # out here, by that rule: the path is written one way only, and that's both what's checked and
 # what's sent. Each part between slashes, and each name and value in its query ("+" a space
 # there), is percent-decoded once and encoded again as below; empty parts are left out. Refused:
-# a fragment, an escape that doesn't decode, a part that decodes to "." or holds "..", a backslash
-# or a control character, and a part between slashes that holds a slash or starts or ends with a
-# space.
+# a fragment or a space at either end, an escape that doesn't decode, a part that holds a
+# backslash or a control character, a part between slashes that holds a slash or is "." or "..",
+# and a name or value in the query with a ".." between its slashes (only ASCII counts in both, so
+# a mark or joiner hides neither).
 PATH_PLAIN = "-._~!$&'()*+,;=:@"
 QUERY_PLAIN = "-._~!$()*,;:@/?"
 
@@ -144,24 +145,27 @@ def percent_decoded(path):
 
 def decoded_part(raw):
     text = percent_decoded(raw)
-    if text is None or ".." in text or "\\" in text or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+    if text is None or "\\" in text or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
         return None
     return text
 
+def ascii_of(text):
+    return "".join(c for c in text if ord(c) < 0x80)
+
 def canonical(path):
-    if "#" in path:
+    if "#" in path or path.startswith(" ") or path.endswith(" "):
         return None
     head, _, query = path.partition("?")
     parts = []
     for raw in filter(None, head.split("/")):
         part = decoded_part(raw)
-        if part is None or part == "." or "/" in part or part.startswith(" ") or part.endswith(" "):
+        if part is None or "/" in part or ascii_of(part) in (".", ".."):
             return None
         parts.append(urllib.parse.quote(part, safe=PATH_PLAIN))
     fields = []
     for raw in filter(None, query.split("&")):
         halves = [decoded_part(half) for half in raw.replace("+", " ").split("=", 1)]
-        if None in halves:
+        if None in halves or any(ascii_of(piece) == ".." for half in halves for piece in half.split("/")):
             return None
         fields.append("=".join(urllib.parse.quote(half, safe=QUERY_PLAIN) for half in halves))
     return "/".join(parts) + ("?" + "&".join(fields) if fields else "")
@@ -186,6 +190,12 @@ routes += [{"path": p, "allowed": None} for p in [
     "api/fs/read/it's (1).txt", "api/integration/%6Fpenai%40work/connect/key", "api/session/ses_1/", "api//session",
     "api/session?", "api/session?limit=50&&order=desc", "api/fs/find?query=a+b&limit=5", "api/fs/find?query=a%2Bb",
     "api/fs/list?path=Sources/App", "api/fs/find?query=it's", "api/fs/find?query=x=y", "%61pi/session",
+    # Names with dots or spaces in them, which are names (a Next.js catch-all folder, say).
+    "api/fs/read/app/blog/%5B...slug%5D/page.tsx", "api/fs/read/app/blog/[...slug]/page.tsx",
+    "api/fs/list?path=app/blog/%5B...slug%5D", "api/fs/find?query=...", "api/fs/read/a..b.txt", "api/fs/list?path=.",
+    "api/fs/read/Old%20/a.txt", "api/fs/read/%20notes.txt",
+    # ".." with a joiner or a mark around it, which only the ASCII in it counts for.
+    "api/fs/read/..%E2%80%8D/x", "api/fs/read/%E2%80%8D../x", "api/fs/list?path=src/..%CC%81", "api/fs/read/%2E%E2%80%8D/x",
 ]]
 agent_routes += [{"path": p, "allowed": None, "method": m} for p, m in [
     ("api/kuvo/%2565ngine", "PUT"), ("api/kuvo/engine%2F", "PUT"), ("api/kuvo%2Fengine", "PUT"), ("api/kuvo/%2e/engine", "PUT"),

@@ -519,17 +519,18 @@ const RESPONSE_HEADERS = ["content-type", "cache-control"];
 // `path` written one way only, which is what's checked and what's sent, or null when it isn't
 // what it seems, as the Mac's EngineRoutes.canonical: each part between slashes, and each name
 // and value in its query, percent-decoded once and encoded again the same way every time; empty
-// parts left out. Refused: a fragment (`#`, which isn't sent), an escape that doesn't decode, and
-// a part that decodes to "." or holds "..", a backslash or a control character; and a part
-// between slashes that holds a slash or starts or ends with a space.
+// parts left out. Also refused: a fragment (`#`, which isn't sent) or a space at either end,
+// which a phone never sends; a part between slashes that holds a slash, or is "." or ".."; a name
+// or value in the query with a ".." between its slashes. (Only what's ASCII counts there, so a
+// mark or joiner hides neither, and "[...slug]" is a name.)
 export const canonicalPath = path => {
   try {
-    if (path.includes("#")) return null;
+    if (path.includes("#") || path.startsWith(" ") || path.endsWith(" ")) return null;
     const at = path.indexOf("?");
     const parts = [];
     for (const raw of (at < 0 ? path : path.slice(0, at)).split("/").filter(Boolean)) {
       const part = decodedPart(raw);
-      if (part === null || part === "." || /^ |\/| $/.test(part)) return null;
+      if (part === null || part.includes("/") || [".", ".."].includes(ascii(part))) return null;
       parts.push(encodeURIComponent(part).replace(/%(24|26|2B|2C|3B|3D|3A|40)/g, plainly));
     }
     const fields = [];
@@ -537,7 +538,7 @@ export const canonicalPath = path => {
       // Its name and value, a "+" in them a space, as a query is read.
       const spaced = raw.replaceAll("+", " "), equals = spaced.indexOf("=");
       const halves = (equals < 0 ? [spaced] : [spaced.slice(0, equals), spaced.slice(equals + 1)]).map(decodedPart);
-      if (halves.includes(null)) return null;
+      if (halves.some(half => half === null || half.split("/").some(piece => ascii(piece) === ".."))) return null;
       fields.push(halves.map(half => encodeURIComponent(half).replace(/%(24|2C|3B|3A|40|2F|3F)/g, plainly).replaceAll("'", "%27")).join("="));
     }
     return parts.join("/") + (fields.length ? `?${fields.join("&")}` : "");
@@ -546,8 +547,7 @@ export const canonicalPath = path => {
     return null;
   }
 };
-// Percent-decoded once, or null when it doesn't decode or holds "..", a backslash or a control
-// character.
+// Percent-decoded once, or null when it doesn't decode or holds a backslash or a control character.
 const decodedPart = raw => {
   let text;
   try {
@@ -555,8 +555,9 @@ const decodedPart = raw => {
   } catch {
     return null;
   }
-  return /[\u0000-\u001f\u007f\\]|\.\./.test(text) ? null : text;
+  return /[\u0000-\u001f\u007f\\]/.test(text) ? null : text;
 };
+const ascii = text => text.replace(/[^\u0000-\u007f]/g, "");
 // What's written as it is beyond what encodeURIComponent leaves (letters, digits, `-_.!~*'()`):
 // between slashes `$&+,;=:@`, and in a query `$,;:@/?`, but not `'`, which URL parsers encode
 // there. As the Mac writes them.

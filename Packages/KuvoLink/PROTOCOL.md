@@ -385,10 +385,11 @@ itself. A host serves:
   percent-decoded once and encoded again the same way (RFC 3986's characters as they are, any
   other as `%XX`), and empty parts are left out, so `api//session/%73es_1/` is sent as
   `api/session/ses_1` and `%252e` stays `%252e`. Only a path that isn't what it seems is refused
-  (403): a fragment, an escape that doesn't decode, a part that decodes to `.` or holds `..`, a
-  backslash or a control character, or a part between slashes that holds a slash (`%2F`) or
-  starts or ends with a space (a machine's bridge from 0.9.25; before, it refused by what the path
-  held, as written and decoded, and sent it as written). The commands the engine
+  (403): a fragment or a space at either end, an escape that doesn't decode, a part with a
+  backslash or a control character, a part between slashes that holds a slash (`%2F`) or is `.`
+  or `..`, or a query name or value with a `..` between its slashes (only the ASCII in a part
+  counts for the dots, so a joiner or mark hides neither; `[...slug]` is a name). A machine's
+  bridge does so from 0.9.25; before, it refused any `..` and sent the path as written. The commands the engine
   runs for agents: `GET api/shell` (those running in the folder `x-opencode-directory` names),
   `GET api/shell/<id>` and `GET api/shell/<id>/output?cursor=&limit=`; their `shell.created`,
   `shell.exited` and `shell.deleted` come with `api/event`.

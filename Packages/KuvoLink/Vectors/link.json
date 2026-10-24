@@ -708,7 +708,8 @@
     },
     {
       "path": "api/fs/read/a%20",
-      "allowed": false
+      "allowed": true,
+      "forwarded": "api/fs/read/a%20"
     },
     {
       "path": "api/fs/read/100%.txt",
@@ -783,6 +784,62 @@
       "path": "%61pi/session",
       "allowed": true,
       "forwarded": "api/session"
+    },
+    {
+      "path": "api/fs/read/app/blog/%5B...slug%5D/page.tsx",
+      "allowed": true,
+      "forwarded": "api/fs/read/app/blog/%5B...slug%5D/page.tsx"
+    },
+    {
+      "path": "api/fs/read/app/blog/[...slug]/page.tsx",
+      "allowed": true,
+      "forwarded": "api/fs/read/app/blog/%5B...slug%5D/page.tsx"
+    },
+    {
+      "path": "api/fs/list?path=app/blog/%5B...slug%5D",
+      "allowed": true,
+      "forwarded": "api/fs/list?path=app/blog/%5B...slug%5D"
+    },
+    {
+      "path": "api/fs/find?query=...",
+      "allowed": true,
+      "forwarded": "api/fs/find?query=..."
+    },
+    {
+      "path": "api/fs/read/a..b.txt",
+      "allowed": true,
+      "forwarded": "api/fs/read/a..b.txt"
+    },
+    {
+      "path": "api/fs/list?path=.",
+      "allowed": true,
+      "forwarded": "api/fs/list?path=."
+    },
+    {
+      "path": "api/fs/read/Old%20/a.txt",
+      "allowed": true,
+      "forwarded": "api/fs/read/Old%20/a.txt"
+    },
+    {
+      "path": "api/fs/read/%20notes.txt",
+      "allowed": true,
+      "forwarded": "api/fs/read/%20notes.txt"
+    },
+    {
+      "path": "api/fs/read/..%E2%80%8D/x",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/%E2%80%8D../x",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/list?path=src/..%CC%81",
+      "allowed": false
+    },
+    {
+      "path": "api/fs/read/%2E%E2%80%8D/x",
+      "allowed": false
     }
   ],
   "sockets": [

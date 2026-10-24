@@ -21,17 +21,19 @@ public enum EngineRoutes {
     /// `path` written one way only, which is both what's checked and what's sent, or nil when it
     /// isn't what it seems. Each part between slashes, and each name and value in its query, is
     /// percent-decoded once (`decoded`) and encoded again the same way; empty parts are left out.
-    /// Also refused: a fragment (`#`, which isn't sent), and a part between slashes that's ".",
-    /// holds a slash, or starts or ends with a space. As `canonicalPath` in kuvo-link.js.
-    static func canonical(_ path: String) -> String? {
+    /// Also refused: a fragment (`#`, which isn't sent) or a space at either end, which a phone
+    /// never sends; a part between slashes that holds a slash, or is "." or ".."; a name or value
+    /// in the query with a ".." between its slashes. ("%2e%2e" is "..", and so is ".\u{200D}.":
+    /// only what's ASCII counts, so a mark or joiner hides neither; "[...slug]" is a name.) As
+    /// `canonicalPath` in kuvo-link.js.
+    public static func canonical(_ path: String) -> String? {
         // In bytes, never characters, where a mark after a "/" or "?" hides it.
         let bytes = Array(path.utf8)
-        guard !bytes.contains(UInt8(ascii: "#")) else { return nil }
+        guard !bytes.contains(UInt8(ascii: "#")), bytes.first != UInt8(ascii: " "), bytes.last != UInt8(ascii: " ") else { return nil }
         let mark = bytes.firstIndex(of: UInt8(ascii: "?")) ?? bytes.endIndex
         var parts: [String] = []
         for raw in bytes[..<mark].split(separator: UInt8(ascii: "/")) {
-            guard let part = decoded(raw), part != ".", !part.unicodeScalars.contains("/"),
-                  part.unicodeScalars.first != " ", part.unicodeScalars.last != " ",
+            guard let part = decoded(raw), !part.unicodeScalars.contains("/"), ![".", ".."].contains(ascii(part.unicodeScalars)),
                   let written = part.addingPercentEncoding(withAllowedCharacters: pathCharacters) else { return nil }
             parts.append(written)
         }
@@ -39,23 +41,28 @@ public enum EngineRoutes {
         let query = bytes[min(mark + 1, bytes.endIndex)...].map { $0 == UInt8(ascii: "+") ? UInt8(ascii: " ") : $0 }
         var fields: [String] = []
         for raw in query.split(separator: UInt8(ascii: "&")) {
-            let halves = raw.split(separator: UInt8(ascii: "="), maxSplits: 1, omittingEmptySubsequences: false)
-                .map { decoded($0)?.addingPercentEncoding(withAllowedCharacters: queryCharacters) }
-            guard !halves.contains(nil) else { return nil }
-            fields.append(halves.compactMap { $0 }.joined(separator: "="))
+            var halves: [String] = []
+            for half in raw.split(separator: UInt8(ascii: "="), maxSplits: 1, omittingEmptySubsequences: false) {
+                guard let text = decoded(half), !text.unicodeScalars.split(separator: "/").contains(where: { ascii($0) == ".." }),
+                      let written = text.addingPercentEncoding(withAllowedCharacters: queryCharacters) else { return nil }
+                halves.append(written)
+            }
+            fields.append(halves.joined(separator: "="))
         }
         return parts.joined(separator: "/") + (fields.isEmpty ? "" : "?" + fields.joined(separator: "&"))
     }
 
-    /// Percent-decoded once, or nil when it doesn't decode or holds "..", a backslash or a control
-    /// character. So "%2e%2e", ".\t." and "x%5c.." never get through, and "%252e" is a name with
-    /// "%2e" in it, which is how the engine reads "%252e" too.
+    /// Percent-decoded once, or nil when it doesn't decode or holds a backslash or a control
+    /// character. "%252e" is a name with "%2e" in it, which is how the engine reads it too.
     private static func decoded(_ raw: some Collection<UInt8>) -> String? {
-        guard let text = String(decoding: Array(raw), as: UTF8.self).removingPercentEncoding else { return nil }
-        let bytes = Array(text.utf8)
-        let refused = bytes.contains { $0 < 0x20 || $0 == 0x7f || $0 == UInt8(ascii: "\\") }
-            || zip(bytes, bytes.dropFirst()).contains { $0 == UInt8(ascii: ".") && $1 == UInt8(ascii: ".") }
-        return refused ? nil : text
+        guard let text = String(decoding: Array(raw), as: UTF8.self).removingPercentEncoding,
+              !text.utf8.contains(where: { $0 < 0x20 || $0 == 0x7f || $0 == UInt8(ascii: "\\") }) else { return nil }
+        return text
+    }
+
+    /// Its ASCII only.
+    private static func ascii(_ scalars: some Sequence<Unicode.Scalar>) -> String {
+        String(String.UnicodeScalarView(scalars.filter(\.isASCII)))
     }
 
     /// What's written as it is (RFC 3986's): letters, digits and `-._~`; between slashes
