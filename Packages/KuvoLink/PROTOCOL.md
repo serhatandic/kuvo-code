@@ -938,9 +938,12 @@ host serves:
 
 ### Features
 
-`kuvo/info`'s `features` names what the box answers, so a client checks a name, never a version
-(`app`, `bridge`), before it shows what needs a route. A name comes with what it names and never
-changes meaning; one the client doesn't know, it ignores. Both boxes are held to their lists by
+`kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
+(`app`, `bridge`), before it shows what needs a route. A route it names can still refuse for now,
+with a message to show: `503` while the engine or the coding agents' bridge is down, and on a
+machine `409` for `config`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
+settings its own. A name comes with what it names and never changes meaning; one the client
+doesn't know, it ignores. Both boxes are held to their lists by
 the route scenarios (`Vectors/routes/routing.json`).
 
 | Name | What it answers |
@@ -1151,8 +1154,8 @@ before connects (the box notes one: `run/attached`).
   Until then a machine's bridge answers `kuvo/config`, `kuvo/keys`, `kuvo/mcp/catalog` and
   `kuvo/integrations` with `409 {"message"}`.
 - **Leaving the engine running**: such a Mac stops a machine's engine as it quits unless
-  something waits there (a wake-up, a group chat at work) or a phone used the machine in the last
-  week (`run/link.seen`, which the bridge touches as a phone asks).
+  something waits there (a wake-up, a group chat at work), or, from 0.7.0, a phone used the
+  machine in the last week (`run/link.seen`, which the bridge touches as a phone asks).
 - **Its worktrees**: it kept a machine's worktrees itself. A Mac that has such records gives them
   to the machine with `POST kuvo/worktrees/record`.
 - **Its agents bridge** installed the agents' programs in `~/.kuvo-code/agents/runtime` on a

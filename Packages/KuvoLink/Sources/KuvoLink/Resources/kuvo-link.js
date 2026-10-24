@@ -1968,8 +1968,8 @@ export function engineConnect(readEngine = readEngineFile) {
   };
 }
 
-// When a phone last used this machine, in `run/link.seen`: a Mac with Kuvo Code 0.7 or before
-// leaves the engine running as it quits while one has in the last week (later ones always do), so
+// When a phone last used this machine, in `run/link.seen`: a Mac with Kuvo Code 0.7.x leaves the
+// engine running as it quits while one has in the last week (later ones always do), so
 // the machine's sessions and bots are there whenever it asks; a phone lost or unpaired elsewhere
 // stops keeping it after that.
 export const SEEN_FILE = path.join(RUN, "link.seen");
