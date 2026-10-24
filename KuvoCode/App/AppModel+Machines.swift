@@ -452,6 +452,9 @@ extension AppModel {
                     // bridge was still starting): now, not at its next connection.
                     await AgentMail.shared.deliverWaiting(to: engine)
                     await self?.wakeUps.share(with: engine)
+                    // Your personalities as the machine has them now (one changed on another
+                    // machine reaches it box to box), so this Mac never tells a bot older words.
+                    await self?.syncPersonalities(with: engine)
                 }
             }
             // Settings changed here while it connected, after it took the ones it has.
@@ -471,7 +474,9 @@ extension AppModel {
         engine.startWanted = false
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
-        // Gone from here: the machine does what a Mac does for it again, now.
+        // Gone from here: the machine does what a Mac does for it again, now (and nothing of this
+        // Mac's notes it's here again after).
+        engine.agentSync?.cancel()
         if engine.isReady {
             let leaving = RemoteServer.leavingScript(MachineEngine.macID), connection = engine.machine.connection
             Task.detached { RemoteServer.runNow(leaving, on: connection) }
