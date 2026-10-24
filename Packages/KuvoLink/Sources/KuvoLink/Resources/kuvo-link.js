@@ -574,8 +574,10 @@ export const socketAllowed = path => SOCKETS.some(pattern => pattern.test(canoni
 // phone does through `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part
 // by part. As the Mac allows them (EngineRoutes.allowsAgents; both are checked against
 // Vectors/link.json).
-export const agentsAllowed = (path, method = "GET") =>
-  allowed(path, method) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(canonicalPath(path));
+export const agentsAllowed = (path, method = "GET") => {
+  const sent = canonicalPath(path) ?? "";
+  return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(sent);
+};
 
 // Where a sign-in's page sent the browser back to this machine, for it to load
 // (`kuvo/sign-in/return`), as the Mac's EngineRoutes.signInReturn: only its own address

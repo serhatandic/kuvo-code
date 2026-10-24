@@ -15,7 +15,7 @@ public enum EngineRoutes {
     /// `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part by part.
     public static func allowsAgents(_ path: String, method: String = "GET") -> Bool {
         guard let sent = canonical(path) else { return false }
-        return allows(sent) && sent.prefixMatch(of: #/api/kuvo/(engine|groups)(/|\?|$)/#) == nil
+        return sent.prefixMatch(of: #/api(/|\?|$)/#) != nil && sent.prefixMatch(of: #/api/kuvo/(engine|groups)(/|\?|$)/#) == nil
     }
 
     /// `path` written one way only, which is both what's checked and what's sent, or nil when it
