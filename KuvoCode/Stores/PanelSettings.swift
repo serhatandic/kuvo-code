@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 /// The side panel's settings, kept in UserDefaults under these keys (Settings › Panel).
 nonisolated enum PanelSettings {
@@ -58,7 +59,7 @@ nonisolated enum SearchEngine: String, CaseIterable {
         case .ecosia: "https://www.ecosia.org/search"
         }
         var components = URLComponents(string: base)
-        components?.queryItems = [URLQueryItem(name: "q", value: query)]
+        components?.percentEncodedQueryItems = [URLQueryItem(name: "q", value: query).formEscaped]
         return components?.url
     }
 }
