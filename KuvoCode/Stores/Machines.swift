@@ -862,7 +862,7 @@ final class Machines {
             """
         } ?? ""
         return leave + """
-        rm -rf "$K/keys" "$K/box/keys"
+        rm -rf "$K/keys" "$K/box/keys" "$K/box/bot-keys"
         rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-boot"
         \(RemoteServer.rebootCrontabRemoval)
         """

@@ -1225,7 +1225,7 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// Takes the Mac `mac` out of the machine's present ones, as it quits: what `stopNow` runs first.
     public static func leavingScript(_ mac: String) -> String {
-        "rm -f \"\(run)/present/\(mac)\"\n"
+        "rm -f \"\(run)/present/\(mac)\" \"\(run)/connected/\(mac)\"\n"
     }
 
     /// A port nobody on this Mac is listening on right now, other than `taken`.

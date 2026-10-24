@@ -58,7 +58,7 @@ struct MachinesSettings: View {
             Button("Remove", role: .destructive) { app.removeMachine(machine.id) }
             Button("Uninstall from \(machine.name)", role: .destructive) { app.removeMachine(machine.id, uninstall: true) }
         } message: { machine in
-            Text("Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys, and your phones keep it. Uninstall also stops it there and deletes its sign-ins and keys.")
+            Text("Remove takes it off this Mac; it keeps running, with its sessions, bots, sign-ins and keys\(PhoneLink.isEnabled ? ", and your phones keep it" : ""). Uninstall also stops it there and deletes its sign-ins and keys.")
         }
     }
 

@@ -98,6 +98,38 @@ import Testing
         #expect(Self.waiting("gone.invalid").contains { $0.hasPrefix(Machines.removalMark) && $0.contains(Machines.agentsSignOut) })
     }
 
+    /// A machine this Mac only removed stays for your phones, marked as removed here, until a
+    /// phone forgets it; one this Mac still has is removed in Settings › Machines instead.
+    @Test func aPhoneForgetsAMachineThisMacRemoved() async throws {
+        defer { Self.clean() }
+        let file = AppInfo.testRoot.appending(path: "PhoneHosts/\(UUID().uuidString).json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let host = { (name: String) in ["name": name, "address": "AAAAAAAAAAAAAAAAAAAAAA", "key": String(repeating: "k", count: 43)] }
+        try JSONSerialization.data(withJSONObject: ["phones": [], "removed": [], "machines": ["gone.invalid": host("Gone"), "box": host("Box")]]).write(to: file)
+        app.machines.add("box")
+        let kept = PhoneLink(file: file)
+        kept.bots = app.bots
+        func ask(_ path: String, method: String = "GET") async throws -> (status: Int, json: [String: Any]) {
+            var status = 0
+            var answer = Data()
+            for try await part in PhoneLink.respond(to: LinkRequest(method: method, path: path, headers: [:], body: Data()), link: kept,
+                                                    engine: URL(string: "http://127.0.0.1:47996/")!, password: nil, agents: nil) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): answer += chunk
+                }
+            }
+            return (status, (try? JSONSerialization.jsonObject(with: answer) as? [String: Any]) ?? [:])
+        }
+        let hosts = try #require(try await ask("kuvo/hosts").json["hosts"] as? [[String: Any]])
+        #expect(hosts.map { "\($0["machine"] as? String ?? "") \($0["removed"] as? Bool ?? false)" } == ["box false", "gone.invalid true"])
+        #expect(try await ask("kuvo/hosts/box", method: "DELETE").status == 409)
+        #expect(try await ask("kuvo/hosts/gone.invalid", method: "DELETE").status == 200)
+        #expect((try await ask("kuvo/hosts").json["hosts"] as? [[String: Any]])?.map { $0["machine"] as? String } == ["box"])
+        #expect(try await ask("kuvo/hosts/gone.invalid", method: "DELETE").status == 404)
+    }
+
     /// What waits to run on a machine the next time it answers.
     private static func waiting(_ machine: String) -> [String] {
         (UserDefaults.standard.dictionary(forKey: "machines.waiting") as? [String: [String]])?[machine] ?? []

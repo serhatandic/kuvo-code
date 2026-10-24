@@ -935,10 +935,11 @@ final class PhoneLink {
         struct Hosts: Encodable {
             /// `machine`: its id, as bots name theirs. `anotherMac`: its engine is another Mac's,
             /// which gives it its settings, so this Mac's (`kuvo/config`) don't reach it (as it
-            /// was when it last connected).
+            /// was when it last connected). `removed`: this Mac removed it (it runs on there), so
+            /// a phone may forget it.
             struct Host: Encodable {
                 var kind = "machine"; var name: String; var address: String; var key: String; var relay: String
-                var machine: String; var anotherMac: Bool
+                var machine: String; var anotherMac: Bool; var removed: Bool
             }
             var hosts: [Host]
         }
@@ -965,9 +966,20 @@ final class PhoneLink {
             return (200, (try? encoder.encode(Named(agents: entries))) ?? Data())
         case "kuvo/hosts":
             let hosts = machineHosts.sorted { $0.value.name < $1.value.name }.map { id, host in
-                Hosts.Host(name: host.name, address: host.address, key: host.key, relay: relay.absoluteString, machine: id, anotherMac: host.anotherMac ?? false)
+                Hosts.Host(name: host.name, address: host.address, key: host.key, relay: relay.absoluteString, machine: id, anotherMac: host.anotherMac ?? false,
+                           removed: bots?.app?.machines.engine(id) == nil)
             }
             return (200, (try? encoder.encode(Hosts(hosts: hosts))) ?? Data())
+        case let path where path.hasPrefix("kuvo/hosts/") && request.method.uppercased() == "DELETE":
+            // A machine this Mac removed, forgotten for your phones too (one it still has is
+            // removed in Settings › Machines).
+            let id = String(path.dropFirst("kuvo/hosts/".count)).removingPercentEncoding ?? ""
+            guard machineHosts[id] != nil else { return (404, Data("{}".utf8)) }
+            if bots?.app?.machines.engine(id) != nil { return (409, Self.message("It's one of this Mac's machines: remove it in Settings › Machines.")) }
+            forget(machine: id)
+            // Your other machines stop counting it among their peers.
+            machinesChanged()
+            return (200, Data("{}".utf8))
         case "kuvo/asks":
             return (200, asksJSON())
         case "kuvo/wakes":

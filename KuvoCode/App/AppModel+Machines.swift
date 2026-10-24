@@ -386,10 +386,11 @@ extension AppModel {
         // Removed a moment ago and added again: after the removal there has finished.
         await machines.waitForRemoval(of: engine.machine.id)
         await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux"))
-        // Removed while it started: nothing of yours goes there (its removal waits in the queue).
+        // Removed while it started: nothing of yours goes there. It keeps running as Remove leaves
+        // it (an Uninstall's stop waits in the queue), but for a test or demo copy's.
         // Checked again before each step that sends it something, as removing can come any time.
         guard machines.engine(engine.machine.id) === engine else {
-            if engine.isReady { await engine.shutDown() }
+            if engine.isReady { if leavesMachinesRunning { engine.disconnect() } else { await engine.shutDown() } }
             return
         }
         // What waits for it (a bot deleted, an integration removed while it was away), now.
@@ -470,6 +471,11 @@ extension AppModel {
         engine.startWanted = false
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
+        // Gone from here: the machine does what a Mac does for it again, now.
+        if engine.isReady {
+            let leaving = RemoteServer.leavingScript(MachineEngine.macID), connection = engine.machine.connection
+            Task.detached { RemoteServer.runNow(leaving, on: connection) }
+        }
         if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         workspace.forget(engine.machine.id)
     }
@@ -508,6 +514,8 @@ extension AppModel {
     /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
     /// phones (`Machines.remove`).
     func removeMachine(_ id: String, uninstall: Bool = false) {
+        // Left running, as Disconnect leaves it (a test or demo copy's stops).
+        if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
         machines.engine(id)?.browser.reset()
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
@@ -519,7 +527,8 @@ extension AppModel {
         machineGroups.forget(machine: id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
-        // Your others stop counting it among their peers; the last gone, no relay for it.
+        // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
+        // as your phones keep it); the last gone, no relay for it.
         phoneLink.machinesChanged()
         Task { await moves.machineRemoved(id) }
     }
@@ -528,7 +537,7 @@ extension AppModel {
     /// tells your phones what happens there from now on. (A demo or test copy's stops, unless a
     /// session there is working.)
     func stopMachines() {
-        let leaving = PhoneLink.isEnabled ? RemoteServer.leavingScript(MachineEngine.macID) : ""
+        let leaving = RemoteServer.leavingScript(MachineEngine.macID)
         var left = Set<String>()
         // Each machine it's connected to, and a demo or test copy's it reached at all: a connection
         // tried starts the box's keeper there.
