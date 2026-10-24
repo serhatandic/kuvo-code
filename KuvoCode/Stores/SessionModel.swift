@@ -461,7 +461,9 @@ final class SessionModel {
     #endif
     /// Where the messages not read yet end, while there are earlier ones.
     private(set) var earlierCursor: String?
-    private(set) var isLoadingEarlier = false
+    /// The read of earlier messages on its way, if there is one.
+    private var earlierRead: Task<Void, Never>?
+    var isLoadingEarlier: Bool { earlierRead != nil }
     var hasEarlier: Bool { earlierCursor != nil }
 
     /// The page's way back to earlier messages, when it was full (so there may be more).
@@ -473,28 +475,33 @@ final class SessionModel {
     func loadAllEarlier() async {
         while hasEarlier, transcript.messages.count < 20_000 {
             // After one already on its way (scrolling up).
-            while isLoadingEarlier { try? await Task.sleep(for: .milliseconds(100)) }
+            await earlierRead?.value
             let before = transcript.messages.count
             await loadEarlier()
-            if transcript.messages.count == before, !isLoadingEarlier { return }
+            if transcript.messages.count == before { return }
         }
     }
 
-    /// Reads the messages before those on screen, and puts them ahead of them.
+    /// Reads the messages before those on screen, and puts them ahead of them; with one on its
+    /// way already, once it's in.
     func loadEarlier() async {
-        guard let cursor = earlierCursor, !isLoadingEarlier, !waitsForEngine else { return }
-        isLoadingEarlier = true
-        defer { isLoadingEarlier = false }
-        guard let page = try? await api.messages(session: id, limit: Self.pageSize, before: cursor) else { return }
-        let known = Set(transcript.messages.map(\.id))
-        let older = page.data.filter { !known.contains($0.id) }
-        guard !older.isEmpty else {
-            earlierCursor = nil
-            return
+        if let read = earlierRead { return await read.value }
+        guard let cursor = earlierCursor, !waitsForEngine else { return }
+        let read = Task {
+            defer { earlierRead = nil }
+            guard let page = try? await api.messages(session: id, limit: Self.pageSize, before: cursor) else { return }
+            let known = Set(transcript.messages.map(\.id))
+            let older = page.data.filter { !known.contains($0.id) }
+            guard !older.isEmpty else {
+                earlierCursor = nil
+                return
+            }
+            editTranscript { $0.messages = older + $0.messages }
+            earlierCursor = Self.cursor(before: page)
+            prepareCode(in: older)
         }
-        editTranscript { $0.messages = older + $0.messages }
-        earlierCursor = Self.cursor(before: page)
-        prepareCode(in: older)
+        earlierRead = read
+        await read.value
     }
 
     /// The code in replies read, colored ahead of time, so it shows colored as it's scrolled to
