@@ -176,8 +176,9 @@ connection.
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
 - **Agents**: `{"agents": {"at", "list": [{session, name, kind: "bot"|"session", id?, project?,
-  about?, machine?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their members),
-  and `features` as the box's `kuvo/info` names them. A box sends its bots and its 40 latest
+  about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
+  members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it), and `features` as the box's
+  `kuvo/info` names them. A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -227,35 +228,51 @@ connection.
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a
   seat of the home's own, and does its part of the work and remembers the chat in its own
   conversation there. Only words go between them, as `{"seat": <mail>}` (with `"seatID"` for one
-  that mustn't be lost), or `{"seatPart": {whole, i, of, d, s}}` for a mail too big for one (as a
-  document's parts, `s` the `seatID`, or empty). The coding agents' bridge on each box writes and
+  that mustn't be lost), or `{"seatPart": {whole, i, of, d, s}}` for a mail over 48,000 bytes (as a
+  document's parts, but `d` is the base64url of the mail's JSON in UTF-8, so each part fits whatever
+  the words are; `s` the `seatID`, or empty). One that would take more parts than a document may
+  isn't sent at all, and the link's log says so. The coding agents' bridge on each box writes and
   reads the mail (`Agents/src/groups/peer.ts`), and the box's link carries it.
   - **`turn`** (host → home): `{id, chat: {id, name, purpose?, members: [{id, name, job}]}, bot,
     seat?, agentsSeat?, kind: "turn"|"wrapUp"|"guest"|"split", text, fresh?, chatSize?}`: what the
     bot hears, composed by the host (`fresh`, the whole chat, for a seat its home has to make
     anew). The home builds the seat's instructions and rules from its own bot, checks its model's
-    sign-in, and runs it. It takes each `id` once (remembered a day), and answers one asked again
-    with how it's going.
+    sign-in, and runs it. It uses `seat` only when that conversation's metadata says it's this bot's
+    seat in this chat (`kuvo.seat`: `bot`, `group`, as it made it), and otherwise makes the bot a
+    seat of its own (`replaced`). It takes each `id` once (remembered a day), and answers one asked
+    again with how it's going (what it's doing, only the latest), or how it ended.
   - **`state`** (home → host): `{id, state}`, `state` one of `{phase: "taken"}` (at once),
     `{phase: "seated", seat, agents, replaced?}`, `{phase: "started"}` (its words are with its
     seat), `{phase: "activity", activity}` (at most every 1.5 s, the latest), `{phase: "steered",
     message}`. **`result`** (home → host): `{id, result}`, `{ok: true, text, steps, outgrown?}` or
-    `{ok: false, why}`. A host takes them only from the box it asked. Unheard of after 15 s, it
-    asks again once; after 45 s, the chat says the bot's computer can't be reached now.
+    `{ok: false, why}`, with `seat`, `agents` and `replaced?` when it ended in a seat (so a host
+    that missed `seated` keeps it, and one that missed `started` knows its words were heard). A
+    host takes them only from the box it asked, and each only once. Each 15 s it hears nothing of a
+    turn, it asks again by the same `id`; after 45 s of nothing, or past the home's own limit on a
+    turn (ten minutes, and a minute more) without a result, it sends `stop` and the chat says the
+    bot's computer can't be reached now.
   - **`steer`** `{id, text, message}` and **`stop`** `{id}` (host → home), for a message you write
     while it talks, and for Stop, Undo or a move.
-  - Not to be lost (sent as letters are, until `delivered`; never through a Mac): **`drop`**
-    `{seat, agents}` (host → home: a seat gone), **`work`** `{work: {task, wrapUp, chat, bot,
-    text, started}}` (host → home: a part, to the bot's own conversation, followed there across
-    restarts), **`report`** `{task, wrapUp, chat, result}` (home → host, taken only from the box
-    that bot lives on), and **`memory`** `{memory: {chat, bot, forget?, name?, with?, recap?,
-    transcript?, time?}}` (host → home: kept beside the home's own chats in the bot's one memory
-    instruction, the transcript in `groups/<host key's first 8 characters>-<chat>.md` in its
-    folder).
+  - Not to be lost (sent as letters are, the first time as the bridge hands it over, then each
+    minute until `delivered`; never through a Mac): **`drop`** `{seat, agents, bot, chat}` (host
+    → home: `bot`'s seat in `chat` gone, deleted only when its metadata says it's that),
+    **`work`** `{work: {task, wrapUp, chat, bot, text, started}}` (host → home: a part, to the
+    bot's own conversation, followed there across restarts; taken once, and given again as the
+    host starts while it waits for its report), **`report`** `{task, wrapUp, chat, result}` (home
+    → host, taken only from the box the part was given to), and **`memory`** `{memory: {chat, bot,
+    at, forget?, name?, with?, recap?, transcript?, time?}}` (host → home: kept beside the home's
+    own chats in the bot's one memory instruction, the transcript in `groups/<host key's first 8
+    characters>-<chat>.md` in its folder). A memory carries its recap and the chat's latest
+    messages, within 24 KB and 200 KB, and `at` (milliseconds, later each time): the home refuses
+    one said before the newest it took for that bot and chat, or before it forgot that chat (it
+    remembers that three days), so one that comes late or twice changes nothing. A newer one for
+    the same bot and chat goes in place of one still waiting to go.
   - A bot whose home changed (it moved) loses its seat where it was (`drop`), and its next turn
     makes one where it is now, given the whole chat. A host offers in its chats the bots of the
     peers that take seats (`kuvo/groups/joinable`), and its chats list them as members with
-    `computer`, the peer's name.
+    `computer`, the peer's name, and the fields any member has: `look` (as the peer listed it, or a
+    plain one), `session` (its own conversation there, empty when the peer didn't say) and
+    `directory` (empty: its folder is there).
 - `kuvo-link.js leave <mac>`: run when that Mac removes the machine. It stops counting that Mac,
   forgets its documents, the peers only it named and what they told it, and leaves other Macs'
   alone. A Mac that can't reach the machine names it in its peers document's `left`, and mails it
@@ -880,7 +897,8 @@ host serves:
   Edit Group Chat does (an empty `purpose` is none, `meeting: null` none): `200 {"group"}`, 400
   `{"message"}` for what can't be (no name, fewer than two bots, a bot that doesn't live where
   the chat does, a meeting as above), 404 for no such chat or bot, 409 while it moves. A Mac
-  answers it for every chat it lists, a machine's bridge for those that live there;
+  answers it for every chat it lists, a machine's bridge for those that live there (a Mac passes
+  the change to a machine's chat on as it came, and that machine's rules and words answer it);
   `kuvo/groups/events` says what changed at once.
 - `DELETE kuvo/groups/<id>` deletes the chat as Delete Group Chat… does: its messages and seats
   go, and its bots forget it. `200 {}`, for one that's gone already too; 409 `{"message"}` while it
@@ -995,8 +1013,10 @@ host serves:
   members list them>]}`, every bot that lives there, the first made first, then the bots of your
   other computers that take a chat's turns ("Peers", group chats), each with `computer` (its
   computer's name). Offer exactly those in New Group Chat and Edit Group Chat for that computer
-  (`features`: `groups.joinable`). A chat's members list a bot of another computer the same way,
-  with `id`, `name`, `session` and `computer`.
+  (`features`: `groups.joinable`). A chat's members list a bot of another computer the same way:
+  `id`, `name`, `look`, `session` (empty when that computer didn't say), `directory` (empty: its
+  folder is on that computer) and `computer`. Don't open a member's conversation from a chat that
+  has `computer`: it's on that computer, not the one asked.
 - `kuvo/file?uri=<file:// URI>`: a file on that computer that an agent's reply or tool names
   (a picture it made, a file it shows you), by its `file://` address, percent-encoded as a query
   value: `200` with its bytes and `content-type` (from its extension; `application/octet-stream`
