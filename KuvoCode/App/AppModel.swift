@@ -159,6 +159,23 @@ final class AppModel {
         EngineFolders(root: AppInfo.supportDirectory.appending(path: "opencode"))
     }
 
+    /// The stores told of each other, and of the machines' engines, once this Mac's engine is up.
+    /// Also what the route scenarios run with (RouteContractTests).
+    func wireStores() {
+        workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
+        workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
+        bots.app = self
+        wakeUps.app = self
+        groups.app = self
+        machineGroups.app = self
+        moves.app = self
+        workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
+        workspace.runsOnAgents(bots.agentSessionIDs)
+        workspace.botSessions = bots.sessionIDs
+        workspace.runsOnAgents(groups.agentSeatIDs.union(machineGroups.agentSeatIDs))
+        workspace.seats = groups.seatIDs.union(machineGroups.seatIDs)
+    }
+
     /// What a phone's request reaches on this Mac (`PhoneLink`): its stores, as they are now, and
     /// what it does with them. Also what the route scenarios run against (RouteContractTests).
     func wirePhoneLink() {
@@ -333,22 +350,11 @@ final class AppModel {
             }
             Analytics.shared.catalog = catalog
             workspace.api = api
-            workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
-            workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
-            bots.app = self
-            wakeUps.app = self
-            groups.app = self
-            machineGroups.app = self
-            moves.app = self
+            wireStores()
             // A move cut short (the app quit) is finished or taken back.
             Task { await moves.recover() }
-            workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
-            workspace.runsOnAgents(bots.agentSessionIDs)
-            workspace.botSessions = bots.sessionIDs
             // Bots' keys of their own, in their folders' settings as integrations are now.
             Task { await BotKeys.applyAll(on: nil, app: self) }
-            workspace.runsOnAgents(groups.agentSeatIDs.union(machineGroups.agentSeatIDs))
-            workspace.seats = groups.seatIDs.union(machineGroups.seatIDs)
             usage.api = api
             engineStarted = .now
             engine = .ready
