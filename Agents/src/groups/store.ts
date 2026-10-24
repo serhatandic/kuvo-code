@@ -90,6 +90,10 @@ export interface MachineBot extends SeatBot {
   personality?: string
   /** Its conversation runs with the coding agents (this bridge), not the engine. */
   agents: boolean
+  /** How it looks, as its description has it (BotLook: color, shape, face). */
+  look?: unknown
+  /** When it was made. */
+  created?: string
 }
 
 const read = (file: string): any => {
@@ -223,6 +227,8 @@ export class GroupStore {
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
       agents: text(join(folder, "via"))?.trim() === "bridge",
+      ...(described.look !== undefined ? { look: described.look } : {}),
+      ...(typeof described.created === "string" ? { created: described.created } : {}),
     }
   }
 

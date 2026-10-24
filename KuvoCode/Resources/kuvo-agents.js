@@ -215,6 +215,10 @@ function emit(type, data, directory) {
     listener(event);
   return event;
 }
+function subscribe(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 function feed() {
   const encoder = new TextEncoder;
   let listener;
@@ -10682,10 +10686,6 @@ function ownWords(message) {
   }
 }
 
-// Agents/src/groups/store.ts
-import { existsSync as existsSync11, mkdirSync as mkdirSync13, readdirSync as readdirSync6, readFileSync as readFileSync16, renameSync as renameSync5, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "fs";
-import { join as join17 } from "path";
-
 // Agents/src/groups/rules.ts
 var stamp2 = (date = new Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 function length(text) {
@@ -11315,6 +11315,8 @@ function jobInMemory(text) {
 }
 
 // Agents/src/groups/store.ts
+import { existsSync as existsSync11, mkdirSync as mkdirSync13, readdirSync as readdirSync6, readFileSync as readFileSync16, renameSync as renameSync5, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "fs";
+import { join as join17 } from "path";
 var version2 = 1;
 var strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
 var stringMap = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
@@ -11469,7 +11471,9 @@ class GroupStore {
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text(join17(folder, "via"))?.trim() === "bridge"
+      agents: text(join17(folder, "via"))?.trim() === "bridge",
+      ...described.look !== undefined ? { look: described.look } : {},
+      ...typeof described.created === "string" ? { created: described.created } : {}
     };
   }
   writeFile(path, contents) {
@@ -11735,6 +11739,250 @@ async function groupRoutes(runner, store, method, parts2, body) {
   return error(404, "Not found");
 }
 
+// Agents/src/groups/link.ts
+var json2 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message = (status, text2) => json2({ message: text2 }, status);
+var seconds = (text2) => {
+  const time = Date.parse(text2 ?? "");
+  return Number.isFinite(time) ? time / 1000 : undefined;
+};
+var stamp3 = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+var plainName = (text2) => String(text2 ?? "").replace(/[\u0000-\u001f\u007f\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+var newGroupID = () => "grp_" + Array.from(crypto.getRandomValues(new Uint8Array(10)), (byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
+var failed = (status) => status === 409 ? 409 : status >= 500 ? 503 : 404;
+function clientMessage(message2, withSteps = true) {
+  if (!message2)
+    return;
+  const { named: _named, steps, time, tasks: tasks2, ...rest } = message2;
+  return {
+    ...rest,
+    time: seconds(time),
+    ...withSteps && steps ? { steps } : {},
+    ...tasks2 ? {
+      tasks: tasks2.map(({ started, finished, ...task }) => ({ ...task, ...started ? { started: seconds(started) } : {}, ...finished ? { finished: seconds(finished) } : {} }))
+    } : {}
+  };
+}
+function member(bot) {
+  return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents };
+}
+function list(runner, store) {
+  const groups = runner.list().filter((chat) => chat.status === "active").map(({ group, state, said: said3, fromBot }) => ({
+    id: group.id,
+    name: group.name,
+    purpose: group.purpose,
+    members: group.members.flatMap((id) => {
+      const bot = store.bot(id);
+      return bot ? [member(bot)] : [];
+    }),
+    speaking: state.speaking,
+    discussing: Boolean(state.discussing),
+    paused: Boolean(state.paused),
+    unread: Boolean(fromBot && (!group.viewed || Date.parse(fromBot.time) > Date.parse(group.viewed))),
+    last: clientMessage(said3, false),
+    meeting: group.meeting ? { ...group.meeting, next: seconds(group.meeting.next) } : undefined
+  }));
+  return { groups };
+}
+function chat(runner, id) {
+  const found = runner.get(id);
+  if (!found || found.status !== "active")
+    return;
+  const { messages, state } = found;
+  return {
+    messages: messages.slice(-300).map((each) => clientMessage(each)),
+    speaking: state.speaking,
+    discussing: Boolean(state.discussing),
+    paused: Boolean(state.paused),
+    ...state.activity?.length ? { activity: state.activity } : {}
+  };
+}
+function following(read2, oneChat, signal) {
+  const encoder = new TextEncoder;
+  let stop = () => {};
+  const stream = new ReadableStream({
+    start(controller) {
+      let last2 = "";
+      let lastMessages;
+      const look = () => {
+        const now = read2();
+        if (!now) {
+          stop();
+          try {
+            controller.close();
+          } catch {}
+          return;
+        }
+        const line = JSON.stringify(now);
+        if (line === last2)
+          return;
+        const messages = oneChat ? JSON.stringify(now.messages) : undefined;
+        const { messages: _messages, ...state } = now;
+        last2 = line;
+        try {
+          controller.enqueue(encoder.encode((oneChat && messages === lastMessages ? JSON.stringify(state) : line) + `
+`));
+        } catch {
+          stop();
+        }
+        lastMessages = messages;
+      };
+      const unsubscribe = subscribe((event) => {
+        if (event.type.startsWith("kuvo.group."))
+          look();
+      });
+      const onAbort = () => stop();
+      stop = () => {
+        unsubscribe();
+        signal?.removeEventListener("abort", onAbort);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      look();
+    },
+    cancel() {
+      stop();
+    }
+  });
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
+}
+async function ask(runner, store, method, parts2, body = {}) {
+  const response = await groupRoutes(runner, store, method, parts2, async () => body);
+  const value = await response.json().catch(() => ({}));
+  return { status: response.status, value };
+}
+function joinable(store) {
+  return store.allBots().sort((a, b) => (a.created ?? "").localeCompare(b.created ?? "") || a.name.localeCompare(b.name)).map(member);
+}
+async function linkRoutes(runner, store, method, parts2, body, signal) {
+  if (!runner || !store)
+    return json2({}, 404);
+  const [id, action] = parts2;
+  const here = () => new Set(store.allBots().map((bot) => bot.id));
+  if (!id || id === "events") {
+    if (method === "GET")
+      return id ? following(() => list(runner, store), false, signal) : json2(list(runner, store));
+    if (method === "POST" && !id)
+      return await make(runner, store, await body().catch(() => {
+        return;
+      }), here());
+    return json2({}, 405);
+  }
+  if (id === "joinable")
+    return method === "GET" ? json2({ bots: joinable(store) }) : json2({}, 405);
+  if (!/^grp_[a-z0-9]+$/.test(id))
+    return json2({}, 404);
+  if (method === "GET" && (!action || action === "events")) {
+    if (!chat(runner, id))
+      return json2({}, 404);
+    return action ? following(() => chat(runner, id), true, signal) : json2(chat(runner, id));
+  }
+  if (method === "PATCH" && !action) {
+    const given2 = await body().catch(() => {
+      return;
+    });
+    if (!given2 || typeof given2 !== "object" || Array.isArray(given2))
+      return message(400, "That isn\u2019t a change to a group chat.");
+    const edits2 = {};
+    if ("name" in given2) {
+      const name = plainName(given2.name);
+      if (!name)
+        return message(400, "A group chat needs a name.");
+      edits2.name = name;
+    }
+    if ("purpose" in given2)
+      edits2.purpose = typeof given2.purpose === "string" && given2.purpose.trim() ? given2.purpose.trim() : null;
+    if ("members" in given2) {
+      if (!Array.isArray(given2.members) || !given2.members.every((each) => typeof each === "string"))
+        return message(400, "Those aren\u2019t bots.");
+      const members = [...new Set(given2.members)];
+      if (members.length < 2)
+        return message(400, "A group chat needs at least two bots.");
+      const bots = here();
+      const missing = members.find((each) => !bots.has(each));
+      if (missing)
+        return message(404, `There\u2019s no bot \u201C${missing}\u201D.`);
+      edits2.members = members;
+    }
+    if ("meeting" in given2)
+      edits2.meetingPlan = given2.meeting;
+    const asked2 = await ask(runner, store, "PATCH", [id], edits2);
+    if (asked2.status !== 200)
+      return message([400, 404, 409].includes(asked2.status) ? asked2.status : 503, asked2.value?.message ?? "The group chat couldn\u2019t be changed.");
+    return json2({ group: list(runner, store).groups.find((each) => each.id === id) ?? null });
+  }
+  if (method === "DELETE" && !action) {
+    const asked2 = await ask(runner, store, "DELETE", [id]);
+    if (asked2.status === 200 || asked2.status === 404 && asked2.value?.message === "No such chat.")
+      return json2({});
+    if (asked2.status === 409)
+      return message(409, "That chat is moving. Try again once it\u2019s there.");
+    return message(503, asked2.value?.message ?? "The group chat couldn\u2019t be deleted. Try again in a moment.");
+  }
+  if (method !== "POST" || action === "events")
+    return json2({}, 405);
+  const given = await body().catch(() => {
+    return;
+  }) ?? {};
+  let asked;
+  switch (action) {
+    case undefined:
+      if (typeof given.text !== "string" || !trim(given.text))
+        return json2({}, 400);
+      asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...typeof given.named === "string" ? { named: given.named } : {} });
+      break;
+    case "stop":
+    case "keep-going":
+      asked = await ask(runner, store, "POST", [id, action]);
+      break;
+    case "viewed":
+      asked = await ask(runner, store, "PATCH", [id], { viewed: stamp3() });
+      break;
+    case "undo": {
+      if (typeof given.message !== "string")
+        return json2({}, 404);
+      asked = await ask(runner, store, "POST", [id, "undo"], { message: given.message });
+      if (asked.status !== 200)
+        return json2({}, failed(asked.status));
+      return json2({ text: asked.value?.data?.text ?? "" });
+    }
+    case "start":
+      if (typeof given.message !== "string")
+        return json2({}, 404);
+      asked = await ask(runner, store, "POST", [id, "start-work"], { wrapUp: given.message });
+      break;
+    default:
+      return json2({}, 404);
+  }
+  return json2({}, asked.status === 200 ? 200 : failed(asked.status));
+}
+async function make(runner, store, given, here) {
+  if (!given || typeof given !== "object" || Array.isArray(given))
+    return message(400, "That isn\u2019t a group chat to make.");
+  const name = plainName(given.name);
+  if (!name)
+    return message(400, "A group chat needs a name.");
+  const members = [...new Set(Array.isArray(given.members) ? given.members.filter((each) => typeof each === "string") : [])];
+  if (members.length < 2)
+    return message(400, "A group chat needs at least two bots.");
+  const missing = members.find((each) => !here.has(each));
+  if (missing)
+    return message(404, `There\u2019s no bot \u201C${missing}\u201D.`);
+  const purpose = typeof given.purpose === "string" && given.purpose.trim() ? given.purpose.trim() : undefined;
+  let meeting;
+  if (given.meeting !== undefined && given.meeting !== null) {
+    const planned = planMeeting(given.meeting, undefined, store.settings()?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+    if (typeof planned === "string")
+      return message(400, planned);
+    meeting = planned;
+  }
+  const id = newGroupID();
+  const now = stamp3();
+  if (!runner.put({ id, name, ...purpose ? { purpose } : {}, members, seats: {}, heard: {}, created: now, viewed: now, ...meeting ? { meeting } : {} }, [], "active", false)) {
+    return message(409, "That chat is here already.");
+  }
+  return json2({ group: list(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
+}
+
 // Agents/src/server.ts
 var attempts = new Map;
 function cancelSignIns() {
@@ -11750,9 +11998,9 @@ setInterval(() => {
     attempts.delete(id);
   }
 }, 60000).unref?.();
-var json2 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var located = (value) => json2({ location: { directory: process.cwd() }, data: value });
-var error2 = (status, message) => json2({ message }, status);
+var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var located = (value) => json3({ location: { directory: process.cwd() }, data: value });
+var error2 = (status, message2) => json3({ message: message2 }, status);
 var lastSeen = new Map;
 var lastMaintained = new Map;
 async function maintainedSoon(agent, fresh) {
@@ -11851,7 +12099,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts2;
       if (area === "info")
-        return json2({ version: context.version, pid: process.pid });
+        return json3({ version: context.version, pid: process.pid });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -11897,12 +12145,12 @@ function handler(context) {
             if (!pending.attempt.complete)
               return error2(400, "This sign-in finishes in the browser.");
             await pending.attempt.complete(String(code ?? ""));
-            return json2({});
+            return json3({});
           }
           if (method === "DELETE") {
             pending.attempt.cancel();
             attempts.delete(d);
-            return json2({});
+            return json3({});
           }
         }
         if (b === "connect" && c === "key" && method === "POST") {
@@ -11910,7 +12158,7 @@ function handler(context) {
           if (!agent.signInWithKey)
             return error2(400, `${agent.name} doesn't take a key here.`);
           await agent.signInWithKey(String(key ?? "").trim());
-          return json2({});
+          return json3({});
         }
         if (b === "update" && method === "POST") {
           if (!agent.update)
@@ -11923,7 +12171,7 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json2({ data: result });
+          return json3({ data: result });
         }
         if (b === "install" && method === "POST") {
           if (!agent.installProgram)
@@ -11936,13 +12184,13 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json2({ data: result });
+          return json3({ data: result });
         }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut)
             return error2(400, `Sign out of ${agent.name} where you signed in.`);
           await agent.signOut();
-          return json2({});
+          return json3({});
         }
       }
       if (area === "model") {
@@ -11969,33 +12217,33 @@ function handler(context) {
           return read2 ? located(read2) : error2(404, "No such command.");
         }
         if (a && !b && method === "DELETE")
-          return await stopShell(a) ? json2({}) : error2(404, "No such command.");
+          return await stopShell(a) ? json3({}) : error2(404, "No such command.");
       }
       if (area === "session") {
         if (!a) {
           if (method === "POST")
-            return json2({ data: sessions.create(await body()) });
+            return json3({ data: sessions.create(await body()) });
           const directory = url.searchParams.get("directory") ?? undefined;
           const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
           const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
           const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
-          return json2(page(ordered, url));
+          return json3(page(ordered, url));
         }
         if (a === "active")
-          return json2({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
+          return json3({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
         if (a === "import" && method === "POST")
-          return json2({ data: sessions.importSession(await body()) });
+          return json3({ data: sessions.importSession(await body()) });
         const id = a;
         if (!b) {
           if (method === "GET")
-            return json2({ data: sessions.get(id) });
+            return json3({ data: sessions.get(id) });
           if (method === "PATCH") {
             sessions.update(id, await body());
-            return json2({ data: sessions.get(id) });
+            return json3({ data: sessions.get(id) });
           }
           if (method === "DELETE") {
             await sessions.remove(id);
-            return json2({});
+            return json3({});
           }
         }
         switch (b) {
@@ -12004,51 +12252,51 @@ function handler(context) {
             const asc = url.searchParams.get("order") === "asc" || url.searchParams.get("cursor")?.startsWith("asc");
             const ordered = asc ? messages : [...messages].reverse();
             if (c) {
-              const found = messages.find((message) => message.id === c);
-              return found ? json2({ data: found }) : error2(404, "No such message.");
+              const found = messages.find((message2) => message2.id === c);
+              return found ? json3({ data: found }) : error2(404, "No such message.");
             }
-            return json2(page(ordered, url));
+            return json3(page(ordered, url));
           }
           case "inbox":
             if (method === "DELETE" && c) {
               sessions.cancelInput(id, c);
-              return json2({});
+              return json3({});
             }
             if (method === "PATCH" && c) {
               sessions.setDelivery(id, c, (await body()).delivery);
-              return json2({});
+              return json3({});
             }
-            return json2({ data: sessions.inbox(id) });
+            return json3({ data: sessions.inbox(id) });
           case "prompt": {
             const input = await body();
             sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json2({});
+            return json3({});
           }
           case "fork":
-            return json2({ data: sessions.fork(id, String((await body()).before ?? "")) });
+            return json3({ data: sessions.fork(id, String((await body()).before ?? "")) });
           case "revert":
             if (c === "stage" && method === "POST")
-              return json2({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
+              return json3({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
             if (!c && method === "DELETE") {
               await sessions.clearRevert(id);
-              return json2({});
+              return json3({});
             }
             break;
           case "shell":
             if (method !== "POST")
               break;
             sessions.runShell(id, String((await body()).command ?? ""));
-            return json2({});
+            return json3({});
           case "synthetic": {
             const input = await body();
             sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
-            return json2({});
+            return json3({});
           }
           case "generate": {
             const prompt = String((await body()).prompt ?? "");
             if (!prompt.trim())
               throw new BadRequest("Say what to write.");
-            return json2({ data: { text: await sessions.generate(id, prompt) } });
+            return json3({ data: { text: await sessions.generate(id, prompt) } });
           }
           case "command": {
             const input = await body();
@@ -12057,44 +12305,44 @@ function handler(context) {
             const template = name ? await link2.commandTemplate(name, sessions.get(id).location.directory) : undefined;
             const text2 = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
             sessions.prompt(id, { id: newID("msg"), text: text2, files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json2({});
+            return json3({});
           }
           case "interrupt":
-            return json2({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
+            return json3({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
           case "model":
             sessions.selectModel(id, (await body()).model);
-            return json2({});
+            return json3({});
           case "agent":
             sessions.selectAgent(id, (await body()).agent);
-            return json2({});
+            return json3({});
           case "permission":
             if (!c)
-              return json2({ data: id === "global" ? [] : sessions.permissions(id) });
+              return json3({ data: id === "global" ? [] : sessions.permissions(id) });
             if (d === "reply") {
               const { decision } = await body();
               sessions.replyPermission(id, c, decision);
-              return json2({});
+              return json3({});
             }
             break;
           case "form":
             if (!c)
-              return json2({ data: id === "global" ? [] : sessions.forms(id) });
+              return json3({ data: id === "global" ? [] : sessions.forms(id) });
             if (d === "reply") {
               sessions.replyForm(id, c, (await body()).answer ?? {});
-              return json2({});
+              return json3({});
             }
             if (method === "DELETE") {
               sessions.replyForm(id, c, null);
-              return json2({});
+              return json3({});
             }
             break;
           case "view": {
             const { idle } = await body();
             sessions.view(id, Number(idle) || Date.now());
-            return json2({});
+            return json3({});
           }
           case "diff":
-            return json2({ data: [] });
+            return json3({ data: [] });
         }
       }
       if (area === "kuvo" && a === "accounts") {
@@ -12106,7 +12354,7 @@ function handler(context) {
           roster.sync();
           const added = roster.all().find((each) => each.instance.id === record.id && each.id === agent);
           emit("integration.updated", { integrationID: added.providerID });
-          return json2({ data: { providerID: added.providerID } });
+          return json3({ data: { providerID: added.providerID } });
         }
         const target = b ? roster.find(b) : undefined;
         if (!target)
@@ -12117,7 +12365,7 @@ function handler(context) {
           roster.accounts.rename(target.providerID, (await body()).label);
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
-          return json2({});
+          return json3({});
         }
         if (method === "DELETE") {
           sessions.forgetProvider(target.providerID);
@@ -12127,20 +12375,22 @@ function handler(context) {
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
           emit("model.updated", {});
-          return json2({});
+          return json3({});
         }
       }
       if (area === "kuvo" && a === "groups")
         return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
+      if (area === "kuvo" && a === "link" && b === "groups")
+        return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(4), body, request.signal);
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body();
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
-        return json2({});
+        return json3({});
       }
       if (area === "kuvo" && a === "engine" && method === "PUT") {
         const { url: address, password } = await body();
         link2.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
-        return json2({});
+        return json3({});
       }
       if (area === "kuvo" && a === "auto") {
         if (b === "limits" && method === "DELETE") {
@@ -12150,7 +12400,7 @@ function handler(context) {
           else
             auto.clearLimits();
           emit("kuvo.auto.updated", {});
-          return json2({});
+          return json3({});
         }
         if (!b && method === "PUT") {
           const { entries, lists } = await body();
@@ -12167,18 +12417,18 @@ function handler(context) {
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json2({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+          return json3({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
         if (c === "instructions" && d === "entries" && e) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
-          return json2({});
+          return json3({});
         }
         if (c === "wait") {
           while (sessions.active().includes(id))
             await Bun.sleep(200);
-          return json2({});
+          return json3({});
         }
       }
       return error2(404, "Not available for this agent.");
@@ -12382,8 +12632,8 @@ class SeatAPI {
   async delete(id) {
     await this.requester.request("DELETE", at(id));
   }
-  async prompt(id, message, text2, delivery) {
-    await this.requester.request("POST", at(id) + "/prompt", { id: message, text: text2, delivery });
+  async prompt(id, message2, text2, delivery) {
+    await this.requester.request("POST", at(id) + "/prompt", { id: message2, text: text2, delivery });
   }
   async interrupt(id) {
     await this.requester.request("POST", at(id) + "/interrupt");
@@ -12412,14 +12662,14 @@ class SeatAPI {
   async permissions(id) {
     return (await this.requester.request("GET", at(id) + "/permission"))?.data ?? [];
   }
-  async reject(id, permission, message) {
-    await this.requester.request("POST", `${at(id)}/permission/${encodeURIComponent(permission)}/reply`, { decision: "reject", message });
+  async reject(id, permission, message2) {
+    await this.requester.request("POST", `${at(id)}/permission/${encodeURIComponent(permission)}/reply`, { decision: "reject", message: message2 });
   }
   async forms(id) {
     return (await this.requester.request("GET", at(id) + "/form"))?.data ?? [];
   }
-  async dismiss(id, form, message) {
-    await this.requester.request("DELETE", `${at(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message)}`);
+  async dismiss(id, form, message2) {
+    await this.requester.request("DELETE", `${at(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message2)}`);
   }
   async sharedForms(directory) {
     return (await this.requester.request("GET", at(sharedSession) + "/form", undefined, undefined, directory))?.data ?? [];
@@ -12518,14 +12768,14 @@ class GroupRunner {
   }
   list() {
     return [...this.chats.values()].map((kept2) => {
-      const said3 = kept2.messages.filter((message) => message.kind !== "note");
+      const said3 = kept2.messages.filter((message2) => message2.kind !== "note");
       return {
         group: kept2.group,
         status: kept2.status,
         state: this.talk(kept2.group.id),
         last: kept2.messages.at(-1),
         said: said3.at(-1),
-        fromBot: said3.filter((message) => message.author !== undefined).at(-1)
+        fromBot: said3.filter((message2) => message2.author !== undefined).at(-1)
       };
     });
   }
@@ -12560,7 +12810,7 @@ class GroupRunner {
     const kept2 = this.chats.get(id);
     if (!kept2)
       return;
-    const working = kept2.messages.some((message) => message.tasks?.some((task) => task.state === "working" || task.state === "waiting"));
+    const working = kept2.messages.some((message2) => message2.tasks?.some((task) => task.state === "working" || task.state === "waiting"));
     this.context.store.setAwake(id, kept2.status === "active" && (kept2.group.meeting !== undefined || this.state(id).abort !== undefined || working));
   }
   put(group, messages, status, replace) {
@@ -12645,7 +12895,7 @@ class GroupRunner {
     if (typeof edits2.viewed === "string")
       group.viewed = edits2.viewed;
     const leaving = [];
-    if (Array.isArray(edits2.members) && edits2.members.every((member) => typeof member === "string")) {
+    if (Array.isArray(edits2.members) && edits2.members.every((member2) => typeof member2 === "string")) {
       group.members = [...edits2.members];
       for (const bot of old.members) {
         if (group.members.includes(bot))
@@ -12681,28 +12931,28 @@ class GroupRunner {
     const kept2 = this.chat(id);
     if (!text2 || !kept2)
       return;
-    const message = { id: groupMessageID(), text: text2, time: stamp2(), kind: "message", ...named2 ? { named: named2 } : {} };
-    this.append(message, id);
+    const message2 = { id: groupMessageID(), text: text2, time: stamp2(), kind: "message", ...named2 ? { named: named2 } : {} };
+    this.append(message2, id);
     const live = this.state(id);
     live.asked++;
     live.paused = false;
     if (live.speaking)
-      this.steer(live.speaking, id, message);
+      this.steer(live.speaking, id, message2);
     if (!live.abort)
       this.begin(id);
     this.told(id);
-    return message;
+    return message2;
   }
   meet(id, topic) {
     if (!this.chat(id))
       return;
-    const message = this.append({ id: groupMessageID(), text: topic, time: stamp2(), kind: "meeting" }, id);
+    const message2 = this.append({ id: groupMessageID(), text: topic, time: stamp2(), kind: "meeting" }, id);
     const live = this.state(id);
     live.asked++;
     live.paused = false;
-    live.meeting = message.id;
+    live.meeting = message2.id;
     if (live.speaking)
-      this.steer(live.speaking, id, message);
+      this.steer(live.speaking, id, message2);
     if (!live.abort)
       this.begin(id);
     this.told(id);
@@ -12714,16 +12964,16 @@ class GroupRunner {
     const kept2 = this.chats.get(id);
     if (!start || !kept2)
       return;
-    const index = kept2.messages.findIndex((message) => message.id === start);
+    const index = kept2.messages.findIndex((message2) => message2.id === start);
     const since = index >= 0 ? kept2.messages.slice(index + 1) : [];
-    const last2 = [...since].reverse().find((message) => message.author !== undefined && message.kind !== "note");
+    const last2 = [...since].reverse().find((message2) => message2.author !== undefined && message2.kind !== "note");
     emit("kuvo.group.met", { id, name: kept2.group.name, ...last2 ? { last: last2, who: this.name(last2.author) } : {} });
   }
   undo(id, messageID2) {
     const kept2 = this.chat(id);
     if (!kept2)
       return;
-    const cut = kept2.messages.findIndex((message) => message.id === messageID2);
+    const cut = kept2.messages.findIndex((message2) => message2.id === messageID2);
     if (cut < 0)
       return;
     this.stop(id);
@@ -12734,7 +12984,7 @@ class GroupRunner {
     const retracted = { ...kept2.group.retracted ?? {} };
     for (const bot of kept2.group.members) {
       const heard = kept2.group.heard[bot];
-      if (!heard || !taken.some((message) => message.id === heard))
+      if (!heard || !taken.some((message2) => message2.id === heard))
         continue;
       const last2 = kept2.messages.at(-1)?.id;
       if (last2)
@@ -12818,7 +13068,7 @@ class GroupRunner {
     let absent = new Set;
     let saidCount = 0;
     const guested = new Set;
-    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message) => message.kind !== "note"));
+    const begun = Math.max(0, (this.chat(id)?.messages ?? []).findLastIndex((message2) => message2.kind !== "note"));
     while (!signal.aborted) {
       const kept3 = this.chat(id);
       if (!kept3)
@@ -12831,30 +13081,30 @@ class GroupRunner {
         saidCount = 0;
       }
       const names = new Map;
-      for (const member of kept3.group.members) {
-        const bot = this.bot(member);
+      for (const member2 of kept3.group.members) {
+        const bot = this.bot(member2);
         if (bot)
-          names.set(member, bot.name);
+          names.set(member2, bot.name);
       }
-      const members = kept3.group.members.filter((member) => names.has(member) && !absent.has(member));
+      const members = kept3.group.members.filter((member2) => names.has(member2) && !absent.has(member2));
       const bots = this.context.store.allBots().map((bot) => ({ id: bot.id, name: bot.name }));
       let named2;
       for (let index = begun;index < kept3.messages.length && !named2; index++) {
-        const message = kept3.messages[index];
-        if (message.kind === "note")
+        const message2 = kept3.messages[index];
+        if (message2.kind === "note")
           continue;
-        const guest = guests(kept3.messages.slice(0, index + 1), kept3.group.members, bots).find((bot) => !guested.has(message.id + "/" + bot));
+        const guest = guests(kept3.messages.slice(0, index + 1), kept3.group.members, bots).find((bot) => !guested.has(message2.id + "/" + bot));
         if (guest)
-          named2 = { message, guest };
+          named2 = { message: message2, guest };
       }
       if (named2) {
-        const { message, guest } = named2;
-        guested.add(message.id + "/" + guest);
+        const { message: message2, guest } = named2;
+        guested.add(message2.id + "/" + guest);
         if (turns >= limit(kept3.group.members.length)) {
           live.paused = true;
           break;
         }
-        const outcome2 = await this.turn(guest, id, signal, false, message);
+        const outcome2 = await this.turn(guest, id, signal, false, message2);
         if (signal.aborted)
           return epoch;
         turns++;
@@ -12962,8 +13212,8 @@ class GroupRunner {
       }
       const all = [...current.messages];
       const heard = current.group.heard[botID];
-      const start = heard ? all.findIndex((message) => message.id === heard) + 1 : 0;
-      const unheard = all.slice(start).filter((message) => message.author !== botID && message.kind !== "note");
+      const start = heard ? all.findIndex((message2) => message2.id === heard) + 1 : 0;
+      const unheard = all.slice(start).filter((message2) => message2.author !== botID && message2.kind !== "note");
       const promptID = newID("msg");
       const retracted = guest ? undefined : current.group.retracted?.[botID];
       const name = (author) => this.name(author);
@@ -13068,7 +13318,7 @@ class GroupRunner {
       this.told(id);
     }
   }
-  async steer(botID, id, message) {
+  async steer(botID, id, message2) {
     const kept2 = this.chat(id);
     const bot = this.bot(botID);
     const seat = kept2?.group.seats[botID];
@@ -13077,12 +13327,12 @@ class GroupRunner {
     const api = await this.seatAPI(bot, kept2.group, seat);
     if (!api || !(await api.active().catch(() => new Set)).has(seat))
       return;
-    const text2 = "The user, just now: " + message.text + (message.named ? `
+    const text2 = "The user, just now: " + message2.text + (message2.named ? `
 
-` + message.named : "");
+` + message2.named : "");
     try {
       await api.prompt(seat, newID("msg"), text2, "steer");
-      this.setHeard(message.id, botID, id);
+      this.setHeard(message2.id, botID, id);
     } catch {}
   }
   async waitForRun(seat, promptID, sent, api, signal, directory, seen, stops) {
@@ -13122,8 +13372,8 @@ class GroupRunner {
           const read2 = await api.messages(seat, 60).catch(() => {
             return;
           });
-          const at2 = read2 ? read2.data.findIndex((message) => message?.id === promptID) : -1;
-          if (at2 >= 0 ? read2.data.slice(at2 + 1).some((message) => message?.type === "idle") : read2 ? ++gone >= 3 : false)
+          const at2 = read2 ? read2.data.findIndex((message2) => message2?.id === promptID) : -1;
+          if (at2 >= 0 ? read2.data.slice(at2 + 1).some((message2) => message2?.type === "idle") : read2 ? ++gone >= 3 : false)
             return;
           if (at2 >= 0)
             gone = 0;
@@ -13178,11 +13428,11 @@ class GroupRunner {
   }
   async reply(seat, promptID, sent, api) {
     const { data } = await api.messages(seat, 60);
-    const start = data.findIndex((message) => message?.id === promptID);
+    const start = data.findIndex((message2) => message2?.id === promptID);
     const since = sent - 2000;
-    const tokens = [...data].reverse().find((message) => message?.type === "assistant" && message.tokens)?.tokens;
+    const tokens = [...data].reverse().find((message2) => message2?.type === "assistant" && message2.tokens)?.tokens;
     const size = tokens ? (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0) : undefined;
-    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message) => (message?.time?.created ?? 0) >= since)), size };
+    return { ...said2(start >= 0 ? data.slice(start + 1) : data.filter((message2) => (message2?.time?.created ?? 0) >= since)), size };
   }
   async splitWork(wrapUpID, id, lead, signal) {
     const kept2 = this.chat(id);
@@ -13192,12 +13442,12 @@ class GroupRunner {
     const api = await this.seatAPI(bot, kept2.group, kept2.group.seats[lead]);
     if (!api)
       return;
-    const members = kept2.group.members.flatMap((member) => {
-      const found2 = this.bot(member);
-      return found2 ? [{ id: member, name: found2.name }] : [];
+    const members = kept2.group.members.flatMap((member2) => {
+      const found2 = this.bot(member2);
+      return found2 ? [{ id: member2, name: found2.name }] : [];
     });
     const all = kept2.messages;
-    const found = all.findIndex((message) => message.id === wrapUpID);
+    const found = all.findIndex((message2) => message2.id === wrapUpID);
     const end = found >= 0 ? found : all.length;
     const before = all.slice(0, end);
     let begin = 0;
@@ -13207,7 +13457,7 @@ class GroupRunner {
         break;
       }
     }
-    const yours = all.slice(begin, end).filter((message) => message.author === undefined && message.kind === "message").slice(-6).map((message) => [...new Intl.Segmenter().segment(ownWords2(message.text))].slice(0, 800).map((part) => part.segment).join(""));
+    const yours = all.slice(begin, end).filter((message2) => message2.author === undefined && message2.kind === "message").slice(-6).map((message2) => [...new Intl.Segmenter().segment(ownWords2(message2.text))].slice(0, 800).map((part) => part.segment).join(""));
     const promptID = newID("msg");
     const live = this.state(id);
     const epoch = live.asked;
@@ -13217,9 +13467,9 @@ class GroupRunner {
     let seat;
     try {
       seat = await this.scratch(bot, kept2.group, api, `${bot.name} handing out the work in ${kept2.group.name}`);
-      const chat = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
-      await api.prompt(seat, promptID, chat + `
-` + splitText(members.map((member) => member.name), yours), "queue");
+      const chat2 = chatText(lead, kept2.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author));
+      await api.prompt(seat, promptID, chat2 + `
+` + splitText(members.map((member2) => member2.name), yours), "queue");
       await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, undefined, () => this.state(id).asked !== epoch);
       const reply = await this.reply(seat, promptID, sent, api);
       const { tasks: tasks2, go } = tasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase());
@@ -13230,7 +13480,7 @@ class GroupRunner {
           this.note(`${bot.name} didn\u2019t say who does what, so no parts were handed out.`, id);
         return;
       }
-      this.change(wrapUpID, id, (message) => message.tasks = tasks2);
+      this.change(wrapUpID, id, (message2) => message2.tasks = tasks2);
       if (go && this.state(id).asked === epoch)
         this.startWork(wrapUpID, id);
     } catch (error3) {
@@ -13246,7 +13496,7 @@ class GroupRunner {
     }
   }
   startWork(wrapUpID, id) {
-    const tasks2 = this.chat(id)?.messages.find((message) => message.id === wrapUpID)?.tasks;
+    const tasks2 = this.chat(id)?.messages.find((message2) => message2.id === wrapUpID)?.tasks;
     if (!tasks2)
       return;
     const proposed = tasks2.filter((task) => task.state === "proposed");
@@ -13263,7 +13513,7 @@ class GroupRunner {
   }
   startReady(wrapUpID, id) {
     for (;; ) {
-      const tasks2 = this.chat(id)?.messages.find((message) => message.id === wrapUpID)?.tasks;
+      const tasks2 = this.chat(id)?.messages.find((message2) => message2.id === wrapUpID)?.tasks;
       if (!tasks2)
         return;
       let changed = false;
@@ -13271,9 +13521,9 @@ class GroupRunner {
         if (task.state !== "waiting")
           continue;
         const first = tasks2.filter((other) => other.id !== task.id && (task.after ?? []).includes(other.bot));
-        const failed = first.find((other) => other.state === "failed");
-        if (failed) {
-          this.fail(task.id, wrapUpID, id, `${this.bot(failed.bot)?.name ?? "the bot before it"} couldn\u2019t finish its part first`, false);
+        const failed2 = first.find((other) => other.state === "failed");
+        if (failed2) {
+          this.fail(task.id, wrapUpID, id, `${this.bot(failed2.bot)?.name ?? "the bot before it"} couldn\u2019t finish its part first`, false);
         } else if (first.every((other) => other.state === "done")) {
           this.changeTask(task.id, wrapUpID, id, (part) => part.state = "working");
           this.handSoon(task.id, wrapUpID, id);
@@ -13311,7 +13561,7 @@ class GroupRunner {
   }
   async hand(taskID, wrapUpID, id) {
     const kept2 = this.chat(id);
-    const wrapUp = kept2?.messages.find((message) => message.id === wrapUpID);
+    const wrapUp = kept2?.messages.find((message2) => message2.id === wrapUpID);
     const task = wrapUp?.tasks?.find((part) => part.id === taskID);
     if (!kept2 || !wrapUp || !task)
       return;
@@ -13322,7 +13572,7 @@ class GroupRunner {
     if (!api)
       return this.fail(taskID, wrapUpID, id, "the coding agents aren\u2019t running");
     const before = (wrapUp.tasks ?? []).filter((part) => (task.after ?? []).includes(part.bot)).flatMap((part) => {
-      const report = [...kept2.messages].reverse().find((message) => message.report === part.id);
+      const report = [...kept2.messages].reverse().find((message2) => message2.report === part.id);
       return report ? [{ name: this.name(part.bot), report: report.text }] : [];
     });
     const promptID = newID("msg");
@@ -13336,7 +13586,7 @@ class GroupRunner {
     }
   }
   taskState(taskID, wrapUpID, id) {
-    return this.chat(id)?.messages.find((message) => message.id === wrapUpID)?.tasks?.find((task) => task.id === taskID);
+    return this.chat(id)?.messages.find((message2) => message2.id === wrapUpID)?.tasks?.find((task) => task.id === taskID);
   }
   async awaitReport(taskID, wrapUpID, id) {
     let misses = 0;
@@ -13374,10 +13624,10 @@ class GroupRunner {
       }
       misses = 0;
       const run2 = read2.messages.slice(1);
-      let end = run2.findIndex((message, index) => {
-        if (message?.type !== "idle")
+      let end = run2.findIndex((message2, index) => {
+        if (message2?.type !== "idle")
           return false;
-        if (message.outcome !== "interrupted")
+        if (message2.outcome !== "interrupted")
           return true;
         return run2[index + 1]?.type === "user";
       });
@@ -13388,7 +13638,7 @@ class GroupRunner {
       } else {
         stoppedChecks = 0;
       }
-      const answered = end >= 0 || run2.some((message) => message?.type === "assistant" && message.time?.completed !== undefined);
+      const answered = end >= 0 || run2.some((message2) => message2?.type === "assistant" && message2.time?.completed !== undefined);
       if (!answered)
         continue;
       const stillActive = await api.active().catch(() => {
@@ -13425,19 +13675,19 @@ class GroupRunner {
     }
     let messages = page2.data;
     const start = ((started ? Date.parse(started) : 0) / 1000 - 5) * 1000;
-    while (!messages.some((message) => message?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page2.cursor) {
+    while (!messages.some((message2) => message2?.id === promptID) && messages.length > 0 && (messages[0]?.time?.created ?? 0) > start && messages.length < 2000 && page2.cursor) {
       let older;
       try {
         older = await api.messages(session, 200, page2.cursor);
       } catch {
         break;
       }
-      if (older.data.length === 0 || messages.some((message) => message?.id === older.data.at(-1)?.id))
+      if (older.data.length === 0 || messages.some((message2) => message2?.id === older.data.at(-1)?.id))
         break;
       messages = [...older.data, ...messages];
       page2 = older;
     }
-    const index = messages.findIndex((message) => message?.id === promptID);
+    const index = messages.findIndex((message2) => message2?.id === promptID);
     return index >= 0 ? { kind: "found", messages: messages.slice(index) } : { kind: "missing" };
   }
   fail(taskID, wrapUpID, id, why, thenOthers = true) {
@@ -13455,19 +13705,19 @@ class GroupRunner {
     for (const [id, kept2] of this.chats) {
       if (kept2.status !== "active" || only && id !== only)
         continue;
-      for (const message of kept2.messages) {
-        for (const task of message.tasks ?? []) {
+      for (const message2 of kept2.messages) {
+        for (const task of message2.tasks ?? []) {
           if (task.state !== "working" || this.following.has(task.id))
             continue;
           if (!task.prompt) {
-            this.fail(task.id, message.id, id, "Kuvo Code stopped before it reached the bot");
+            this.fail(task.id, message2.id, id, "Kuvo Code stopped before it reached the bot");
           } else {
             this.following.add(task.id);
-            this.awaitReport(task.id, message.id, id).catch((error3) => console.error("group chat part:", error3)).finally(() => this.following.delete(task.id));
+            this.awaitReport(task.id, message2.id, id).catch((error3) => console.error("group chat part:", error3)).finally(() => this.following.delete(task.id));
           }
         }
-        if (message.tasks?.some((task) => task.state === "waiting"))
-          this.startReady(message.id, id);
+        if (message2.tasks?.some((task) => task.state === "waiting"))
+          this.startReady(message2.id, id);
       }
     }
   }
@@ -13621,7 +13871,7 @@ class GroupRunner {
   }
   seatText(bot, group) {
     const settings = this.context.store.settings();
-    const others = group.members.filter((member) => member !== bot.id).flatMap((member) => this.bot(member) ?? []);
+    const others = group.members.filter((member2) => member2 !== bot.id).flatMap((member2) => this.bot(member2) ?? []);
     const lead = this.bot(group.members[0]);
     const personality = bot.personality ? settings?.personalities[bot.personality] : undefined;
     return seatInstructions(bot, group, others, lead, personality, settings?.identityNote ?? "");
@@ -13688,7 +13938,7 @@ class GroupRunner {
       }
       if (index >= 4)
         continue;
-      const others = kept2.group.members.filter((member) => member !== botID).flatMap((member) => this.bot(member)?.name ?? []);
+      const others = kept2.group.members.filter((member2) => member2 !== botID).flatMap((member2) => this.bot(member2)?.name ?? []);
       text2 += `
 
 ## "${kept2.group.name}"${others.length ? " with " + others.join(", ") : ""}, in ${file}
@@ -13707,46 +13957,46 @@ class GroupRunner {
   }
   recap(kept2) {
     const discussions = [];
-    for (const message of kept2.messages) {
-      if (message.kind === "note")
+    for (const message2 of kept2.messages) {
+      if (message2.kind === "note")
         continue;
       const current = discussions.at(-1);
-      if (!current || message.author === undefined && current.at(-1)?.author !== undefined)
-        discussions.push([message]);
+      if (!current || message2.author === undefined && current.at(-1)?.author !== undefined)
+        discussions.push([message2]);
       else
-        current.push(message);
+        current.push(message2);
     }
     return discussions.slice(-3).flatMap((discussion) => {
       let asked = 0;
       while (asked < discussion.length && discussion[asked].author === undefined)
         asked++;
       const rest = discussion.slice(asked);
-      const wrapUp = [...rest].reverse().find((message) => message.kind === "wrapUp");
+      const wrapUp = [...rest].reverse().find((message2) => message2.kind === "wrapUp");
       const shown = wrapUp ? [wrapUp] : rest.slice(-4);
-      return [...discussion.slice(0, asked), ...shown].map((message) => {
-        const segments2 = [...new Intl.Segmenter().segment(message.text)];
-        const words = segments2.length > 500 ? segments2.slice(0, 500).map((part) => part.segment).join("") + "\u2026" : message.text;
-        return `${label(message, (author) => this.name(author))} \xB7 ${this.when(message.time)}: ${words}`;
+      return [...discussion.slice(0, asked), ...shown].map((message2) => {
+        const segments2 = [...new Intl.Segmenter().segment(message2.text)];
+        const words = segments2.length > 500 ? segments2.slice(0, 500).map((part) => part.segment).join("") + "\u2026" : message2.text;
+        return `${label(message2, (author) => this.name(author))} \xB7 ${this.when(message2.time)}: ${words}`;
       });
     }).join(`
 `);
   }
   transcript(kept2) {
-    const names = kept2.group.members.flatMap((member) => this.bot(member)?.name ?? []);
+    const names = kept2.group.members.flatMap((member2) => this.bot(member2)?.name ?? []);
     let text2 = `# ${kept2.group.name}
 
 A group chat in Kuvo Code between the user and ${names.join(", ")}.
 `;
-    for (const message of kept2.messages) {
-      if (message.kind === "note")
+    for (const message2 of kept2.messages) {
+      if (message2.kind === "note")
         text2 += `
-_${message.text}_
+_${message2.text}_
 `;
       else
         text2 += `
-**${label(message, (author) => this.name(author))}** \xB7 ${this.when(message.time)}
+**${label(message2, (author) => this.name(author))}** \xB7 ${this.when(message2.time)}
 
-${message.text}
+${message2.text}
 `;
     }
     return text2;
@@ -13768,33 +14018,33 @@ ${message.text}
     timer.unref?.();
     this.syncs.set(id, timer);
   }
-  append(message, id) {
+  append(message2, id) {
     const kept2 = this.chat(id);
     if (!kept2)
-      return message;
-    kept2.messages.push(message);
+      return message2;
+    kept2.messages.push(message2);
     this.context.store.saveMessages(kept2);
     this.keepAwake(id);
-    emit("kuvo.group.message", { id, message });
+    emit("kuvo.group.message", { id, message: message2 });
     this.rememberSoon(id);
-    return message;
+    return message2;
   }
   note(text2, id) {
     this.append({ id: groupMessageID(), text: text2, time: stamp2(), kind: "note" }, id);
   }
   change(messageID2, id, edit) {
     const kept2 = this.chat(id);
-    const message = kept2?.messages.find((each) => each.id === messageID2);
-    if (!kept2 || !message)
+    const message2 = kept2?.messages.find((each) => each.id === messageID2);
+    if (!kept2 || !message2)
       return;
-    edit(message);
+    edit(message2);
     this.context.store.saveMessages(kept2);
     this.keepAwake(id);
-    emit("kuvo.group.message", { id, message });
+    emit("kuvo.group.message", { id, message: message2 });
   }
   changeTask(taskID, messageID2, id, edit) {
-    this.change(messageID2, id, (message) => {
-      const task = message.tasks?.find((each) => each.id === taskID);
+    this.change(messageID2, id, (message2) => {
+      const task = message2.tasks?.find((each) => each.id === taskID);
       if (task)
         edit(task);
     });
@@ -13805,8 +14055,8 @@ ${message.text}
       return;
     const all = kept2.messages;
     const heard = kept2.group.heard[botID];
-    const current = heard ? all.findIndex((message) => message.id === heard) : -1;
-    const next2 = all.findIndex((message) => message.id === messageID2);
+    const current = heard ? all.findIndex((message2) => message2.id === heard) : -1;
+    const next2 = all.findIndex((message2) => message2.id === messageID2);
     if (next2 < 0 || next2 <= current)
       return;
     kept2.group.heard[botID] = messageID2;
@@ -13814,7 +14064,7 @@ ${message.text}
   }
 }
 function named2(unheard) {
-  const blocks = unheard.slice(-40).filter((message) => message.author === undefined).map((message) => message.named).filter((block) => typeof block === "string" && block.length > 0);
+  const blocks = unheard.slice(-40).filter((message2) => message2.author === undefined).map((message2) => message2.named).filter((block) => typeof block === "string" && block.length > 0);
   if (blocks.length <= 1)
     return blocks[0];
   const lines3 = blocks[0].split(`
@@ -13991,4 +14241,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 0383f377b9cd959e086f680c101653e8d93035af02f97e6c2dacc8fe605cf04c
+// Built from Agents/src 103e4157ef4d040366a7e32d52959c73eb3c7b956f4f62a20cb5fb186567dd7f

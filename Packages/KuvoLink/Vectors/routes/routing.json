@@ -19,18 +19,18 @@
       "steps": [
         {
           "send": "GET kuvo/info",
-          "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself and starts an engine an older Mac's Stop left down; only a Mac has Settings › Machines, its phones' hosts, While Agents Work, Claude Code's agents and commands, and ended sign-ins.",
+          "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself and starts an engine an older Mac's Stop left down, and says who can be in a group chat made there (a Mac does once its own group chats run in its coding agents' bridge); only a Mac has Settings › Machines, its phones' hosts, While Agents Work, Claude Code's agents and commands, and ended sign-ins.",
           "expect": {
             "mac": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
                 "accounts.ended", "claude-code", "hosts", "mac", "machines"],
-              "<excludes>": ["engine.start", "update"]
+              "<excludes>": ["engine.start", "update", "groups.joinable"]
             } } },
             "machine": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees",
-                "engine.start", "update"],
+                "engine.start", "update", "groups.joinable"],
               "<excludes>": ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 31
+              "<length>": 32
             } } }
           }
         }
@@ -83,7 +83,7 @@
     {
       "name": "a list answers only the methods it takes",
       "steps": [
-        { "given": { "agentsBridge": {} } },
+        { "given": { "agentsBridge": { "groups": true } } },
         { "send": "PUT kuvo/groups", "body": {}, "expect": { "status": 405 } },
         { "send": "PUT kuvo/bots", "body": {}, "expect": { "status": 405 } },
         { "send": "DELETE kuvo/wakes", "expect": { "status": 405 } },

@@ -24,14 +24,14 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.31";
+export const BRIDGE_VERSION = "0.9.32";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
-  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.make", "integrations", "keys",
+  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "update", "wakes", "wakes.edit", "worktrees",
 ];
@@ -1778,23 +1778,11 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
         : await deleteBot(id, readEngine, bridge, signal);
       return yield* json(status, value);
     }
-    if (request.method.toUpperCase() === "POST" && route === "kuvo/groups") {
+    // The group chats that live here (`kuvo/groups`), from the coding agents' bridge, which runs them.
+    if (GROUP_ROUTE.test(route)) {
       const target = bridge();
-      if (!target) return yield* json(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
-      const { status, value } = await makeGroup(parsed(request.body), target, signal);
-      return yield* json(status, value);
-    }
-    // The group chats that live here, as the Mac answers its own (`kuvo/groups`), from the
-    // coding agents' bridge, which runs them.
-    const group = route.match(GROUP_ROUTE);
-    if (group) {
-      const target = bridge();
-      if (!target) {
-        yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-        yield { body: Buffer.from(JSON.stringify({ message: "Group chats run with the coding agents' bridge, which isn't running on this machine." })) };
-        return;
-      }
-      return yield* answerGroups(target, group[1], group[2], request, signal);
+      if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
+      return yield* forwardGroups(target, route, request, signal);
     }
     // This machine's bots and wake-ups, from their folders.
     if (route === "kuvo/bots") {
@@ -2115,46 +2103,12 @@ export function readWakes(folder) {
 
 // ---- Group chats that live here ----
 
-// What a phone asks of them, as of a Mac's: the list and one chat (read, or followed as they
-// change), and what it does in one (writes to it, stops it, lets it keep going, looks at it, takes
-// a message back, starts the work a wrap-up split up).
-const GROUP_ROUTE = /^kuvo\/groups(?:\/(grp_[a-z0-9]+))?(?:\/(events|stop|keep-going|viewed|undo|start))?$/;
-
-// Times as the Mac sends them to a phone: seconds since 1970.
-const seconds = text => {
-  const time = Date.parse(text ?? "");
-  return Number.isFinite(time) ? time / 1000 : undefined;
-};
-
-// A message as the Mac sends it: its times in seconds, without the block naming agents (the
-// machine's own record of who you named) nor, in a list, what each bot did on its turn.
-export function phoneMessage(message, withSteps = true) {
-  if (!message) return undefined;
-  const { named: _, steps, time, tasks, ...rest } = message;
-  const out = { ...rest, time: seconds(time) };
-  if (withSteps && steps) out.steps = steps;
-  if (tasks) out.tasks = tasks.map(({ started, finished, ...task }) => ({ ...task, ...(started ? { started: seconds(started) } : {}), ...(finished ? { finished: seconds(finished) } : {}) }));
-  return out;
-}
-
-// A chat's bot as the Mac lists it: who it is, how it looks, its own conversation and folder.
-function groupMember(id) {
-  if (!/^bot_[A-Za-z0-9]+$/.test(id)) return null;
-  const folder = path.join(BOTS, id);
-  let described;
-  try {
-    described = JSON.parse(textOf(path.join(folder, "bot.json")) ?? "");
-  } catch {
-    return null;
-  }
-  const session = (textOf(path.join(folder, "session")) ?? "").trim();
-  if (!described?.name || !session) return null;
-  return {
-    id, name: described.name, look: described.look, session,
-    directory: (textOf(path.join(folder, "directory")) ?? "").trim() || path.join(folder, "workspace"),
-    agents: (textOf(path.join(folder, "via")) ?? "").trim() === "bridge",
-  };
-}
+// What a client asks of them (PROTOCOL.md, `kuvo/groups`): the list and one chat (read, or followed
+// as they change), who can be in one, and what it does (makes, changes or deletes one, writes to it,
+// stops it, lets it keep going, looks at it, takes a message back, starts the work a wrap-up split
+// up). The coding agents' bridge that runs them answers in the shapes a client takes, with every
+// rule of what can be: passed on as it answers.
+const GROUP_ROUTE = /^kuvo\/groups(?:\/(events|joinable|grp_[a-z0-9]+(?:\/(?:events|stop|keep-going|viewed|undo|start))?))?$/;
 
 async function askGroups(target, method, route, body, signal) {
   const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/groups${route}`, {
@@ -2167,144 +2121,37 @@ async function askGroups(target, method, route, body, signal) {
   return { status: response.status, value };
 }
 
-// The list, as the Mac's `kuvo/groups` has it; null when none run here. Throws when the bridge
-// couldn't be asked (it's there, but not answering now).
-export async function groupsList(target, signal) {
-  const { status, value } = await askGroups(target, "GET", "", undefined, signal);
-  if (status === 404) return null;
-  if (status !== 200) throw new Error(`The coding agents' bridge answered ${status}.`);
-  const groups = (value.data ?? []).filter(chat => chat.status === "active").map(({ group, state, said, fromBot }) => {
-    const meeting = group.meeting ? { ...group.meeting, next: seconds(group.meeting.next) } : undefined;
-    return {
-      id: group.id, name: group.name, purpose: group.purpose, members: group.members.map(groupMember).filter(Boolean),
-      speaking: state?.speaking, discussing: Boolean(state?.discussing), paused: Boolean(state?.paused),
-      unread: Boolean(fromBot && (!group.viewed || Date.parse(fromBot.time) > Date.parse(group.viewed))),
-      last: phoneMessage(said, false), meeting,
-    };
-  });
-  return { groups };
-}
-
-// One chat, as the Mac's `kuvo/groups/<id>/events` sends it; null once it's gone (or moving).
-// Throws when the bridge couldn't be asked.
-export async function groupChat(target, id, signal) {
-  const { status, value } = await askGroups(target, "GET", `/${id}`, undefined, signal);
-  if (status === 404) return null;
-  if (status !== 200) throw new Error(`The coding agents' bridge answered ${status}.`);
-  if (value.data?.status !== "active") return null;
-  const { messages, state } = value.data;
-  return {
-    messages: messages.slice(-300).map(message => phoneMessage(message)), speaking: state?.speaking, discussing: Boolean(state?.discussing), paused: Boolean(state?.paused),
-    ...(state?.activity?.length ? { activity: state.activity } : {}),
-  };
-}
-
-async function* answerGroups(target, id, action, request, signal) {
+// A client's group chat route, to the bridge that runs them and back as it answers (a followed
+// one as its lines come). Not answering now: 503, to ask again, never taken as having none.
+async function* forwardGroups(target, route, request, signal) {
   const method = request.method.toUpperCase();
-  const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
-  // Read, or followed: a line of JSON each time it changes, as a Mac's.
-  if (method === "GET" && (!action || action === "events")) {
-    const read = () => (id ? groupChat(target, id, signal) : groupsList(target, signal));
-    let now;
-    try {
-      now = await read();
-    } catch {
-      // There, but not answering now: asked again later, not taken as having none.
-      return yield* json(503, {});
-    }
-    if (!now) return yield* json(404, {});
-    if (!action) return yield* json(200, now);
-    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    // One chat's lines leave out its messages when they're as they were (who's talking, or
-    // what they're doing, changed): the phone keeps the ones it has.
-    let last = "";
-    let lastMessages = null;
-    while (!signal?.aborted && now) {
-      const line = JSON.stringify(now);
-      if (line !== last) {
-        const messages = id ? JSON.stringify(now.messages) : null;
-        const { messages: _, ...state } = now;
-        yield { body: Buffer.from((id && messages === lastMessages ? JSON.stringify(state) : line) + "\n") };
-        last = line;
-        lastMessages = messages;
-      }
-      await new Promise(done => setTimeout(done, 1000));
-      if (signal?.aborted) break;
-      now = await read().catch(() => now);
-    }
-    return;
-  }
-  // Its name, purpose, bots or meeting changed, as Edit Group Chat changes them: a meeting
-  // as you set it up, worked out by the bridge that runs it, on your clock.
-  if (method === "PATCH" && id && !action) {
-    const given = parsed(request.body);
-    if (!isObject(given)) return yield* json(400, { message: "That isn’t a change to a group chat." });
-    const edits = {};
-    if ("name" in given) {
-      const name = plainName(given.name);
-      if (!name) return yield* json(400, { message: "A group chat needs a name." });
-      edits.name = name;
-    }
-    if ("purpose" in given) edits.purpose = typeof given.purpose === "string" && given.purpose.trim() ? given.purpose.trim() : null;
-    if ("members" in given) {
-      if (!Array.isArray(given.members) || !given.members.every(each => typeof each === "string")) return yield* json(400, { message: "Those aren’t bots." });
-      const members = [...new Set(given.members)];
-      if (members.length < 2) return yield* json(400, { message: "A group chat needs at least two bots." });
-      const here = new Set(listBots().map(bot => bot.id));
-      const missing = members.find(member => !here.has(member));
-      if (missing) return yield* json(404, { message: `There’s no bot “${missing}”.` });
-      edits.members = members;
-    }
-    if ("meeting" in given) edits.meetingPlan = given.meeting;
-    const asked = await askGroups(target, "PATCH", `/${id}`, edits, signal).catch(error => ({ status: 503, value: { message: String(error?.message ?? error) } }));
-    if (asked.status !== 200) return yield* json(asked.status === 400 || asked.status === 404 || asked.status === 409 ? asked.status : 503, { message: asked.value?.message ?? "The group chat couldn’t be changed." });
-    const listed = await groupsList(target, signal).catch(() => null);
-    return yield* json(200, { group: listed?.groups.find(each => each.id === id) ?? null });
-  }
-  // Deleted, as Delete Group Chat deletes it: its messages and seats go, and its bots forget it.
-  // Not one moving, which the bridge refuses; one gone already is as good as deleted.
-  if (method === "DELETE" && id && !action) {
-    const { status, value } = await askGroups(target, "DELETE", `/${id}`, undefined, signal).catch(() => ({ status: 503 }));
-    if (status === 200 || (status === 404 && value?.message === "No such chat.")) return yield* json(200, {});
-    if (status === 409) return yield* json(409, { message: "That chat is moving. Try again once it’s there." });
-    return yield* json(503, { message: value?.message ?? "The coding agents’ bridge here isn’t answering. Try again in a moment." });
-  }
-  if (method !== "POST" || !id || action === "events") return yield* json(405, {});
-  let given = {};
+  const sends = !["GET", "HEAD", "DELETE"].includes(method);
+  let response;
   try {
-    given = JSON.parse(Buffer.from(request.body ?? []).toString("utf8") || "{}");
-  } catch {}
-  let asked;
-  switch (action) {
-    case undefined:
-      if (typeof given.text !== "string" || !given.text.trim()) return yield* json(400, {});
-      asked = await askGroups(target, "POST", `/${id}/send`, { text: given.text }, signal);
-      break;
-    case "stop":
-    case "keep-going":
-      asked = await askGroups(target, "POST", `/${id}/${action}`, {}, signal);
-      break;
-    case "viewed":
-      asked = await askGroups(target, "PATCH", `/${id}`, { viewed: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") }, signal);
-      break;
-    case "undo": {
-      if (typeof given.message !== "string") return yield* json(404, {});
-      asked = await askGroups(target, "POST", `/${id}/undo`, { message: given.message }, signal);
-      // Moving: 409, as for what you write.
-      if (asked.status !== 200) return yield* json(failed(asked.status), {});
-      return yield* json(200, { text: asked.value.data?.text ?? "" });
-    }
-    case "start":
-      if (typeof given.message !== "string") return yield* json(404, {});
-      asked = await askGroups(target, "POST", `/${id}/start-work`, { wrapUp: given.message }, signal);
-      break;
+    response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/link/groups${route.slice("kuvo/groups".length)}`, {
+      method,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(sends ? { "content-type": "application/json" } : {}) },
+      body: sends ? Buffer.from(request.body ?? []) : undefined,
+      signal,
+    });
+  } catch {
+    if (signal?.aborted) return;
+    return yield* groupJSON(503, { message: "The coding agents’ bridge here isn’t answering. Try again in a moment." });
   }
-  return yield* json(asked.status === 200 ? 200 : failed(asked.status), {});
+  if (response.status >= 500) {
+    await response.body?.cancel().catch(() => {});
+    return yield* groupJSON(503, { message: "The coding agents’ bridge here isn’t answering. Try again in a moment." });
+  }
+  yield { head: { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } } };
+  try {
+    for await (const chunk of response.body ?? []) yield { body: Buffer.from(chunk) };
+  } catch {}
 }
 
-// What a phone hears of a group chat's action the coding agents' bridge didn't take: moving (409),
-// there but not answering now (503: ask again), or no such chat or message (404).
-const failed = status => (status === 409 ? 409 : status >= 500 ? 503 : 404);
+function* groupJSON(status, value) {
+  yield { head: { status, headers: { "content-type": "application/json" } } };
+  yield { body: Buffer.from(JSON.stringify(value)) };
+}
 
 // The biggest file `kuvo/file` sends.
 export const FILE_LIMIT = 25 * 1024 * 1024;
@@ -2935,37 +2782,6 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   } catch {}
   if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, signal).catch(() => {});
   return { status: 200, value: {} };
-}
-
-// `POST kuvo/groups`, as the Mac's: a group chat of this machine's bots, which lives here and runs
-// in the coding agents' bridge, as the others here do.
-export async function makeGroup(given, target, signal) {
-  const no = (status, message) => ({ status, value: { message } });
-  if (!given || typeof given !== "object") return no(400, "That isn’t a group chat to make.");
-  const name = plainName(given.name);
-  if (!name) return no(400, "A group chat needs a name.");
-  const members = [...new Set(Array.isArray(given.members) ? given.members.filter(each => typeof each === "string") : [])];
-  if (members.length < 2) return no(400, "A group chat needs at least two bots.");
-  const here = new Set(listBots().map(bot => bot.id));
-  const missing = members.find(member => !here.has(member));
-  if (missing) return no(404, `There’s no bot “${missing}”.`);
-  const purpose = typeof given.purpose === "string" && given.purpose.trim() ? given.purpose.trim() : undefined;
-  const id = newID("grp_");
-  const now = stamp();
-  const group = { id, name, ...(purpose ? { purpose } : {}), members, seats: {}, heard: {}, created: now, viewed: now };
-  const { status, value } = await askGroups(target, "PUT", `/${id}`, { group, messages: [], status: "active" }, signal).catch(error => ({ status: 503, value: { message: String(error?.message ?? error) } }));
-  if (status !== 200) return no(status === 409 ? 409 : 503, value?.message ?? "The group chat couldn’t be made.");
-  // Its meeting, worked out by the bridge that runs it, on your clock; one that can't be, and
-  // the chat with it, doesn't stay.
-  if (given.meeting !== undefined && given.meeting !== null) {
-    const planned = await askGroups(target, "PATCH", `/${id}`, { meetingPlan: given.meeting }, signal).catch(error => ({ status: 503, value: { message: String(error?.message ?? error) } }));
-    if (planned.status !== 200) {
-      await askGroups(target, "DELETE", `/${id}`, undefined, signal).catch(() => {});
-      return no(planned.status === 400 ? 400 : 503, planned.value?.message ?? "Its meeting couldn’t be set.");
-    }
-  }
-  const listed = await groupsList(target, signal).catch(() => null);
-  return { status: 201, value: { group: listed?.groups.find(each => each.id === id) ?? null } };
 }
 
 const LETTERS = /^[A-Za-z0-9]+$/;

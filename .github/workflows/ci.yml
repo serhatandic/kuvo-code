@@ -47,15 +47,16 @@ jobs:
         working-directory: Packages/UsageKit
         run: swift test
 
+      # Before the machines' bridge's tests too: its route scenarios run the coding agents' bridge.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
       - name: Test KuvoLink and the machines' bridge
         working-directory: Packages/KuvoLink
         run: |
           swift test
           node --test Tests/Bridge/*.test.js
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.2
 
       - name: Test the coding agents' bridge
         working-directory: Agents
