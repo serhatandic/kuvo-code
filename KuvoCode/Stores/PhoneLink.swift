@@ -929,7 +929,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/bots", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if ["kuvo/bots", "kuvo/groups", "kuvo/named", "kuvo/asks", "kuvo/wakes", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
