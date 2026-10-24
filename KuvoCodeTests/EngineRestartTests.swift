@@ -9,7 +9,7 @@ import Testing
 /// script, as `KUVO_OPENCODE_BINARY` allows) that answers at a stubbed address and stops when the
 /// test says.
 @MainActor
-@Suite(.serialized) struct EngineRestartTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct EngineRestartTests {
     let engine = StubEngine(port: 47998)
     let folder = AppInfo.testRoot.appending(path: "FakeEngine-\(UUID().uuidString.prefix(6))")
     var crashFile: String { folder.appending(path: "crash").path(percentEncoded: false) }
@@ -38,10 +38,6 @@ import Testing
     /// The engine stops, as it would on a crash.
     private func crash() {
         FileManager.default.createFile(atPath: crashFile, contents: nil)
-    }
-
-    private func until(_ condition: () -> Bool) async throws {
-        for _ in 0..<600 where !condition() { try await Task.sleep(for: .milliseconds(50)) }
     }
 
     @Test func aStoppedEngineComesBackUntilItKeepsStopping() async throws {

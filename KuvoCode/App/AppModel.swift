@@ -518,9 +518,11 @@ final class AppModel {
 
     #if DEBUG
     /// For tests: this Mac's engine is the one at `api`, as if it had started (no feed, nothing
-    /// else connected to it).
+    /// else connected to it). Its stores are told of each other as a start tells them, in the
+    /// same step: without, a machine's bots steps (its kit, the bots it made) would do nothing.
     func standIn(engine api: OpenCodeAPI) {
         self.api = api
+        wireStores()
     }
     #endif
 

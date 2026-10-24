@@ -8,7 +8,7 @@ import Testing
 /// Dock, until you look at it; one renamed, archived or moved elsewhere (the phone, another Mac)
 /// follows here; a chat moved into a project goes there. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct SessionLifecycleTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct SessionLifecycleTests {
     let engine = StubEngine(port: 47987)
     let workspace = Workspace()
     let project = "/tmp/kuvo-tests-lifecycle/web"
@@ -59,7 +59,7 @@ import Testing
         workspace.markViewed("ses_done")
         #expect(workspace.waitingCount == 0)
         #expect(workspace.session("ses_done")?.isUnread == false)
-        try await eventually { !engine.requests("POST", "/api/session/ses_done/view").isEmpty }
+        try await until { !engine.requests("POST", "/api/session/ses_done/view").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_done/view").first?.body["idle"] as? Double == 9)
     }
 
@@ -69,17 +69,17 @@ import Testing
         await start([StubEngine.session("ses_a", title: "Fix login", directory: project), StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_a", json: ["data": StubEngine.session("ses_a", title: "Fix the login form", directory: project)])
         workspace.handle(try engine.event("session.renamed", session: "ses_a"))
-        try await eventually { workspace.session("ses_a")?.title == "Fix the login form" }
+        try await until { workspace.session("ses_a")?.title == "Fix the login form" }
         #expect(workspace.session("ses_a")?.title == "Fix the login form")
 
         engine.on("GET", "/api/session/ses_a", json: ["data": StubEngine.session("ses_a", title: "Fix the login form", directory: project, extra: ["metadata": ["kuvo.archived": true]])])
         workspace.handle(try engine.event("session.metadata.updated", session: "ses_a"))
-        try await eventually { !listed().contains("ses_a") }
+        try await until { !listed().contains("ses_a") }
         #expect(listed() == ["ses_chat"])
 
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
         workspace.handle(try engine.event("session.moved", session: "ses_chat"))
-        try await eventually { workspace.chats.isEmpty }
+        try await until { workspace.chats.isEmpty }
         #expect(workspace.projects.first { $0.directory == project }?.sessions.map(\.id) == ["ses_chat"])
     }
 

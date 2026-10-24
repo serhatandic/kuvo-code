@@ -9,7 +9,7 @@ import WebKit
 /// instead (declined, unless the step said to accept), and the agent is told. Real WebKit, on
 /// local pages.
 @MainActor
-@Suite(.serialized) struct PageDialogsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PageDialogsTests {
     let folder = AppInfo.testRoot.appending(path: "Pages-\(UUID().uuidString.prefix(6))")
 
     /// A page that asks as it opens and writes what it heard as its title.
@@ -20,40 +20,26 @@ import WebKit
         return file.path(percentEncoded: false)
     }
 
-    private func title(of session: BrowserSession) async -> String? {
-        try? await session.webView.evaluateJavaScript("document.title") as? String
-    }
-
     @Test func aConfirmationWaitsForYourAnswer() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let session = BrowserSession()
         session.load(try page(#"confirm("Delete the draft?") ? "yes" : "no""#))
-        try await eventually { session.dialog != nil }
+        try await until { session.dialog != nil }
         #expect(session.dialog?.kind == .confirm)
         #expect(session.dialog?.message == "Delete the draft?")
         session.answerDialog(accept: true)
         #expect(session.dialog == nil)
-        var heard: String?
-        for _ in 0..<200 where heard != "yes" {
-            heard = await title(of: session)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(heard == "yes")
+        try await until { session.title == "yes" }
     }
 
     @Test func aQuestionGetsWhatYouTyped() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let session = BrowserSession()
         session.load(try page(#"prompt("Your name?", "") || "none""#))
-        try await eventually { session.dialog != nil }
+        try await until { session.dialog != nil }
         #expect(session.dialog?.kind == .prompt)
         session.answerDialog(accept: true, text: "Ada")
-        var heard: String?
-        for _ in 0..<200 where heard != "Ada" {
-            heard = await title(of: session)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(heard == "Ada")
+        try await until { session.title == "Ada" }
     }
 
     /// The address field: a file's path on this Mac opens the file (these pages are opened so),
@@ -66,6 +52,15 @@ import WebKit
         #expect(BrowserSession.url(from: "swift concurrency")?.isFileURL == false)
     }
 
+    /// A search reaches the search engine as typed: it reads `+` as a space, so "c++" must be sent
+    /// as `c%2B%2B`, or it searches for "c".
+    @Test func aSearchIsSentAsTyped() throws {
+        let typed = "c++ templates & more=1"
+        let url = try #require(BrowserSession.url(from: typed))
+        let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQueryItems?.first { $0.name == "q" }?.value)
+        #expect(query.replacingOccurrences(of: "+", with: " ").removingPercentEncoding == typed)
+    }
+
     /// While the agent's step works in the page: answered at once, declined unless the step said
     /// to accept; it hears what the page asked.
     @Test(arguments: [false, true])
@@ -74,12 +69,8 @@ import WebKit
         let session = BrowserSession()
         session.agentStepBegan(nil, accepting: accepting)
         session.load(try page(#"confirm("Send the form?") ? "yes" : "no""#))
-        var heard: String?
-        for _ in 0..<300 where heard != "yes" && heard != "no" {
-            heard = await title(of: session)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(heard == (accepting ? "yes" : "no"))
+        try await until { session.title == "yes" || session.title == "no" }
+        #expect(session.title == (accepting ? "yes" : "no"))
         #expect(session.dialog == nil, "nothing left waiting in the bar")
         #expect(session.agentNotes.contains { $0.contains("Send the form?") && $0.contains(accepting ? "accepted" : "declined") })
     }

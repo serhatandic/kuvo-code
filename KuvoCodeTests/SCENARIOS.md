@@ -63,6 +63,7 @@ for Linux's tools).
 | I1 Add a machine, at one or more addresses | AddMachineTests, MachineAddressesTests | choosing the address that answers (needs SSH) |
 | I2 A project on a machine | MachineFoldersTests, AttachmentRoutesTests, SignInSyncTests, MachineSignOutTests | |
 | I3 A machine that's away | MachineAwayTests | |
+| A machine's connection: what it's sent once it's connected (its bots' kit), and what runs for it ending with it (Disconnect, Remove, a reconnect) | MachineConnectionTests | |
 | I4 What machines share with this Mac, and what's their own; Also Apply to… | MachineSettingsTests, BoxSettingsTests, AlsoApplyTests, CustomAutoPlacesTests, SignInSyncTests | a connected machine's engine starting over with new settings (needs SSH) |
 | F9, L46 A bot on a machine works and wakes while the Mac's app is closed; the machine restarting brings its engine back | OpenCodeKit's MachineWakeUpsTests (kuvo-wake, each minute: a due one reaches its bot once, one the engine couldn't take is tried again) and RebootTests (kuvo-start from the crontab, the watchdog: what keeps the engine up, a day without the app stops it); the bridge's bots tests (Packages/KuvoLink/Tests/Bridge) | the real crontab and restart (the end-to-end runs) |
 | Group chats on a machine, run there with the Mac closed | MachineGroupTests; Agents' groups and groups-runner tests (the coding agents' bridge runs them); the bridge's groups tests | |

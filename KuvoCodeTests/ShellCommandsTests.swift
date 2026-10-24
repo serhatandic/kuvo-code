@@ -8,7 +8,7 @@ import Testing
 /// your next message; a command the engine doesn't take comes back to the composer, saying why.
 /// The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct ShellCommandsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct ShellCommandsTests {
     let engine = StubEngine(port: 47999)
     let workspace = Workspace()
     let id = "ses_shell"
@@ -38,7 +38,7 @@ import Testing
         model.draftFiles = [file]
         model.draftQuotes = [Drafts.Quote(text: "The build fails on CI")]
         model.submitDraft(for: nil, queue: false, commands: [])
-        try await eventually { !engine.requests("POST", "/api/session/\(id)/shell").isEmpty }
+        try await until { !engine.requests("POST", "/api/session/\(id)/shell").isEmpty }
         #expect(engine.requests("POST", "/api/session/\(id)/shell").first?.body["command"] as? String == "npm test -- --watch=false")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "no message to the agent")
         #expect(model.draftText.isEmpty)
@@ -55,7 +55,7 @@ import Testing
         let model = try await open()
         model.draftText = "!git status"
         model.submitDraft(for: nil, queue: false, commands: [])
-        try await eventually { model.failure != nil }
+        try await until { model.failure != nil }
         #expect(model.draftText == "!git status", "back as you typed it")
         #expect(model.failure != nil)
     }

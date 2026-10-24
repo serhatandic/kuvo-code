@@ -8,7 +8,7 @@ import Testing
 /// coding agents, and one made while it's archived waits, as those it had when archived do. The
 /// engine and the agents' bridge are stubbed; the wake-ups' folders and kuvo-wake are real.
 @MainActor
-@Suite(.serialized) struct WakeUpsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct WakeUpsTests {
     static let engine = "http://127.0.0.1:47996"
     static let bridge = "http://127.0.0.1:47995"
     let app = AppModel()
@@ -145,7 +145,7 @@ import Testing
         let daily = try #require(wakes.first?["id"] as? String), once = try #require(wakes.last?["id"] as? String)
 
         #expect(try await ask("kuvo/wakes/\(id)/now", ["wake": daily]).status == 200)
-        try await eventually { prompts.all.contains { $0.contains("Look at the build") } }
+        try await until { prompts.all.contains { $0.contains("Look at the build") } }
         #expect(prompts.all.filter { $0.hasPrefix(Wakes.marker) }.count == 1)
         #expect(try await ask("kuvo/wakes/\(id)/cancel", ["wake": once]).status == 200)
         let left = try #require(try await ask("kuvo/wakes/\(id)").json?["wakes"] as? [[String: Any]])
@@ -198,7 +198,10 @@ import Testing
     nonisolated final class Prompts: @unchecked Sendable {
         private let lock = NSLock()
         private var texts: [String] = []
-        func add(_ text: String) { lock.withLock { texts.append(text) } }
+        func add(_ text: String) {
+            lock.withLock { texts.append(text) }
+            TestPulse.beat()
+        }
         var all: [String] { lock.withLock { texts } }
     }
 
@@ -227,14 +230,17 @@ import Testing
         let wake = try #require(app.wakeUps.wakes[owner.key]?.first)
 
         let first = Task { try await app.wakeUps.wakeNow(wake, of: owner) }
-        try await eventually { prompts.all.count == 1 }
+        try await until { prompts.all.count == 1 }
         var secondDone = false
         let second = Task {
-            defer { secondDone = true }
+            defer {
+                secondDone = true
+                TestPulse.beat()
+            }
             try await app.wakeUps.wakeNow(wake, of: owner)
         }
         // The second click has done what it does: nothing, or sent it again.
-        try await eventually { secondDone || prompts.all.count > 1 }
+        try await until { secondDone || prompts.all.count > 1 }
         gate.open()
         try await first.value
         try await second.value
@@ -379,7 +385,8 @@ import Testing
         try Data("Stand up and stretch".utf8).write(to: URL(filePath: wakes + "/" + once))
 
         app.wakeUps.start()
-        try await eventually { prompts.all.count >= 2 && ((try? FileManager.default.contentsOfDirectory(atPath: wakes))?.count ?? 0) == 1 }
+        // Its round's over once it lists what's left.
+        try await until { app.wakeUps.wakes[owner.key]?.count == 1 }
         #expect(prompts.all.sorted() == [Wakes.marker + "Check the nightly build", Wakes.marker + "Stand up and stretch"])
         let left = try FileManager.default.contentsOfDirectory(atPath: wakes)
         #expect(left.count == 1, "the one-off is done: \(left)")

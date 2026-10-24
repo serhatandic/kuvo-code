@@ -8,7 +8,7 @@ import Testing
 /// of the other's addresses. Nothing there is signed out or stopped (that machine's engine is the
 /// other's), and what was kept under its name (projects, their settings, bots) is the other's.
 @MainActor
-@Suite(.serialized) struct MachineAddressesTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct MachineAddressesTests {
     init() {
         TestEnvironment.prepare()
         Self.clean()
@@ -116,7 +116,7 @@ import Testing
         }
         SessionCopies.saveSessions([try session(on: "lokum-local")], of: "lokum-local")
         SessionCopies.saveSessions([try session(on: "lokum-tailscale")], of: "lokum-tailscale")
-        try await eventually { !SessionCopies.sessions(of: "lokum-local").isEmpty && !SessionCopies.sessions(of: "lokum-tailscale").isEmpty }
+        await SessionCopies.written()
         let workspace = Workspace()
         workspace.machines = ["lokum-local", "lokum-tailscale"]
         #expect(workspace.sessions.filter { $0.id == "ses_build" }.count == 2)

@@ -41,6 +41,15 @@ import Testing
         machine.stop()
     }
 
+    /// Once it's connected, it's sent what its bots are made with (their kit: templates, your
+    /// personalities, its projects), so it makes bots itself with this Mac closed.
+    @Test func connectedItsSentItsBotsKit() async throws {
+        defer { done() }
+        let id = Self.name()
+        await app.connect(add(id, at: machine)).value
+        #expect(ssh.scripts(to: id).contains { $0.contains("kit.json") }, "its bots' kit went to it")
+    }
+
     /// Removed while it copies your sign-ins, the step before it's sent your agents' list, its
     /// wake-ups' time zone and the rest: none of those go, nor anything after, and it's gone from
     /// the sidebar with its sessions.
@@ -58,7 +67,7 @@ import Testing
         let id = Self.name()
         let engine = add(id, at: machine)
         let start = app.connect(engine)
-        try await eventually { reading.isOpen }
+        try await until { reading.isOpen }
         #expect(reading.isOpen, "it got to copying your sign-ins")
         #expect(sessions(on: id).count == 1, "its sessions are listed as it connects")
         let sent = ssh.scripts(to: id).count
@@ -83,15 +92,15 @@ import Testing
         let id = Self.name()
         let engine = add(id, at: machine)
         await app.connect(engine).value
-        try await eventually { clock.waits == [60, 600] }
+        try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600], "its agents' mail each minute, its sign-ins every ten")
         await app.reconnectNow(engine)?.value
-        try await eventually { clock.waits == [60, 600] }
+        try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600], "one set of syncs, not two")
         // A minute on: one round, which meets your personalities with its copy once.
         let sent = ssh.scripts(to: id).count
         clock.pass(60)
-        try await eventually { clock.waits == [60, 600] }
+        try await until { clock.waits == [60, 600] }
         #expect(clock.waits == [60, 600])
         #expect(ssh.scripts(to: id).dropFirst(sent).filter { $0.contains("box personalities") }.count == 1)
     }
@@ -108,17 +117,17 @@ import Testing
         let second = add(two, at: other)
         await app.connect(first).value
         await app.connect(second).value
-        try await eventually { clock.waits == [60, 60, 600, 600] }
+        try await until { clock.waits == [60, 60, 600, 600] }
         #expect(clock.waits == [60, 60, 600, 600])
         app.personalitiesChanged()
-        try await eventually { clock.waits == [1, 1, 60, 60, 600, 600] }
+        try await until { clock.waits == [1, 1, 60, 60, 600, 600] }
         #expect(clock.waits == [1, 1, 60, 60, 600, 600], "a round for each, a moment on")
         app.disconnect(first)
         let sent = ssh.scripts(to: one).count
         let sentThere = ssh.scripts(to: two).count
         clock.pass(1)
         // The other's round, begun at the same moment: its copy of your personalities met.
-        try await eventually { ssh.scripts(to: two).dropFirst(sentThere).contains { $0.contains("box personalities") } }
+        try await until { ssh.scripts(to: two).dropFirst(sentThere).contains { $0.contains("box personalities") } }
         #expect(ssh.scripts(to: two).dropFirst(sentThere).contains { $0.contains("box personalities") }, "the one still connected gets its round")
         #expect(Array(ssh.scripts(to: one).dropFirst(sent)) == [], "nothing went to the one disconnected")
     }
@@ -143,7 +152,7 @@ import Testing
             return nil
         }
         let restart = app.restartEngine(engine)
-        try await eventually { sending.isOpen }
+        try await until { sending.isOpen }
         #expect(sending.isOpen, "it began starting over")
         let sent = ssh.scripts(to: id).count
         let asked = machine.asked.count
@@ -197,6 +206,7 @@ nonisolated final class SSHLog: @unchecked Sendable {
 
     func note(_ script: String, to address: String) {
         lock.withLock { sent.append((address, script)) }
+        TestPulse.beat()
     }
 
     func scripts(to address: String) -> [String] {

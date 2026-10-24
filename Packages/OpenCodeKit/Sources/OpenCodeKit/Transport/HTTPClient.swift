@@ -51,7 +51,7 @@ public struct HTTPClient: Sendable {
         var components = URLComponents(url: endpoint.url, resolvingAgainstBaseURL: false)!
         components.percentEncodedPath = components.percentEncodedPath.trimmingSuffix("/") + "/" + path
         let items = query.compactMap { key, value in value.map { URLQueryItem(name: key, value: $0) } }
-        if !items.isEmpty { components.queryItems = items.sorted { $0.name < $1.name } }
+        if !items.isEmpty { components.percentEncodedQueryItems = items.sorted { $0.name < $1.name }.map(\.formEscaped) }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -113,6 +113,16 @@ public struct HTTPClient: Sendable {
         }
         if let data = object["data"] as? [String: Any], let text = data["message"] as? String { return text }
         return nil
+    }
+}
+
+extension URLQueryItem {
+    /// This item escaped for `URLComponents.percentEncodedQueryItems`, the way JavaScript's
+    /// `encodeURIComponent` does. `queryItems` leaves `+` (and `;`, `/`, `(`…) as they are, and a
+    /// server that reads the query as a form (the engine, search engines) takes `+` for a space,
+    /// so "c++" would arrive as "c  ".
+    public var formEscaped: URLQueryItem {
+        URLQueryItem(name: name.pathEscaped, value: value?.pathEscaped)
     }
 }
 

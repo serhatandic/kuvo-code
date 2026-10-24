@@ -8,7 +8,7 @@ import Testing
 /// Dock until answered (B13); Plan mode's answer carried out with Build It (B9). The engine is
 /// stubbed.
 @MainActor
-@Suite(.serialized) struct AgentAsksTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct AgentAsksTests {
     let engine = StubEngine(port: 47982)
     let workspace = Workspace()
     let project = "/tmp/kuvo-tests-asks"
@@ -42,7 +42,7 @@ import Testing
         #expect(workspace.waitingCount == 1, "waiting on you, on the Dock")
 
         model.answer(try #require(model.forms.first), with: ["q0": .string("SQLite")])
-        try await eventually { !engine.requests("POST", "/form/frm_db/reply").isEmpty }
+        try await until { !engine.requests("POST", "/form/frm_db/reply").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_a/form/frm_db/reply").first?.body["answer"] as? [String: String] == ["q0": "SQLite"])
         workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_db", "sessionID": "ses_a"]))
         #expect(model.forms.isEmpty)
@@ -58,7 +58,7 @@ import Testing
         let model = try #require(workspace.model(for: "ses_a"))
         workspace.handle(try engine.event("form.created", session: "ses_a", ["form": question]))
         model.dismiss(try #require(model.forms.first))
-        try await eventually { !engine.requests("DELETE", "/api/session/ses_a/form/frm_db").isEmpty }
+        try await until { !engine.requests("DELETE", "/api/session/ses_a/form/frm_db").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_a/form/frm_db/reply").isEmpty, "no answer made up for you")
         workspace.handle(try engine.event("form.replied", session: "ses_a", ["id": "frm_db", "sessionID": "ses_a"]))
         #expect(model.forms.isEmpty)
@@ -80,7 +80,7 @@ import Testing
         #expect(workspace.needsAttention("ses_a") && workspace.needsAttention("ses_b"))
 
         workspace.answer("per_a", in: "ses_a", with: .once)
-        try await eventually { !engine.requests("POST", "/api/session/ses_a/permission/per_a/reply").isEmpty }
+        try await until { !engine.requests("POST", "/api/session/ses_a/permission/per_a/reply").isEmpty }
         workspace.handle(try engine.event("permission.replied", ["sessionID": "ses_a", "requestID": "per_a"]))
         #expect(a.permissions.isEmpty)
         #expect(b.permissions.map(\.id) == ["per_b"])
@@ -95,7 +95,7 @@ import Testing
         await start(["ses_a"])
         let model = try #require(workspace.model(for: "ses_a"))
         model.buildPlan()
-        try await eventually { !engine.requests("POST", "/api/session/ses_a/prompt").isEmpty }
+        try await until { !engine.requests("POST", "/api/session/ses_a/prompt").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_a/agent").first?.body["agent"] as? String == "build")
         #expect(model.agent == "build")
         let asked = engine.asked.filter { $0.hasSuffix("/agent") || $0.hasSuffix("/prompt") }
@@ -137,7 +137,7 @@ import Testing
         #expect(b.forms.isEmpty, "not the other conversation's")
 
         a.answer(try #require(a.forms.first), with: ["repo": .string("acme/app")])
-        try await eventually { !engine.requests("POST", "/form/frm_repo/reply").isEmpty }
+        try await until { !engine.requests("POST", "/form/frm_repo/reply").isEmpty }
         let reply = try #require(engine.requests("POST", "/api/session/global/form/frm_repo/reply").first)
         #expect(reply.body["answer"] as? [String: String] == ["repo": "acme/app"])
         #expect(reply.headers["x-opencode-directory"]?.removingPercentEncoding == project, "filed under its folder")

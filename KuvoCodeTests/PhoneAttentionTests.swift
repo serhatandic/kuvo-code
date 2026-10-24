@@ -12,7 +12,7 @@ import Testing
 /// app says you're not here as the Mac sleeps or its screen locks. The clock is the test's own,
 /// the engine is stubbed, and the Mac's sleep and lock are posted to centers of the test's own.
 @MainActor
-@Suite(.serialized) struct PhoneAttentionTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneAttentionTests {
     let engine = StubEngine(port: 47974)
     let workspace = Workspace()
     let link = PhoneLink(file: FileManager.default.temporaryDirectory.appending(path: "kuvo-attention-\(UUID().uuidString).json"))
@@ -21,7 +21,7 @@ import Testing
     /// What reached your phones.
     let phones = Sent()
 
-    final class Sent {
+    @Observable final class Sent {
         var notices: [Notice] = []
     }
 
@@ -54,12 +54,12 @@ import Testing
     /// This Mac's own sessions: a run finished, and a permission asked.
     private func finish(_ id: String) async throws {
         workspace.handle(try engine.event("session.execution.succeeded", session: id))
-        try await eventually { link.hold.count > 0 || !phones.notices.isEmpty }
+        try await until { link.hold.count > 0 || !phones.notices.isEmpty }
     }
 
     private func ask(_ request: String, in id: String) async throws {
         workspace.handle(try engine.event("permission.asked", ["id": request, "sessionID": id, "action": "shell", "resources": ["npm test"]]))
-        try await eventually { link.hold.count > 0 || !phones.notices.isEmpty }
+        try await until { link.hold.count > 0 || !phones.notices.isEmpty }
     }
 
     /// You at this Mac: what the app tells, from a Mac of the test's own.
@@ -176,7 +176,7 @@ import Testing
         await start(["ses_a"])
         try await finish("ses_a")
         try await ask("per_1", in: "ses_a")
-        try await eventually { phones.notices.count == 2 }
+        try await until { phones.notices.count == 2 }
         let pushes: [(Notifier.Push, String)] = [(.init(.finished), "ses_a"), (.init(.permission, request: (session: "ses_a", id: "per_1")), "ses_a")]
         #expect(phones.notices.map(NoticeHold.Shown.init(of:)) == pushes.map { Notifier.shown($0.0, session: $0.1) })
         // A group chat's, and a browser's ask of no conversation.
@@ -336,6 +336,8 @@ final class HoldClock {
             self.next += 1
             let id = self.next
             self.timers.append((id, self.now + delay, fire))
+            // A notice held: a test waiting on it looks again.
+            TestPulse.beat()
             return { [weak self] in self?.timers.removeAll { $0.id == id } }
         }
     }

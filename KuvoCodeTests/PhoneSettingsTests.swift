@@ -9,7 +9,7 @@ import Testing
 /// the popular MCP servers and adding one, starting the engine over, and finishing a sign-in
 /// whose page sends the browser back to this Mac, which a phone can't load.
 @MainActor
-@Suite(.serialized) struct PhoneSettingsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneSettingsTests {
     let folder: URL
     let config: EngineConfig
     let link = PhoneLink()
@@ -147,10 +147,13 @@ import Testing
         link.engineStarted = { up }
         #expect(try await ask("kuvo/info").json?["started"] as? Double == up.timeIntervalSince1970)
         var restarted = false
-        link.restartEngine = { restarted = true }
+        link.restartEngine = {
+            restarted = true
+            TestPulse.beat()
+        }
         #expect(try await ask("kuvo/engine/restart", method: "POST").status == 202)
         #expect(!restarted)
-        try await eventually { restarted }
+        try await until { restarted }
         #expect(restarted)
     }
 

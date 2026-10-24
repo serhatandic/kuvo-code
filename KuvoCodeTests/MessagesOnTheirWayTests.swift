@@ -8,7 +8,7 @@ import Testing
 /// Stop as it goes. What the queue shows at each point, and what the app asks of the engine, are
 /// checked. The engine is stubbed; a request it holds (a `Gate`) is one still on its way.
 @MainActor
-@Suite(.serialized) struct MessagesOnTheirWayTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct MessagesOnTheirWayTests {
     let engine = StubEngine(port: 47904)
     let workspace = Workspace()
     let id = "ses_outgoing_\(UUID().uuidString.prefix(8).lowercased())"
@@ -131,7 +131,7 @@ import Testing
 
         model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
         #expect(!model.isRunning)
-        try await eventually { !deliveries(of: message).isEmpty }
+        try await until { !deliveries(of: message).isEmpty }
         #expect(deliveries(of: message) == ["steer"])
         model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": message, "delivery": "steer"]))
         model.apply(try engine.event("session.execution.started", session: id))
@@ -153,18 +153,18 @@ import Testing
             return StubWeb.json([:])
         }
         model.send("Also run the linter", for: nil)
-        try await eventually { !prompts.isEmpty }
+        try await until { !prompts.isEmpty }
         let sent = try #require(prompts.first)
         #expect(sent.body["delivery"] as? String == "steer")
         let message = try #require(sent.body["id"] as? String)
 
         model.stop()
-        try await eventually { model.isQueuePaused }
+        try await until { model.isQueuePaused }
         #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"], "held, ahead of the queue, while on its way")
         #expect(engine.requests("POST", "/interrupt").isEmpty, "not stopped before the message is in")
 
         gate.open()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         let order = engine.asked.filter { $0.contains("/inbox/\(message)") || $0.hasSuffix("/interrupt") }
         #expect(order == ["PATCH /api/session/\(id)/inbox/\(message)", "POST /api/session/\(id)/interrupt"])
         #expect(deliveries(of: message) == ["queue"])
@@ -180,7 +180,7 @@ import Testing
         #expect(deliveries(of: message) == ["queue"], "nothing hands it to the agent before Resume")
 
         model.resumeQueue()
-        try await eventually { deliveries(of: message).count == 2 }
+        try await until { deliveries(of: message).count == 2 }
         #expect(deliveries(of: message) == ["queue", "steer"], "Resume gives it to the agent first")
         model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": message, "delivery": "steer"]))
         model.apply(try engine.event("session.execution.started", session: id))
@@ -203,15 +203,15 @@ import Testing
             return StubWeb.json([:])
         }
         model.send("Also run the linter", for: nil)
-        try await eventually { !prompts.isEmpty }
+        try await until { !prompts.isEmpty }
         let message = try #require(prompts.first?.body["id"] as? String)
         model.stop()
-        try await eventually { model.isQueuePaused }
+        try await until { model.isQueuePaused }
         model.cancelPending(try #require(model.waiting.first { $0.id == message }))
         #expect(model.waiting.map(\.text) == ["Then update the docs"])
 
         gate.open()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         let order = engine.asked.filter { $0 == "DELETE /api/session/\(id)/inbox/\(message)" || $0.hasSuffix("/interrupt") }
         #expect(order == ["DELETE /api/session/\(id)/inbox/\(message)", "POST /api/session/\(id)/interrupt"])
     }
@@ -225,9 +225,9 @@ import Testing
         defer { gate.open() }
         holdInPreparation(until: gate)
         model.send("Also run the linter", for: nil)
-        try await eventually { !engine.requests("GET", "/api/mcp").isEmpty }
+        try await until { !engine.requests("GET", "/api/mcp").isEmpty }
         model.stop()
-        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        try await until { !engine.requests("POST", "/interrupt").isEmpty }
         #expect(prompts.isEmpty, "stopped without waiting for it")
         #expect(model.isQueuePaused)
         #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"])
@@ -255,14 +255,14 @@ import Testing
             return StubWeb.json([:])
         }
         model.send("Also run the linter", for: nil)
-        try await eventually { !prompts.isEmpty }
+        try await until { !prompts.isEmpty }
         let message = try #require(prompts.first?.body["id"] as? String)
         let item = try #require(model.waiting.first)
         model.cancelPending(item)
         #expect(model.waiting.isEmpty)
 
         gate.open()
-        try await eventually { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
+        try await until { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
         await model.messagesSent()
         model.apply(try enqueued(message, "Also run the linter", "steer"))
         model.apply(try inbox("cancelled", message))
@@ -283,7 +283,7 @@ import Testing
         #expect(item.isLocal)
         model.cancelPending(item)
         #expect(model.waiting.isEmpty)
-        try await eventually { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
+        try await until { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
         #expect(engine.requests("DELETE", "/inbox/\(message)").count == 1)
     }
 
@@ -295,7 +295,7 @@ import Testing
         defer { gate.open() }
         holdInPreparation(until: gate)
         model.send("Also run the linter", for: nil)
-        try await eventually { !engine.requests("GET", "/api/mcp").isEmpty }
+        try await until { !engine.requests("GET", "/api/mcp").isEmpty }
         let item = try #require(model.waiting.first)
         model.cancelPending(item)
         #expect(model.waiting.isEmpty)
@@ -328,16 +328,16 @@ import Testing
 
         // The agent takes it while the cancel is on its way.
         model.edit(try #require(model.waiting.first { $0.id == "msg_02" }))
-        try await eventually { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
         model.apply(try inbox("delivered", "msg_02"))
         taken.open()
 
         // This one's cancel wins, and the engine says so after answering.
         model.edit(try #require(model.waiting.first { $0.id == "msg_04" }))
-        try await eventually { !engine.requests("DELETE", "/inbox/msg_04").isEmpty }
+        try await until { !engine.requests("DELETE", "/inbox/msg_04").isEmpty }
         cancelled.open()
         model.apply(try inbox("cancelled", "msg_04"))
-        try await eventually { !model.draftText.isEmpty }
+        try await until { !model.draftText.isEmpty }
         #expect(model.draftText == "And bump the version")
         #expect(model.waiting.isEmpty)
         #expect(userMessages(in: model) == ["Fix the build", "Then update the docs"])

@@ -7,6 +7,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ## Unreleased
 
 - Your machines keep each other up to date on which computers are yours and on your personalities with your Mac closed, signed by the computer each change came from, so none can pass on one it made up, and a computer whose clock is wrong no longer decides which change wins. A personality you delete stays deleted everywhere, and a change that would make your personalities too big to share is turned down with a message, in the bot editor and from your phone.
+- A search with + in it, like c++, typed in the panel browser's address field searches for what you typed rather than for c.
 - While a bot or chat moves to another computer, a reply from its notification and messages from other agents wait and reach it once the move is over, rather than being turned away, and a bot whose turn comes in a group chat meanwhile takes it then rather than sitting it out.
 - Math in replies: a web address that starts with www. and has dollar signs in it opens the right page, and a formula on a line of its own is centered in a few places it used to stay in the line, such as on an unindented line under a list item or quote.
 - Opening the session that's beside a tab, from the sidebar or a notification, puts you in its half of the split. Clicking a notification while the window is closed opens it. A conversation moved to a coding agent from your phone no longer switches the tab in view on your Mac.

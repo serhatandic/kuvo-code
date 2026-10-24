@@ -7,7 +7,7 @@ import Testing
 /// what you'd written; Redo takes them out again while the composer is as the undo left it, and
 /// never takes away what you typed meanwhile. The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct UndoRedoTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct UndoRedoTests {
     let engine = StubEngine(port: 47992)
     let workspace = Workspace()
     let id = "ses_undo_\(UUID().uuidString.prefix(8))"
@@ -48,12 +48,12 @@ import Testing
         let model = try await open()
         model.draftText = "half a thought"
         model.undo(from: try user(newer))
-        try await eventually { model.draftText.contains("Make it dark") }
+        try await until { model.draftText.contains("Make it dark") }
         model.undo(from: try user(older))
-        try await eventually { model.draftText.contains("Add a settings page") }
+        try await until { model.draftText.contains("Add a settings page") }
         #expect(model.draftText == "Add a settings page\n\nMake it dark\n\nhalf a thought")
         model.redo()
-        try await eventually { model.session.revert == nil }
+        try await until { model.session.revert == nil }
         #expect(model.draftText == "half a thought")
     }
 
@@ -62,10 +62,10 @@ import Testing
         defer { done() }
         let model = try await open()
         model.undo(from: try user(newer))
-        try await eventually { model.draftText == "Make it dark" }
+        try await until { model.draftText == "Make it dark" }
         model.draftText += ", with a toggle"
         model.redo()
-        try await eventually { model.session.revert == nil }
+        try await until { model.session.revert == nil }
         #expect(model.draftText == "Make it dark, with a toggle")
     }
 
@@ -76,12 +76,12 @@ import Testing
         let model = try await open()
         model.draftText = "half a thought"
         model.undo(from: try user(newer))
-        try await eventually { model.draftText.contains("Make it dark") }
+        try await until { model.draftText.contains("Make it dark") }
         model.draftText += " about colors"
         model.undo(from: try user(older))
-        try await eventually { model.draftText.contains("Add a settings page") }
+        try await until { model.draftText.contains("Add a settings page") }
         model.redo()
-        try await eventually { model.session.revert == nil }
+        try await until { model.session.revert == nil }
         #expect(model.draftText.contains("half a thought about colors"), "typed text was lost: \(model.draftText)")
         #expect(!model.draftText.contains("Add a settings page"), "the message Redo brought back shouldn't stay in the composer to be sent again")
         #expect(!model.draftText.contains("Make it dark"), "nor the one the first undo put there: \(model.draftText)")
@@ -116,7 +116,7 @@ import Testing
         #expect(model.transcript.messages.map(\.id) == ["msg_01", "msg_02", "msg_04", "msg_05", "msg_03", "msg_06"])
 
         model.undo(from: try user(conversation[4]))
-        try await eventually { model.draftText == "Then run the tests" }
+        try await until { model.draftText == "Then run the tests" }
         model.send("Then run the tests, and the linter", for: nil)
         #expect(model.transcript.messages.map(\.id) == ["msg_01", "msg_02", "msg_04", "msg_05"], "the reply before the undone message should stay")
         // The engine's word that it made the undo final, as it takes the message: already done.

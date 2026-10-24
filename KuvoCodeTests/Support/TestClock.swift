@@ -23,6 +23,7 @@ nonisolated final class TestClock: @unchecked Sendable {
                     return false
                 }
                 if goesOn { continuation.resume() }
+                TestPulse.beat()
             }
         } onCancel: {
             let found = lock.withLock { () -> CheckedContinuation<Void, Never>? in
@@ -33,6 +34,7 @@ nonisolated final class TestClock: @unchecked Sendable {
                 return waiting.remove(at: index).resume
             }
             found?.resume()
+            TestPulse.beat()
         }
     }
 
@@ -47,5 +49,6 @@ nonisolated final class TestClock: @unchecked Sendable {
             return due
         }
         for wait in due { wait.resume.resume() }
+        TestPulse.beat()
     }
 }

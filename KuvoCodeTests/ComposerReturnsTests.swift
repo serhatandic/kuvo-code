@@ -7,7 +7,7 @@ import Testing
 /// what you wrote meanwhile, and why it didn't go), and one you undo, which Redo takes back out.
 /// The engine is stubbed.
 @MainActor
-@Suite(.serialized) struct ComposerReturnsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct ComposerReturnsTests {
     static let engine = "http://127.0.0.1:47994"
     let workspace = Workspace()
     let id = "ses_composer_\(UUID().uuidString.prefix(8))"
@@ -30,11 +30,6 @@ import Testing
     private func done() {
         StubWeb.stop()
         Drafts.shared.remove(id)
-    }
-
-    /// Until `condition` holds (the work goes on off the main thread), a few seconds at most.
-    private func until(_ condition: () -> Bool) async throws {
-        for _ in 0..<500 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
     }
 
     @Test func aMessageTheEngineDidntTakeComesBackWhole() async throws {
@@ -132,7 +127,10 @@ import Testing
     nonisolated final class Bodies: @unchecked Sendable {
         private let lock = NSLock()
         private var list: [String] = []
-        func add(_ delivery: String) { lock.withLock { list.append(delivery) } }
+        func add(_ delivery: String) {
+            lock.withLock { list.append(delivery) }
+            TestPulse.beat()
+        }
         var all: [String] { lock.withLock { list } }
     }
 
