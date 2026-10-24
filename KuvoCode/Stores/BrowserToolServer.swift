@@ -61,9 +61,15 @@ final class BrowserToolServer {
                     case .ready:
                         resumed = true
                         continuation.resume(returning: listener.port?.rawValue ?? 0)
-                    case .failed(let error):
+                    // One that can't listen now (waiting for a network that may never come) fails
+                    // rather than holding the engine's start: it starts without the browser.
+                    case .failed(let error), .waiting(let error):
                         resumed = true
+                        listener.cancel()
                         continuation.resume(throwing: error)
+                    case .cancelled:
+                        resumed = true
+                        continuation.resume(throwing: CancellationError())
                     default:
                         break
                     }
