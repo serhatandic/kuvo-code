@@ -415,10 +415,18 @@ test("a box that missed its Mac's mail learns that Mac's newer list from a machi
   fresh({ peersFrom: { [mac.pub]: { at: 10, peers: [mac.peer, second.peer] } } });
   const passOn = (from, lists) => link.receiveMail(mailFrom(from, { vouched: { lists }, at: Date.now() }), undefined, link.peerMail);
   const names = () => link.peersOf(link.readLink()).map(peer => peer.name).sort();
-  // The Mac added `third` while this box was away: `second` heard it, and passes it on.
-  passOn(second, [{ mac: mac.pub, at: 20, peers: [mac.peer, second.peer, third.peer, here.peer] }]);
+  // The Mac added `third` while this box was away: `second` heard it, and passes it on, as the
+  // Mac gave it (a Mac's list to a machine leaves that machine out): `second` stays a peer here.
+  passOn(second, [{ mac: mac.pub, at: 20, peers: [mac.peer, third.peer, here.peer] }]);
   assert.deepEqual(names(), ["mac", "second", "third"]);
-  // So `third` can write here now; told this box's agents, it isn't sent lists to pass on.
+  const kept = [];
+  link.receiveMail(mailFrom(second, { agents: { at: 2, list: [] } }), undefined, sender => kept.push(sender.name));
+  assert.deepEqual(kept, ["second"], "its mail is still opened");
+  // A list dated far ahead isn't taken (it would win over every list to come).
+  passOn(second, [{ mac: mac.pub, at: Date.now() + 10 * 86_400_000, peers: [mac.peer] }]);
+  assert.deepEqual(names(), ["mac", "second", "third"]);
+  // So `third` can write here now, and is told this box's agents, with the Mac's list as this box
+  // has it from the Mac itself (only that is passed on: one hop).
   const heard = [];
   link.receiveMail(mailFrom(third, { agents: { at: 1, list: [] } }), undefined, sender => heard.push(sender.name));
   assert.deepEqual(heard, ["third"]);
@@ -427,7 +435,7 @@ test("a box that missed its Mac's mail learns that Mac's newer list from a machi
   await link.announce({ send: bytes => sent.push(bytes) }, () => target, link.readLink(), Date.now());
   const to = who => sent.filter(bytes => k(bytes.subarray(1, 17)) === who.address).map(bytes => opened(bytes, who).payload);
   assert.deepEqual(to(second)[0].vouched.lists.map(list => [list.mac, list.at]), [[mac.pub, 10]], "the Mac's list as it gave it here");
-  assert.equal(to(third)[0].vouched, undefined);
+  assert.deepEqual(to(third)[0].vouched.lists.map(list => [list.mac, list.at]), [[mac.pub, 10]]);
   assert.equal(to(mac)[0].vouched, undefined);
   // Another Mac's list, one passed on by `third`, and an older copy: nothing.
   const fourth = box("machine", "fourth");
@@ -435,10 +443,12 @@ test("a box that missed its Mac's mail learns that Mac's newer list from a machi
   passOn(third, [{ mac: mac.pub, at: 60, peers: [mac.peer, fourth.peer] }]);
   passOn(second, [{ mac: mac.pub, at: 15, peers: [mac.peer] }]);
   assert.deepEqual(names(), ["mac", "second", "third"]);
-  // Nor personalities from a machine only passed on: only from one this box's own Mac named.
-  link.receiveMail(mailFrom(third, { personalities: { personalities: [{ id: "custom.sly", name: "Sly", description: "Sly.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
+  // Personalities from a machine this box's Mac named (in its newest list) are taken; from one it
+  // didn't, nothing's even opened.
+  link.receiveMail(mailFrom(stranger, { personalities: { personalities: [{ id: "custom.sly", name: "Sly", description: "Sly.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
+  link.receiveMail(mailFrom(third, { personalities: { personalities: [{ id: "custom.kind", name: "Kind", description: "Kind.", updated: 1 }] }, at: 1 }), undefined, link.peerMail);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(link.readPersonalities().personalities.some(each => each.id === "custom.sly"), false);
+  assert.deepEqual(link.readPersonalities().personalities.map(each => each.id).filter(id => ["custom.sly", "custom.kind"].includes(id)), ["custom.kind"]);
   // The Mac's own newer word wins over what was passed on: it dropped `third` and `second`.
   link.receiveMail(mailFrom(mac, { at: 30, peers: [mac.peer] }));
   assert.deepEqual(names(), ["mac"]);

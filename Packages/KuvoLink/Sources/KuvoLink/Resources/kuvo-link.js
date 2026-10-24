@@ -1141,7 +1141,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...(typeof body?.base === "string" ? { base: body.base } : {}) };
     const absolute = folder => typeof folder === "string" && path.isAbsolute(folder);
     if (!absolute(given.project) || !absolute(given.root) || !absolute(given.folder) || typeof given.branch !== "string" || !given.branch) return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
-    if (!fs.existsSync(given.root) || gitIn(given.root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return { status: 404, value: message("That worktree isn't on this machine any more.") };
+    if (!fs.existsSync(given.root)) return { status: 404, value: message("That worktree isn't on this machine any more.") };
     updateWorktrees(list => [...list.filter(each => each.root !== given.root), given]);
     return { status: 200, value: {} };
   }
@@ -1158,6 +1158,10 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     const { sessions, active } = await sessionsHere(engine, signal);
     if (sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root) && active.has(session.id))) {
       return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
+    }
+    // One made for a session that never started (`forget`): not one a session has after all.
+    if (body?.forget === true && sessions.some(session => inside(session.location?.directory ?? session.directory, tree.root))) {
+      return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
     }
     const discard = body?.discard !== false;
     if (!discard && fs.existsSync(tree.root) && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
@@ -3544,18 +3548,24 @@ export function readPersonalities(file = PERSONALITIES_FILE) {
 export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
   return locked(lock, () => {
     const library = mergePersonalities(change(readPersonalities(file)));
-    writePrivate(file, JSON.stringify({ kuvo: 1, ...library }, null, 2) + "\n");
+    // Written only when it changed (a Mac meets this copy every minute).
+    const text = JSON.stringify({ kuvo: 1, ...library }, null, 2) + "\n";
+    if (textOf(file) !== text) writePrivate(file, text);
     return library;
   });
+}
+
+// A copy from elsewhere without what's dated ahead of this box's clock by more than a day, which
+// would win over every change to come.
+export function timelyPersonalities(given, now = Date.now()) {
+  const timely = list => (Array.isArray(list) ? list : []).filter(entry => changedAt(entry) <= now + 86_400_000);
+  return { personalities: timely(given?.personalities), removed: timely(given?.removed) };
 }
 
 // A peer's copy met with this one's (each box tells the others its own, box to box, with no Mac
 // needed): the personalities that changed here, whose bots here are told what they are now.
 export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK, now = Date.now()) {
-  // Never a change dated ahead of this box's clock by more than a day, which would win over every
-  // change to come.
-  const timely = list => (Array.isArray(list) ? list : []).filter(entry => changedAt(entry) <= now + 86_400_000);
-  given = { personalities: timely(given?.personalities), removed: timely(given?.removed) };
+  given = timelyPersonalities(given, now);
   const before = readPersonalities(file);
   const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
   const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
@@ -4131,17 +4141,30 @@ export function movedOf(link) {
 export function peersOf(link) {
   if (!link?.peersFrom || !Object.keys(link.peersFrom).length) return [];
   // Each of this box's Macs' lists as that Mac last gave it: its own copy, or a newer one a
-  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail.
-  const vouchers = peersFromMacs(link).filter(peer => peer.kind === "machine").map(peer => peer.key);
+  // machine that Mac named passed on (`vouched`), when this box missed the Mac's mail. Twice: a
+  // machine the newer lists dropped passes nothing on.
+  const direct = peersFromMacs(link).filter(peer => peer.kind === "machine");
+  let peers = composedPeers(link, direct);
+  peers = composedPeers(link, direct.filter(voucher => peers.some(peer => peer.key === voucher.key)));
+  return peers;
+}
+
+// This box's Macs' lists, each the newest of its own copy and those `vouchers` passed on; a copy
+// one passed on counts that machine too (a Mac's list to a machine leaves that machine out).
+function composedPeers(link, vouchers) {
   const own = ownKey(link);
   const byKey = new Map();
   for (const mac of macsOf(link)) {
-    let newest = link.peersFrom[mac];
+    let newest = link.peersFrom[mac], from = null;
     for (const voucher of vouchers) {
-      const passed = link.vouched?.[voucher]?.[mac];
-      if (passed && passed.at > (newest?.at ?? 0)) newest = passed;
+      const passed = link.vouched?.[voucher.key]?.[mac];
+      if (passed && passed.at > (newest?.at ?? 0)) {
+        newest = passed;
+        from = voucher;
+      }
     }
-    for (const peer of newest?.peers ?? []) if (fitsPeer(peer) && peer.key !== own) byKey.set(peer.key, peer);
+    const listed = [...(newest?.peers ?? []), ...(from ? [from] : [])];
+    for (const peer of listed) if (fitsPeer(peer) && peer.key !== own && !byKey.has(peer.key)) byKey.set(peer.key, peer);
   }
   return [...byKey.values()];
 }
@@ -4174,7 +4197,9 @@ export function takeVouched(link, by, lists) {
   const macs = new Set(macsOf(link));
   let changed = false;
   for (const list of lists.slice(0, 16)) {
-    if (!isObject(list) || !macs.has(list.mac) || typeof list.at !== "number" || !Array.isArray(list.peers)) continue;
+    // Never one dated ahead of this box's clock by more than a day, which would win over every
+    // list its Mac gives after.
+    if (!isObject(list) || !macs.has(list.mac) || typeof list.at !== "number" || list.at > Date.now() + 86_400_000 || !Array.isArray(list.peers)) continue;
     link.vouched ??= {};
     link.vouched[by] ??= {};
     if (list.at <= (link.vouched[by][list.mac]?.at ?? 0)) continue;
@@ -4486,8 +4511,8 @@ export function peerMail(sender, payload, host, targets = () => []) {
   if (isObject(payload.agents)) {
     if (takeAgents(sender, payload.agents)) writeAgents();
   }
-  // Your personalities only from a machine this box's own Macs named.
-  if (isObject(payload.personalities) && sender.kind === "machine" && peersFromMacs(readLink()).some(peer => peer.key === sender.key)) {
+  // Your personalities only from a machine this box's own Macs named (all its peers are).
+  if (isObject(payload.personalities) && sender.kind === "machine") {
     takePersonalities(payload.personalities).catch(() => {});
   }
   if (isObject(payload.vouched) && sender.kind === "machine") {
@@ -4538,13 +4563,12 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
   if (!ownList) return;
   // With them, to a machine this box's Macs named, their lists as they gave them (`vouched`), for
   // one that missed a Mac's mail.
-  const direct = new Set(peersFromMacs(link).map(peer => peer.key));
   const lists = macsOf(link).filter(mac => link.peersFrom?.[mac]).map(mac => ({ mac, at: link.peersFrom[mac].at, peers: link.peersFrom[mac].peers }));
   const json = JSON.stringify([ownList, lists]);
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
     if (!ask && last && last.json === json && now - last.at < 600_000) continue;
-    const others = peer.kind === "machine" && direct.has(peer.key) && lists.length ? { vouched: { lists } } : {};
+    const others = peer.kind === "machine" && lists.length ? { vouched: { lists } } : {};
     // As many as fit in one mail: the first (bots, then the latest sessions) first.
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
@@ -4563,7 +4587,7 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
   const library = readPersonalities();
   const words = JSON.stringify(library);
   if (!library.personalities.length && !library.removed.length) return;
-  for (const peer of peersFromMacs(link).filter(peer => peer.kind === "machine")) {
+  for (const peer of peersOf(link).filter(peer => peer.kind === "machine")) {
     const last = toldPersonalities.get(peer.key);
     if (!ask && last && last.words === words && now - last.at < 600_000) continue;
     // In as many mails as it takes (each personality is met on its own), the newest first.
@@ -5598,7 +5622,7 @@ async function box(command) {
       // A Mac's copy met with this one's: both end up as one.
       let given = null;
       try { given = JSON.parse((await input()) || "null"); } catch {}
-      return say({ status: 200, ...changePersonalities(library => mergePersonalities(library, given)) });
+      return say({ status: 200, ...changePersonalities(library => mergePersonalities(library, timelyPersonalities(given))) });
     }
     default:
       console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-auto | update-now");
