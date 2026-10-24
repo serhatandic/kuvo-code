@@ -14,10 +14,13 @@ public protocol RelayTransport: AnyObject, Sendable {
     /// Whether messages queued with `send` are still on their way out (a big body on a slow
     /// connection): the other end can't have answered what hasn't reached it.
     var isSending: Bool { get }
+    /// Returns once what's queued with `send` so far has gone out (or the connection's closed).
+    func allSent() async
 }
 
 extension RelayTransport {
     public var isSending: Bool { false }
+    public func allSent() async {}
 }
 
 /// The relay over a WebSocket.
@@ -27,8 +30,22 @@ public final class WebSocketRelay: RelayTransport, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
     private let outbox: AsyncStream<RelayMessage>.Continuation
     private let inbox: AsyncStream<RelayMessage>.Continuation
-    /// Messages queued that the socket hasn't taken yet.
-    private let queued = OSAllocatedUnfairLock(initialState: 0)
+    /// Messages queued that the socket hasn't taken yet, and who waits for there to be none.
+    private let queued = OSAllocatedUnfairLock(initialState: Outbox())
+
+    private struct Outbox {
+        var count = 0
+        /// Nothing more goes out: the connection's closed.
+        var closed = false
+        var waiting: [CheckedContinuation<Void, Never>] = []
+
+        /// The waiters to let go, once nothing's queued.
+        mutating func emptied() -> [CheckedContinuation<Void, Never>] {
+            guard count == 0 else { return [] }
+            defer { waiting = [] }
+            return waiting
+        }
+    }
 
     /// Connects, says hello and waits for the relay's welcome.
     public static func connect(to url: URL, secret: RelaySecret) async throws -> any RelayTransport {
@@ -65,9 +82,9 @@ public final class WebSocketRelay: RelayTransport, @unchecked Sendable {
                     task.cancel(with: .goingAway, reason: nil)
                     break
                 }
-                queued.withLock { $0 -= 1 }
+                for waiter in queued.withLock({ $0.count -= 1; return $0.emptied() }) { waiter.resume() }
             }
-            queued.withLock { $0 = 0 }
+            for waiter in queued.withLock({ $0.count = 0; $0.closed = true; return $0.emptied() }) { waiter.resume() }
         }
         Task { [task, inbox] in
             while true {
@@ -97,11 +114,22 @@ public final class WebSocketRelay: RelayTransport, @unchecked Sendable {
     deinit { close() }
 
     public func send(_ message: RelayMessage) {
-        queued.withLock { $0 += 1 }
+        queued.withLock { if !$0.closed { $0.count += 1 } }
         outbox.yield(message)
     }
 
-    public var isSending: Bool { queued.withLock { $0 > 0 } }
+    public var isSending: Bool { queued.withLock { $0.count > 0 } }
+
+    public func allSent() async {
+        await withCheckedContinuation { continuation in
+            let now = queued.withLock { outbox in
+                guard outbox.count > 0 else { return true }
+                outbox.waiting.append(continuation)
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
 
     public func close() {
         task.cancel(with: .normalClosure, reason: nil)

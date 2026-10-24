@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.33";
+export const BRIDGE_VERSION = "0.9.34";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -258,6 +258,8 @@ export function readRelay(bytes) {
   if (kind === 2 && bytes.length >= 17) return { kind: "deliver", address, payload: bytes.subarray(17) };
   if (kind === 3 && bytes.length === 17) return { kind: "unreachable", address };
   if (kind === 6 && bytes.length === 18) return { kind: "pushed", address, status: bytes[17] };
+  // A reason it doesn't know yet counts as left: the sessions are over either way.
+  if (kind === 7 && bytes.length === 18) return { kind: "gone", address, reason: bytes[17] === 0 ? "replaced" : "left" };
   return null;
 }
 
@@ -337,7 +339,11 @@ export class LinkHost {
 
   get active() { return this.sessions.size; }
 
-  // A phone the relay can't reach any more (asleep, gone): what it asked for has nobody to go to.
+  // A phone the relay can't reach any more (asleep, gone), or whose relay connection the relay says
+  // went or was replaced (it ended its sessions with it): what it asked for has nobody to go to.
+  // While this host's own relay connection stays up, a session ends only with the phone told, or
+  // by the phone's own doing: phones count on that rather than checking before each request
+  // (PROTOCOL.md, "The relay").
   forget(address) {
     for (const session of this.sessions.values()) if (session.from.equals(address)) this.end(session, false);
   }
@@ -5927,6 +5933,15 @@ export function startUpdate(options = {}) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
+// gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
+// sent. What this connection sends itself, to check it's alive, is only that.
+export function fromRelay(host, message, self) {
+  if (message.address.equals(self)) return;
+  if (message.kind === "deliver") host.receive(message.address, message.payload);
+  if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
+}
+
 // Connects once, serves until the connection ends. Resolves whether it got as far as welcome.
 export function connectOnce(relay, secret, host) {
   return new Promise(resolve => {
@@ -5973,8 +5988,7 @@ export function connectOnce(relay, secret, host) {
         try { confirmUpdate(); } catch {}
         return;
       }
-      if (message.kind === "deliver" && !message.address.equals(self)) host.receive(message.address, message.payload);
-      if (message.kind === "unreachable" && !message.address.equals(self)) host.forget(message.address);
+      fromRelay(host, message, self);
     };
     socket.onerror = finish;
     socket.onclose = finish;
