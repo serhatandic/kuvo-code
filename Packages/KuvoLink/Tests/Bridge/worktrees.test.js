@@ -145,6 +145,15 @@ test("the machine names a branch after its session's title, once, and only one i
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
+test("a subagent's title, working in a session's worktree, doesn't name its branch", async () => {
+  const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
+  sessions.push({ id: "ses_helper", parentID: "ses_lead", title: "Explore the codebase", location: { directory: made.folder } });
+  await link.nameWorktreeBranch(atEngine, "ses_helper");
+  assert.equal(git(made.root, "symbolic-ref", "--short", "HEAD"), made.branch);
+  sessions.splice(sessions.findIndex(each => each.id === "ses_helper"), 1);
+  assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+});
+
 test("a project in a folder of its repository, reached through a link: its session runs in that folder of the worktree", async () => {
   fs.mkdirSync(path.join(project, "web"));
   fs.writeFileSync(path.join(project, "web", "index.html"), "<p>Shop</p>\n");

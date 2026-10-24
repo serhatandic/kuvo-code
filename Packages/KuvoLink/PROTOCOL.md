@@ -348,6 +348,8 @@ Who sends it: each box, for what happens on it, so each notice comes once.
   or failed, bots' news), from 0.9.9 what agents ask for as they browse there (category `ask`),
   and from 0.9.10 its coding agents' sessions and the group chats that live there (a meeting
   held, a bot done with its part: category `message`, `data.group`), each as the Mac words it.
+  An ask goes once it's still asked a couple of seconds later (from 0.9.24), so one a connected
+  Mac answers at once with a saved password doesn't.
   From 0.9.24 it tells them whether a Mac is connected to it or not (before, it stayed quiet
   while a Mac noted it was there, in `run/present`), and leaves out a group chat's seats, as
   the Mac does. An engine run a coding agent's session started (Auto on an engine model)
@@ -687,9 +689,10 @@ itself. A host serves:
     own prefix, from Settings › Git); make the session in `folder`, and the computer tells it it
     works in a worktree (a Mac's from this version, a machine's bridge from 0.9.23). `400` for a
     project that isn't a folder there, `409 {"message"}` when it isn't in a git repository, `503`
-    while the engine isn't running. On a machine (0.9.23 also took a Mac's `POST
-    kuvo/worktrees/rename`, gone from 0.9.24: it names them itself): `POST kuvo/worktrees/record {project, root, folder?, branch, base?}` keeps one a Mac
-    made there before machines kept their own (`404` when it isn't there any more).
+    while the engine isn't running. On a machine, `POST kuvo/worktrees/record {project, root,
+    folder?, branch, base?}` keeps one a Mac made there before machines kept their own (`404`
+    when it isn't there any more). (0.9.23 also took a Mac's `POST kuvo/worktrees/rename`, gone
+    from 0.9.24, which names them itself.)
 - On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
   awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
   while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;

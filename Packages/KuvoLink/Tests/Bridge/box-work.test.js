@@ -114,15 +114,38 @@ test("a group chat's seat says nothing of its own: its chat tells your phones wh
 test("with a Mac connected, what an agent asks for as it browses here still reaches your phones, from the machine", async () => {
   macJustConnected();
   fs.writeFileSync(path.join(run, "browser-asks.json"), JSON.stringify({ asks: [{ id: "ask-1", kind: "code", host: "github.com", prompt: "The code GitHub sent" }] }));
-  // The browser runs (a process that's alive: this one).
-  fs.writeFileSync(path.join(run, "browser.pid"), String(process.pid));
   const stop = new AbortController();
   const { tell, next } = phones();
   try {
-    link.watchAsks(tell, stop.signal);
+    // The browser runs.
+    link.watchAsks(tell, { signal: stop.signal, every: 0, read: () => link.readAsks(() => true) });
     assert.deepEqual(await next(), { title: "Code for github.com", subtitle: undefined, body: "The code GitHub sent", category: "ask", thread: "ask-1", data: { ask: "ask-1" } });
   } finally {
     stop.abort();
-    for (const name of ["browser-asks.json", "browser.pid"]) fs.rmSync(path.join(run, name), { force: true });
+    fs.rmSync(path.join(run, "browser-asks.json"), { force: true });
+  }
+});
+
+test("a sign-in a Mac answers at once, with your saved password, never reaches your phones", async () => {
+  const signIn = { id: "ask-2", kind: "signIn", host: "github.com", username: true, password: true };
+  // Asked at one look, answered by the next; a third shows the watch went on.
+  const looks = [[signIn], [], []];
+  let looked = 0, lookedThrice;
+  const thrice = new Promise(resolve => { lookedThrice = resolve; });
+  const stop = new AbortController();
+  const { told, tell } = phones();
+  try {
+    link.watchAsks(tell, {
+      signal: stop.signal, every: 0,
+      read: () => {
+        looked += 1;
+        if (looked === 3) lookedThrice();
+        return looks[Math.min(looked, looks.length) - 1];
+      },
+    });
+    await thrice;
+    assert.deepEqual(told, []);
+  } finally {
+    stop.abort();
   }
 });

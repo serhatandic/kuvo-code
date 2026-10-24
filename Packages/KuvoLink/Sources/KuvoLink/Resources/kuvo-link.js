@@ -1046,7 +1046,12 @@ const inside = (folder, root) => folder === root || folder?.startsWith(root + "/
 function renameWorktree(tree, to) {
   if (gitIn(tree.root, ["rev-parse", "--abbrev-ref", `${tree.branch}@{upstream}`]) !== null) return false;
   const name = freeBranch(tree.root, to);
-  if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) return false;
+  if (!name || gitIn(tree.root, ["branch", "-m", tree.branch, name]) === null) {
+    // Renamed meanwhile (by this box's other process, named as it was read): kept as git has it.
+    const now = gitIn(tree.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    if (now && now !== tree.branch) updateWorktrees(list => list.map(each => (each.root === tree.root ? { ...each, branch: now } : each)));
+    return false;
+  }
   updateWorktrees(list => list.map(each => (each.root === tree.root ? { ...each, branch: name } : each)));
   return true;
 }
@@ -1057,10 +1062,12 @@ function renameWorktree(tree, to) {
 export async function nameWorktreeBranch(engine, sessionID) {
   if (typeof sessionID !== "string") return;
   const session = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`))?.data;
-  const folder = session?.location?.directory ?? session?.directory;
+  // Not after a subagent's title, nor an engine run's a coding agent's session started.
+  if (!session || session.parentID || isHiddenRun(session)) return;
+  const folder = session.location?.directory ?? session.directory;
   // Read now, after the wait: what another naming did meanwhile shows.
   const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
-  const slug = branchSlug(session?.title ?? "");
+  const slug = branchSlug(session.title ?? "");
   if (!tree?.made || tree.branch !== tree.made || !slug) return;
   if (renameWorktree(tree, (tree.prefix ?? "") + slug)) await tellWorktree(engine, sessionID);
 }
@@ -1073,7 +1080,7 @@ async function nameDueWorktrees(engine, signal) {
   if (!due.length || !engine?.port) return;
   const { sessions } = await sessionsHere(engine, signal);
   for (const tree of due) {
-    const titled = sessions.find(session => (session.location?.directory ?? session.directory) === (tree.folder ?? tree.root) && branchSlug(session.title ?? ""));
+    const titled = sessions.find(session => (session.location?.directory ?? session.directory) === (tree.folder ?? tree.root) && !isHiddenRun(session) && branchSlug(session.title ?? ""));
     if (titled) await nameWorktreeBranch(engine, titled.id).catch(() => {});
   }
 }
@@ -3474,22 +3481,26 @@ async function inConversation(ask, readEngine) {
   return { ask: conversation ? { ...ask, session: conversation.id } : ask, asker: conversation?.name ?? null };
 }
 
-// What's asked, as each comes, to your phones' notifications, once (again if it didn't go). `tell`
-// says whether it went. Until `signal` stops it (a test's).
-export async function watchAsks(tell, signal) {
+// What's asked, to your phones' notifications, once (again if it didn't go): each once it's still
+// asked a look later, so one a Mac answers at once (with a saved password) never buzzes a phone.
+// `tell` says whether it went. Every `every` ms, until `signal` stops it; `read`: what's asked
+// (a test's).
+export async function watchAsks(tell, { signal, every = 2000, read = readAsks } = {}) {
   const told = new Set();
+  let seen = new Set();
   while (!signal?.aborted) {
     try {
-      const asks = readAsks();
+      const asks = read();
       const open = new Set(asks.map(ask => ask.id));
       for (const id of told) if (!open.has(id)) told.delete(id);
       for (const ask of asks) {
-        if (told.has(ask.id)) continue;
+        if (told.has(ask.id) || !seen.has(ask.id)) continue;
         const { ask: shown, asker } = await inConversation(ask);
         if (tell(askNotice(shown, asker))) told.add(ask.id);
       }
+      seen = open;
     } catch {}
-    await pause(2000, signal);
+    await pause(every, signal);
   }
 }
 
