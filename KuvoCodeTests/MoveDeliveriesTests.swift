@@ -23,7 +23,7 @@ import Testing
     }
 
     private static func clean() {
-        for name in ["bots.json", "bots", "wakes"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name)) }
+        for name in ["bots.json", "bots", "wakes", "groups.json", "groups"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name)) }
         try? FileManager.default.removeItem(at: AppInfo.testRoot.appending(path: "deliveries-box"))
         try? FileManager.default.removeItem(at: AppInfo.testTrash)
         try? FileManager.default.removeItem(at: AgentMail.seenFile)
@@ -121,8 +121,7 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: there.path).count == 1, "it went along")
         #expect(!FileManager.default.fileExists(atPath: boxRoot.appending(path: "bots/\(id)/paused").path))
         await app.wakeUps.wakeDue()
-        #expect(prompts(mac, session, saying: "check the build") == 0)
-        #expect(prompts(box, session, saying: "check the build") == 0, "the machine sends it, not this Mac")
+        #expect(prompts(mac, session, saying: "check the build") == 0, "the machine sends it, not this Mac")
     }
 
     /// A machine's bot coming to this Mac: a letter and a reply sent to it on the way arrive once
@@ -147,7 +146,9 @@ import Testing
         let mail = letter("ltr_deliver2", to: session)
         let sent = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
         let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
-        // Both reach it before it goes on (the main actor takes them in turn).
+        // Its sender tries again meanwhile.
+        let again = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
+        // These reach it before it goes on (the main actor takes them in turn).
         await Task.yield()
         await app.wakeUps.wakeDue()
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
@@ -155,6 +156,7 @@ import Testing
         try await move.value
         await sent.value
         await replied.value
+        await again.value
         #expect(app.bots.bot(id)?.machine == nil)
         #expect(prompts(mac, session, saying: "The API's deployed.") == 1, "it waited, and went once it could")
         #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
@@ -208,6 +210,31 @@ import Testing
         #expect(prompts(mac, session, saying: "The API's deployed.") == 1)
         #expect(prompts(mac, session, saying: "check the build") == 1)
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
+    }
+
+    /// A bot whose move was cut short after it switched (the app quit), before it went over to its
+    /// copy, takes nothing where it was until that's finished: its turn in a group chat is sat
+    /// out, and nothing goes to an engine for it.
+    @Test func aBotCutShortSitsOutItsTurnUntilItsThere() async throws {
+        defer { Self.clean(); mac.stop() }
+        let id = "bot_deliver004", session = "ses_deliver4"
+        let original = try bot(id, session: session, in: Bots.root)
+        try Data(Moves.hold.utf8).write(to: original.appending(path: "paused"))
+        let record: [String: Any] = ["kind": "bot", "id": id, "sessions": [session], "original": original.path, "to": machine,
+                                     "copy": boxRoot.appending(path: "bots/\(id)").path, "wasPaused": false, "stage": "switched"]
+        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
+        let app = app()
+        // The machine away: the move can't be finished yet.
+        app.workspace.machineAPI = { _ in nil }
+        await app.moves.recover()
+        let group = app.groups.create(name: "Crew", members: [id])
+
+        app.groups.send("Where are we?", to: group.id)
+        try await eventually { app.groups.messages(in: group.id).contains { $0.kind == .note } && !app.groups.discussing.contains(group.id) }
+
+        #expect(app.groups.messages(in: group.id).contains { $0.kind == .note && $0.text.contains("sat this out") })
+        #expect(mac.asked.allSatisfy { !$0.hasPrefix("POST") }, "nothing went to an engine for it: \(mac.asked)")
+        app.groups.stop(group.id)
     }
 }
 

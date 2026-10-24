@@ -19,14 +19,14 @@ enum Deliveries {
 
     /// Sends `text` to `session`, on `api` as it is once nothing holds it (asked then). `later`:
     /// it doesn't wait, as it's kept to be tried again. Whether it went: not when it's left for
-    /// later, or its move was cut short (`Moves.Failure.moving` for one that waited).
+    /// later. One whose move was cut short throws `Moves.Failure.moving` until that's finished.
     @discardableResult
     static func send(_ text: String, to session: String, id: String = Identifier.message(), delivery: InboxItem.Delivery,
                      later: Bool = false, on api: @autoclosure () -> OpenCodeAPI?) async throws -> Bool {
-        if !later { try await settled(session) }
-        if Moves.isFrozen(session) {
-            if later { return false }
-            throw Moves.Failure.moving
+        if later {
+            guard !Moves.isFrozen(session) else { return false }
+        } else {
+            try await settled(session)
         }
         guard let api = api() else { throw Unreachable() }
         try await api.prompt(session: session, id: id, text: text, delivery: delivery)
@@ -34,9 +34,10 @@ enum Deliveries {
     }
 
     /// Once no move under way has any of `ids` (a conversation, a bot): at once when none has.
-    /// Throws if the task waiting is cancelled.
+    /// Throws `Moves.Failure.moving` for one whose move was cut short, until that's finished, and
+    /// if the task waiting is cancelled.
     static func settled(_ ids: String...) async throws {
-        while ids.contains(where: Moves.isUnderWay) {
+        while ids.contains(where: Moves.frozen.contains) {
             let key = UUID()
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (going: CheckedContinuation<Void, Error>) in
@@ -46,6 +47,7 @@ enum Deliveries {
                 Task { @MainActor in waiting.removeValue(forKey: key)?.going.resume(throwing: CancellationError()) }
             }
         }
+        if ids.contains(where: Moves.isFrozen) { throw Moves.Failure.moving }
     }
 
     /// What waits for moves, by the IDs it waits for.
@@ -53,7 +55,7 @@ enum Deliveries {
 
     /// A move let some go (`Moves`): what waited for only those goes now.
     static func movesChanged() {
-        for (key, waiter) in waiting where !waiter.ids.contains(where: Moves.isUnderWay) {
+        for (key, waiter) in waiting where !waiter.ids.contains(where: Moves.frozen.contains) {
             waiting.removeValue(forKey: key)?.going.resume()
         }
     }

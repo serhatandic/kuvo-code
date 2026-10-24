@@ -312,12 +312,14 @@ final class AgentMail {
         }
         guard target.session != caller else { return .refused("That's you.") }
         // Moving to another computer: once it's over, to it where it lives then.
-        if Moves.isUnderWay(target.session) {
-            try? await Deliveries.settled(target.session)
-            switch find(to, caller: caller) {
-            case .found(let found): target = found
-            case .missing(let outcome): return outcome
-            }
+        do {
+            try await Deliveries.settled(target.session)
+        } catch {
+            return .failed("\(target.name) is moving to another computer. Try again in a minute.")
+        }
+        switch find(to, caller: caller) {
+        case .found(let found): target = found
+        case .missing(let outcome): return outcome
         }
         // A few at a time: two agents shouldn't keep writing to each other unattended. Counted as
         // it starts, before anything's awaited, so messages sent at once count each other; taken

@@ -37,8 +37,6 @@ final class Moves {
     private(set) static var pending: Set<String> = []
 
     static func isFrozen(_ id: String) -> Bool { frozen.contains(id) || pending.contains(id) }
-    /// In a move under way now (not one cut short): one that ends by itself.
-    static func isUnderWay(_ id: String) -> Bool { frozen.contains(id) }
 
     /// What a move writes in a folder's pause file while it holds the wake-ups there: only a move
     /// takes it away (`MoveTransport.unpause`), never a pause of yours.

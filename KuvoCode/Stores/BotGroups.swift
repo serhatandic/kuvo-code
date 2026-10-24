@@ -916,7 +916,7 @@ final class BotGroups {
     /// `namedIn`: a guest's turn, asked in by that message.
     private func turn(of botID: String, in id: String, wrapUp: Bool = false, namedIn: GroupMessage? = nil) async -> Outcome {
         let guest = namedIn != nil
-        guard let app, app.bots.bot(botID) != nil else { return .absent }
+        guard let app, var bot = app.bots.bot(botID) else { return .absent }
         speaking[id] = botID
         defer {
             if speaking[id] == botID {
@@ -924,9 +924,19 @@ final class BotGroups {
                 activity[id] = nil
             }
         }
-        // Moving to another computer: its turn once it's there.
-        do { try await Deliveries.settled(botID) } catch { return .absent }
-        guard let bot = app.bots.bot(botID) else { return .absent }
+        // Moving to another computer: its turn once it's there (one whose move was cut short sits
+        // it out until that's finished).
+        if app.moves.isMoving(botID) { note("\(bot.name) is moving to another computer; it takes its turn once that’s done.", in: id) }
+        do {
+            try await Deliveries.settled(botID)
+        } catch is CancellationError {
+            return .absent
+        } catch {
+            note("\(bot.name) is moving to another computer, so it sat this out.", in: id)
+            return .absent
+        }
+        guard let now = app.bots.bot(botID) else { return .absent }
+        bot = now
         if let machine = bot.machine, app.machines.engine(machine)?.isReady != true {
             note("\(bot.name) is on \(machine), which isn’t connected, so it sat this out.", in: id)
             return .absent
@@ -1521,7 +1531,13 @@ final class BotGroups {
     private func hand(_ taskID: String, of wrapUpID: String, in id: String) async {
         // A bot moving to another computer gets its part there, once it is.
         if let bot = group(id).flatMap({ group in messages(in: id).first { $0.id == wrapUpID }?.tasks?.first { $0.id == taskID }?.bot }) {
-            do { try await Deliveries.settled(bot) } catch { return }
+            do {
+                try await Deliveries.settled(bot)
+            } catch is CancellationError {
+                return
+            } catch {
+                return fail(taskID, of: wrapUpID, in: id, error.localizedDescription)
+            }
         }
         guard let app, let group = group(id), let wrapUp = messages(in: id).first(where: { $0.id == wrapUpID }),
               let task = wrapUp.tasks?.first(where: { $0.id == taskID }) else { return }
