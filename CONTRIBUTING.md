@@ -200,6 +200,7 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
+| `KUVO_DEMO_REMOVE_PROJECT` | Remove Project…'s dialog for the project of this name, open (nothing's removed unless you click) |
 | `KUVO_DEMO_PALETTE` | Open the command palette with this typed in it (empty for none) |
 | `KUVO_DEMO_MENU` | Open the `mode` menu, the `model` picker (`list` on the model list, `models` with every model shown), or `location` in the New Project sheet |
 | `KUVO_DEMO_EFFORT` | With the model picker open, pick this effort level |

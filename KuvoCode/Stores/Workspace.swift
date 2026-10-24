@@ -366,10 +366,13 @@ final class Workspace {
     private static let pinnedKey = "kuvo.pinned"
 
     /// Archives a session, or brings it back.
-    func setArchived(_ id: String, _ archived: Bool) async {
+    /// Whether the engine took it.
+    @discardableResult
+    func setArchived(_ id: String, _ archived: Bool) async -> Bool {
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
-        guard await setFlag(Self.archivedKey, archived, of: id) else { return }
+        guard await setFlag(Self.archivedKey, archived, of: id) else { return false }
         onArchived?(id, archived)
+        return true
     }
 
     /// A session was archived, or brought back. The app sets it.
@@ -657,6 +660,25 @@ final class Workspace {
         UserDefaults.standard.set(folders, forKey: "projectFolders")
         settings[directory] = nil
         saveSettings()
+    }
+
+    /// Remove Project…: every session of the project, its worktrees' too, archived (Archived
+    /// Sessions brings them back), and the project off the sidebar. Its files, worktrees included,
+    /// stay. How many the engine didn't take: those stay listed, and the project with them.
+    @discardableResult
+    func removeProject(_ directory: String) async -> Int {
+        let sessions = projects.first { $0.directory == directory }?.sessions ?? []
+        // Side by side: on a machine, each is a round trip.
+        let kept = await withTaskGroup(of: Bool.self) { group in
+            for session in sessions {
+                group.addTask { await self.setArchived(session.id, true) }
+            }
+            var kept = 0
+            for await archived in group where !archived { kept += 1 }
+            return kept
+        }
+        removeFolder(directory)
+        return kept
     }
 
     /// The project's name: its own, or its primary folder's. A worktree has its project's.
