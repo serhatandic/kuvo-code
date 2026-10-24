@@ -2,7 +2,7 @@
 # Runs the app's tests (KuvoCodeTests): scenarios run on the app's own code, hosted by a copy of
 # the app that starts nothing (no window, engine or menu bar item) and keeps everything in the
 # temporary folder.
-#   ONLY   a suite or test to run alone, e.g. KuvoCodeTests/ChangesDiscardTests
+#   ONLY   suites or tests to run alone, separated by spaces, e.g. KuvoCodeTests/ChangesDiscardTests
 #
 # The test copy is built outside the checkout: a copy of the app loading its code from Desktop or
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
@@ -23,7 +23,7 @@ BUILD="${TEMP%/}/KuvoCodeTests-build"
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
     APP_BUNDLE_ID=run.kuvo.code.tests CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
-if [ -n "${ONLY:-}" ]; then set -- "$@" -only-testing:"$ONLY"; fi
+for only in ${ONLY:-}; do set -- "$@" -only-testing:"$only"; done
 
 # The Bun that runs the agents bridge the app ships, for the tests that run it for real: `bun` on
 # PATH, else the engine Kuvo Code installed (Bun, as the app runs it). Passed to the tests as
