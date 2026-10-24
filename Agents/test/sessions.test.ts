@@ -2431,10 +2431,18 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     send(id, "work")
     await drain()
     send(id, "waits", "queue")
+    // The agent forgets its conversation when the test says.
+    let forgotten!: () => void
+    ;(a as any).forgetConversation = () => new Promise<void>((resolve) => (forgotten = resolve))
     const removing = sessions.remove(id)
     expect(own()).toBe(false)
     expect(() => send(id, "late")).toThrow()
     ends[0]({ outcome: "interrupted" })
+    await drain()
+    // Still being deleted: nothing sent now starts either.
+    expect(() => send(id, "later still")).toThrow()
+    expect(sessions.active()).not.toContain(id)
+    forgotten()
     await removing
     await drain()
     expect(a.runs).toHaveLength(1)
