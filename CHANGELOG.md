@@ -19,6 +19,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - In a group chat, the line under a bot at work shows what it's thinking as it thinks, and bots name each other with & so the names show as the bots.
 - Click a bot's face or name in a group chat to open its conversation, and the title at the top of a group chat or a bot's conversation to edit it.
 - A message you steer into a session says At its next step until the agent takes it.
+- A message you remove from the queue just as it's being sent no longer reaches the agent anyway.
 - A new app icon: Kuvo Code's bots peeking out from behind a big coral one, on a light tile in light mode and a dark one in dark mode.
 - A remote machine's engine runs on its own, with its sessions, bots and group chats: quitting Kuvo Code or clicking Disconnect leaves it running, it no longer stops after a day without Kuvo Code, and it starts again by itself if it crashes.
 - Open at login, in Settings › General: Kuvo Code opens in the background when you log in, without its window, so your bots and sessions on this Mac keep working from then on. Its engine also starts with the app now, whether or not the window is open.

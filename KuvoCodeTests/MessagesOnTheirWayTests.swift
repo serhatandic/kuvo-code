@@ -191,6 +191,31 @@ import Testing
         #expect(deliveries(of: "msg_02").isEmpty, "what was queued after it waits its turn")
     }
 
+    /// Stop as a message goes, then removed from under Paused while its request is still on its
+    /// way: it's taken back before the agent is stopped, so it can't start a run afterwards.
+    @Test func aHeldMessageRemovedOnItsWayIsTakenBackBeforeTheStop() async throws {
+        defer { done() }
+        let model = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")])
+        let gate = Gate()
+        defer { gate.open() }
+        engine.on("POST", "/api/session/\(id)/prompt") { _ in
+            gate.wait()
+            return StubWeb.json([:])
+        }
+        model.send("Also run the linter", for: nil)
+        try await eventually { !prompts.isEmpty }
+        let message = try #require(prompts.first?.body["id"] as? String)
+        model.stop()
+        try await eventually { model.isQueuePaused }
+        model.cancelPending(try #require(model.waiting.first { $0.id == message }))
+        #expect(model.waiting.map(\.text) == ["Then update the docs"])
+
+        gate.open()
+        try await eventually { !engine.requests("POST", "/interrupt").isEmpty }
+        let order = engine.asked.filter { $0 == "DELETE /api/session/\(id)/inbox/\(message)" || $0.hasSuffix("/interrupt") }
+        #expect(order == ["DELETE /api/session/\(id)/inbox/\(message)", "POST /api/session/\(id)/interrupt"])
+    }
+
     /// Stop before a message for the next step has left (its folder's tools still being checked):
     /// the agent is stopped at once, and the message goes to the queue rather than its next step.
     @Test func stopBeforeAMessageLeftSendsItToTheQueue() async throws {
@@ -244,6 +269,22 @@ import Testing
         #expect(model.waiting.isEmpty)
         #expect(model.draftText.isEmpty)
         #expect(userMessages(in: model) == ["Fix the build"])
+    }
+
+    /// Removed once its request went but before the engine's word of it came (it still shows as
+    /// sending): the engine has it, so the app takes it back.
+    @Test func aMessageRemovedAsItArrivesIsTakenBack() async throws {
+        defer { done() }
+        let model = try await open(running: true)
+        model.send("Also run the linter", for: nil)
+        await model.messagesSent()
+        let message = try #require(prompts.first?.body["id"] as? String)
+        let item = try #require(model.waiting.first)
+        #expect(item.isLocal)
+        model.cancelPending(item)
+        #expect(model.waiting.isEmpty)
+        try await eventually { !engine.requests("DELETE", "/inbox/\(message)").isEmpty }
+        #expect(engine.requests("DELETE", "/inbox/\(message)").count == 1)
     }
 
     /// Removed before it left: it's never sent.
