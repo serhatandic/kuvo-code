@@ -22,7 +22,10 @@ import Testing
     @Test func askFirstLetsThroughWhatSettingsAllows() {
         let settings = [EngineConfig.botMemory,
                         PermissionRule(action: "shell", resource: "npm test *", effect: .allow),
+                        PermissionRule(action: "shell", resource: "git *", effect: .allow),
+                        PermissionRule(action: "shell", resource: "git push *", effect: .ask),
                         PermissionRule(action: "edit", effect: .allow),
+                        PermissionRule(action: "external_directory", resource: "/Users/me/data/*", effect: .allow),
                         PermissionRule(action: "shell", resource: "rm *", effect: .deny)]
         let rules = ToolApproval.askFirst.rules(settings: settings)
         #expect(effect(rules, "edit", "/Users/me/Library/Application Support/run.kuvo.code/bots/bot_ada/MEMORY.md") == .allow)
@@ -32,6 +35,11 @@ import Testing
         #expect(effect(rules, "edit", "src/memory.ts") == .ask)
         #expect(effect(rules, "shell", "make") == .ask)
         #expect(effect(rules, "shell", "rm -rf build") == .deny)
+        // An Ask under a broader Allow still asks.
+        #expect(effect(rules, "shell", "git status") == .allow)
+        #expect(effect(rules, "shell", "git push origin main") == .ask)
+        // Made again, a session's rules don't pile up.
+        #expect(ToolApproval.refreshed(rules, settings: settings) == ToolApproval.refreshed(ToolApproval.refreshed(rules, settings: settings), settings: settings))
         #expect(ToolApproval(rules: rules) == .askFirst)
     }
 }

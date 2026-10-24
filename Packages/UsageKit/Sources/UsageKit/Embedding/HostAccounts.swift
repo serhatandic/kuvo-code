@@ -43,7 +43,7 @@ public enum HostAccounts {
         }
         said.withLock { $0 = true }
         UsageMenuBar.shared.hostAccountsArrived()
-        if changed { UsageMenuBar.shared.refresh(providerIDs: ["copilot", "openrouter", "zai", "opencode", "grok", "codex"]) }
+        if changed { UsageMenuBar.shared.refresh(providerIDs: ["copilot", "openrouter", "zai", "opencode", "grok", "codex", "cursor"]) }
     }
 
     /// Whether the host has handed over its accounts yet. Until it has, a provider can't tell its

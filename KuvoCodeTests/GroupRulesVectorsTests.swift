@@ -11,7 +11,7 @@ import Testing
 /// bridge's tests then say whether the machine's rules still match.
 @MainActor
 struct GroupRulesVectorsTests {
-    static let recorded = "f4415876466b597d27ce28a403f4e9195186d470493ad59674259142b844926a"
+    static let recorded = "af23556ea64fb0ee654a65bbf28fdcb93ff0f8ad4885b4b2670fc95cc0a7aeaa"
 
     @Test func theMachinesChatsGoByTheseRules() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
@@ -218,6 +218,8 @@ struct GroupRulesVectorsTests {
             (["&Scout and &Cy, join in", "A note"], nil),
             (["&Ben and &Ada, both of you"], nil),
             (["> &Scout said so\nI agree"], "bot_ada"),
+            // An answer to a quote, then your own words after the line that ends the answers.
+            (["> &Ada: who else?\n\nAsk &Scout\n\n---\n\n&Cy, join in"], nil),
             (["Ask &Cy please"], "bot_cy"),
             (["&scoutish isn't Scout"], nil),
             ([String](), nil),

@@ -105,8 +105,9 @@ export function isPass(text: string): boolean {
 
 /**
  * A message as what it quotes and what it says (Quoting.segments): each quote (lines of "> ",
- * starting the message or after a blank line, ending at one) with the words after it. Lines in a
- * code block, or like ">>> x", are words.
+ * starting the message or after a blank line, ending at one) with the words after it, and the
+ * message's own words after a "---" line that ends the answers. Lines in a code block, or like
+ * ">>> x", are words.
  */
 export function segments(message: string): { quote?: string; text: string }[] {
   const parts: { quote?: string; text: string }[] = []
@@ -129,6 +130,9 @@ export function segments(message: string): { quote?: string; text: string }[] {
       if (!quoting) close()
       quoting = true
       quote = [...(quote ?? []), line === ">" ? "" : line.slice(2)]
+    } else if (!inCode && line === "---" && previousBlank && quote !== undefined && !quoting) {
+      // The end of the answers: the words after are the message's own.
+      close()
     } else {
       quoting = false
       words.push(line)

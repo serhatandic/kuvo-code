@@ -943,6 +943,42 @@
         }
       ],
       "guests" : [
+        "bot_scout",
+        "bot_cy"
+      ],
+      "members" : [
+        "bot_ada",
+        "bot_ben"
+      ],
+      "messages" : [
+        {
+          "id" : "gm_0",
+          "kind" : "message",
+          "text" : "> &Ada: who else?\n\nAsk &Scout\n\n---\n\n&Cy, join in",
+          "time" : "2026-09-21T14:13:20Z"
+        }
+      ]
+    },
+    {
+      "bots" : [
+        {
+          "id" : "bot_ada",
+          "name" : "Ada"
+        },
+        {
+          "id" : "bot_ben",
+          "name" : "Ben"
+        },
+        {
+          "id" : "bot_cy",
+          "name" : "Cy"
+        },
+        {
+          "id" : "bot_scout",
+          "name" : "Scout"
+        }
+      ],
+      "guests" : [
 
       ],
       "members" : [

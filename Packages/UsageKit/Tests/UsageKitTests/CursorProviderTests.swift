@@ -572,4 +572,15 @@ final class CursorAgentSignInTests: XCTestCase {
         let said = snapshot.lines.map { "\($0)" }.joined()
         XCTAssertTrue(said.contains("Sign in to Cursor again in Kuvo Code"), said)
     }
+
+    func testCursorNotAnsweringIsntASignInThatEnded() async throws {
+        HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
+        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+            HTTPResponse(statusCode: 503, headers: [:], body: Data())
+        }
+        let snapshot = await provider.refresh()
+        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertNotEqual(snapshot.errorCategory, .authExpired)
+        XCTAssertNotEqual(snapshot.errorCategory, .notLoggedIn)
+    }
 }

@@ -196,7 +196,7 @@ struct TranscriptView: View {
         _ = find.marksState
         return RowStack(items: rows, id: \.id, same: ==, estimate: Self.estimate, animatesNew: !rowCache.isBulk, text: { $0.copiedText(folders: model.folders()) },
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) }) { row, index in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: forks, retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -207,7 +207,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: forks, retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -451,13 +451,6 @@ struct TranscriptView: View {
         return rows
     }
 
-    /// A new session from a message of yours: not in a bot's conversation, which is the bot's one,
-    /// and a session made from it would be no bot's, in no list you'd look in.
-    private var forks: ((Message.User) -> Void)? {
-        guard !workspace.botSessions.contains(model.id) else { return nil }
-        return { fork($0) }
-    }
-
     private func fork(_ message: Message.User) {
         Task {
             do { try await workspace.fork(model.id, from: message) } catch { model.failure = error.localizedDescription }
@@ -662,8 +655,8 @@ private struct RowView: View, Equatable {
     let cancel: (Transcript.Pending) -> Void
     let undo: (Message.User) -> Void
     let redo: () -> Void
-    /// New Session From Here; nil where it has no place (a bot's conversation).
-    let fork: ((Message.User) -> Void)?
+    /// New Session From Here.
+    let fork: (Message.User) -> Void
     let retry: (Message.User) -> Void
     /// While the session is in Plan mode: build what the last answer planned.
     let buildPlan: (() -> Void)?
@@ -715,7 +708,9 @@ private struct RowView: View, Equatable {
             let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
             YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments, sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
-                        fork: fork.map { fork in { fork(message) } }, undo: { undo(message) },
+                        // Not in a bot's conversation, which is the bot's one: a session made from
+                        // it would be no bot's, in no list you'd look in.
+                        fork: bot == nil ? { fork(message) } : nil, undo: { undo(message) },
                         undoNote: YourMessage.undoNote(in: directory),
                         isOffline: isOffline)
         case .pending(let item):

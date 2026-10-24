@@ -305,7 +305,8 @@ final class CursorProvider: ProviderRuntime {
         if let apiKey = authState.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
             let response = try await usageClient.exchangeAPIKey(apiKey)
             if response.statusCode == 400 || response.statusCode == 401 { throw CursorAuthError.agentSignInEnded }
-            guard (200..<300).contains(response.statusCode) else { return nil }
+            // Cursor not answering isn't the sign-in ending.
+            guard (200..<300).contains(response.statusCode) else { throw CursorUsageError.connectionFailed }
             return (ProviderParse.jsonObject(response.body)?["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         }
         guard let refreshToken = authState.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {

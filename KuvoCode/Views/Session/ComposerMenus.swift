@@ -50,7 +50,9 @@ enum ToolApproval: String, CaseIterable {
         case .approveAll:
             return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
         case .askFirst:
-            return rules + settings.filter { $0.effect == .allow && $0.resource != "*" } + denied
+            // What Settings says of particular things (an Ask under a broader Allow too), in its
+            // order; folders outside a project stay the session's own (`isParticular`).
+            return rules + settings.filter { $0.effect != .deny && $0.resource != "*" && $0.action != "external_directory" } + denied
         }
     }
 
