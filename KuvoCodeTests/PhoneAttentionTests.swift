@@ -16,7 +16,7 @@ import Testing
     let engine = StubEngine(port: 47974)
     let workspace = Workspace()
     let link = PhoneLink(file: FileManager.default.temporaryDirectory.appending(path: "kuvo-attention-\(UUID().uuidString).json"))
-    let clock = TestClock()
+    let clock = HoldClock()
     let project = "/tmp/kuvo-tests-attention"
     /// What reached your phones.
     let phones = Sent()
@@ -325,7 +325,7 @@ import Testing
 
 /// A clock that moves only when the test moves it, and the timers it runs.
 @MainActor
-final class TestClock {
+final class HoldClock {
     /// Only differences count: where it starts makes no difference.
     var now = ContinuousClock.now
     private var timers: [(id: Int, at: ContinuousClock.Instant, fire: () -> Void)] = []
