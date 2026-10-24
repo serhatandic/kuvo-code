@@ -59,11 +59,20 @@ struct GroupChatView: View {
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
-                // One on a machine that's away: as last seen, and what you write waits.
-                if let machine = groups.unreachable(group.id), let engine = app.machines.engine(machine) {
-                    MachineOfflineBar(engine: engine)
+                // Where it lives can't be reached now: as last seen, and what you write waits.
+                switch groups.reach(group.id) {
+                case .away(let machine):
+                    if let engine = app.machines.engine(machine) {
+                        MachineOfflineBar(engine: engine)
+                            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                            .transition(.opacity.combined(with: .offset(y: 6)))
+                    }
+                case .starting, .stopped:
+                    MacGroupsBar()
                         .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
                         .transition(.opacity.combined(with: .offset(y: 6)))
+                case .ready:
+                    EmptyView()
                 }
                 // Once the wrap-up after the limit is done: Keep Going does nothing before.
                 if groups.paused.contains(group.id) && !groups.discussing.contains(group.id) {
@@ -83,6 +92,7 @@ struct GroupChatView: View {
                 )
             }
             .animation(.ui, value: groups.paused.contains(group.id))
+            .animation(.ui, value: groups.reach(group.id))
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
             .readableColumn()
@@ -140,8 +150,8 @@ struct GroupChatView: View {
         let message = Quoting.message(quotes: draft.quotes, text: draft.text)
         // A quote you didn't answer goes only with words of yours.
         guard !Quoting.words(of: message).isEmpty else { return }
-        // Its machine away, or it's moving: it waits in the composer.
-        guard groups.unreachable(group.id) == nil, groups.send(message, to: group.id) else { return NSSound.beep() }
+        // Where it lives can't be reached now, or it's moving: it waits in the composer.
+        guard groups.send(message, to: group.id) else { return NSSound.beep() }
         Drafts.shared[draftKey].text = ""
         Drafts.shared[draftKey].quotes = []
         scroller.toEnd()

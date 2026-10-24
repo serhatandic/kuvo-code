@@ -26,9 +26,13 @@ struct GroupEditor: View {
     @State private var meetsAt: Date
     @State private var meetsEvery: Wakes.Repeat?
     @State private var topic: String
-    /// Who can be in it, as the computer it lives on says (a machine's: its own bots, and those of
-    /// your other computers that take a chat's turns); nil until it's said, or for this Mac's.
+    /// Who can be in it, as the computer it lives on says (its own bots, and those of your other
+    /// computers that take a chat's turns); nil until it's said.
     @State private var joinable: [String]?
+    /// Making it now (this Mac's box is asked).
+    @State private var isSaving = false
+    /// Why it couldn't be made, shown above the buttons.
+    @State private var failure: String?
     @FocusState private var focus: Field?
 
     private enum Field { case name, purpose, topic }
@@ -58,42 +62,44 @@ struct GroupEditor: View {
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
-    /// The meeting to save: its next time after now (a repeating one's next round, if the one
-    /// picked has passed; on weekdays, a weekday). With its time and repeat as they were, it keeps
-    /// the time of day (and a week's day) it had, whatever daylight saving or a new time zone did
-    /// to its next time; a time picked here is the one it keeps from then on.
-    private var meeting: BotGroup.Meeting? {
+    /// The meeting as you set it up: its time, how often, its topic. The computer the chat lives on
+    /// works out when it comes, on its clock (a repeating one whose time has passed, at its next round).
+    private var meeting: BoxGroups.MeetingPlan? {
         guard meets else { return nil }
-        // A one-off whose time has passed: as picked, so Save stays off and says why.
-        return BotGroup.Meeting.planned(at: meetsAt, every: meetsEvery, topic: topic, before: group?.meeting)
-            ?? BotGroup.Meeting(next: meetsAt, every: nil, topic: topic, at: nil, weekday: nil)
+        let topic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        return BoxGroups.MeetingPlan(next: meetsAt, every: meetsEvery?.text, topic: topic)
     }
+
+    /// A one-off whose time has passed, which can't be.
+    private var meetingPassed: Bool { meets && meetsEvery == nil && meetsAt <= .now }
 
     private var isNew: Bool { group == nil }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var picked: [Bot] { members.compactMap { bots.bot($0) } }
-    /// The bots it can have: those the computer it lives on says can join; until it's said, a
-    /// machine's own (this Mac's chats can have any).
+    /// The computer it lives on: a new one is this Mac's.
+    private var machine: String? { group.flatMap { groups.machine(of: $0.id) } }
+
+    /// The bots it can have: those the computer it lives on says can join (its own, and those of
+    /// your other computers that take a chat's turns); until it's said, that computer's own.
     private var choices: [Bot] {
-        guard let machine = group.flatMap({ groups.machine(of: $0.id) }) else { return bots.list }
         if let joinable { return bots.list.filter { joinable.contains($0.id) || members.contains($0.id) } }
-        return bots.list.filter { $0.machine == machine }
+        return bots.list.filter { $0.machine == machine || members.contains($0.id) }
     }
 
-    /// What the bots section says: a machine's chat that can have bots of your other computers says
-    /// where each takes its turn, and that this Mac's can't join yet (its box doesn't take a chat's
-    /// turns until it runs group chats in its coding agents' bridge, D1b step 4).
+    /// What the bots section says: where they take their turns, when some live on other computers.
     private var botsNote: String {
-        guard let machine = group.flatMap({ groups.machine(of: $0.id) }) else {
-            return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
-        }
-        let macBots = bots.list.contains { $0.machine == nil } ? " Bots on this Mac can join once it runs group chats too." : ""
         if choices.contains(where: { $0.machine != machine }) {
-            return "Pick two or more. They answer one at a time, each on its own computer, and each remembers the chat in its own conversation." + macBots
+            return "Pick two or more. They answer one at a time, each on its own computer, and each remembers the chat in its own conversation."
         }
-        return "Pick two or more of the bots on \(machine), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation." + macBots
+        if let machine {
+            return "Pick two or more of the bots on \(machine), where this chat lives. They answer one at a time, and each remembers the chat in its own conversation."
+        }
+        return "Pick two or more. They answer one at a time, and each remembers the chat in its own conversation."
     }
-    private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && (meeting.map { $0.next > .now } ?? true) }
+
+    /// This Mac's group chats aren't running now (starting, or stopped): a new one waits for them.
+    private var macWaits: Bool { isNew && groups.macReach != .ready }
+    private var canSave: Bool { !trimmedName.isEmpty && picked.count >= 2 && !meetingPassed && !isSaving && !macWaits }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -115,9 +121,8 @@ struct GroupEditor: View {
                 .frame(maxWidth: .infinity)
         }
         .onAppear { if isNew { focus = .name } }
-        .task(id: group?.id) {
-            guard let group else { return }
-            joinable = await groups.joinable(for: group.id)
+        .task(id: [group?.id, groups.macReach == .ready ? "ready" : "waiting"]) {
+            joinable = await groups.joinable(on: machine)
         }
         .alert("Delete \(group?.name ?? "This Group Chat")?", isPresented: $confirmsDelete) {
             Button("Delete", role: .destructive) {
@@ -215,7 +220,7 @@ struct GroupEditor: View {
                 }
             }
 
-            section("Meets", note: meets ? (meeting.map { $0.next > .now } == false ? "That time has passed. Pick one to come, or how often it repeats." : "At its time, the topic goes to the chat and the bots talk it through; if you’re away, you get the lead’s sum-up. It meets while Kuvo Code is open.") : nil) {
+            section("Meets", note: meets ? (meetingPassed ? "That time has passed. Pick one to come, or how often it repeats." : "At its time, the topic goes to the chat and the bots talk it through; if you’re away, you get the lead’s sum-up. It meets while Kuvo Code is open.") : nil) {
                 meetingRows
             }
         }
@@ -279,38 +284,78 @@ struct GroupEditor: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            if !isNew {
-                Button("Delete Group Chat…", role: .destructive) { confirmsDelete = true }
-                    .buttonStyle(.glass)
+        VStack(alignment: .trailing, spacing: 10) {
+            // Why it couldn't be made, or that this Mac's group chats are starting (or stopped).
+            if let note = failure ?? macNote {
+                HStack(spacing: 8) {
+                    if failure == nil, groups.macReach == .starting {
+                        Spinner(size: 13)
+                    } else {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    Text(note)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
             }
-            Spacer()
-            Button("Cancel", role: .cancel, action: close)
-                .keyboardShortcut(.cancelAction)
-                .buttonStyle(.glass)
-            Button(isNew ? "Start Group Chat" : "Save", action: save)
+            HStack(spacing: 10) {
+                if !isNew {
+                    Button("Delete Group Chat…", role: .destructive) { confirmsDelete = true }
+                        .buttonStyle(.glass)
+                }
+                Spacer()
+                Button("Cancel", role: .cancel, action: close)
+                    .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.glass)
+                Button(action: save) {
+                    HStack(spacing: 6) {
+                        if isSaving { Spinner(size: 12) }
+                        Text(isNew ? "Start Group Chat" : "Save")
+                    }
+                }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.glassProminent)
                 .disabled(!canSave)
+            }
         }
         .controlSize(.large)
+        .animation(.ui, value: failure ?? macNote)
+    }
+
+    /// A new chat while this Mac's group chats aren't running: what it waits for.
+    private var macNote: String? {
+        guard isNew else { return nil }
+        switch groups.macReach {
+        case .starting: return "Group chats on this Mac are starting. You can start this one in a moment."
+        case .stopped: return "Group chats on this Mac stopped. Restart them from the sidebar, then start this one."
+        default: return nil
+        }
     }
 
     private func save() {
         guard canSave else { return }
         let members = picked.map(\.id)
         let purpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let editing = group {
-            // Onto the chat as it is now: its seats and what each heard moved on while you edited.
-            var group = groups.group(editing.id) ?? editing
-            group.name = trimmedName
-            group.purpose = purpose.isEmpty ? nil : purpose
-            group.members = members
-            group.meeting = meeting
-            Task { await groups.update(group) }
+        if let group {
+            // The computer it lives on says what can be, and what it refuses is said.
+            let meeting = meeting
+            Task { await groups.update(group.id, name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting) }
             close()
         } else {
-            created(groups.create(name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting))
+            isSaving = true
+            failure = nil
+            Task {
+                defer { isSaving = false }
+                do {
+                    created(try await groups.create(name: trimmedName, purpose: purpose.isEmpty ? nil : purpose, members: members, meeting: meeting))
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
         }
     }
 
