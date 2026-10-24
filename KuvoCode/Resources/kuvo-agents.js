@@ -9680,12 +9680,14 @@ class Sessions {
     if (!taken) {
       if (handing.cancelled)
         return this.cancelInput(id, input.id);
-      if (isBusy(live.doing))
+      if (live.doing.kind === "running")
         return this.setDelivery(id, input.id, "queue");
       if (live.doing.kind === "idle" && record.session.outcome === "succeeded")
-        this.wake(id);
-      return;
+        live.go = true;
+      return this.advance(id, live);
     }
+    if (live.doing.kind === "idle" && !live.steering.size)
+      live.go = false;
     queue.splice(at, 1);
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory);
     const attachments = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }));
@@ -9757,7 +9759,8 @@ class Sessions {
       index = queue.findIndex((input2) => input2.delivery === "steer" && free(input2));
     if (ended === "succeeded" && index < 0)
       index = queue.findIndex(free);
-    live.go = false;
+    if (index >= 0 || !live.steering.size)
+      live.go = false;
     if (index < 0)
       return;
     const [input] = queue.splice(index, 1);
@@ -13906,4 +13909,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 4b346e6f6208b7a5941bdef7de2a9a9ec73fec71d32b256102532eb7a24e8f1a
+// Built from Agents/src 7ce9c2842a37e9cf9a85849fd445d29043994b30f68d23e5f21f537e154c2aff

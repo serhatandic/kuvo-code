@@ -2401,6 +2401,47 @@ describe("what comes in while a turn starts, ends or is stopped, step by step", 
     expect(idles(id)).toHaveLength(2)
   })
 
+  test("Stop and resume while a message is being handed to the turn: one the agent turns away goes next", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const answers: ((taken: boolean) => void)[] = []
+    a.threads[0].steer = () => new Promise((resolve) => answers.push(resolve))
+    send(id, "do this instead")
+    await drain()
+    expect(answers).toHaveLength(1)
+    const stopping = sessions.interrupt(id, true)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    expect(a.runs).toHaveLength(1)
+    answers[0](false)
+    await drain()
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "do this instead"])
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+
+  test("Stop and resume while a message is being handed to the turn: one the agent turns away as the turn stops goes next", async () => {
+    const ends = heldRuns()
+    const id = create()
+    send(id, "first")
+    await drain()
+    const answers: ((taken: boolean) => void)[] = []
+    a.threads[0].steer = () => new Promise((resolve) => answers.push(resolve))
+    send(id, "do this instead")
+    await drain()
+    const stopping = sessions.interrupt(id, true)
+    answers[0](false)
+    await drain()
+    expect(a.runs).toHaveLength(1)
+    ends[0]({ outcome: "interrupted" })
+    await stopping
+    await drain()
+    expect(a.runs.map((run) => run.text)).toEqual(["first", "do this instead"])
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+
   test("Send Now while the stopped turn's files are kept starts the message you picked once they are", async () => {
     const snapshots = withSteps()
     const ends = heldRuns()

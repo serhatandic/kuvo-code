@@ -1370,12 +1370,16 @@ export class Sessions {
     if (at < 0) return
     if (!taken) {
       if (handing.cancelled) return this.cancelInput(id, input.id)
-      // It waits for the turn, or for its files to be kept.
-      if (isBusy(live.doing)) return this.setDelivery(id, input.id, "queue")
-      // Its turn ended meanwhile: it goes next, as after any turn (one you stopped holds it).
-      if (live.doing.kind === "idle" && record.session.outcome === "succeeded") this.wake(id)
-      return
+      // It waits for the turn, which goes on.
+      if (live.doing.kind === "running") return this.setDelivery(id, input.id, "queue")
+      // Its turn ended meanwhile, or is ending: it goes next, as after any turn, or as you asked
+      // with Send Now (one you stopped holds it). Until the turn's over and its files are kept,
+      // the turn's end starts it.
+      if (live.doing.kind === "idle" && record.session.outcome === "succeeded") live.go = true
+      return this.advance(id, live)
     }
+    // Into the turn: a Send Now that waited for it is done.
+    if (live.doing.kind === "idle" && !live.steering.size) live.go = false
     queue.splice(at, 1)
     emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
     const attachments: Attachment[] = input.files.map((file) => ({ mime: mime(file.uri), name: file.name, source: { type: "uri", uri: file.uri } }))
@@ -1455,7 +1459,8 @@ export class Sessions {
     let index = -1
     if (ended === "succeeded" || live.go) index = queue.findIndex((input) => input.delivery === "steer" && free(input))
     if (ended === "succeeded" && index < 0) index = queue.findIndex(free)
-    live.go = false
+    // (With nothing to start but one being handed, Send Now waits for it.)
+    if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
     const [input] = queue.splice(index, 1)
     this.start(id, live, input)

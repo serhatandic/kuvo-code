@@ -31,6 +31,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine another Mac set up with a newer Kuvo Code is used as it is, rather than taken back to older versions.
 - A Mac with an older Kuvo Code can still use a machine a newer one set up: the machine keeps its own tools, keeps running by itself, and goes back to its own settings once nothing runs there.
 - Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start.
+- With a coding agent, Send Now on a message the agent is just being handed starts it next if the agent doesn't take it, rather than leaving it waiting for another nudge.
 
 ## 0.7.2
 
