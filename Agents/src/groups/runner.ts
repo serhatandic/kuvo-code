@@ -42,26 +42,34 @@ import {
   type GroupTask,
   type Meeting,
   plainError,
+  isWaiting,
 } from "./rules"
 import type { GroupStore, Kept, MachineBot, Status } from "./store"
 import { keepsTimeOfDay, keepsWeekday, minutesOf, next as nextTime, parseRepeat } from "./time"
 
 /** The key of a seat's instructions, and of the chats here a bot's own conversation remembers. */
 export const seatKey = "kuvo.seat"
+/** On a machine; the Mac's own chats use the key its app always used (`kuvo.groups`). */
 export const memoryKey = "kuvo.groups.machine"
 
 export interface RunnerContext {
   store: GroupStore
-  /** The machine's engine. */
+  /** The computer's engine. */
   engine: Requester
   /** This bridge, once it listens: where seats on the coding agents' models run. */
   bridge: () => Requester | undefined
-  /** Kuvo Code's trash folder on the machine. */
+  /** Kuvo Code's trash folder on the computer. */
   trash: string
   /** How often it looks in on a run, as a share of the usual (tests look in more often). */
   pace?: number
   /** The engine's live events for a session, while it's listened to: a seat's thinking reaches its messages only as each step ends. */
   listen?: (session: string, listener: { event(event: any): void; reconnected(): void }) => () => void
+  /** The computer, as what a bot can't do here names it ("this machine"); none on the Mac. */
+  place?: string
+  /** The key a bot's own conversation remembers these chats under (`memoryKey` unless given). */
+  memoryKey?: string
+  /** A coding agent's account, by its provider: its name, and whether it needs a sign-in it hasn't got. */
+  agentAccount?: (provider: string) => Promise<{ name: string; signedOut: boolean } | undefined>
 }
 
 /** What the Mac and phone see of a chat's talk. */
@@ -130,6 +138,15 @@ export class GroupRunner {
   private seatTexts = new Map<string, string>()
   private syncs = new Map<string, ReturnType<typeof setTimeout>>()
   private meetings?: ReturnType<typeof setTimeout>
+
+  /** Where this is, as what a bot can't do here says it (" on this machine"; nothing on the Mac). */
+  private get here(): string {
+    return this.context.place ? ` on ${this.context.place}` : ""
+  }
+
+  private get memoryKey(): string {
+    return this.context.memoryKey ?? memoryKey
+  }
 
   constructor(private readonly context: RunnerContext) {
     this.chats = context.store.load()
@@ -612,13 +629,16 @@ export class GroupRunner {
       }
       // Its model can't run here (its account signed out of): said, rather than sent to an
       // engine that drops it without a word.
+      // A coding agent's model, by the agent's own account (Auto picks one that can run itself).
       const model = await this.model(bot)
-      if (model && !runsWithAgents(model)) {
-        const account = await new SeatAPI(this.context.engine).account(model).catch(() => undefined)
+      if (model && model.providerID !== autoProvider) {
+        const account = runsWithAgents(model)
+          ? await this.context.agentAccount?.(model.providerID).catch(() => undefined)
+          : await new SeatAPI(this.context.engine).account(model).catch(() => undefined)
         going()
         provider = account?.name
         if (account?.signedOut) {
-          this.note(`${bot.name} couldn’t answer: ${model.id} needs a sign-in on this machine: sign in to ${account.name} in Settings › Accounts, or choose another model.`, id)
+          this.note(`${bot.name} couldn’t answer: ${model.id} needs a sign-in${this.here}: sign in to ${account.name} in Settings › Accounts, or choose another model.`, id)
           return "absent"
         }
       }
@@ -692,7 +712,7 @@ export class GroupRunner {
         reconnected() {},
       })
       try {
-        await this.waitForRun(seat, promptID, sent, api, signal, (messages) => {
+        await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, (messages) => {
           const now = activityOf(messages, promptID, sent)
           if (live.run !== run || live.speaking !== botID || now.length === 0 || JSON.stringify(now) === JSON.stringify(live.activity ?? [])) return
           if (Date.now() - streamedAt < 3000) return
@@ -719,7 +739,7 @@ export class GroupRunner {
       }
       if (!reply.text) {
         if (reply.error) {
-          this.note(`${bot.name} couldn’t answer: ${plainError(reply.error, provider)}`, id)
+          this.note(`${bot.name} couldn’t answer: ${plainError(reply.error, provider, this.context.place)}`, id)
           return "absent"
         }
         return "passed"
@@ -740,7 +760,7 @@ export class GroupRunner {
     } catch (error) {
       if (signal.aborted || error instanceof Cancelled || left()) return "absent"
       console.error(`${botID}'s turn in ${id} failed:`, reason(error))
-      this.note(`${bot.name} couldn’t answer: ${plainError(reason(error), provider)}`, id)
+      this.note(`${bot.name} couldn’t answer: ${plainError(reason(error), provider, this.context.place)}`, id)
       return "absent"
     } finally {
       if (scratch) void scratch.api.delete(scratch.seat).catch(() => {})
@@ -768,9 +788,13 @@ export class GroupRunner {
     } catch {}
   }
 
-  /** Until the seat's run ends. Questions and requests for permission are turned down on the way, since nobody's there to answer them. */
-  /** Until the seat's run ends; `seen` hears its latest messages now and then, for what it's doing. */
-  private async waitForRun(seat: string, promptID: string, sent: number, api: SeatAPI, signal: AbortSignal, seen?: (messages: any[]) => void, stops?: () => boolean) {
+  /**
+   * Until the seat's run ends. Questions and requests for permission are turned down on the way,
+   * since nobody's there to answer them, and so is what an MCP server asks in its folder
+   * (`directory`) while a tool of it runs there. `seen` hears its latest messages now and then,
+   * for what it's doing.
+   */
+  private async waitForRun(seat: string, promptID: string, sent: number, api: SeatAPI, signal: AbortSignal, directory: string, seen?: (messages: any[]) => void, stops?: () => boolean) {
     const pace = this.context.pace ?? 1
     let looked = Date.now()
     let gone = 0
@@ -785,7 +809,7 @@ export class GroupRunner {
         await api.interrupt(seat).catch(() => {})
         throw new Cancelled()
       }
-      await this.decline(seat, api)
+      await this.decline(seat, api, directory)
       if (seen && Date.now() - looked > 1500 * pace) {
         looked = Date.now()
         const page = await api.messages(seat, 12).catch(() => undefined)
@@ -832,7 +856,7 @@ export class GroupRunner {
     }
   }
 
-  private async decline(seat: string, api: SeatAPI) {
+  private async decline(seat: string, api: SeatAPI, directory: string) {
     for (const request of await api.permissions(seat).catch(() => [])) {
       if (this.declined.has(request.id)) continue
       this.declined.add(request.id)
@@ -842,6 +866,16 @@ export class GroupRunner {
       if (this.declined.has(form.id)) continue
       this.declined.add(form.id)
       await api.dismiss(seat, form.id, "Ask the group in your reply instead.").catch(() => {})
+    }
+    // What an MCP server asks in its folder, filed under no session: the seat's while a tool of
+    // that server runs in it (its messages read only when something's asked).
+    const asked = (await api.sharedForms(directory).catch(() => [])).filter((form) => form?.metadata?.kind === "mcp-elicitation" && !this.declined.has(form.id))
+    if (asked.length === 0) return
+    const messages = (await api.messages(seat, 8).catch(() => undefined))?.data ?? []
+    for (const form of asked) {
+      if (!isWaiting(String(form.metadata.server ?? ""), messages)) continue
+      this.declined.add(form.id)
+      await api.dismissShared(form.id, directory).catch(() => {})
     }
   }
 
@@ -900,7 +934,7 @@ export class GroupRunner {
       const chat = chatText(lead, kept.group, all.slice(0, Math.min(end + 1, all.length)), (author) => this.name(author))
       await api.prompt(seat, promptID, chat + "\n" + splitText(members.map((member) => member.name), yours), "queue")
       // You writing meanwhile comes first: the list stops, and your message has the next turn.
-      await this.waitForRun(seat, promptID, sent, api, signal, undefined, () => this.state(id).asked !== epoch)
+      await this.waitForRun(seat, promptID, sent, api, signal, bot.directory, undefined, () => this.state(id).asked !== epoch)
       const reply = await this.reply(seat, promptID, sent, api)
       const { tasks, go } = splitTasks(reply.text, members, () => "gt_" + crypto.randomUUID().toLowerCase())
       if (signal.aborted) return
@@ -1352,7 +1386,7 @@ export class GroupRunner {
       .filter((kept) => kept.status === "active" && kept.group.members.includes(botID) && kept.messages.length > 0)
       .sort((a, b) => Date.parse(b.messages.at(-1)?.time ?? b.group.created) - Date.parse(a.messages.at(-1)?.time ?? a.group.created))
     if (chats.length === 0) {
-      await api.removeInstruction(bot.sessionID, memoryKey).catch(() => {})
+      await api.removeInstruction(bot.sessionID, this.memoryKey).catch(() => {})
       return
     }
     let text =
@@ -1372,7 +1406,7 @@ export class GroupRunner {
       text += `\n\n## "${kept.group.name}"${others.length ? " with " + others.join(", ") : ""}, in ${file}\n`
       text += this.recap(kept)
     }
-    await api.setInstruction(bot.sessionID, memoryKey, text).catch(() => {})
+    await api.setInstruction(bot.sessionID, this.memoryKey, text).catch(() => {})
   }
 
   private when(time: string): string {

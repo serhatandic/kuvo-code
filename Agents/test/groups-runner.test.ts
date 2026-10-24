@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
 import { groupRoutes } from "../src/groups/routes"
-import { GroupRunner } from "../src/groups/runner"
+import { GroupRunner, type RunnerContext } from "../src/groups/runner"
 import { stamp, type Group } from "../src/groups/rules"
 import { GroupStore } from "../src/groups/store"
 import type { ServerEvent } from "../src/wire"
@@ -15,7 +15,7 @@ import type { ServerEvent } from "../src/wire"
 
 /** The engine on the machine: each seat answers its turn with its bot's next line (PASS once it has none). */
 class Engine {
-  readonly requests: { method: string; path: string; body: any }[] = []
+  readonly requests: { method: string; path: string; body: any; directory?: string }[] = []
   private seats = new Map<string, string>()
   private conversations = new Map<string, any[]>()
   private next = 1
@@ -41,6 +41,10 @@ class Engine {
   /** The model each bot's own conversation is on, when not its seat's ("m" of "p"). */
   ownModels: Record<string, { id: string; providerID: string }> = {}
   failing = new Map<string, string>()
+  /** What MCP servers ask in a project folder (filed under no session), by folder. */
+  shared = new Map<string, any[]>()
+  /** A slow bot's tool still running while it's at work (an MCP server's), by its name. */
+  running = new Map<string, string>()
   private busy = new Set<string>()
   private queued = new Map<string, { id: string }[]>()
   private deleted = new Set<string>()
@@ -57,6 +61,11 @@ class Engine {
     this.server.stop(true)
   }
 
+  /** A conversation as it is already (a bot's own, with a part it was given before). */
+  seed(session: string, messages: any[]) {
+    this.conversations.set(session, messages)
+  }
+
   seatsMade() {
     return this.requests.filter((request) => request.method === "POST" && request.path === "/api/session").map((request) => request.body.title as string)
   }
@@ -68,14 +77,24 @@ class Engine {
   private async answer(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const body: any = request.method === "GET" || request.method === "DELETE" ? undefined : await request.json().catch(() => ({}))
-    this.requests.push({ method: request.method, path: url.pathname, body })
+    const header = request.headers.get("x-opencode-directory")
+    this.requests.push({ method: request.method, path: url.pathname, body, ...(header ? { directory: decodeURIComponent(header) } : {}) })
+    beat()
     const ok = (data: unknown = {}) => Response.json({ data })
     const parts = url.pathname.split("/").filter(Boolean)
+    // What MCP servers ask, listed and turned down by folder.
+    if (parts[2] === "global" && parts[3] === "form") {
+      const folder = header ? decodeURIComponent(header) : ""
+      if (request.method === "GET") return ok(this.shared.get(folder) ?? [])
+      if (request.method === "DELETE") this.shared.set(folder, (this.shared.get(folder) ?? []).filter((form) => form.id !== parts[4]))
+      return ok()
+    }
     if (request.method === "POST" && url.pathname === "/api/session") {
       const id = `ses_seat${this.next++}`
       this.seats.set(id, String(body.title).split(" ")[0])
       return ok({ id, title: body.title, model: body.model, location: body.location })
     }
+    if (request.method === "GET" && url.pathname === "/api/session") return ok([])
     if (url.pathname === "/api/integration") return ok(this.integrations)
     if (url.pathname === "/api/provider") return ok(this.providers)
     if (url.pathname === "/api/session/active") return ok(Object.fromEntries([...this.busy].map((id) => [id, { type: "busy" }])))
@@ -92,6 +111,8 @@ class Engine {
       const own = session.startsWith("ses_own_") ? this.ownModels[session.slice("ses_own_".length)] : undefined
       return ok({ id: session, model: own ?? { id: "m", providerID: "p" } })
     }
+    // Steered into a run under way: it hears it at its next step, and its run goes on.
+    if (what === "prompt" && body.delivery === "steer" && this.busy.has(session)) return ok()
     if (what === "prompt" && this.stuck.has(this.seats.get(session) ?? "")) {
       this.queued.set(session, [...(this.queued.get(session) ?? []), { id: body.id }])
       return ok()
@@ -123,6 +144,12 @@ class Engine {
         // At work a while, its answer not there yet.
         const said = conversation.pop()
         const thinking = bot ? this.working.get(bot) : undefined
+        const tool = bot ? this.running.get(bot) : undefined
+        if (tool) {
+          conversation.push({ type: "assistant", id: body.id + "_t", time: { created: at + 1 }, agent: "build", model: { id: "m", providerID: "p" }, content: [
+            { type: "tool", id: "call_t", name: tool, state: { status: "running", input: {} } },
+          ] })
+        }
         if (thinking) {
           conversation.push({ type: "assistant", id: body.id + "_w", time: { created: at + 1 }, agent: "build", model: { id: "m", providerID: "p" }, content: [
             { type: "reasoning", text: thinking },
@@ -161,10 +188,10 @@ let engine: Engine
 let events: ServerEvent[]
 let unsubscribe: () => void
 
-function bot(id: string, name: string, memory = `# ${name}'s memory\n\n## Job\nHelps with the release\n`) {
+function bot(id: string, name: string, memory = `# ${name}'s memory\n\n## Job\nHelps with the release\n`, model = { id: "m", providerID: "p" }) {
   const folder = join(root, "bots", id)
   mkdirSync(join(folder, "workspace"), { recursive: true })
-  writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id, name, job: "Helps", look: { color: "mint", shape: "round", face: "calm" }, model: { id: "m", providerID: "p" }, created: stamp(), updated: stamp() }))
+  writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id, name, job: "Helps", look: { color: "mint", shape: "round", face: "calm" }, model, created: stamp(), updated: stamp() }))
   writeFileSync(join(folder, "session"), "ses_own_" + name)
   writeFileSync(join(folder, "directory"), join(folder, "workspace"))
   writeFileSync(join(folder, "MEMORY.md"), memory)
@@ -174,16 +201,29 @@ function group(meeting?: Group["meeting"]): Group {
   return { id: "grp_team000001", name: "Team", members: ["bot_ada", "bot_ben"], seats: {}, heard: {}, created: stamp(), ...(meeting ? { meeting } : {}) }
 }
 
-function runner() {
+/** A runner on a machine (what it says names "this machine"), unless `options` say otherwise. */
+function runner(options: Partial<RunnerContext> = {}) {
   const store = new GroupStore(join(root, "groups"), join(root, "bots"))
-  const groups = new GroupRunner({ store, engine: server(engine.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05 })
+  const groups = new GroupRunner({ store, engine: server(engine.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05, place: "this machine", ...options })
   return { store, groups }
 }
 
-async function until(condition: () => boolean, ms = 5000) {
-  const end = Date.now() + ms
-  while (!condition() && Date.now() < end) await Bun.sleep(10)
-  expect(condition()).toBe(true)
+/** Waits that look again only when something happened: the runner told something, or the engine was asked something. */
+const wakes = new Set<() => void>()
+function beat() {
+  for (const wake of [...wakes]) wake()
+}
+
+async function until(condition: () => boolean, _ms?: number) {
+  while (!condition()) {
+    await new Promise<void>((resolve) => {
+      const wake = () => {
+        wakes.delete(wake)
+        resolve()
+      }
+      wakes.add(wake)
+    })
+  }
 }
 
 beforeEach(() => {
@@ -192,7 +232,10 @@ beforeEach(() => {
   bot("bot_ada", "Ada")
   bot("bot_ben", "Ben")
   events = []
-  unsubscribe = subscribe((event) => events.push(event))
+  unsubscribe = subscribe((event) => {
+    events.push(event)
+    beat()
+  })
 })
 
 afterEach(() => {
@@ -476,7 +519,7 @@ describe("a group chat on a machine", () => {
     const store = new GroupStore(join(root, "groups"), join(root, "bots"))
     const listeners = new Map<string, { event(event: any): void }>()
     const groups = new GroupRunner({
-      store, engine: server(engine.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05,
+      store, engine: server(engine.url, "x"), bridge: () => undefined, trash: join(root, "trash"), pace: 0.05, place: "this machine",
       listen: (session, listener) => {
         listeners.set(session, listener)
         return () => listeners.delete(session)
@@ -620,4 +663,189 @@ describe("a group chat on a machine", () => {
     expect(gone.status).toBe(404)
     expect(((await gone.json()) as any).message).toBe("No such chat.")
   })
+})
+
+// What the Mac's own group chats did that these didn't, so either computer runs a chat alike.
+describe("a group chat on any computer", () => {
+  const id = "grp_team000001"
+  const notes = (groups: GroupRunner) => groups.get(id)!.messages.filter((message) => message.kind === "note").map((message) => message.text)
+  const over = (groups: GroupRunner, done: () => boolean = () => true) => until(() => !groups.talk(id).discussing && done())
+
+  test("what an MCP server asks while a bot's tool of it runs is turned down: nobody's there to answer", async () => {
+    const { groups } = runner()
+    const folder = join(root, "bots", "bot_ada", "workspace")
+    const asked = (server: string, form: string) => ({ id: form, sessionID: "global", title: "", fields: [], metadata: { kind: "mcp-elicitation", server, message: "Which notebook?" } })
+    engine.shared.set(folder, [asked("notes", "frm_notes"), asked("calendar", "frm_calendar")])
+    engine.running.set("Ada", "notes_search")
+    engine.slow.set("Ada", 1500)
+    engine.lines = { Ada: ["Found it."], Ben: [] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Look it up")
+    await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === "/api/session/global/form/frm_notes"))
+    const dismissed = engine.requests.find((request) => request.method === "DELETE" && request.path === "/api/session/global/form/frm_notes")!
+    expect(dismissed.directory).toBe(folder)
+    // Another server's, whose tool isn't running in the seat, isn't the seat's to turn down.
+    expect(engine.requests.some((request) => request.path === "/api/session/global/form/frm_calendar")).toBe(false)
+    await over(groups)
+  })
+
+  test("a bot on a coding agent whose account was signed out of says so, rather than going without a word", async () => {
+    const accounts: Record<string, { name: string; signedOut: boolean }> = { "claude-code": { name: "Claude Code", signedOut: true } }
+    const { groups } = runner({ bridge: () => server(engine.url, "x"), agentAccount: async (provider) => accounts[provider] })
+    bot("bot_ada", "Ada", undefined, { id: "opus", providerID: "claude-code" })
+    engine.lines = { Ada: ["Here."], Ben: ["PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Anyone there?")
+    await over(groups, () => notes(groups).length > 0)
+    expect(notes(groups)[0]).toBe("Ada couldn’t answer: opus needs a sign-in on this machine: sign in to Claude Code in Settings › Accounts, or choose another model.")
+    expect(engine.seatsMade()).not.toContain("Ada in Team")
+
+    // Signed in again: it answers.
+    accounts["claude-code"].signedOut = false
+    groups.send(id, "Now?")
+    await over(groups, () => groups.get(id)!.messages.some((message) => message.author === "bot_ada"))
+  })
+
+  test("on the Mac, what a bot can't do names no machine", async () => {
+    const { groups } = runner({ place: undefined })
+    engine.integrations = [{ id: "p", name: "Provider P", methods: [{ type: "key" }], connections: [] }]
+    engine.providers = [{ id: "opencode" }]
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Anyone there?")
+    await over(groups, () => notes(groups).length > 0)
+    expect(notes(groups)[0]).toBe("Ada couldn’t answer: m needs a sign-in: sign in to Provider P in Settings › Accounts, or choose another model.")
+
+    engine.providers = [{ id: "p" }]
+    engine.failing.set("Ben", "Missing required Authorization header")
+    engine.lines = { Ada: ["PASS"] }
+    groups.send(id, "And you, Ben?")
+    await over(groups, () => notes(groups).length > 1)
+    expect(notes(groups).at(-1)).toBe("Ben couldn’t answer: Provider P isn’t signed in: sign in to it again in Settings › Accounts, or choose another model.")
+  })
+
+  test("its bots remember it under the key it's given", async () => {
+    const { groups } = runner({ memoryKey: "kuvo.groups" })
+    engine.lines = { Ada: ["Hello."], Ben: ["Hi."] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Say hello.")
+    await until(() => engine.requests.some((request) => request.method === "PUT" && request.path === "/api/experimental/session/ses_own_Ada/instructions/entries/kuvo.groups"))
+    expect(engine.requests.some((request) => request.path.endsWith("/kuvo.groups.machine"))).toBe(false)
+  }, 15_000)
+
+  test("your message while a bot talks reaches it straight away, and isn't told it again at its next turn", async () => {
+    const { groups } = runner()
+    engine.slow.set("Ada", 800)
+    engine.lines = { Ada: ["On it.", "PASS"], Ben: ["Me too."] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Ship it?")
+    await until(() => groups.talk(id).speaking === "bot_ada" && engine.prompts().length > 0)
+    const seat = engine.prompts()[0].path.split("/")[3]
+    groups.send(id, "Also, check the build.")
+    await until(() => engine.prompts(seat).some((request) => request.body.delivery === "steer"))
+    expect(engine.prompts(seat).find((request) => request.body.delivery === "steer")!.body.text).toBe("The user, just now: Also, check the build.")
+    await over(groups, () => groups.get(id)!.messages.some((message) => message.author === "bot_ben"))
+    const later = engine.prompts(seat).filter((request) => request.body.delivery === "queue").slice(1)
+    expect(later.length).toBeGreaterThan(0)
+    expect(later.some((request) => String(request.body.text).includes("Also, check the build."))).toBe(false)
+  }, 15_000)
+
+  test("parts that wait on each other fail with a note, and none starts", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["We'll split it.", "&Ada (after &Ben): write the notes\n&Ben (after &Ada): fix the build\nGO"], Ben: ["PASS"] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Split it and go ahead.")
+    await over(groups, () => notes(groups).length > 0)
+    expect(notes(groups)).toEqual(["Ada and Ben wait on each other’s parts, so neither could start."])
+    const parts = groups.get(id)!.messages.find((message) => message.tasks)!.tasks!
+    expect(parts.map((part) => [part.bot, part.state])).toEqual([
+      ["bot_ada", "failed"],
+      ["bot_ben", "failed"],
+    ])
+    expect(engine.prompts().some((request) => request.path.includes("ses_own_"))).toBe(false)
+  })
+
+  test("parts under way when it last stopped are followed again until their bots report; one that never reached its bot fails", async () => {
+    const { store } = runner()
+    const started = stamp()
+    const wrapUp = {
+      id: "gm_wrap", author: "bot_ada", text: "Ada writes, Ben fixes.", time: started, kind: "wrapUp" as const,
+      tasks: [
+        { id: "gt_ada", bot: "bot_ada", task: "write the notes", state: "working" as const, prompt: "msg_part", started },
+        { id: "gt_ben", bot: "bot_ben", task: "fix the build", state: "working" as const, started },
+      ],
+    }
+    store.saveGroup({ group: group(), status: "active", messages: [wrapUp] })
+    store.saveMessages({ group: group(), status: "active", messages: [wrapUp] })
+    const at = Date.now()
+    engine.seed("ses_own_Ada", [
+      { type: "user", id: "msg_part", time: { created: at }, text: "[Work from Team · grp_team000001]" },
+      { type: "assistant", id: "msg_part_a", time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text: "Notes written." }] },
+      { type: "idle", id: "msg_part_i", time: { created: at + 3 }, outcome: "succeeded" },
+    ])
+    const { groups } = runner()
+    groups.start()
+    await until(() => groups.get(id)!.messages.some((message) => message.report === "gt_ada"))
+    expect(groups.get(id)!.messages.find((message) => message.report === "gt_ada")?.text).toBe("Notes written.")
+    expect(notes(groups)).toEqual(["Ben couldn’t do its part: Kuvo Code stopped before it reached the bot."])
+    expect(groups.get(id)!.messages[0].tasks!.map((part) => part.state)).toEqual(["done", "failed"])
+  })
+
+  test("a part whose message was taken back before its bot read it ends, rather than working forever", async () => {
+    const { store } = runner()
+    const started = stamp()
+    const wrapUp = {
+      id: "gm_wrap", author: "bot_ada", text: "Ada writes.", time: started, kind: "wrapUp" as const,
+      tasks: [{ id: "gt_ada", bot: "bot_ada", task: "write the notes", state: "working" as const, prompt: "msg_gone", started }],
+    }
+    store.saveGroup({ group: group(), status: "active", messages: [wrapUp] })
+    store.saveMessages({ group: group(), status: "active", messages: [wrapUp] })
+    const { groups } = runner()
+    groups.start()
+    await until(() => notes(groups).length > 0)
+    expect(notes(groups)).toEqual(["Ada couldn’t do its part: its message was taken back before Ada read it."])
+    expect(groups.get(id)!.messages[0].tasks![0].state).toBe("failed")
+  })
+
+  for (const hours of [-1, 1]) {
+    test(`a daily meeting missed for days is held once, and next comes at its own time (${hours > 0 ? "later" : "earlier"} in the day)`, () => {
+      const { groups } = runner()
+      const first = new Date(Date.now() - 3 * 86_400_000 + hours * 3_600_000)
+      first.setSeconds(0, 0)
+      groups.put(group({ next: stamp(first), every: "1d", topic: "Daily standup" }), [], "active", false)
+      groups.meetDue()
+      groups.meetDue()
+      groups.stop(id)
+      expect(groups.get(id)!.messages.filter((message) => message.kind === "meeting").length).toBe(1)
+      const next = new Date(groups.get(id)!.group.meeting!.next)
+      expect([next.getHours(), next.getMinutes()]).toEqual([first.getHours(), first.getMinutes()])
+      const wait = (next.getTime() - Date.now()) / 3_600_000
+      expect(wait).toBeGreaterThan(3)
+      expect(wait).toBeLessThan(26)
+    })
+  }
+
+  test("a bot taken out of the chat (deleted, or edited out) loses its seat and forgets the chat; the others go on", async () => {
+    const { groups, store } = runner()
+    engine.lines = { Ada: ["Hello.", "Still here."], Ben: ["Hi."] }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Say hello.")
+    await over(groups, () => groups.get(id)!.messages.some((message) => message.author === "bot_ben"))
+    // Each remembers it, in its own folder and conversation.
+    const transcript = join(root, "bots", "bot_ben", "groups", `${id}.md`)
+    await until(() => existsSync(transcript) && engine.requests.some((request) => request.method === "PUT" && request.path.endsWith("ses_own_Ben/instructions/entries/kuvo.groups.machine")))
+    const seat = groups.get(id)!.group.seats.bot_ben
+
+    const changed = await groupRoutes(groups, store, "PATCH", [id], async () => ({ members: ["bot_ada"] }))
+    expect(changed.status).toBe(200)
+    expect(engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${seat}`)).toBe(true)
+    const after = groups.get(id)!.group
+    expect(after.members).toEqual(["bot_ada"])
+    expect(after.seats.bot_ben).toBeUndefined()
+    expect(after.heard.bot_ben).toBeUndefined()
+    expect(existsSync(transcript)).toBe(false)
+    expect(engine.requests.some((request) => request.method === "DELETE" && request.path.endsWith("ses_own_Ben/instructions/entries/kuvo.groups.machine"))).toBe(true)
+
+    groups.send(id, "Still there?")
+    await over(groups, () => groups.get(id)!.messages.some((message) => message.text === "Still here."))
+  }, 15_000)
 })

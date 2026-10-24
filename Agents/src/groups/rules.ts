@@ -530,9 +530,28 @@ export function compose(task: GroupTask, chat: Group, wrapUp: GroupMessage, from
  * A provider's refusal that means it isn't signed in (a request sent without its credentials, or
  * ones it turned down), in words saying what to do, for `provider`; any other error as it was said.
  */
-export function plainError(error: string, provider?: string): string {
+export function plainError(error: string, provider?: string, place?: string): string {
   if (!/authorization header|unauthori[sz]ed|\b401\b|\b403\b|forbidden|invalid api key/i.test(error)) return error
-  return `${provider ?? "Its account"} isn’t signed in on this machine: sign in to it again in Settings › Accounts, or choose another model.`
+  return `${provider ?? "Its account"} isn’t signed in${place ? ` on ${place}` : ""}: sign in to it again in Settings › Accounts, or choose another model.`
+}
+
+/**
+ * Whether a tool of MCP server `server` is running in `messages` (the engine's, oldest first), so
+ * what that server asks is theirs: a server can't say which conversation it answers. One run
+ * through Code Mode counts when its code names the server. As the Mac's Transcript.isWaiting.
+ */
+export function isWaiting(server: string, messages: any[]): boolean {
+  // A server's name as its tools start: what a tool's name can't have becomes `_`.
+  const name = [...server].map((character) => (/[\p{L}\p{N}_-]/u.test(character) ? character : "_")).join("")
+  for (const message of messages.slice(-8)) {
+    if (message?.type !== "assistant") continue
+    for (const block of message.content ?? []) {
+      if (block?.type !== "tool" || block.state?.status !== "running") continue
+      if (String(block.name).startsWith(name + "_")) return true
+      if (block.name === "execute" && typeof block.state.input?.code === "string" && block.state.input.code.includes(server)) return true
+    }
+  }
+  return false
 }
 
 // MARK: Reading a seat's answer

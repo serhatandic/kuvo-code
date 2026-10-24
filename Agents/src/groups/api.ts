@@ -5,17 +5,22 @@ import type { ModelRef } from "../wire"
 import type { Rule } from "./rules"
 
 export interface Requester {
-  request<T = any>(method: string, path: string, body?: unknown, timeout?: number): Promise<T>
+  /** `directory`: the project folder what's asked is tied to (what MCP servers ask there). */
+  request<T = any>(method: string, path: string, body?: unknown, timeout?: number, directory?: string): Promise<T>
 }
 
 /** A server that answers the engine's API at `url` behind `password` (this bridge, from inside it). */
 export function server(url: string, password: string): Requester {
   const authorization = "Basic " + Buffer.from(`opencode:${password}`).toString("base64")
   return {
-    async request<T>(method: string, path: string, body?: unknown, timeout = 30_000): Promise<T> {
+    async request<T>(method: string, path: string, body?: unknown, timeout = 30_000, directory?: string): Promise<T> {
       const response = await fetch(url.replace(/\/$/, "") + path, {
         method,
-        headers: { Authorization: authorization, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: {
+          Authorization: authorization,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(directory ? { "x-opencode-directory": encodeURIComponent(directory) } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeout),
       })
@@ -37,6 +42,8 @@ export function server(url: string, password: string): Requester {
 }
 
 const at = (id: string) => "/api/session/" + encodeURIComponent(id)
+/** Where the engine files what MCP servers ask (FormRequest.anySession). */
+const sharedSession = "global"
 
 /** The calls a group chat makes, as the Mac's OpenCodeAPI makes them. */
 export class SeatAPI {
@@ -160,5 +167,14 @@ export class SeatAPI {
 
   async dismiss(id: string, form: string, message: string) {
     await this.requester.request("DELETE", `${at(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message)}`)
+  }
+
+  /** What MCP servers ask in a project folder: the engine files it under no session, only the folder. */
+  async sharedForms(directory: string): Promise<{ id: string; metadata?: any }[]> {
+    return (await this.requester.request("GET", at(sharedSession) + "/form", undefined, undefined, directory))?.data ?? []
+  }
+
+  async dismissShared(form: string, directory: string) {
+    await this.requester.request("DELETE", `${at(sharedSession)}/form/${encodeURIComponent(form)}`, undefined, undefined, directory)
   }
 }
