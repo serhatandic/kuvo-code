@@ -56,7 +56,7 @@ struct SkillsSettings: View {
                     SettingsSearchRow(text: $search, prompt: "Search skills")
                 }
                 if let boxFailure {
-                    FailureLabel(title: "Couldn’t read the skills added here", detail: boxFailure) {
+                    FailureLabel(title: "Couldn’t read the skills you added", detail: boxFailure) {
                         Task {
                             if box.machine == nil { await app.box.startAgain() }
                             await refresh()
@@ -192,6 +192,8 @@ struct SkillsSettings: View {
             here = SkillsShown(try await routes.folder())
             boxFailure = nil
         } catch {
+            // Nothing's yours to edit until its box answers.
+            here = SkillsShown()
             boxFailure = error.localizedDescription
         }
         // The engine notices a new folder within a moment.
