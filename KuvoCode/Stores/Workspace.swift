@@ -840,27 +840,33 @@ final class Workspace {
         return true
     }
 
+    /// Machine worktrees whose new name was read once their session had a title.
+    @ObservationIgnored private var namesRead: Set<String> = []
+
     /// A worktree's branch starts with a made-up name; once its session has a title, the branch
-    /// is named after it, unless it's been pushed (or renamed) already.
+    /// is named after it, unless it's been pushed (or renamed) already. A machine names its own
+    /// (and tells its session), so its new name is read from there, once.
     private func nameBranch(of session: Session) {
         let folder = session.location.directory
         guard let tree = worktrees[folder], let title = session.title, !title.isEmpty,
               tree.branch == GitPreferences.branchPrefix + (tree.root as NSString).lastPathComponent else { return }
+        if let machine = RemoteFolder.machine(of: tree.root) {
+            guard namesRead.insert(tree.root).inserted else { return }
+            Task {
+                // Not read (the machine didn't answer): read again with the session's next change.
+                guard await takeWorktrees(from: machine) != nil else {
+                    namesRead.remove(tree.root)
+                    return
+                }
+                await loadBranch(for: folder)
+            }
+            return
+        }
         let slug = Git.slug(title)
         guard !slug.isEmpty else { return }
         Task {
             let prefix = GitPreferences.branchPrefix
-            let renamed: String?
-            if let remote = RemoteFolder.parse(tree.root) {
-                // Only if it's still called that: the machine may have named it already, and told
-                // its session (it tells it each name), so it's read from there.
-                let answer: BoxWorktree.Renamed? = try? await onBox(remote.machine, "POST", "kuvo/worktrees/rename", ["path": remote.path, "from": tree.branch, "branch": prefix + slug])
-                if answer == nil { await takeWorktrees(from: remote.machine) }
-                renamed = answer?.branch ?? worktrees[folder].map(\.branch).flatMap { $0 == tree.branch ? nil : $0 }
-            } else {
-                renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value
-            }
-            guard let renamed else { return }
+            guard let renamed = await Task.detached(operation: { Git.renameBranch(tree.branch, to: prefix + slug, in: tree.root) }).value else { return }
             for (key, value) in worktrees where value.root == tree.root { worktrees[key]?.branch = renamed }
             saveWorktrees()
             if let tree = worktrees[folder] {
@@ -964,7 +970,6 @@ final class Workspace {
         var base: String?
         var size: Int64?
 
-        struct Renamed: Decodable { var branch: String }
 
         init(project: String, root: String, folder: String?, branch: String, base: String?) {
             (self.project, self.root, self.folder, self.branch, self.base) = (project, root, folder, branch, base)
