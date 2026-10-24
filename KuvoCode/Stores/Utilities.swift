@@ -84,36 +84,31 @@ final class Utilities {
     /// A machine's browser, by the machine's ID.
     @ObservationIgnored var machineBrowser: ((String) -> MachineBrowser?)?
 
-    /// The machine the session in view runs on, nil for this Mac: the browser tabs are its, and
-    /// new ones open there. The window sets it.
-    var place: String? {
-        didSet { if place != oldValue { placeChanged(from: oldValue) } }
+    /// What's in view in the window, which the panel follows: the window sets it, all at once.
+    struct InView: Equatable {
+        /// The tab's session; an agent elsewhere browsing doesn't bring its page forward.
+        var session: String?
+        /// The session beside it in split view, while it shows: in view too.
+        var beside: String?
+        /// The group chat in view, by its tab's key (`group:<id>`): its bots' seats are in view.
+        var group: String?
+        /// The session beside you work in (you clicked or typed there), also while the expanded
+        /// panel covers it: the panel is its, and a tab you pick is its agent's.
+        var worksBeside: String?
+        /// The machine the session you work in runs on, nil for this Mac: the browser tabs are
+        /// its, and new ones open there.
+        var place: String?
+        /// The bots on this Mac whose conversation is in view (one, or a group chat's): their tabs
+        /// show beside yours.
+        var bots: Set<String> = []
     }
 
-    /// The session in view; an agent elsewhere browsing doesn't bring its page forward. The window
-    /// sets it.
-    var sessionInView: String? {
-        didSet { if sessionInView != oldValue { panelChanged(from: panelKey(session: oldValue)) } }
+    var inView = InView() {
+        didSet { if inView != oldValue { inViewChanged(from: oldValue) } }
     }
-    /// The session beside it in split view, in view too. The window sets it.
-    var besideInView: String? {
-        didSet { if besideInView != oldValue, worksBeside { panelChanged(from: panelKey(beside: oldValue)) } }
-    }
-    /// The group chat in view, by its tab's key (`group:<id>`): its bots' seats are in view. The
-    /// window sets it.
-    var groupInView: String? {
-        didSet { if groupInView != oldValue { panelChanged(from: panelKey(group: oldValue, isSet: true)) } }
-    }
-    /// You're working in the session beside the tab's (you clicked or typed there): a tab you pick
-    /// is its agent's. The window sets it.
-    var worksBeside = false {
-        didSet { if worksBeside != oldValue { panelChanged(from: panelKey(worksBeside: oldValue)) } }
-    }
-    /// The session beside you work in, also while the expanded panel covers it (it's no longer
-    /// in view then, but the panel stays its). The window sets it, before `worksBeside`.
-    var workedBeside: String? {
-        didSet { if workedBeside != oldValue, worksBeside, besideInView == nil { panelChanged(from: oldValue.map(panelOf) ?? panelKey) } }
-    }
+
+    /// The machine the session you work in runs on, nil for this Mac.
+    var place: String? { inView.place }
 
     /// Which conversation's panel a session's tabs are in: a bot's session's are the bot's (by its
     /// ID), a group chat seat's the chat's, a subagent's the session that started it. The app sets it.
@@ -121,15 +116,14 @@ final class Utilities {
 
     /// The conversation whose panel shows: the group chat in view, else the session you work in
     /// (either half of a split); "" for none (a new session's draft).
-    var panelKey: String { panelKey() }
+    var panelKey: String { panelKey(of: inView) }
 
-    private func panelKey(session: String?? = nil, beside: String?? = nil, group: String? = nil, isSet: Bool = false, worksBeside: Bool? = nil) -> String {
-        if let group = isSet ? group : groupInView { return group }
-        let session = session ?? sessionInView
-        let beside = beside ?? besideInView
-        let working = (worksBeside ?? self.worksBeside) ? beside ?? workedBeside ?? session : session
-        return working.map(panelOf) ?? ""
+    private func panelKey(of view: InView) -> String {
+        view.group ?? (view.worksBeside ?? view.session).map(panelOf) ?? ""
     }
+
+    /// The session whose agent a tab you pick in the panel is: the one you work in.
+    private var workingSession: String? { inView.worksBeside ?? inView.session }
 
     /// Where a session shows: a subagent's in the session that started it, a group chat seat's in
     /// its chat (by its tab's key), any other in itself. The app sets it.
@@ -139,17 +133,30 @@ final class Utilities {
     /// or a seat's when where it shows is.
     func isInView(_ session: String) -> Bool {
         let shown = shownIn(session)
-        return shown == sessionInView || shown == besideInView || shown == groupInView
+        return shown == inView.session || shown == inView.beside || shown == inView.group
     }
-    /// The bots on this Mac whose conversation is in view (one, or a group chat's): their tabs
-    /// show beside yours. The window sets it.
-    var botsInView: Set<String> = [] {
-        didSet {
-            guard botsInView != oldValue else { return }
-            // A tab of the bot left behind goes out of view: the one beside it takes its place.
-            if let selected = tabs.first(where: { $0.id == selection }), !isVisible(selected) {
-                selection = visibleTabs.last { $0.kind == .browser }?.id ?? visibleTabs.first?.id
+
+    /// Another conversation's panel in view, or another place's tabs: the tab you had where you
+    /// were is kept, and the panel shows the one you had here, and what its agent showed you
+    /// meanwhile. A bot's tab left behind goes out of view: the one beside it takes its place.
+    private func inViewChanged(from old: InView) {
+        let oldPanel = panelKey(of: old)
+        let movedPlace = inView.place != old.place
+        if movedPlace || oldPanel != panelKey {
+            chosen[chosenKey(oldPanel, old.place)] = selection
+            if movedPlace {
+                pendingReveal = nil
+                if let old = old.place { machineBrowser?(old)?.keep(false) }
+                if let place, let browser = machineBrowser?(place) {
+                    browser.keep(true)
+                    syncMachinePages(place, browser.pages)
+                }
             }
+            restoreSelection()
+            if oldPanel != panelKey { showKept() }
+        }
+        if inView.bots != old.bots, let selected = tabs.first(where: { $0.id == selection }), !isVisible(selected) {
+            selection = visibleTabs.last { $0.kind == .browser }?.id ?? visibleTabs.first?.id
         }
     }
 
@@ -167,7 +174,7 @@ final class Utilities {
         let key = panelKey
         switch tab.kind {
         // A group chat's bots browse beside it.
-        case .browser: return place == nil && (tab.owner == key || (groupInView != nil && botsInView.contains(tab.owner)))
+        case .browser: return place == nil && (tab.owner == key || (inView.group != nil && inView.bots.contains(tab.owner)))
         case .machinePage(let machine, _): return place == machine && (tab.owner == key || tab.owner == Self.unclaimed)
         default: return tab.owner == key
         }
@@ -190,27 +197,6 @@ final class Utilities {
         } else {
             add(Tab(kind: .changes, owner: panelKey), at: 0)
         }
-    }
-
-    /// Another place in view: its browser tabs in the strip, and the tab you had there.
-    private func placeChanged(from old: String?) {
-        chosen[chosenKey(panelKey, old)] = selection
-        pendingReveal = nil
-        if let old { machineBrowser?(old)?.keep(false) }
-        if let place, let browser = machineBrowser?(place) {
-            browser.keep(true)
-            syncMachinePages(place, browser.pages)
-        }
-        restoreSelection()
-    }
-
-    /// Another conversation in view, or the other half of a split: its own panel, on the tab you
-    /// had there, and what its agent showed you meanwhile.
-    private func panelChanged(from old: String) {
-        guard old != panelKey else { return }
-        chosen[chosenKey(old, place)] = selection
-        restoreSelection()
-        showKept()
     }
 
     /// The tab you had in the panel in view, else the one in view if it's there too (a tool's, or
@@ -433,7 +419,7 @@ final class Utilities {
         } else if let id = page.flatMap(UUID.init(uuidString:)), browsers[id] != nil, let tab = tabs.first(where: { $0.id == id }), isVisible(tab) {
             // The tab an ask here is about.
             selection = id
-        } else if let browser = botsInView.lazy.compactMap(botBrowser).first ?? activeBrowser, let id = id(of: browser) {
+        } else if let browser = inView.bots.lazy.compactMap(botBrowser).first ?? activeBrowser, let id = id(of: browser) {
             selection = id
         }
         revealRequest += 1
@@ -701,7 +687,7 @@ final class Utilities {
     /// You picked one of your tabs with a conversation in view: the agent of the one you work in
     /// (either half of a split) goes on in it, unless another conversation's agent is using it.
     private func picked(_ id: UUID) {
-        guard let session = worksBeside ? besideInView ?? sessionInView : sessionInView, let browser = browsers[id], tabs.first(where: { $0.id == id })?.owner == panelOf(session), isFree(id, for: session) else { return }
+        guard let session = workingSession, let browser = browsers[id], tabs.first(where: { $0.id == id })?.owner == panelOf(session), isFree(id, for: session) else { return }
         picks[session] = .now
         agentWorks(session, in: browser)
     }
@@ -811,9 +797,9 @@ final class Utilities {
         selection = nil
         let place = place
         // Back on this Mac for the start tab (going there may have made it already).
-        self.place = nil
+        inView.place = nil
         if !visibleTabs.contains(where: { $0.owner == panelKey }) { startOver() }
-        self.place = place
+        inView.place = place
     }
 
     private func add(_ tab: Tab, at index: Int? = nil, select: Bool = true) {

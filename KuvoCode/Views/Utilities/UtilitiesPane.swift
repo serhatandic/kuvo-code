@@ -228,7 +228,7 @@ struct UtilitiesPane: View {
     /// Add Screenshot to Message, for a conversation whose message can carry files: not a group
     /// chat's, which takes words only.
     private var attachToMessage: (([URL]) -> Void)? {
-        utilities.groupInView == nil ? { [utilities] files in utilities.attachToMessage?(files) } : nil
+        utilities.inView.group == nil ? { [utilities] files in utilities.attachToMessage?(files) } : nil
     }
 
     private func placeholder(_ title: String, symbol: String, detail: String) -> some View {

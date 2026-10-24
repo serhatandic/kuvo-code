@@ -302,7 +302,7 @@ extension AppModel {
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
         engine.browser.onActive = { [weak self] page, byAgent, session in self?.utilities.machinePageActive(machine, page: page, byAgent: byAgent, session: session) }
-        engine.browser.sessionInView = { [weak self] in self?.utilities.sessionInView }
+        engine.browser.sessionInView = { [weak self] in self?.utilities.inView.session }
         // What its agents ask you for, answered in the window, filled in there.
         engine.browser.onAsk = { [weak self, weak browser = engine.browser] ask in
             self?.browserAsks.add(ask) { answer in browser?.answer(ask.id, answer) }

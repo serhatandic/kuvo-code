@@ -10,28 +10,24 @@ struct MainView: View {
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
 
-    /// Open tabs, in order: session IDs, or `draft:<folder>` for a new session
-    /// that doesn't exist on the server until its first message.
-    @SceneStorage("tabs") private var tabStorage = ""
-    /// The active tab.
-    @SceneStorage("selection") private var selection: String?
+    /// The tabs, the one in view, the split, the panel shown or expanded, the editor in the main
+    /// card: the window's, in a store of their own, which keeps them with this scene.
+    private var tabs: WindowTabs { app.tabs }
+    /// What the tabs were, kept with the scene for the next launch (`WindowTabs.saved`).
+    @SceneStorage("windowTabs") private var savedTabs = ""
+    /// How they were kept before, read once to bring them over.
+    @SceneStorage("tabs") private var olderTabs = ""
+    @SceneStorage("selection") private var olderSelection: String?
+    @SceneStorage("splitPairs") private var olderPairs = ""
+    @SceneStorage("showsPanel") private var olderShowsPanel = false
     @SceneStorage("showsSidebar") private var showsSidebar = true
     /// The row at the top: the project, its branch and the tabs. Hidden, sessions are switched
     /// from the sidebar or ⌘K.
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
     /// The window is being resized.
     @State private var window = WindowStateReader.State()
-    @SceneStorage("showsPanel") private var showsPanel = false
-    /// The panel over the conversation, for room.
     /// Goes up for ⌘F in the group chat in view.
     @State private var groupFind = 0
-    @State private var panelExpanded = false
-    /// Out of room, the side cards give way in this order: the one opened last stays. A split you
-    /// didn't just open (one restored, or met again on its tab) goes first.
-    @State private var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
-    /// The tab whose split you opened (or swapped) last: there it keeps its place in `givesWay`;
-    /// another tab's, met again, gives way first.
-    @State private var keptSplit: String?
     /// The room the conversation and the panel share: what the panel takes, expanded.
     @State private var mainAreaWidth: CGFloat = 0
     @AppStorage("sessionsWidth") private var sessionsWidth = 280.0
@@ -39,18 +35,6 @@ struct MainView: View {
     @AppStorage(Notifier.badgeKey) private var showsBadge = true
     /// New Project or Edit Project, in a popup while it's open.
     @State private var projectEditor: ProjectEditorRequest?
-    /// Making or changing a bot, in the main card while it's open.
-    @State private var botEditor: BotEditorRequest?
-    /// Making or changing a group chat, the same way.
-    @State private var groupEditor: GroupEditorRequest?
-    @State private var focus = Pane.conversation
-    /// The half of the conversation you worked in last (a click in the panel or the sidebar
-    /// isn't working in either): a tab you pick in the panel is its agent's.
-    @State private var lastHalf = Pane.conversation
-    /// Tabs you closed, last one last, with where they were: ⇧⌘T opens them again.
-    @State private var closedTabs: [ClosedTab] = []
-    /// Goes up to put the cursor in a new session's composer.
-    @State private var draftFocus = 0
     /// Open Quickly's palette is showing.
     @State private var showsOpenQuickly = false
     /// The command palette (⌘K) is showing.
@@ -66,101 +50,27 @@ struct MainView: View {
     @State private var mainPaneX: CGFloat = 0
     @State private var titleBarX: CGFloat = 0
     @State private var settingsBarX: CGFloat = 0
-
-    enum Pane { case sessions, conversation, split, changes }
-
-    /// Split views, as pairs: a tab and the session beside it, kept with the tab as a browser's split
-    /// tabs are, one "<tab>=<session>" a line. Choosing another tab shows it alone; the pair comes
-    /// back with its tab. Kept with the window's tabs, so the two never disagree.
-    @SceneStorage("splitPairs") private var splitStorage = ""
-
-    private var splitPairs: [String: String] {
-        get {
-            Dictionary(splitStorage.split(separator: "\n").compactMap { line in
-                let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
-                return parts.count == 2 ? (parts[0], parts[1]) : nil
-            }, uniquingKeysWith: { first, _ in first })
-        }
-        nonmutating set {
-            splitStorage = newValue.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
-        }
-    }
-
-    /// The session beside the tab in view, or empty.
-    private var splitSession: String { selection.flatMap { splitPairs[$0] } ?? "" }
     @AppStorage("splitWidth") private var splitWidth = 560.0
 
-    struct ClosedTab {
-        var key: String
-        var index: Int
-        /// The session that was beside it, back with it.
-        var beside: String?
-        /// The tab it was beside, which it goes back beside if it still can.
-        var besideOf: String?
-    }
-
-    private var tabs: [String] {
-        get { tabStorage.split(separator: "\n").map(String.init) }
-        nonmutating set { tabStorage = newValue.joined(separator: "\n") }
-    }
-
     private var utilities: Utilities { app.utilities }
-
-    private var sessionID: String? {
-        selection.flatMap { SidebarView.draftDirectory(from: $0) == nil && BotGroups.groupID(fromTab: $0) == nil && !MainTerminals.isTerminal($0) ? $0 : nil }
-    }
-
-    /// The group chat in view.
-    private var groupID: String? {
-        selection.flatMap(BotGroups.groupID(fromTab:))
-    }
-
-    /// The browser tabs of the bots on this Mac in view, a bot's or a group chat's, beside yours.
-    private func showBotTabs() {
-        let inView = groupID.flatMap { groups.group($0)?.members.compactMap { bots.bot($0) } } ?? [bots.bot(forSession: sessionID)].compactMap { $0 }
-        utilities.botsInView = Set(inView.filter { $0.machine == nil }.map(\.id))
-        // Its bots' seats are in view too: what they show you opens.
-        utilities.groupInView = groupID.map(BotGroups.tabKey)
-    }
-
-    private var draftDirectory: String? {
-        selection.flatMap(SidebarView.draftDirectory(from:))
-    }
-
-    private var activeModel: SessionModel? {
-        sessionID.flatMap(workspace.model(for:))
-    }
-
-    /// The session you're working in: the one beside, once you've clicked into it (and while you
-    /// use the panel or the sidebar after, as the panel stays its). The menus' commands (Stop,
-    /// Find, the modes) go to it.
-    private var focusedModel: SessionModel? {
-        worksBeside ? splitModel : activeModel
-    }
-
-    /// The last half you worked in is the one beside: the panel is its, and the commands go to it.
-    /// It stays so while the expanded panel covers it (the panel is still its), not once it gave
-    /// way for want of room.
-    private var worksBeside: Bool {
-        lastHalf == .split && splitModel != nil && paneLayout(available: contentWidth).split != nil
-    }
-
-    /// The session beside you work in, if you do.
-    private var workedBesideID: String? {
-        worksBeside ? splitModel?.id : nil
-    }
-
-    /// The sessions on screen: the tab's, and the one beside it.
-    private var sessionsInView: [String] {
-        [sessionID, besideID].compactMap(\.self)
-    }
-
-    /// The session beside the tab's, while it shows: with room for it in the window, and not under
-    /// the expanded panel. One that gave way is out of view: not read, nor working there.
-    private var besideID: String? {
-        guard let splitModel, paneLayout(available: contentWidth).split != nil, !(showsPanel && panelExpanded) else { return nil }
-        return splitModel.id
-    }
+    private var selection: TabKey? { tabs.selection }
+    private var focus: WindowTabs.Pane { tabs.focus }
+    private var showsPanel: Bool { tabs.showsPanel }
+    private var panelExpanded: Bool { tabs.panelExpanded }
+    private var sessionID: String? { tabs.sessionID }
+    private var groupID: String? { tabs.groupID }
+    private var draftDirectory: String? { tabs.draftDirectory }
+    private var activeModel: SessionModel? { tabs.activeModel }
+    private var focusedModel: SessionModel? { tabs.focusedModel }
+    private var splitModel: SessionModel? { tabs.splitModel }
+    private var besideID: String? { tabs.besideID }
+    private var sessionsInView: [String] { tabs.sessionsInView }
+    private var activeDirectory: String? { tabs.activeDirectory }
+    private var focusedDirectory: String? { tabs.focusedDirectory }
+    /// The active tab's folder, and the focused session's, when they're a project's: not the chats'
+    /// folder or a bot's own.
+    private var activeProject: String? { WindowTabs.project(activeDirectory) }
+    private var focusedProject: String? { WindowTabs.project(focusedDirectory) }
 
     /// When the sessions on screen last finished.
     private var idlesInView: [Milliseconds?] {
@@ -170,27 +80,6 @@ struct MainView: View {
     /// The sessions on screen count as seen.
     private func markViewed() {
         for id in sessionsInView { workspace.markViewed(id) }
-    }
-
-    /// The active tab's project folder.
-    private var activeDirectory: String? {
-        activeModel?.session.location.directory ?? draftDirectory ?? selection.flatMap { terminals.entry($0)?.directory }
-    }
-
-    /// The active tab's folder when it's a project's: not the chats' folder or a bot's own.
-    private var activeProject: String? {
-        activeDirectory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
-    }
-
-    /// The folder of the session you're working in: the one beside, once you've clicked into it.
-    /// Run, a new terminal and Open Quickly go there, as Stop goes to its session.
-    private var focusedDirectory: String? {
-        worksBeside ? splitModel?.session.location.directory ?? activeDirectory : activeDirectory
-    }
-
-    /// The focused session's folder when it's a project's.
-    private var focusedProject: String? {
-        focusedDirectory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
     }
 
     /// A bot's workspace: the folder of its own it works in when it has no project.
@@ -206,6 +95,17 @@ struct MainView: View {
     /// The agents, commands and models of the engine a folder's sessions run on.
     private func catalog(for folder: String?) -> Catalog {
         machine(for: folder)?.catalog ?? catalog
+    }
+
+    /// What the window has room for, for the tabs: the split in view, and one opened now.
+    private var room: WindowTabs.Room {
+        var opened = tabs.givesWay.filter { $0 != .split }
+        opened.append(.split)
+        return WindowTabs.Room(
+            showsBeside: paneLayout(available: contentWidth).split != nil,
+            fitsBeside: PaneLayout(available: contentWidth, sessions: showsSidebar ? sessionsWidth : nil, changes: showsPanel ? changesWidth : nil,
+                                   split: splitWidth, givesWay: opened).split != nil
+        )
     }
 
     /// The cards, the title bar and what shows over them.
@@ -369,7 +269,7 @@ struct MainView: View {
             window.makeFirstResponder(nil)
         }
         // The agent started browsing: show it.
-        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { showPanel() } }
+        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
         // button stays, so the window's buttons keep a toolbar's height, centered on the cards'
         // header row, and the sidebar is a click away. The panel is still ⌥⌘0, and sessions ⌘K.
@@ -455,26 +355,10 @@ struct MainView: View {
         .onChange(of: sessionsInView) { if NSApp.isActive { markViewed() } }
         .onChange(of: idlesInView) { if NSApp.isActive { markViewed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markViewed() }
-        // The panel's browser is that of the place the session in view runs: this Mac's, or its
-        // machine's.
-        .onChange(of: focusedDirectory, initial: true) { _, directory in
-            utilities.place = directory.flatMap(RemoteFolder.machine(of:))
-        }
-        // Its agent's browsing brings pages forward; others' stay where they are.
-        .onChange(of: sessionID, initial: true) { _, id in
-            utilities.sessionInView = id
-            showBotTabs()
-        }
-        // The one beside it shows you files in the panel too.
-        .onChange(of: besideID, initial: true) { _, id in utilities.besideInView = id }
-        // Another tab: you're back in its own conversation, not the one beside the last (whatever
-        // had the keyboard: the panel or the sidebar keep the last half otherwise).
-        .onChange(of: selection) {
-            if focus == .split { focus = .conversation }
-            lastHalf = .conversation
-        }
-        // Another session beside: you work in the tab's until you click into it.
-        .onChange(of: splitModel?.id) { lastHalf = .conversation }
+        // The panel follows what's in view, all at once: the conversations, the half you work in,
+        // its place, and the bots in view.
+        .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
+        .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
         .sheet(item: $projectEditor) { projectSheet($0) }
     }
@@ -491,7 +375,7 @@ struct MainView: View {
                 settings.terminal = given(settings.terminal) ?? existing.terminal
             }
             let primary = workspace.saveProject(primary, settings: settings)
-            if request.project == nil { newSession(in: primary) }
+            if request.project == nil { tabs.newSession(in: primary) }
         } close: {
             projectEditor = nil
         }
@@ -499,58 +383,28 @@ struct MainView: View {
 
     var body: some View {
         followingSessions
-        // A tab you pick is the agent's of the half you work in.
-        .onChange(of: focus) { _, pane in if pane == .conversation || pane == .split { lastHalf = pane } }
-        .onChange(of: workedBesideID, initial: true) { _, id in
-            utilities.workedBeside = id
-            utilities.worksBeside = id != nil
-        }
-        .onChange(of: groupID) { showBotTabs() }
-        .onChange(of: groupID.flatMap { groups.group($0)?.members } ?? []) { showBotTabs() }
         .task(id: activeDirectory) {
             if let activeDirectory { await workspace.loadBranch(for: activeDirectory) }
         }
-        .onChange(of: workspace.sessions.map(\.id)) { _, ids in dropClosedSessions(ids) }
-        .onChange(of: groups.list.map(\.id)) { dropClosedSessions(workspace.sessions.map(\.id)) }
+        .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
+        .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
-            dropClosedSessions(workspace.sessions.map(\.id))
-            startIfEmpty()
+            tabs.dropClosed()
+            tabs.startIfEmpty()
         }
-        .onAppear(perform: startIfEmpty)
-        .onAppear { Notifier.shared.open = { openTab($0) } }
-        .onAppear { utilities.addToMessage = { addToMessage($0) } }
-        .onAppear { utilities.attachToMessage = { attachToMessage($0) } }
-        .onChange(of: workspace.requestedTab) { _, id in
-            guard let id else { return }
-            openTab(id)
-            workspace.requestedTab = nil
+        .onAppear {
+            tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel))
+            (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
+            // Opened again after the window closed: the terminals went with it.
+            tabs.dropClosed()
+            tabs.startIfEmpty()
         }
-        .onChange(of: workspace.swappedTab) { _, swap in
-            // Only the window the session's tab is in (another window leaves it).
-            guard let swap, tabs.contains(swap.from) || splitPairs.values.contains(swap.from) else { return }
-            workspace.swappedTab = nil
-            swapTab(swap.from, with: swap.to)
-        }
-        // From outside the window: a folder opened with Kuvo Code, or the Dock menu.
-        .onChange(of: app.request, initial: true) { _, request in
-            guard let request else { return }
-            app.request = nil
-            switch request {
-            case .folder(let path):
-                newSession(in: workspace.addFolder(path))
-            case .session(let id):
-                openTab(id)
-            case .newSession:
-                newSession(in: nil)
-            case .bot(let recipe):
-                openBotEditor(bot: nil, recipe: recipe)
-            }
-        }
+        .onChange(of: tabs.saved) { _, saved in savedTabs = saved }
         .onChange(of: workspace.waitingCount, initial: true) { Notifier.shared.setBadge(workspace.waitingCount) }
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
         // Another tab: a rename in the last one's header ends, keeping what was typed.
-        .onChange(of: selection) { _, id in if renaming?.id != id { renaming = nil } }
+        .onChange(of: selection) { _, key in if renaming?.id != key?.sessionID { renaming = nil } }
         #if DEBUG
         .task(id: workspace.isLoaded) { await DemoDirector.run(app: app, window: demoWindow) }
         #endif
@@ -599,10 +453,12 @@ struct MainView: View {
             .frame(width: identityWidth, alignment: .leading)
             .padding(.trailing, identityWidth == nil ? 16 : 0)
             if !tabItems.isEmpty {
-                TabStrip(tabs: tabItems, selection: $selection, close: { closeTab($0) }, closeAll: closeTabs(except:), openBeside: besideOpener, closeBeside: closeBeside, closeBesideTab: closeBesideTab, swapBeside: swapBeside) { id in
+                TabStrip(tabs: tabItems, selection: tabSelection, close: { tabs.close(TabKey($0)) }, closeAll: { tabs.closeAll(except: $0.map(TabKey.init)) },
+                         openBeside: besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
+                         swapBeside: { tabs.swapBeside(TabKey($0)) }) { id in
                     guard let session = workspace.session(id) else { return }
                     // Renamed in its card's header: its tab comes forward for it.
-                    selection = id
+                    tabs.selection = .session(id)
                     renaming = session
                 }
             }
@@ -631,35 +487,39 @@ struct MainView: View {
     }
 
     private var tabItems: [TabItem] {
-        let pairs = splitPairs
-        return tabs.compactMap { key in
+        tabs.keys.compactMap { key in
             guard var item = tabItem(for: key) else { return nil }
-            if let beside = pairs[key], let other = tabItem(for: beside) { item.companion = [other] }
+            if let beside = tabs.pairs[key], let other = tabItem(for: .session(beside)) { item.companion = [other] }
             return item
         }
     }
 
-    private func tabItem(for key: String) -> TabItem? {
-        do {
-            if let directory = SidebarView.draftDirectory(from: key) {
-                return TabItem(id: key, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
+    /// The tab strip's selection, by the tabs' written keys.
+    private var tabSelection: Binding<String?> {
+        Binding(get: { tabs.selection?.text }, set: { tabs.selection = $0.map(TabKey.init) })
+    }
+
+    private func tabItem(for key: TabKey) -> TabItem? {
+        let id = key.text
+        switch key {
+        case .draft(let directory):
+            return TabItem(id: id, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
+        case .terminal:
+            guard let entry = terminals.entry(id) else { return nil }
+            return TabItem(id: id, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
+        case .group(let group):
+            guard let group = groups.group(group) else { return nil }
+            let status: TabItem.Status = groups.discussing.contains(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
+            return TabItem(id: id, title: group.name, logo: nil, group: faces(of: group), status: status)
+        case .session(let sessionID):
+            if workspace.waitingMachine(for: sessionID) != nil {
+                return TabItem(id: id, title: workspace.remoteTitle(sessionID) ?? "Session", logo: nil, status: .idle)
             }
-            if let entry = terminals.entry(key) {
-                return TabItem(id: key, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
+            guard let session = workspace.session(sessionID) else { return nil }
+            if let bot = bots.bot(forSession: sessionID) {
+                return TabItem(id: id, title: bot.name, logo: nil, bot: bot.look, botMood: bots.mood(of: bot, in: workspace), status: status(of: session))
             }
-            if workspace.waitingMachine(for: key) != nil {
-                return TabItem(id: key, title: workspace.remoteTitle(key) ?? "Session", logo: nil, status: .idle)
-            }
-            if let id = BotGroups.groupID(fromTab: key) {
-                guard let group = groups.group(id) else { return nil }
-                let status: TabItem.Status = groups.discussing.contains(id) ? .working : groups.isUnread(group) && groupID != id ? .unread : .idle
-                return TabItem(id: key, title: group.name, logo: nil, group: faces(of: group), status: status)
-            }
-            guard let session = workspace.session(key) else { return nil }
-            if let bot = bots.bot(forSession: key) {
-                return TabItem(id: key, title: bot.name, logo: nil, bot: bot.look, botMood: bots.mood(of: bot, in: workspace), status: status(of: session))
-            }
-            return TabItem(id: key, title: session.title ?? "New Session", logo: logo(for: session.model, in: session.location.directory), status: status(of: session))
+            return TabItem(id: id, title: session.title ?? "New Session", logo: logo(for: session.model, in: session.location.directory), status: status(of: session))
         }
     }
 
@@ -667,8 +527,8 @@ struct MainView: View {
     /// edited): their sidebar rows hold still meanwhile, so each moves in one place at a time.
     /// An idle bot whose conversation is open moves in the sidebar, as nothing in its conversation does.
     private var stagedBots: Set<String> {
-        if let request = botEditor { return Set([request.bot?.id].compactMap(\.self)) }
-        if groupEditor != nil { return [] }
+        if let request = tabs.botEditor { return Set([request.bot?.id].compactMap(\.self)) }
+        if tabs.groupEditor != nil { return [] }
         if let id = sessionID, let bot = bots.bot(forSession: id), workspace.running.contains(id) { return [bot.id] }
         if let id = groupID, let speaker = groups.speaking[id] { return [speaker] }
         return []
@@ -703,17 +563,17 @@ struct MainView: View {
             EmptyView()
         } content: {
             SidebarView(
-                selection: Binding(get: { selection }, set: { id in if let id { openTab(id) } }),
-                newSession: { newSession(in: $0) },
+                selection: Binding(get: { selection?.text }, set: { id in if let id { tabs.open(TabKey(id)) } }),
+                newSession: { tabs.newSession(in: $0) },
                 newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
                 editProject: { openProjectEditor(ProjectEditorRequest(project: $0)) },
                 showProviders: { app.openSettings(.accounts) },
-                newBot: { openBotEditor(bot: nil) },
-                editBot: { openBotEditor(bot: $0) },
-                newGroup: { openGroupEditor(group: nil) },
-                editGroup: { openGroupEditor(group: $0) },
-                newConversation: { openTab(SidebarView.draftTag($0)) },
-                closeTerminal: { closeTab($0) },
+                newBot: { tabs.openBotEditor(bot: nil) },
+                editBot: { tabs.openBotEditor(bot: $0) },
+                newGroup: { tabs.openGroupEditor(group: nil) },
+                editGroup: { tabs.openGroupEditor(group: $0) },
+                newConversation: { tabs.open(.draft($0)) },
+                closeTerminal: { tabs.close(TabKey($0)) },
                 stagedBots: stagedBots,
                 openBeside: besideOpener
             )
@@ -723,13 +583,7 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .simultaneousGesture(TapGesture().onEnded { focus = .sessions })
-    }
-
-    /// The session in split view, while it's another than the one in view.
-    private var splitModel: SessionModel? {
-        guard !splitSession.isEmpty, splitSession != sessionID, workspace.session(splitSession) != nil else { return nil }
-        return workspace.model(for: splitSession)
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .sessions })
     }
 
     /// The session's title, renamed in its card's header, while it's the one being renamed.
@@ -756,128 +610,68 @@ struct MainView: View {
             } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
         } actions: {
             ContextGauge(model: model)
-            Button("Swap", systemImage: "arrow.left.arrow.right") { swapSplit() }
+            Button("Swap", systemImage: "arrow.left.arrow.right") { tabs.swapSplit() }
                 .help("Swap the two sessions")
-            Button("Close Split View", systemImage: "xmark") { if let selection { closeBeside(selection) } }
+            Button("Close Split View", systemImage: "xmark") { if let selection { tabs.closeBeside(selection) } }
                 .help("Close Split View")
         } content: {
             SessionView(model: model)
                 .environment(\.bot, bot)
                 // Return and Esc answer its cards once you've clicked or typed into it.
                 .environment(\.takesCardKeys, focus == .split)
-                .environment(\.composerFocused) { focus = .split }
+                .environment(\.composerFocused) { tabs.focus = .split }
                 .largeWidgetHost()
         }
-        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
+        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
         .id("split-" + id)
-        .simultaneousGesture(TapGesture().onEnded { focus = .split })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .split })
     }
 
     /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
     /// draft or a group chat).
     private var besideOpener: ((String) -> Void)? {
         guard let sessionID, workspace.session(sessionID) != nil else { return nil }
-        return { openBeside($0) }
-    }
-
-    /// Shows `id` beside the tab in view, the two as one tab. Its own tab, if it had one, goes into
-    /// the pair; one beside before gets its tab back, next to it.
-    private func openBeside(_ id: String) {
-        guard let main = selection, main != id, workspace.session(main) != nil, workspace.session(id) != nil else { return }
-        var pairs = splitPairs
-        var tabs = tabs
-        // It's in no other pair, nor has one of its own.
-        if let other = pairs.removeValue(forKey: id), !tabs.contains(other) { tabs.insert(other, at: (tabs.firstIndex(of: id) ?? tabs.count - 1) + 1) }
-        for (key, value) in pairs where value == id { pairs[key] = nil }
-        if let previous = pairs[main], !tabs.contains(previous) { tabs.insert(previous, at: (tabs.firstIndex(of: main) ?? tabs.count - 1) + 1) }
-        tabs.removeAll { $0 == id }
-        pairs[main] = id
-        withAnimation(.ui) {
-            self.tabs = tabs
-            splitPairs = pairs
-            keep(.split)
-            keptSplit = main
-        }
-        // Its composer takes the keyboard, if there's room for it: the menus' commands go to it.
-        if paneLayout(available: contentWidth).split != nil { focus = .split }
-    }
-
-    /// Close Split View: the two go back to tabs of their own, the one beside next to `tab`.
-    private func closeBeside(_ tab: String) {
-        guard let beside = splitPairs[tab] else { return }
-        var tabs = tabs
-        if !tabs.contains(beside) { tabs.insert(beside, at: (tabs.firstIndex(of: tab) ?? tabs.count - 1) + 1) }
-        withAnimation(.ui) {
-            self.tabs = tabs
-            splitPairs[tab] = nil
-        }
-    }
-
-    /// Closes the session beside `tab`'s (its half of the tab): ⇧⌘T brings it back beside it.
-    private func closeBesideTab(_ tab: String) {
-        guard let beside = splitPairs[tab] else { return }
-        Analytics.shared.sessionEnded(beside)
-        rememberClosed([ClosedTab(key: beside, index: (tabs.firstIndex(of: tab) ?? tabs.count - 1) + 1, besideOf: tab)])
-        withAnimation(.ui) { splitPairs[tab] = nil }
-    }
-
-    /// The two in `tab`'s pair trade places, the tab staying where it is.
-    private func swapBeside(_ tab: String) {
-        guard let other = splitPairs[tab] else { return }
-        var pairs = splitPairs
-        pairs[tab] = nil
-        pairs[other] = tab
-        // One tab for the two: a tab of its own it had goes.
-        var tabs = tabs.filter { $0 != other }
-        if let index = tabs.firstIndex(of: tab) { tabs[index] = other }
-        self.tabs = tabs
-        splitPairs = pairs
-        if keptSplit == tab { keptSplit = other }
-        if selection == tab { selection = other }
-    }
-
-    private func swapSplit() {
-        if let selection { swapBeside(selection) }
+        return { tabs.openBeside($0) }
     }
 
     @ViewBuilder private var conversationCard: some View {
         Group {
-            if let request = groupEditor {
+            if let request = tabs.groupEditor {
                 Card(title: request.group.map { "Edit \($0.name)" } ?? "New Group Chat", isFocused: focus == .conversation) {
                     if let group = request.group { GroupAvatar(faces: faces(of: group), size: 20) } else { Image(systemName: "person.2") }
                 } actions: {
-                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { groupEditor = nil } }
+                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.groupEditor = nil } }
                         .help("Close")
                 } content: {
-                    GroupEditor(group: request.group, newBot: { openBotEditor(bot: nil) }) {
-                        withAnimation(.ui) { groupEditor = nil }
+                    GroupEditor(group: request.group, newBot: { tabs.openBotEditor(bot: nil) }) {
+                        withAnimation(.ui) { tabs.groupEditor = nil }
                     } created: { group in
-                        openTab(BotGroups.tabKey(group.id))
+                        tabs.open(.group(group.id))
                     }
                 }
                 .id(request.id)
-            } else if let request = botEditor {
+            } else if let request = tabs.botEditor {
                 Card(title: request.bot.map { "Edit \($0.name)" } ?? "New Bot", isFocused: focus == .conversation) {
                     if let bot = request.bot { BotAvatar(look: bot.look, size: 18, animates: false) } else { Image(systemName: "face.smiling") }
                 } actions: {
-                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { botEditor = nil } }
+                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.botEditor = nil } }
                         .help("Close")
                 } content: {
                     BotEditor(bot: request.bot, recipe: request.recipe) {
                         // This editor's, not one opened since (a delete that took a while).
-                        if botEditor?.id == request.id { withAnimation(.ui) { botEditor = nil } }
+                        if tabs.botEditor?.id == request.id { withAnimation(.ui) { tabs.botEditor = nil } }
                     } created: { bot in
                         // Its tab opens in place of this editor, not of one opened since.
-                        if botEditor?.id == request.id { openTab(bot.sessionID) }
+                        if tabs.botEditor?.id == request.id { tabs.open(.session(bot.sessionID)) }
                     }
                 }
                 .id(request.id)
-            } else if let key = selection, let entry = terminals.entry(key) {
+            } else if let key = selection, let entry = terminals.entry(key.text) {
                 Card(title: entry.session.title == "Terminal" ? entry.label : entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
                     Image(systemName: "apple.terminal")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(key) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(key) }
                         .help("Close Tab")
                 } content: {
                     TerminalHost(session: entry.session)
@@ -887,17 +681,17 @@ struct MainView: View {
                 Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
                     GroupAvatar(faces: faces(of: group), size: 20)
                 } actions: {
-                    Button("Edit Group Chat", systemImage: "slider.horizontal.3") { openGroupEditor(group: group) }
+                    Button("Edit Group Chat", systemImage: "slider.horizontal.3") { tabs.openGroupEditor(group: group) }
                         .help("Edit Group Chat: its name, bots and lead")
                         .disabled(app.moves.isMoving(group.id))
-                    Button("Close Tab", systemImage: "xmark") { closeTab(BotGroups.tabKey(id)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.group(id)) }
                         .help("Close Tab")
                 } content: {
                     GroupChatView(group: group, findRequest: groupFind)
                         .largeWidgetHost()
                 }
-                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { openGroupEditor(group: group) })
-                .id(BotGroups.tabKey(id))
+                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
+                .id(TabKey.group(id))
             } else if let id = sessionID, let model = workspace.model(for: id) {
                 let directory = model.session.location.directory
                 let machine = machine(for: directory)
@@ -913,7 +707,7 @@ struct MainView: View {
                     } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
                 } actions: {
                     if let bot {
-                        Button("Edit Bot", systemImage: "slider.horizontal.3") { openBotEditor(bot: bot) }
+                        Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                             .help("Edit Bot: its look, job, wake-ups and memory")
                     }
                     if Workspace.isChat(directory) {
@@ -926,23 +720,23 @@ struct MainView: View {
                     }
                     ContextGauge(model: model)
                         .disabled(machine.map { !$0.isReady || !$0.isLive } ?? false)
-                    Button("Close Tab", systemImage: "xmark") { closeTab(id) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                         .help("Close Tab")
                 } content: {
                     SessionView(model: model)
                         .environment(\.bot, bot)
                         .environment(\.takesCardKeys, !(focus == .split && besideID != nil))
                         // Typing here is working here, however the keyboard got here.
-                        .environment(\.composerFocused) { focus = .conversation }
+                        .environment(\.composerFocused) { tabs.focus = .conversation }
                         .largeWidgetHost()
                 }
-                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
+                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
                 .environment(catalog(for: directory))
             } else if let id = sessionID, let engine = app.machines.engine(workspace.waitingMachine(for: id)) {
                 Card(title: workspace.remoteTitle(id) ?? "Session", detail: engine.machine.name, isFocused: focus == .conversation) {
                     Image(systemName: "server.rack")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(id) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                         .help("Close Tab")
                 } content: {
                     MachineWaitingView(engine: engine)
@@ -952,7 +746,7 @@ struct MainView: View {
                 Card(title: "New Session", detail: workspace.projectName(directory), isFocused: focus == .conversation) {
                     Image(systemName: "square.and.pencil")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(SidebarView.draftTag(directory)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.draft(directory)) }
                         .help("Close Tab")
                 } content: {
                     MachineWaitingView(engine: engine)
@@ -964,18 +758,11 @@ struct MainView: View {
                 Card(title: isChat ? "New Chat" : "New Session", detail: isChat ? nil : workspace.projectName(directory), isFocused: focus == .conversation) {
                     Image(systemName: "square.and.pencil")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(SidebarView.draftTag(directory)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.draft(directory)) }
                         .help("Close Tab")
                 } content: {
-                    DraftSessionView(directory: directory, focusRequest: draftFocus) { session, text, files in
-                        // The first takes the draft's tab and stays in view; more attempts open at the end.
-                        let draft = SidebarView.draftTag(directory)
-                        if tabs.contains(draft) {
-                            utilities.adoptDraft(as: session.id)
-                            replaceTab(draft, with: session.id)
-                        } else if !tabs.contains(session.id) {
-                            tabs.append(session.id)
-                        }
+                    DraftSessionView(directory: directory, focusRequest: tabs.draftFocus) { session, text, files in
+                        tabs.draftSent(.draft(directory), as: session.id)
                         workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: directory))
                     }
                 }
@@ -985,26 +772,14 @@ struct MainView: View {
                 Card(title: AppInfo.name, isFocused: focus == .conversation) {
                     AppLogo(size: 16)
                 } content: {
-                    WelcomeView(openFolder: openFolder, newChat: { newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
+                    WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
                 }
             }
         }
-        .simultaneousGesture(TapGesture().onEnded { focus = .conversation })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .conversation })
         // What you open last keeps its place when the window is short of room (a split, from
         // Open Beside: coming back to a tab that has one isn't opening it).
-        .onChange(of: showsSidebar) { _, shows in if shows { keep(.sessions) } }
-        .onChange(of: showsPanel) { _, shows in if shows { keep(.changes) } }
-        // A session an agent started: beside the conversation that started it, if that's the one
-        // in view; otherwise (or asked to) in a tab of its own, for you to find.
-        .onChange(of: workspace.besideRequest) { _, request in
-            guard let request else { return }
-            workspace.besideRequest = nil
-            if request.beside, request.startedBy == sessionID {
-                openBeside(request.session)
-            } else if !tabs.contains(request.session), !splitPairs.values.contains(request.session) {
-                tabs.append(request.session)
-            }
-        }
+        .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
     }
 
     private func paneLayout(available: Double) -> PaneLayout {
@@ -1013,7 +788,7 @@ struct MainView: View {
             sessions: showsSidebar ? sessionsWidth : nil,
             changes: showsPanel ? changesWidth : nil,
             split: splitModel == nil ? nil : splitWidth,
-            givesWay: selection != nil && selection == keptSplit ? givesWay : [.split] + givesWay.filter { $0 != .split }
+            givesWay: selection != nil && selection == tabs.keptSplit ? tabs.givesWay : [.split] + tabs.givesWay.filter { $0 != .split }
         )
     }
 
@@ -1027,29 +802,19 @@ struct MainView: View {
     }
 
     /// Showing one that's wanted but out of room makes room for it, as the one opened last.
-    private func showPanel(_ shows: Bool = true) {
-        showsPanel = shows
-        if shows { keep(.changes) }
-    }
-
     private func showSidebar(_ shows: Bool) {
         showsSidebar = shows
-        if shows { keep(.sessions) }
+        if shows { tabs.keep(.sessions) }
     }
 
     /// The panel's and the sidebar's buttons, which show what's on screen.
-    private var panelToggle: Binding<Bool> { Binding(get: { panelOnScreen }, set: { showPanel($0) }) }
+    private var panelToggle: Binding<Bool> { Binding(get: { panelOnScreen }, set: { tabs.showPanel($0) }) }
     /// Room kept free in the title bar while the window is dragged narrower: its width reaches
     /// the tabs a pass late, and a strip wider than the room left would be put away in the
     /// toolbar's overflow and back, again and again.
     private var resizeRoom: CGFloat { window.isResizing ? 72 : 0 }
 
     private var sidebarToggle: Binding<Bool> { Binding(get: { sidebarOnScreen }, set: { showSidebar($0) }) }
-
-    private func keep(_ pane: PaneLayout.Pane) {
-        givesWay.removeAll { $0 == pane }
-        givesWay.append(pane)
-    }
 
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
@@ -1060,31 +825,20 @@ struct MainView: View {
             folders: focusedDirectory.map { [$0] + workspace.extraFolders($0) } ?? [],
             model: focusedModel,
             environment: app.shellEnvironment,
-            isExpanded: $panelExpanded,
+            isExpanded: Binding(get: { tabs.panelExpanded }, set: { tabs.panelExpanded = $0 }),
             isFocused: focus == .changes
         )
         .environment(catalog(for: focusedDirectory))
-        .simultaneousGesture(TapGesture().onEnded { focus = .changes })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .changes })
     }
 
     /// Opens the panel on a tool.
     private func showInPanel(_ open: () -> Void) {
         withAnimation(.ui) {
             open()
-            showPanel()
+            tabs.showPanel()
             app.showsSettings = false
         }
-    }
-
-    /// Makes a bot (from a shared one's `recipe`, if given), or changes `bot`, in the main card.
-    private func openBotEditor(bot: Bot?, recipe: BotRecipe? = nil) {
-        withAnimation(.ui) {
-            panelExpanded = false
-            app.showsSettings = false
-            groupEditor = nil
-            botEditor = BotEditorRequest(bot: bot, recipe: recipe)
-        }
-        focus = .conversation
     }
 
     /// Makes a project, or changes one, in a popup over what's in the window. One open already
@@ -1093,17 +847,6 @@ struct MainView: View {
     private func openProjectEditor(_ request: ProjectEditorRequest) {
         guard projectEditor == nil else { return }
         projectEditor = request
-    }
-
-    /// Makes a group chat, or changes `group`, in the main card.
-    private func openGroupEditor(group: BotGroup?) {
-        withAnimation(.ui) {
-            panelExpanded = false
-            app.showsSettings = false
-            botEditor = nil
-            groupEditor = GroupEditorRequest(group: group)
-        }
-        focus = .conversation
     }
 
     /// Under a group chat's name: who's in it.
@@ -1171,169 +914,9 @@ struct MainView: View {
 
     // MARK: Tabs
 
-    /// Shows a session or draft, opening a tab for it next to the current one if needed.
-    private func openTab(_ key: String) {
-        // The session beside a tab: that tab, with it beside.
-        let key = splitPairs.first { $0.value == key && tabs.contains($0.key) }?.key ?? key
-        var tabs = tabs
-        if !tabs.contains(key) {
-            let index = selection.flatMap { tabs.firstIndex(of: $0) }.map { $0 + 1 } ?? tabs.count
-            tabs.insert(key, at: index)
-            self.tabs = tabs
-        }
-        withAnimation(.ui) {
-            selection = key
-            focus = .conversation
-            app.showsSettings = false
-            botEditor = nil
-            groupEditor = nil
-        }
-    }
-
-    /// Closes a tab; one you close (rather than a deleted session's) can be reopened.
-    private func closeTab(_ key: String, remember: Bool = true) {
-        var tabs = tabs
-        guard let index = tabs.firstIndex(of: key) else { return }
-        tabs.remove(at: index)
-        Analytics.shared.sessionEnded(key)
-        let beside = splitPairs[key]
-        if let beside {
-            Analytics.shared.sessionEnded(beside)
-            splitPairs[key] = nil
-        }
-        if remember && !MainTerminals.isTerminal(key) { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
-        terminals.close(key)
-        withAnimation(.ui) {
-            self.tabs = tabs
-            if selection == key {
-                selection = tabs.indices.contains(index) ? tabs[index] : tabs.last
-            }
-        }
-    }
-
-    /// Closes every tab but `key`, or all of them when it's nil.
-    private func closeTabs(except key: String?) {
-        // Reopened last first, so the leftmost comes back last.
-        let pairs = splitPairs
-        rememberClosed(tabs.enumerated().filter { $0.element != key && !MainTerminals.isTerminal($0.element) }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
-        for closed in tabs where closed != key {
-            Analytics.shared.sessionEnded(closed)
-            terminals.close(closed)
-            if let beside = splitPairs[closed] { Analytics.shared.sessionEnded(beside) }
-        }
-        withAnimation(.ui) {
-            tabs = tabs.filter { $0 == key }
-            splitPairs = splitPairs.filter { $0.key == key }
-            selection = key
-        }
-    }
-
-    private func rememberClosed(_ closed: [ClosedTab]) {
-        closedTabs.append(contentsOf: closed)
-        if closedTabs.count > 50 { closedTabs.removeFirst(closedTabs.count - 50) }
-    }
-
-    /// In a tab, or beside one.
-    private func isOpen(_ key: String) -> Bool {
-        tabs.contains(key) || splitPairs.values.contains(key)
-    }
-
-    /// Not open again already, and not a session deleted since.
-    private func canReopen(_ closed: ClosedTab) -> Bool {
-        !isOpen(closed.key) && (SidebarView.draftDirectory(from: closed.key) != nil || workspace.session(closed.key) != nil
-            || groups.group(BotGroups.groupID(fromTab: closed.key)) != nil)
-    }
-
-    /// Opens the tab closed last, where it was, skipping sessions deleted since. A pair comes back
-    /// as a pair, and a session closed from beside a tab goes back beside it.
-    private func reopenClosedTab() {
-        while let closed = closedTabs.popLast() {
-            guard canReopen(closed) else { continue }
-            var tabs = tabs
-            var pairs = splitPairs
-            let shown: String
-            if let partner = closed.besideOf, tabs.contains(partner), pairs[partner] == nil {
-                pairs[partner] = closed.key
-                shown = partner
-            } else {
-                tabs.insert(closed.key, at: min(closed.index, tabs.count))
-                if let beside = closed.beside, !isOpen(beside), workspace.session(beside) != nil { pairs[closed.key] = beside }
-                shown = closed.key
-            }
-            withAnimation(.ui) {
-                self.tabs = tabs
-                splitPairs = pairs
-                selection = shown
-                focus = .conversation
-            }
-            return
-        }
-    }
-
-    /// Where the panel's Add to Message goes: the session you work in, the one beside once you've
-    /// clicked into it (the panel is its), else the tab's.
-    private var messageTarget: String? { workedBesideID ?? selection }
-
-    /// Adds a file's lines ("@src/App.swift:12-20") or a terminal's output to what's in the
-    /// composer of the session you work in, and puts the cursor there.
-    private func addToMessage(_ addition: String) {
-        composerForAdding()
-        guard let key = messageTarget else { return }
-        var text = Drafts.shared[key].text
-        let isBlock = addition.hasPrefix("```")
-        if !text.isEmpty {
-            if isBlock { if !text.hasSuffix("\n") { text += "\n" } } else if !(text.last?.isWhitespace ?? true) { text += " " }
-        }
-        Drafts.shared[key].text = text + addition + (isBlock ? "\n" : " ")
-        if SidebarView.draftDirectory(from: key) != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
-        focus = worksBeside ? .split : .conversation
-    }
-
-    /// Attaches files to the message in the composer of the session you work in, and puts the
-    /// cursor there.
-    private func attachToMessage(_ files: [URL]) {
-        composerForAdding()
-        guard let key = messageTarget else { return }
-        Drafts.shared[key].files += files.filter { !Drafts.shared[key].files.contains($0) }
-        if SidebarView.draftDirectory(from: key) != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
-        focus = worksBeside ? .split : .conversation
-    }
-
-    /// With no composer in view to add to (no tab open, or a terminal's): a new conversation, in
-    /// the terminal's folder if one's in view, never a terminal (which would start the project's
-    /// command, and not have the text).
-    private func composerForAdding() {
-        guard selection == nil || messageTarget.map(MainTerminals.isTerminal) == true else { return }
-        newSession(in: selection.flatMap { terminals.entry($0)?.directory }, conversation: true)
-    }
-
-    /// A session that carries on in another: the new one takes its tab (or its place beside
-    /// one), and is shown.
-    private func swapTab(_ old: String, with id: String) {
-        if let tab = splitPairs.first(where: { $0.value == old })?.key {
-            splitPairs[tab] = id
-            openTab(id)
-            return
-        }
-        guard tabs.contains(old) else { return openTab(id) }
-        if let beside = splitPairs[old] {
-            splitPairs[old] = nil
-            splitPairs[id] = beside
-        }
-        replaceTab(old, with: id)
-    }
-
-    /// A draft became a real session: it keeps its place in the tab strip.
-    private func replaceTab(_ key: String, with id: String) {
-        var tabs = tabs
-        if let index = tabs.firstIndex(of: key) { tabs[index] = id } else { tabs.append(id) }
-        self.tabs = tabs
-        selection = id
-    }
-
     /// Settings' tabs while Settings shows, else the sessions'.
     private func cycleAnyTabs(by offset: Int) {
-        if app.showsSettings { withAnimation(.ui) { app.settingsTabs.cycle(by: offset) } } else { cycleTabs(by: offset) }
+        if app.showsSettings { withAnimation(.ui) { app.settingsTabs.cycle(by: offset) } } else { tabs.cycle(by: offset) }
     }
 
     /// ⌘W: in Settings, closes its tab, and with one left goes back to the sessions. With no tab
@@ -1346,51 +929,10 @@ struct MainView: View {
                 closeSettings()
             }
         } else if let selection {
-            closeTab(selection)
+            tabs.close(selection)
         } else {
             NSApp.keyWindow?.performClose(nil)
         }
-    }
-
-    private func cycleTabs(by offset: Int) {
-        let tabs = tabs
-        guard !tabs.isEmpty else { return }
-        let index = selection.flatMap { tabs.firstIndex(of: $0) } ?? 0
-        withAnimation(.ui) { selection = tabs[(index + offset + tabs.count) % tabs.count] }
-    }
-
-    /// Deleted sessions lose their tabs; the one beside a deleted tab's session takes its tab.
-    /// Pairs whose tab or session beside is gone end.
-    private func dropClosedSessions(_ ids: [String]) {
-        guard workspace.isLoaded else { return }
-        let known = Set(ids)
-        // A machine's sessions wait for it to connect.
-        func isGone(_ key: String) -> Bool { !known.contains(key) && workspace.waitingMachine(for: key) == nil }
-        for key in tabs where SidebarView.draftDirectory(from: key) == nil && isGone(key) {
-            // A terminal's tab stays while its shell runs; one restored at launch has none.
-            if MainTerminals.isTerminal(key) {
-                if terminals.entry(key) != nil { continue }
-                closeTab(key, remember: false)
-                continue
-            }
-            // A group chat's tab stays as long as the chat does.
-            if let id = BotGroups.groupID(fromTab: key), groups.group(id) != nil { continue }
-            if let beside = splitPairs[key], !isGone(beside), !tabs.contains(beside) {
-                splitPairs[key] = nil
-                var tabs = tabs
-                if let index = tabs.firstIndex(of: key) { tabs[index] = beside }
-                self.tabs = tabs
-                if selection == key { selection = beside }
-                continue
-            }
-            closeTab(key, remember: false)
-        }
-        let open = Set(tabs)
-        let pairs = splitPairs.filter { open.contains($0.key) && !open.contains($0.value) && !isGone($0.value) }
-        if pairs != splitPairs { splitPairs = pairs }
-        // A selection that isn't one of the tabs (its session went while the app was closed)
-        // shows nothing; show the last tab instead.
-        if let selection, !tabs.contains(selection) { self.selection = tabs.last }
     }
 
     // MARK: Actions
@@ -1401,18 +943,18 @@ struct MainView: View {
             hasSession: model != nil,
             hasProject: focusedProject != nil,
             canStop: model?.isRunning == true,
-            canReopenTab: closedTabs.contains(where: canReopen),
-            newSession: { newSession(in: nil) },
-            newTerminalTab: { openTerminalTab(command: nil) },
+            canReopenTab: tabs.canReopenTab,
+            newSession: { tabs.newSession(in: nil) },
+            newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
             newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
-            newBot: { openBotEditor(bot: nil) },
-            importBot: { if let recipe = BotRecipe.pick() { openBotEditor(bot: nil, recipe: recipe) } },
-            newGroup: { openGroupEditor(group: nil) },
-            newChat: { newSession(in: Workspace.chatsFolder) },
+            newBot: { tabs.openBotEditor(bot: nil) },
+            importBot: { if let recipe = BotRecipe.pick() { tabs.openBotEditor(bot: nil, recipe: recipe) } },
+            newGroup: { tabs.openGroupEditor(group: nil) },
+            newChat: { tabs.newSession(in: Workspace.chatsFolder) },
             stop: { model?.stop() },
             selectAgent: { model?.selectAgent($0) },
-            togglePanel: { withAnimation(.ui) { showPanel(!panelOnScreen) } },
+            togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },
             newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment) } },
@@ -1422,19 +964,16 @@ struct MainView: View {
             nextTab: { cycleAnyTabs(by: 1) },
             previousTab: { cycleAnyTabs(by: -1) },
             closeTab: closeAnyTab,
-            reopenTab: reopenClosedTab,
+            reopenTab: tabs.reopenClosedTab,
             find: {
-                if let model { model.showFind() } else if selection.flatMap(BotGroups.groupID(fromTab:)) != nil { groupFind += 1 }
+                if let model { model.showFind() } else if groupID != nil { groupFind += 1 }
             },
             showTab: { number in
                 if app.showsSettings {
                     withAnimation(.ui) { app.settingsTabs.show(number: number) }
                     return
                 }
-                let tabs = tabs
-                guard !tabs.isEmpty else { return }
-                let index = number == 9 ? tabs.count - 1 : number - 1
-                if tabs.indices.contains(index) { openTab(tabs[index]) }
+                tabs.show(number: number)
             },
             showProviders: { app.openSettings(.accounts) },
             openQuickly: {
@@ -1454,7 +993,7 @@ struct MainView: View {
     private var paletteSessions: [PaletteItem] {
         (workspace.projects.flatMap(\.sessions) + workspace.chats).sorted { $0.time.updated > $1.time.updated }.map { session in
             PaletteItem(id: "session:" + session.id, kind: .session, title: session.title ?? "New Session", detail: workspace.projectName(session.location.directory),
-                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { openTab(session.id) }
+                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { tabs.open(.session(session.id)) }
         }
     }
 
@@ -1482,7 +1021,7 @@ struct MainView: View {
         add(sidebarOnScreen ? "Hide Sessions" : "Show Sessions", "sidebar.left", "⌘0", actions.toggleSidebar)
         add(showsTabBar ? "Hide Tab Bar" : "Show Tab Bar", "rectangle.topthird.inset.filled", "⌥⌘T") { showsTabBar.toggle() }
         add("New Project…", "folder.badge.plus", "⇧⌘N", actions.newProject)
-        add("New Bot…", "face.smiling", nil) { openBotEditor(bot: nil) }
+        add("New Bot…", "face.smiling", nil) { tabs.openBotEditor(bot: nil) }
         add("Open Folder…", "folder", "⌘O", actions.openFolder)
         if let directory = focusedProject {
             let primary = workspace.projectDirectory(directory)
@@ -1533,30 +1072,6 @@ struct MainView: View {
         showInPanel { utilities.run(command, in: directory, environment: app.shellEnvironment) }
     }
 
-    /// Starts a draft in `directory`, or in the current project (a worktree's, for a session in one).
-    /// A new session in `directory`, or the project in view, or the latest one; with no project
-    /// at all, a chat. A bot's own folder isn't a project: from its conversation, the latest one.
-    /// `conversation`: one, even in a project whose sessions open its terminal command.
-    private func newSession(in directory: String?, conversation: Bool = false) {
-        let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
-        let directory = directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.chatsFolder
-        // A project that has a terminal command for its sessions opens that, not a conversation.
-        if !conversation, let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
-            openTerminalTab(command: command, in: directory)
-            return
-        }
-        openTab(SidebarView.draftTag(directory))
-    }
-
-    /// A terminal as a tab, in the folder of the tab in view (or the one given), typing `command`
-    /// in it. Without one, a plain shell: where you start `omp` or any agent yourself.
-    private func openTerminalTab(command: String?, in directory: String? = nil) {
-        // A project's folder, not a bot's own or the chats' (their agents work there).
-        let directory = directory ?? activeProject ?? NSHomeDirectory()
-        Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        openTab(terminals.open(in: directory, command: command, environment: app.shellEnvironment))
-    }
-
     private func openFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -1566,43 +1081,19 @@ struct MainView: View {
         panel.message = "Choose a project folder for the agent to work in."
         Analytics.shared.onboardingStep("pick_project")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        newSession(in: workspace.addFolder(url.path))
-    }
-
-    /// With nothing open, pick up where the user left off.
-    private func startIfEmpty() {
-        guard workspace.isLoaded, tabs.isEmpty, let latest = workspace.projects.first?.sessions.first else { return }
-        openTab(latest.id)
+        tabs.newSession(in: workspace.addFolder(url.path))
     }
 
     #if DEBUG
     /// What the demo director may do here (KUVO_DEMO_*), as the window's own controls do it.
     private var demoWindow: DemoWindow {
         DemoWindow(
-            tabs: { tabs },
-            selection: { selection },
-            sessionInView: { sessionID },
-            activeDirectory: { activeDirectory },
-            focusedDirectory: { focusedDirectory },
-            openTab: { openTab($0) },
-            clearTabs: {
-                tabs = []
-                selection = nil
-            },
-            cycleTabs: { cycleTabs(by: $0) },
-            newSession: { newSession(in: $0) },
-            showsPanel: { showsPanel },
-            showPanel: { showPanel($0) },
-            panelExpanded: { panelExpanded },
-            expandPanel: { panelExpanded = $0 },
             showsSidebar: { showsSidebar },
             showSidebar: { showSidebar($0) },
             showPalette: { showsPalette = true },
             renameInView: { if let session = activeModel?.session { renaming = session } },
             runProject: { runProject() },
-            newProject: { openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) },
-            openBotEditor: { openBotEditor(bot: $0, recipe: $1) },
-            openGroupEditor: { openGroupEditor(group: $0) }
+            newProject: { openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }
         )
     }
     #endif

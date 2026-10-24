@@ -10,10 +10,10 @@ import SwiftUI
 enum DemoPerf {
     static func start(_ environment: [String: String], app: AppModel, window: DemoWindow) {
         Task { await PerfLayers.run() }
-        if let count = environment["KUVO_PERF_SWITCH"].flatMap(Int.init) { Task { await switchTabs(count, environment, app: app, window: window) } }
-        if let count = environment["KUVO_PERF_TOGGLE"].flatMap(Int.init) { Task { await toggle(count, environment, window: window) } }
+        if let count = environment["KUVO_PERF_SWITCH"].flatMap(Int.init) { Task { await switchTabs(count, environment, app: app) } }
+        if let count = environment["KUVO_PERF_TOGGLE"].flatMap(Int.init) { Task { await toggle(count, environment, app: app, window: window) } }
         if let count = environment["KUVO_PERF_SIDEBAR"].flatMap(Int.init) { Task { await scrollSidebar(count, environment) } }
-        if let count = environment["KUVO_PERF_RESIZE"].flatMap(Int.init) { Task { await resize(count, environment, window: window) } }
+        if let count = environment["KUVO_PERF_RESIZE"].flatMap(Int.init) { Task { await resize(count, environment, app: app) } }
         if let count = environment["KUVO_PERF_TYPE"].flatMap(Int.init) { Task { await type(count, environment) } }
     }
 
@@ -31,12 +31,12 @@ enum DemoPerf {
 
     /// KUVO_PERF_SWITCH=<n>: goes to the next session tab n times, a second and a half apart, and
     /// writes how the main thread kept up.
-    private static func switchTabs(_ count: Int, _ environment: [String: String], app: AppModel, window: DemoWindow) async {
+    private static func switchTabs(_ count: Int, _ environment: [String: String], app: AppModel) async {
         await DemoWait.pause(.launchSettles)
         // KUVO_PERF_SWITCH_CHECK: each tab's session with a draft of its own, and after each
         // switch, whether the composer shows it, and takes what's typed there.
         let check = environment["KUVO_PERF_SWITCH_CHECK"] != nil
-        if check { for (index, tab) in window.tabs().enumerated() { app.workspace.model(for: tab)?.draftText = "draft \(index)" } }
+        if check { for (index, tab) in app.tabs.keys.enumerated() { app.workspace.model(for: tab.text)?.draftText = "draft \(index)" } }
         var wrong: [String] = []
         let meter = PerfMeter()
         meter.start()
@@ -44,9 +44,9 @@ enum DemoPerf {
         // among three), rather than always the next.
         let by = environment["KUVO_PERF_SWITCH_BY"].map { $0.split(separator: ",").compactMap { Int($0) } } ?? [1]
         for step in 0..<count {
-            window.cycleTabs(by[step % by.count])
+            app.tabs.cycle(by: by[step % by.count])
             await DemoWait.pause(.step(.milliseconds(1500)))
-            if check, let id = window.selection(), let model = app.workspace.model(for: id),
+            if check, let id = app.tabs.selection?.text, let model = app.workspace.model(for: id),
                let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) {
                 if editor.string != model.draftText { wrong.append("step \(step): shows \"\(editor.string)\", draft \"\(model.draftText)\"") }
                 editor.insertText("+", replacementRange: NSRange(location: (editor.string as NSString).length, length: 0))
@@ -56,14 +56,14 @@ enum DemoPerf {
                 wrong.append("step \(step): no field editor")
             }
         }
-        let line = "switch x\(count) among \(window.tabs().count) tabs: " + meter.stop() + (check ? "; check: " + (wrong.isEmpty ? "all right" : wrong.prefix(6).joined(separator: "; ")) : "") + "\n"
+        let line = "switch x\(count) among \(app.tabs.keys.count) tabs: " + meter.stop() + (check ? "; check: " + (wrong.isEmpty ? "all right" : wrong.prefix(6).joined(separator: "; ")) : "") + "\n"
         if let file = environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
         log(line, environment)
     }
 
     /// KUVO_PERF_TOGGLE=<n>: the sidebar hidden and shown n times, then the panel, as their buttons
     /// do, a second apart; how the main thread kept up with the slides.
-    private static func toggle(_ count: Int, _ environment: [String: String], window: DemoWindow) async {
+    private static func toggle(_ count: Int, _ environment: [String: String], app: AppModel, window: DemoWindow) async {
         await DemoWait.pause(.launchSettles)
         let sidebar = PerfMeter()
         sidebar.start()
@@ -80,7 +80,7 @@ enum DemoPerf {
         let panel = PerfMeter()
         panel.start()
         for _ in 0..<(count * 2) {
-            withAnimation(.ui) { window.showPanel(!window.showsPanel()) }
+            withAnimation(.ui) { app.tabs.showPanel(!app.tabs.showsPanel) }
             await DemoWait.pause(.step(.seconds(1)))
         }
         log("toggle panel x\(count * 2): " + panel.stop() + "\n", environment)
@@ -130,10 +130,10 @@ enum DemoPerf {
 
     /// KUVO_PERF_RESIZE=<n>: goes through the next three session tabs and back, then makes the
     /// window narrower and wider again, n frames each way; how the main thread kept up.
-    private static func resize(_ count: Int, _ environment: [String: String], window: DemoWindow) async {
+    private static func resize(_ count: Int, _ environment: [String: String], app: AppModel) async {
         await DemoWait.pause(.launchSettles)
         for by in [1, 1, 1, -3] {
-            window.cycleTabs(by)
+            app.tabs.cycle(by: by)
             await DemoWait.pause(.step(.milliseconds(1500)))
         }
         guard let shown = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { return }

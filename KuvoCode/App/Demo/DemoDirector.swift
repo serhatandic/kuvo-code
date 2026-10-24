@@ -47,7 +47,7 @@ enum DemoDirector {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: break
         }
-        if environment["KUVO_DEMO_CHANGES"] != nil { window.showPanel(true) }
+        if environment["KUVO_DEMO_CHANGES"] != nil { app.tabs.showPanel() }
         // KUVO_DEMO_PALETTE=<text>: the command palette, with that typed in it (`DemoPalette`).
         if workspace.isLoaded, environment["KUVO_DEMO_PALETTE"] != nil { window.showPalette() }
         // KUVO_DEMO_RENAME=header: the session in view, renamed in its card's header.
@@ -90,14 +90,14 @@ enum DemoDirector {
             app.settingsTabs.select(shown)
         }
         // KUVO_DEMO_WELCOME: no tabs, so the welcome card shows.
-        if environment["KUVO_DEMO_WELCOME"] != nil { window.clearTabs() }
+        if environment["KUVO_DEMO_WELCOME"] != nil { app.tabs.clear() }
         // The folder's new session first, so the panel's tools open in it.
-        if let folder = environment["KUVO_DEMO_FOLDER"], environment["KUVO_DEMO_PROMPT"] == nil, environment["KUVO_DEMO_REPLAY"] == nil { window.newSession(folder) }
+        if let folder = environment["KUVO_DEMO_FOLDER"], environment["KUVO_DEMO_PROMPT"] == nil, environment["KUVO_DEMO_REPLAY"] == nil { app.tabs.newSession(in: folder) }
         openPanelTools(environment["KUVO_DEMO_PANEL"] ?? "", app: app, window: window)
         // KUVO_DEMO_IMPORT_BOT=<path>: New Bot, from that shared bot's file.
         if let path = environment["KUVO_DEMO_IMPORT_BOT"], let data = FileManager.default.contents(atPath: path),
            let recipe = try? JSONDecoder().decode(BotRecipe.self, from: data) {
-            window.openBotEditor(nil, recipe)
+            app.tabs.openBotEditor(bot: nil, recipe: recipe)
         }
         // KUVO_DEMO_CHAT=<message>: a new chat, with this message sent; KUVO_DEMO_MOVE_CHAT=<folder>
         // then moves the newest chat into that project.
@@ -105,7 +105,7 @@ enum DemoDirector {
             Task {
                 await DemoWait.until("the engine (KUVO_DEMO_CHAT)", limit: DemoWait.unbounded) { app.api != nil }
                 guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: nil, agent: nil) else { return }
-                window.openTab(session.id)
+                app.tabs.open(.session(session.id))
                 workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false, commands: [])
             }
         }
@@ -116,7 +116,7 @@ enum DemoDirector {
                 guard let chat = workspace.chats.first else { return log.error("KUVO_DEMO_MOVE_CHAT: no chat") }
                 do {
                     try await workspace.move(chat.id, toProject: folder)
-                    window.openTab(chat.id)
+                    app.tabs.open(.session(chat.id))
                 } catch {
                     log.error("KUVO_DEMO_MOVE_CHAT failed: \(String(describing: error), privacy: .public)")
                 }
@@ -127,7 +127,7 @@ enum DemoDirector {
         if let wait = environment["KUVO_DEMO_UNDO_RESEND"].flatMap(Double.init) {
             Task {
                 await DemoWait.pause(.conversationRead)
-                guard let id = window.sessionInView(), let model = workspace.model(for: id) else { return }
+                guard let id = app.tabs.sessionID, let model = workspace.model(for: id) else { return }
                 if !model.isLoaded { await model.load() }
                 guard let last = model.transcript.messages.last(where: { if case .user = $0 { true } else { false } }), case .user(let user) = last else { return }
                 model.undo(from: user)
@@ -156,10 +156,10 @@ enum DemoDirector {
                 while true {
                     await DemoWait.pause(.betweenAsks)
                     if !opened, !["", "1"].contains(title), let session = workspace.sessions.first(where: { $0.title == title }) {
-                        window.openTab(session.id)
+                        app.tabs.open(.session(session.id))
                         opened = true
                     }
-                    guard let id = window.sessionInView(), let session = workspace.session(id) else { continue }
+                    guard let id = app.tabs.sessionID, let session = workspace.session(id) else { continue }
                     workspace.onBrowserAsk?(id, RemoteFolder.machine(of: session.location.directory))
                 }
             }
@@ -169,7 +169,7 @@ enum DemoDirector {
             Task {
                 for _ in 0..<4 {
                     await DemoWait.pause(.asked(wait))
-                    window.cycleTabs(1)
+                    app.tabs.cycle(by: 1)
                 }
             }
         }
@@ -188,7 +188,7 @@ enum DemoDirector {
             Task {
                 for _ in 0..<6 {
                     await DemoWait.pause(.asked(every))
-                    withAnimation(.ui) { window.showPanel(!window.showsPanel()) }
+                    withAnimation(.ui) { app.tabs.showPanel(!app.tabs.showsPanel) }
                 }
             }
         }
@@ -197,7 +197,7 @@ enum DemoDirector {
             ImageViewer.shared.show(paths.split(separator: ",").map { AttachmentItem.local(URL(filePath: String($0))) })
         }
         // KUVO_DEMO_NEW_BOT: the New Bot editor.
-        if environment["KUVO_DEMO_NEW_BOT"] != nil { window.openBotEditor(nil, nil) }
+        if environment["KUVO_DEMO_NEW_BOT"] != nil { app.tabs.openBotEditor(bot: nil) }
         // In tasks of their own: SwiftUI cancels and restarts the window's task while it settles,
         // which would cut the session's creation short.
         Task { await runSession(environment, app: app, window: window) }
@@ -224,7 +224,7 @@ enum DemoDirector {
         for item in list.split(separator: ",").map(String.init) {
             let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
             switch parts.first {
-            case "terminal": utilities.newTerminal(in: window.focusedDirectory(), environment: app.shellEnvironment)
+            case "terminal": utilities.newTerminal(in: app.tabs.focusedDirectory, environment: app.shellEnvironment)
             case "browser": utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
             case "machine" where parts.count > 1:
                 let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
@@ -242,19 +242,19 @@ enum DemoDirector {
                 }
             case "changes": utilities.showChanges()
             case "run": window.runProject()
-            case "expand": window.expandPanel(true)
+            case "expand": app.tabs.panelExpanded = true
             // toggle=<seconds>: expands and collapses it a few times, that far apart.
             case "toggle" where parts.count > 1:
                 let wait = Double(parts[1]) ?? 3
                 Task {
                     for _ in 0..<4 {
                         await DemoWait.pause(.asked(wait))
-                        withAnimation(.ui) { window.expandPanel(!window.panelExpanded()) }
+                        withAnimation(.ui) { app.tabs.panelExpanded.toggle() }
                     }
                 }
             default: continue
             }
-            window.showPanel(true)
+            app.tabs.showPanel()
         }
     }
 
@@ -263,7 +263,7 @@ enum DemoDirector {
     /// and KUVO_DEMO_MOVE_GROUP=<machine> moves it there first.
     private static func runGroup(_ environment: [String: String], app: AppModel, window: DemoWindow) async {
         let groups = app.chats
-        if environment["KUVO_DEMO_NEW_GROUP"] != nil { window.openGroupEditor(nil) }
+        if environment["KUVO_DEMO_NEW_GROUP"] != nil { app.tabs.openGroupEditor(group: nil) }
         guard let spec = environment["KUVO_DEMO_GROUP"] else { return }
         let parts = spec.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         guard let name = parts.first, !name.isEmpty else { return }
@@ -271,8 +271,8 @@ enum DemoDirector {
             app.bots.list.first { $0.name == member.trimmingCharacters(in: .whitespaces) }?.id
         }
         let group = groups.list.first { $0.name == name } ?? groups.create(name: name, members: members)
-        window.openTab(BotGroups.tabKey(group.id))
-        if environment["KUVO_DEMO_EDIT_GROUP"] != nil { window.openGroupEditor(group) }
+        app.tabs.open(.group(group.id))
+        if environment["KUVO_DEMO_EDIT_GROUP"] != nil { app.tabs.openGroupEditor(group: group) }
         // KUVO_DEMO_GROUP_UNDO=<seconds>: then undoes from your last message there, into the composer.
         if let wait = environment["KUVO_DEMO_GROUP_UNDO"].flatMap(Double.init) {
             await DemoWait.pause(.asked(wait))
@@ -343,9 +343,9 @@ enum DemoDirector {
             }
         }
         guard let bot else { return }
-        window.openTab(bot.sessionID)
+        app.tabs.open(.session(bot.sessionID))
         // KUVO_DEMO_EDIT_BOT: its editor, open.
-        if environment["KUVO_DEMO_EDIT_BOT"] != nil { window.openBotEditor(bot, nil) }
+        if environment["KUVO_DEMO_EDIT_BOT"] != nil { app.tabs.openBotEditor(bot: bot) }
         // KUVO_DEMO_REPLY: a reply sent as a notification's Reply sends it.
         if let reply = environment["KUVO_DEMO_REPLY"] { await workspace.send(reply, to: bot.sessionID) }
         if let prompt = environment["KUVO_DEMO_BOT_PROMPT"], let model = workspace.model(for: bot.sessionID) {
@@ -378,7 +378,7 @@ enum DemoDirector {
             let parts = spec.split(separator: "|").map(String.init)
             Task {
                 await DemoWait.pause(.connectedAWhile)
-                guard let id = window.sessionInView(), let session = workspace.session(id), parts.count == 2 else { return }
+                guard let id = app.tabs.sessionID, let session = workspace.session(id), parts.count == 2 else { return }
                 let machine = RemoteFolder.machine(of: session.location.directory)
                 let said = BrowserTools.shown(parts[0], isFolder: parts[1] == "folder", inView: true)
                 for (type, data) in [
@@ -393,7 +393,7 @@ enum DemoDirector {
         }
         // KUVO_DEMO_SESSION=<id>: that session's tab, in view (one on a machine waits for it).
         if let id = environment["KUVO_DEMO_SESSION"] {
-            window.openTab(id)
+            app.tabs.open(TabKey(id))
             // KUVO_DEMO_FIND=<words>: Find in it, looking for those (once it's read, on a machine).
             if let words = environment["KUVO_DEMO_FIND"] {
                 Task {
@@ -426,19 +426,19 @@ enum DemoDirector {
         // KUVO_DEMO_TABS: the project's sessions as tabs (KUVO_DEMO_TAB_COUNT=<n>: its latest n),
         // the one in view staying in view.
         if environment["KUVO_DEMO_TABS"] != nil,
-           let project = workspace.projects.first(where: { $0.directory == window.activeDirectory() }) ?? workspace.projects.first {
-            let current = window.selection()
+           let project = workspace.projects.first(where: { $0.directory == app.tabs.activeDirectory }) ?? workspace.projects.first {
+            let current = app.tabs.selection
             let count = environment["KUVO_DEMO_TAB_COUNT"].flatMap(Int.init) ?? .max
-            let open = window.tabs()
-            for session in project.sessions.prefix(count).reversed() where !open.contains(session.id) { window.openTab(session.id) }
-            if let current { window.openTab(current) }
+            let open = app.tabs.keys
+            for session in project.sessions.prefix(count).reversed() where !open.contains(.session(session.id)) { app.tabs.open(.session(session.id)) }
+            if let current { app.tabs.open(current) }
         }
         // KUVO_DEMO_COMMENT=<path in the project>:<line>:<text> adds a review comment to the
         // session in view, on that line of the changes.
-        if let spec = environment["KUVO_DEMO_COMMENT"], let directory = window.activeDirectory() {
+        if let spec = environment["KUVO_DEMO_COMMENT"], let directory = app.tabs.activeDirectory {
             let parts = spec.split(separator: ":", maxSplits: 2).map(String.init)
             await DemoWait.pause(.changesRead)
-            if parts.count == 3, let line = Int(parts[1]), let selection = window.selection(), let model = workspace.model(for: selection),
+            if parts.count == 3, let line = Int(parts[1]), let selection = app.tabs.selection?.text, let model = workspace.model(for: selection),
                let text = try? String(contentsOfFile: directory + "/" + parts[0], encoding: .utf8) {
                 let lines = text.components(separatedBy: "\n")
                 let snippet = lines.indices.contains(line - 1) ? lines[line - 1].trimmingCharacters(in: .whitespaces) : ""
@@ -450,7 +450,7 @@ enum DemoDirector {
         if let file = environment["KUVO_DEMO_REPLAY"] {
             let catalog = catalog(for: folder, app: app)
             guard let session = try? await workspace.createSession(in: folder, model: catalog.defaultModel?.ref, agent: nil) else { return }
-            window.openTab(session.id)
+            app.tabs.open(.session(session.id))
             await DemoWait.until("the replay's session to load", limit: .seconds(10)) { workspace.model(for: session.id)?.isLoaded == true }
             // Its conversation drawn, before the run starts.
             await DemoWait.pause(.beforeSending)
@@ -463,7 +463,7 @@ enum DemoDirector {
         if let files = environment["KUVO_DEMO_DRAFT_FILES"] {
             Drafts.shared[SidebarView.draftTag(folder)].files = files.split(separator: ",").map { URL(filePath: String($0)) }
         }
-        guard let prompt = environment["KUVO_DEMO_PROMPT"] else { return window.newSession(folder) }
+        guard let prompt = environment["KUVO_DEMO_PROMPT"] else { return app.tabs.newSession(in: folder) }
         let parts = environment["KUVO_DEMO_MODEL"]?.split(separator: "/", maxSplits: 1).map(String.init)
         let model = parts.flatMap { $0.count == 2 ? ModelRef(id: $0[1], providerID: $0[0]) : nil }
         // Like a new session from the UI: the chosen model, or the default one. KUVO_DEMO_WORKTREE
@@ -474,7 +474,7 @@ enum DemoDirector {
         }
         let catalog = catalog(for: folder, app: app)
         guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.defaultModel?.ref, agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
-        window.openTab(session.id)
+        app.tabs.open(.session(session.id))
         // KUVO_DEMO_FILES: comma-separated paths to attach.
         let files = environment["KUVO_DEMO_FILES"]?.split(separator: ",").map { URL(filePath: String($0)) } ?? []
         // As the composer sends it: "/" runs a command, "!" a shell command.
