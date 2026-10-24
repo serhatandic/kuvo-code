@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Removing a machine in Settings › Machines now only takes it off this Mac: it keeps running there, with its sessions, bots, sign-ins and keys. **Uninstall from** the machine, in the same dialog, also stops it and deletes its sign-ins and keys, as Remove did before.
 - GitHub Copilot can be signed in to on a machine, in its own Accounts page. A new machine signs in to integrations like Notion and Linear itself, rather than sharing your Mac's sign-in, which two computers renewing would end.
 - Worktrees on a machine are kept by the machine itself, and its page in Settings › Worktrees shows how much room each takes there.
 - Switching an MCP server to On the web no longer writes it to the engine's settings until you give it a URL, which the engine needs.
