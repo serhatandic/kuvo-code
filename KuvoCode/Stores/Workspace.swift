@@ -2081,23 +2081,19 @@ final class Workspace {
     }
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
-    /// the model it last used. Says so in a notification if it didn't go.
+    /// the model it last used. While it moves to another computer it waits, and goes once it's
+    /// there. Says so in a notification if it didn't go.
     func send(_ text: String, to id: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let failure: String
-        if Moves.isFrozen(id) {
-            failure = Moves.Failure.moving.localizedDescription
-        } else if let api = api(forSession: id) {
-            do {
-                try await api.prompt(session: id, id: Identifier.message(), text: text, delivery: .queue)
-                Analytics.shared.track("notification_replied")
-                return
-            } catch {
-                failure = error.localizedDescription
-            }
-        } else {
-            failure = "Its engine isn’t connected."
+        do {
+            // Moving to another computer: once it's there.
+            try await Deliveries.send(text, to: id, delivery: .queue, on: api(forSession: id))
+            Analytics.shared.track("notification_replied")
+            return
+        } catch {
+            failure = error.localizedDescription
         }
         Notifier.shared.notify(session: id, title: botName?(id) ?? session(id)?.title ?? AppInfo.name,
                                body: "Your reply didn’t go: \(failure) Open the conversation to send it again.")

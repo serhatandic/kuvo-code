@@ -59,7 +59,7 @@ final class AgentMail {
     /// session is gone. It was counted against its sender's messages when it was sent.
     func deliverWaiting(to engine: MachineEngine) async {
         let machine = engine.machine.id
-        for letter in waiting where letter.machine == machine && !Moves.isFrozen(letter.to) {
+        for letter in waiting where letter.machine == machine {
             guard engine.api != nil else { return }
             // Where its session is: known, or its engine's, else its coding agents' (their bridge
             // there); gone only when both say so.
@@ -69,8 +69,12 @@ final class AgentMail {
             var sent = false
             for api in places where !sent {
                 do {
-                    try await api.prompt(session: letter.to, id: Identifier.message(),
-                                         text: Self.compose(from: letter.name, session: letter.from ?? "unknown", text: letter.text, waits: false), delivery: .steer)
+                    // Moving to another computer: it waits here for the next time.
+                    guard try await Deliveries.send(Self.compose(from: letter.name, session: letter.from ?? "unknown", text: letter.text, waits: false),
+                                                    to: letter.to, delivery: .steer, later: true, on: api) else {
+                        gone = false
+                        break
+                    }
                     sent = true
                     Analytics.shared.track("agent_message_sent", ["waits": false, "bot": app?.bots.bot(forSession: letter.to) != nil])
                 } catch {
@@ -301,14 +305,20 @@ final class AgentMail {
     /// for none), when waiting for one. `mailed`: it came by mail, and isn't mailed on.
     private func deliver(from caller: String?, name: String, to: String, text: String, waits: Bool, limitKey: String? = nil, mailed: Bool = false,
                          prompted: (() -> Void)? = nil, answered: ((String?) -> Void)? = nil) async -> Outcome {
-        let target: Agent
+        var target: Agent
         switch find(to, caller: caller) {
         case .found(let found): target = found
         case .missing(let outcome): return outcome
         }
         guard target.session != caller else { return .refused("That's you.") }
-        // Moving to another computer: it can't take messages until it's there.
-        guard !Moves.isFrozen(target.session) else { return .failed("\(target.name) is moving to another computer. Try again in a minute.") }
+        // Moving to another computer: once it's over, to it where it lives then.
+        if Moves.isUnderWay(target.session) {
+            try? await Deliveries.settled(target.session)
+            switch find(to, caller: caller) {
+            case .found(let found): target = found
+            case .missing(let outcome): return outcome
+            }
+        }
         // A few at a time: two agents shouldn't keep writing to each other unattended. Counted as
         // it starts, before anything's awaited, so messages sent at once count each other; taken
         // back if it doesn't go, so one tried again isn't counted twice.
@@ -341,7 +351,7 @@ final class AgentMail {
         let known = waits ? await Self.replies(in: target.session, api: api) : []
         let waits = waits && known != nil
         do {
-            try await api.prompt(session: target.session, id: id, text: Self.compose(from: name, session: caller ?? "unknown", text: text, waits: waits), delivery: .steer)
+            try await Deliveries.send(Self.compose(from: name, session: caller ?? "unknown", text: text, waits: waits), to: target.session, id: id, delivery: .steer, on: api)
         } catch {
             sent[key]?.removeAll { $0 == counted }
             return .failed("It didn't reach \(target.name): \(error.localizedDescription)")
@@ -484,7 +494,7 @@ final class AgentMail {
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false
         let id = Identifier.message()
         do {
-            try await api.prompt(session: session.id, id: id, text: Self.compose(from: agent(caller)?.name ?? "another agent", session: caller ?? "unknown", text: task, waits: waits), delivery: .steer)
+            try await Deliveries.send(Self.compose(from: agent(caller)?.name ?? "another agent", session: caller ?? "unknown", text: task, waits: waits), to: session.id, id: id, delivery: .steer, on: api)
         } catch {
             return ("Started a session (\(session.id)), but the task didn't reach it: \(error.localizedDescription)", true)
         }

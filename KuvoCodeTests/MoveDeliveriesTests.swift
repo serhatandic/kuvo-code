@@ -4,11 +4,11 @@ import Testing
 @testable import KuvoCode
 
 /// What's sent to a bot while it moves to another computer: nothing reaches it on the way, and
-/// each wake-up and agent's letter that came meanwhile arrives exactly once, where it lives once
-/// the move is over: where it went, or where it was if the move failed. A wake-up's file goes
-/// along with its folder (the machine's own kuvo-wake sends it there). The machine is a folder of
-/// the test's own and a second engine, stubbed; the move is held at its first step while things
-/// are sent to it.
+/// each wake-up, agent's letter and reply from a notification that came meanwhile arrives exactly
+/// once, where it lives once the move is over: where it went, or where it was if the move failed.
+/// A letter or a reply waits for that; a wake-up's file goes along with its folder (the machine's
+/// own kuvo-wake sends it there). The machine is a folder of the test's own and a second engine,
+/// stubbed; the move is held at its first step while things are sent to it.
 @MainActor
 @Suite(.serialized) struct MoveDeliveriesTests {
     let mac = StubEngine(port: 47906)
@@ -125,9 +125,9 @@ import Testing
         #expect(prompts(box, session, saying: "check the build") == 0, "the machine sends it, not this Mac")
     }
 
-    /// A machine's bot coming to this Mac: a letter sent to it on the way arrives once it's here,
-    /// once, however often its sender tries; the wake-up that came due meanwhile goes from here,
-    /// once.
+    /// A machine's bot coming to this Mac: a letter and a reply sent to it on the way arrive once
+    /// it's here, once, however often a letter's sender tries; the wake-up that came due meanwhile
+    /// goes from here, once.
     @Test func whatCameWhileItMovedArrivesOnceWhereItWent() async throws {
         defer { Self.clean(); mac.stop() }
         let id = "bot_deliver002", session = "ses_deliver2"
@@ -146,12 +146,18 @@ import Testing
         await waypoint.arrived()
         let mail = letter("ltr_deliver2", to: session)
         let sent = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
+        let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
+        // Both reach it before it goes on (the main actor takes them in turn).
+        await Task.yield()
         await app.wakeUps.wakeDue()
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
         waypoint.open()
         try await move.value
         await sent.value
+        await replied.value
         #expect(app.bots.bot(id)?.machine == nil)
+        #expect(prompts(mac, session, saying: "The API's deployed.") == 1, "it waited, and went once it could")
+        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
 
         // Its sender tries again (as a machine does, until it hears it's there).
         await AgentMail.shared.mailed(mail, from: "peer.invalid")
@@ -183,12 +189,18 @@ import Testing
         await waypoint.arrived()
         let mail = letter("ltr_deliver3", to: session)
         let sent = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
+        let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
+        // Both reach it before it goes on (the main actor takes them in turn).
+        await Task.yield()
         await app.wakeUps.wakeDue()
         #expect(mac.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
         waypoint.open()
         await #expect(throws: (any Error).self) { try await move.value }
         await sent.value
+        await replied.value
         #expect(app.bots.bot(id)?.machine == nil)
+        #expect(prompts(mac, session, saying: "The API's deployed.") == 1, "it waited, and went once it could")
+        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
 
         await AgentMail.shared.mailed(mail, from: "peer.invalid")
         await app.wakeUps.wakeDue()
