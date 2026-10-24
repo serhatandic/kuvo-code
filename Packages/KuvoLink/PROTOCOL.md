@@ -234,9 +234,11 @@ connection.
   the words are; `s` the `seatID`, or empty). One that would take more parts than a document may
   isn't sent at all, and the link's log says so. The coding agents' bridge on each box writes and
   reads the mail (`Agents/src/groups/peer.ts`), and the box's link carries it. The bridge sends no
-  mail over 512 KB (its JSON in UTF-8): a turn that big doesn't go, and the chat says the chat is
-  too big to send to that computer; a part that big fails, said in the chat; a turn's answer leaves
-  its steps out and a part's report is cut to 64 KB, said to be cut.
+  mail over 512 KB (its JSON in UTF-8): a turn that big goes without `fresh`, then with what the bot
+  hasn't heard cut to its latest messages within 160 KB (the last always), and only one that still
+  doesn't fit fails, the chat saying the chat is too big to send to that computer; a part that big
+  fails, said in the chat; a turn's answer leaves its steps out and a part's report is cut to 64 KB,
+  said to be cut.
   - **`turn`** (host → home): `{id, chat: {id, name, purpose?, members: [{id, name, job}]}, bot,
     seat?, agentsSeat?, kind: "turn"|"wrapUp"|"guest"|"split", text, fresh?, chatSize?}`: what the
     bot hears, composed by the host (`fresh`, the whole chat, for a seat its home has to make
@@ -244,15 +246,21 @@ connection.
     sign-in, and runs it. It uses `seat` only when that conversation's metadata says it's this bot's
     seat in this chat (`kuvo.seat`: `bot`, `group`, as it made it), and otherwise makes the bot a
     seat of its own (`replaced`). It takes each `id` once (remembered a day, on disk with its seat,
-    its message there and how it ended), and answers one asked again with how it's going (what it's
-    doing, only the latest), or how it ended. One asked again after the home's bridge restarted goes
-    on in the seat it had, following its message there rather than sending it again (and sending it,
-    by the same id, only when it isn't there); a `stop` for one goes to its seat.
+    its message there and how it ended, that without its steps and only for 15 minutes, past when
+    the host stops asking), and answers one asked again with how it's going (what it's doing, only
+    the latest), or how it ended. One asked again after the home's bridge restarted goes on in the
+    seat it had, following its message there rather than sending it again (and sending it, by the
+    same id, only when it isn't there); a `stop` for one goes to its seat. If that seat is gone
+    (deleted meanwhile), what it got that far is set aside and the turn goes in a seat made anew,
+    given `fresh`; asked without it, the home answers `{phase: "anew"}` and forgets the turn, the host
+    asks again at once with `fresh` (if it had it), and a home asked without it again says `anew`
+    once more, then takes it as it is.
   - **`state`** (home → host): `{id, state}`, `state` one of `{phase: "taken"}` (at once),
     `{phase: "seated", seat, agents, replaced?}`, `{phase: "started"}` (its words are with its
     seat), `{phase: "activity", activity}` (at most every 1.5 s, the latest), `{phase: "steered",
     message}`, `{phase: "working"}` (every 10 s while it runs, so a long quiet step isn't asked
-    again). **`result`** (home → host): `{id, result}`, `{ok: true, text, steps, outgrown?}` or
+    again), `{phase: "anew"}` (its seat went while the home restarted: ask again with `fresh`).
+    **`result`** (home → host): `{id, result}`, `{ok: true, text, steps, outgrown?}` or
     `{ok: false, why}`, with `seat`, `agents` and `replaced?` when it ended in a seat (so a host
     that missed `seated` keeps it, and one that missed `started` knows its words were heard). A
     host takes them only from the box it asked, and each only once. Each 15 s it hears nothing of a
@@ -265,7 +273,7 @@ connection.
     with its seat (`started`: the seat checked as the bot's, or made for it); one that comes before
     waits until then.
   - Not to be lost (sent as letters are, the first time as the bridge hands it over, then each
-    minute until `delivered`; never through a Mac): **`drop`** `{seat, agents, bot, chat}` (host
+    minute until `delivered`, for two days of the link online; never through a Mac): **`drop`** `{seat, agents, bot, chat}` (host
     → home: `bot`'s seat in `chat` gone, deleted only when its metadata says it's that),
     **`work`** `{work: {task, wrapUp, chat, bot, text, started}}` (host → home: a part, to the
     bot's own conversation, followed there across restarts; taken once, and given again as the
@@ -279,11 +287,19 @@ connection.
     one said before the newest it took for that bot and chat, or before it forgot that chat (it
     remembers that three days), so one that comes late or twice changes nothing. A newer one for
     the same bot and chat goes in place of one still waiting to go.
-  - A letter of these that a link gives up (no `delivered` for two days, too big to send, or turned
-    down) is told to its box's coding agents' bridge (`POST /api/kuvo/peers/gaveup {to, mail, at}`)
-    before it goes, never just dropped; until the bridge has heard, it's kept and not sent. A `work`
-    given up fails its part in the chat (its computer couldn't be reached for two days), unless it
-    went before the bridge last started (it was given again then); a `report` given up goes again.
+  - **The rule for these letters**: a letter's two days count only while its link is online (the
+    relay connected, the computer awake: from one round of the outbox to the next counts five
+    minutes at most), so a computer asleep or offline never gives up what it sent. A letter given up
+    (no `delivered` for two days online, too big to send, or turned down) is told to its box's coding
+    agents' bridge (`POST /api/kuvo/peers/gaveup {to, mail, at}`), which decides what comes of it;
+    until the bridge has answered (any 2xx or 4xx; it answers 503 until its link has said who the
+    peers are) the letter is kept and not sent. Nothing given up is final: while `to` is still a peer
+    (one that takes seats, for what goes to a home), what still matters goes again as a new letter (a
+    `work` whose part is still under way, unless it went before the bridge last started and was given
+    again then; a `report` of a part still remembered; a `drop`; and a `memory`, as the chat is
+    now, or that the bot forgets it); otherwise it's let go, and a `work` fails its part in the chat
+    (its computer couldn't be reached for two days). A part failed that way still takes its `report`
+    if it comes after all.
   - A bot whose home changed (it moved) loses its seat where it was (`drop`), and its next turn
     makes one where it is now, given the whole chat. A host offers in its chats the bots of the
     peers that take seats (`kuvo/groups/joinable`), and its chats list them as members with
