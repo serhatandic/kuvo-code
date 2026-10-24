@@ -1609,8 +1609,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const link = readLink();
-      // Its sessions with a title, as a Mac's composer offers its own.
-      const own = (await ownAgents(readEngine, link?.id, readKit(), readBridgeFile, { titled: true }).catch(() => null)) ?? [];
+      const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
       return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)) });
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
@@ -4350,14 +4349,16 @@ export function composeAgents(own, ownID, peers, told, moved = new Map()) {
 
 // Who `&` can name here (`kuvo/named`), as a Mac's composer offers them: this box's own (`machine`
 // null), then each peer's it alone lists (`peerOf`): a machine's by its id, a Mac's own by the
-// Mac's name, and those of machines a Mac speaks for by theirs.
+// Mac's name, and those of machines a Mac speaks for by theirs. Every bot, and only sessions with a
+// title (the lists name one without "New session").
 export function namedAgents(own, peers, told, moved = new Map()) {
   const entry = (agent, machine) => ({ session: agent.session, name: agent.name, kind: agent.kind, machine, project: agent.project ?? null, about: agent.about ?? null });
-  const agents = own.map(agent => entry(agent, null));
+  const titled = agent => agent.kind === "bot" || (Boolean(agent.name) && agent.name !== "New session");
+  const agents = own.filter(titled).map(agent => entry(agent, null));
   const seen = new Set(agents.map(agent => agent.session));
   for (const peer of peers) {
     for (const agent of told[peer.key]?.list ?? []) {
-      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
+      if (!titled(agent) || seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
       seen.add(agent.session);
       agents.push(entry(agent, peer.kind === "machine" ? peer.id ?? peer.name ?? null : agent.machine ?? peer.name ?? null));
     }
@@ -4370,9 +4371,9 @@ const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Bo
 
 // This box's own agents: its bots, then its latest sessions, its engine's and its coding
 // agents' (not a bot's, a subagent's, a group chat's seat, nor one put away), as the Mac lists its
-// own: a chat's project is "Chats", and with `titled`, only those of its latest with a title (whom
-// `&` names). Null when its engine can't say (then what it last said stands).
-export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile, { titled = false } = {}) {
+// own: one without a title is "New session", and a chat's project is "Chats". Null when its engine
+// can't say (then what it last said stands).
+export async function ownAgents(readEngine, machine, kit = readKit(), readBridge = readBridgeFile) {
   const bots = listBots(machine).map(bot => ({ session: bot.session, name: bot.name, kind: "bot", ...(bot.job ? { about: bot.job } : {}) }));
   const botSessions = new Set(bots.map(bot => bot.session));
   const sessionsOf = async target => {
@@ -4393,7 +4394,6 @@ export async function ownAgents(readEngine, machine, kit = readKit(), readBridge
     .filter(session => !session.parentID && !botSessions.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
     .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     .slice(0, 40)
-    .filter(session => !titled || session.title)
     .map(session => ({ session: session.id, name: session.title || "New session", kind: "session", ...(named(session.location?.directory ?? session.directory) ? { project: named(session.location?.directory ?? session.directory) } : {}) }));
   return [...bots, ...recent].map(keptAgent);
 }

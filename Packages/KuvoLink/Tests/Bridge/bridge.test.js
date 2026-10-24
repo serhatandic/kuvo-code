@@ -927,11 +927,13 @@ test("a phone asks a machine who & can name: its own bots and sessions, then its
   }
   // Its other computers': a machine's by its id, a Mac's own by the Mac's name, a machine the Mac speaks for by its.
   const mac = { key: "m".repeat(43), kind: "mac", name: "Studio" }, box = { key: "b".repeat(43), kind: "machine", id: "pi", name: "pi" };
+  // Only sessions with a title, as a Mac's & offers them: a list names one without "New session".
   const told = {
-    [mac.key]: { list: [{ session: "ses_notes", name: "Write the notes", kind: "session" }, { session: "ses_old", name: "Old box's", kind: "session", machine: "oldbox" }] },
-    [box.key]: { list: [{ session: "ses_scout", name: "Scout", kind: "bot", about: "Finds things" }] },
+    [mac.key]: { list: [{ session: "ses_notes", name: "Write the notes", kind: "session" }, { session: "ses_old", name: "Old box's", kind: "session", machine: "oldbox" },
+      { session: "ses_blank", name: "New session", kind: "session" }] },
+    [box.key]: { list: [{ session: "ses_scout", name: "Scout", kind: "bot", about: "Finds things" }, { session: "ses_fresh", name: "New session", kind: "session" }] },
   };
-  assert.deepEqual(link.namedAgents([{ session: "ses_own", name: "Own", kind: "bot" }], [mac, box], told).map(agent => [agent.session, agent.machine]),
+  assert.deepEqual(link.namedAgents([{ session: "ses_own", name: "Own", kind: "bot" }, { session: "ses_new", name: "New session", kind: "session" }], [mac, box], told).map(agent => [agent.session, agent.machine]),
     [["ses_own", null], ["ses_notes", "Studio"], ["ses_old", "oldbox"], ["ses_scout", "pi"]]);
 });
 
