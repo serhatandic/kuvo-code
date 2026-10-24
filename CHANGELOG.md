@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Each computer keeps its own skills through its box, your Mac's too, where they've always been. A skill you delete in Settings › Skills is kept in Kuvo Code's own trash for 30 days, on your Mac as on a machine, rather than in your Mac's Trash, and a machine downloads a skill you add there from GitHub itself.
 - A group chat that lives on a machine can have bots from your other machines: Edit Group Chat offers them, and each takes its turn, does its part of the work and remembers the chat on its own machine, with your Mac closed too. While one's machine can't be reached, the chat says so and carries on without it.
 - A meeting you set up for a group chat on a machine is worked out on that machine's clock: one whose time passed while the editor was open comes at its next round, rather than at once.
 - Bots can write to their memory in Plan mode and Ask First too: Settings › Permissions starts with a rule that allows it, which you can see and take out. In Ask First, what Settings › Permissions allows in particular, like a command such as "npm test *" or a folder to work in, now goes without asking, as its footer says.

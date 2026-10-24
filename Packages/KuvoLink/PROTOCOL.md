@@ -790,8 +790,10 @@ host serves:
   - `DELETE kuvo/bots/<id>/keys` takes away every one, as it moves off the computer.
   - Moving a bot (Move to Computer), its keys go with it: read where it lived, given where it
     goes, then taken away where it was.
-- Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
-  bridge for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
+- Skills, as Settings › Skills has them, each computer its own, kept by its box: the folder its
+  engine reads them from (a machine's `~/.kuvo-code/config/opencode/skills`, with the Mac closed
+  too; this Mac's box's, the app's engine's own, where a Mac has always kept them, named to it as
+  `KUVO_ENGINE_CONFIG`). Every client, the Mac app too, reaches them through these routes. Its
   engine lists them (`api/skill`) and finds a change within a moment.
   - `GET kuvo/skills` → `{"folder", "github": {"<name>": {repository, path}}}`: the folder as its
     engine names skills' paths in it, and which skills came from GitHub (the rest you added).
@@ -799,10 +801,11 @@ host serves:
     "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
     hyphens, and `409 {"message"}` when the name is taken, by a folder there or a skill the engine
     lists from elsewhere; without it, `404` for none, and `409 {"message"}` for one from GitHub,
-    which stays as it came, as in Settings); `DELETE` puts its folder away (the Mac's Trash, or
-    `~/.kuvo-code/trash/skills`, kept 30 days from then). `400 {"message"}` for a name that isn't
+    which stays as it came, as in Settings); `DELETE` puts its folder away (in `trash/skills` in
+    the box's folder, kept 30 days from then). `400 {"message"}` for a name that isn't
     a folder's. A 404 or 405 answers `{}`.
-  - GitHub's collections, which the computer reaches, never the phone: `GET kuvo/skill-library`
+  - GitHub's collections, which a box reaches, never a client (the Mac app browses them through
+    this Mac's box, and adds a skill through the box it's for): `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
     kuvo/skill-library/<owner>/<name>` (any repository on GitHub) → `{"repository", "skills":
     [{name, path, files}], "partial"}` (`partial`: GitHub cut a very big one's list short); `GET
@@ -1191,7 +1194,9 @@ used the machine (`run/link.seen`).
 
 A Mac runs the same box a machine does: the app starts `kuvo-link.js serve` (bridge 0.9.33 and
 later) beside its engine, with the engine's Bun and `KUVO_HOME` in the app's own folder
-(`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`. It answers the box's
+(`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`, and
+`KUVO_ENGINE_CONFIG`, the app's engine's settings folder (its `XDG_CONFIG_HOME`), where it keeps
+the skills a Mac has always kept ("Skills"). It answers the box's
 routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `{"url"}` on its
 first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
 the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
