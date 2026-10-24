@@ -316,6 +316,27 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 | `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
+| `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |
+| `KUVO_DEMO_GROUP_REPLAY` | `setup`, then `run`: a three-bot group chat discussion measured (`Tests/Perf`, `groups`) |
+| `KUVO_PERF_PROVIDER` | The stand-in model that discussion talks on, an OpenAI-compatible URL (`kuvo_perf.py` serves it) |
+
+### Rehearsing the group chats' upgrade
+
+This Mac's group chats moved into its box from what 0.5 to 0.8.0-beta.1 kept (`GroupMigration`).
+`scripts/groups-rehearsal.sh` rehearses it with the real released builds. They can only run as
+Kuvo Code itself, so it saves your Kuvo Code's folder and settings first and puts them back at the
+end (its Keychain items are shared too: an old build may ask for them). Have someone at the Mac.
+
+1. `./scripts/groups-rehearsal.sh prepare` downloads 0.5.22, 0.6.6, 0.7.2 and 0.8.0-beta.1 and
+   builds this checkout as `run.kuvo.code`, then `save`.
+2. For each version: `fresh`, then `open <version>`. Make two bots (one on a machine, if you have
+   one) and a group chat of both with a weekday meeting, talk until a wrap-up splits the work, start
+   it, and take one message back. For one version, quit while Move to Computer moves a chat.
+3. `open this`: the chats show at once, as they were; write in one and see the bots answer.
+   `check` says what moved, what was taken, the copy in Backups, and any seat left on a machine.
+4. `open <version>` again (the rollback): its chats are there, as it left them. Make another chat,
+   quit, `open this`: only the new one comes in, and one you deleted stays deleted.
+5. `restore` when done.
 
 ### The icon
 
