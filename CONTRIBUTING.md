@@ -190,7 +190,9 @@ relay other than one on this Mac (`ws://127.0.0.1:8790`).
 ### Debug launch variables
 
 Debug builds read these environment variables to open the app in a given state
-without clicking, for trying a change or taking screenshots:
+without clicking, for trying a change or taking screenshots. What the window does
+for them (tabs, the panel, prompts, bots, Settings) is in `KuvoCode/App/Demo`, and
+the `KUVO_PERF_*` runs are in `DemoPerf` there:
 
 | Variable | Effect |
 | --- | --- |
@@ -206,6 +208,8 @@ without clicking, for trying a change or taking screenshots:
 | `KUVO_DEMO_WANDER` | Seconds after the conversation in view opens: it scrolls up and down a screen or two from the end, as a trackpad does, for `KUVO_DEMO_WANDER_FOR` seconds |
 | `KUVO_DEMO_TABS` | Open the project's sessions as tabs (`KUVO_DEMO_TAB_COUNT=<n>`: its latest n) |
 | `KUVO_DEMO_SESSION` | Open the session with this ID in a tab (one on a machine shows its conversation as last seen until the machine connects) |
+| `KUVO_DEMO_BESIDE` | Open the session with this ID or title beside the tab in view, as Open Beside does (`KUVO_DEMO_SWAP_BESIDE=<seconds>`: the two trade places that long after) |
+| `KUVO_DEMO_MOVE_TO_AGENTS` | `<provider>/<model>\|<seconds>`: the session in view carries on with the coding agents that long after launch, as picking their model does |
 | `KUVO_DEMO_QUEUE` | Messages to queue once that session's agent is working, separated by `\|` |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
@@ -221,6 +225,7 @@ without clicking, for trying a change or taking screenshots:
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
+| `KUVO_DEMO_REMOVE_PROJECT` | Remove Project…'s dialog for the project of this name, open (nothing's removed unless you click) |
 | `KUVO_DEMO_PALETTE` | Open the command palette with this typed in it (empty for none) |
 | `KUVO_DEMO_MENU` | Open the `mode` menu, the `model` picker (`list` on the model list, `models` with every model shown), or `location` in the New Project sheet |
 | `KUVO_DEMO_EFFORT` | With the model picker open, pick this effort level |

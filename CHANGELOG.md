@@ -6,7 +6,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- While a bot or chat moves to another computer, a reply from its notification and messages from other agents wait and reach it once the move is over, rather than being turned away, and a bot whose turn comes in a group chat meanwhile takes it then rather than sitting it out.
 - Math in replies: a web address that starts with www. and has dollar signs in it opens the right page, and a formula on a line of its own is centered in a few places it used to stay in the line, such as on an unindented line under a list item or quote.
+- Opening the session that's beside a tab, from the sidebar or a notification, puts you in its half of the split. Clicking a notification while the window is closed opens it. A conversation moved to a coding agent from your phone no longer switches the tab in view on your Mac.
+- A project's menu in the sidebar has **Remove Project…**, with sessions in it too: its sessions go to Settings › Archived Sessions, where you can bring them back, and its files stay as they are.
 - Removing a machine in Settings › Machines now only takes it off this Mac: it keeps running there, with its sessions, bots, sign-ins and keys. **Uninstall from** the machine, in the same dialog, also stops it and deletes its sign-ins and keys, as Remove did before.
 - GitHub Copilot can be signed in to on a machine, in its own Accounts page. A new machine signs in to integrations like Notion and Linear itself, rather than sharing your Mac's sign-in, which two computers renewing would end.
 - Worktrees on a machine are kept by the machine itself, and its page in Settings › Worktrees shows how much room each takes there.
@@ -34,6 +37,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine another Mac set up with a newer Kuvo Code is used as it is, rather than taken back to older versions.
 - A Mac with an older Kuvo Code can still use a machine a newer one set up: the machine keeps its own tools, keeps running by itself, and goes back to its own settings once nothing runs there.
 - Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start.
+- With a coding agent, Send Now on a message the agent is just being handed starts it next if the agent doesn't take it, rather than leaving it waiting for another nudge.
+- Stop also stops a coding agent that carries on by itself (a command it left running ended) just as its turn ends, rather than letting that go on once the turn's over.
 
 ## 0.7.2
 

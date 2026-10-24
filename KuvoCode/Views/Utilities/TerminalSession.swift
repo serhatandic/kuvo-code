@@ -232,15 +232,11 @@ final class MainTerminals {
         entries.sorted { $0.value.opened < $1.value.opened }.map { (key: $0.key, entry: $0.value) }
     }
 
-    private static let prefix = "terminal:"
-
-    static func isTerminal(_ key: String) -> Bool { key.hasPrefix(prefix) }
-
     func entry(_ key: String) -> Entry? { entries[key] }
 
     /// Starts a terminal in `directory`, typing `command` in it, and returns its tab's key.
     func open(in directory: String, command: String?, environment: [String: String]) -> String {
-        let key = Self.prefix + UUID().uuidString
+        let key = TabKey.terminal(UUID().uuidString).text
         let command = command?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let label = command.map { String($0.split(separator: " ").first ?? "Terminal") } ?? "Terminal"
         entries[key] = Entry(session: TerminalSession(directory: directory, environment: environment, command: command), directory: directory, label: label)

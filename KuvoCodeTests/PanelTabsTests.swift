@@ -16,35 +16,34 @@ import Testing
 
     /// Closing the window while a machine's conversation is in view: one start tab, not two.
     @Test func closingTheWindowOnAMachinesConversationLeavesOneStartTab() {
-        panel.sessionInView = "ses_remote"
-        panel.place = "my-server"
+        panel.inView = .init(session: "ses_remote", place: "my-server")
         panel.closeAll()
         #expect(panel.tabs.filter { $0.kind == .changes && $0.owner == panel.panelKey }.count == 1)
-        panel.place = nil
+        panel.inView.place = nil
         #expect(startTabs.count == 1)
     }
 
     @Test func closingTheWindowLeavesOneStartTab() {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         panel.closeAll()
         #expect(startTabs.count == 1)
     }
 
     /// Each conversation its own panel, on the tab you left it on.
     @Test func eachConversationKeepsItsTab() {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         let changes = panel.selection
         panel.showChanges()
-        panel.sessionInView = "ses_b"
+        panel.inView = .init(session: "ses_b")
         #expect(startTabs.count == 1)
         #expect(panel.selection != changes)
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         #expect(panel.selection == changes)
     }
 
     /// The panel always has a tab: closing the last one leaves one in its place.
     @Test func closingTheLastTabLeavesOne() throws {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         let only = try #require(panel.visibleTabs.first)
         panel.close(only.id)
         #expect(panel.visibleTabs.count == 1)
@@ -56,7 +55,7 @@ import Testing
 
     /// A file opens in the file tab in view, and one already open is shown, not opened twice.
     @Test func filesOpenInTheFileTab() {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         panel.open(a)
         panel.open(b)
         #expect(panel.visibleTabs.filter { if case .file = $0.kind { true } else { false } }.count == 1)
@@ -70,7 +69,7 @@ import Testing
 
     /// Closing the tab you're on: the one that took its place is selected.
     @Test func closingTheSelectedTabSelectsItsNeighbor() throws {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         panel.showFiles()
         panel.show(a, isFolder: false)
         let tabs = panel.visibleTabs
@@ -82,9 +81,9 @@ import Testing
 
     /// A conversation deleted: its tabs go, and no other's.
     @Test func aDeletedConversationsTabsGo() {
-        panel.sessionInView = "ses_a"
+        panel.inView = .init(session: "ses_a")
         panel.open(a)
-        panel.sessionInView = "ses_b"
+        panel.inView = .init(session: "ses_b")
         panel.open(b)
         panel.closeTabs(of: panel.panelKey)
         #expect(!panel.tabs.contains { $0.kind == .file(b) })
@@ -93,11 +92,11 @@ import Testing
 
     /// The tabs you opened while writing a new session's first message are the session's.
     @Test func aNewSessionKeepsItsDraftsTabs() {
-        panel.sessionInView = nil
+        panel.inView = .init(session: nil)
         panel.open(a)
         let chosen = panel.selection
         panel.adoptDraft(as: "ses_new")
-        panel.sessionInView = "ses_new"
+        panel.inView = .init(session: "ses_new")
         #expect(panel.visibleTabs.contains { $0.kind == .file(a) })
         #expect(panel.selection == chosen)
     }

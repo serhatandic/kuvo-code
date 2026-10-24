@@ -121,6 +121,46 @@ test("a machine's group chats, as a Mac lists and sends its own", async t => {
   assert.equal((await ask(handle, "POST", "kuvo/groups/grp_moving0001", { body: '{"text":"Go"}' })).status, 409);
 });
 
+test("a phone deletes a machine's group chat as Delete Group Chat does, with the Mac closed", async t => {
+  // The runner's chats, as it keeps them: one here, one moving here (which it won't delete).
+  const chats = new Map([["grp_box0000001", "active"], ["grp_moving0001", "held"]]);
+  const asked = [];
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      asked.push(`${request.method} ${request.url}`);
+      const send = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      const id = request.url.split("/")[4];
+      if (request.url === "/api/kuvo/groups") {
+        return send(200, { data: [...chats].map(([each, status]) => ({ group: { id: each, name: each, members: [], seats: {}, heard: {}, created: "2026-10-21T09:00:00Z" }, status, state: {} })) });
+      }
+      if (request.method === "DELETE" && chats.get(id) === "held") return send(409, { message: "That chat is moving." });
+      if (request.method === "DELETE" && chats.delete(id)) return send(200, {});
+      send(404, { message: "No such chat." });
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const named = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
+  t.after(() => named.kill());
+  const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => ({ pid: named.pid, port: server.address().port, password: "agents" }));
+
+  const deleted = await ask(handle, "DELETE", "kuvo/groups/grp_box0000001");
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(deleted.json, {});
+  assert.ok(asked.includes("DELETE /api/kuvo/groups/grp_box0000001"));
+  assert.deepEqual((await ask(handle, "GET", "kuvo/groups")).json.groups, [], "gone from the list");
+  // Gone already: as good as deleted.
+  const again = await ask(handle, "DELETE", "kuvo/groups/grp_box0000001");
+  assert.equal(again.status, 200);
+  assert.deepEqual(again.json, {});
+  // One moving here stays, and says why.
+  const moving = await ask(handle, "DELETE", "kuvo/groups/grp_moving0001");
+  assert.equal(moving.status, 409);
+  assert.equal(moving.json.message, "That chat is moving. Try again once it’s there.");
+  assert.equal(chats.get("grp_moving0001"), "held");
+});
+
 test("a chat's next line leaves out its messages when only who's talking or what they do changed", async t => {
   const runner = await fakeRunner();
   t.after(runner.close);
@@ -158,6 +198,9 @@ test("a bridge there but not answering now is asked again, not taken as having n
   }
   // What a phone does there, too.
   assert.equal((await ask(handle, "POST", "kuvo/groups/grp_box0000001", { body: '{"text":"Go"}' })).status, 503);
+  const deleting = await ask(handle, "DELETE", "kuvo/groups/grp_box0000001");
+  assert.equal(deleting.status, 503);
+  assert.ok(deleting.json.message);
   assert.equal((await ask(handle, "POST", "kuvo/groups/grp_box0000001/undo", { body: '{"message":"gm_1"}' })).status, 503);
 });
 
@@ -165,4 +208,7 @@ test("without the coding agents' bridge, a machine's group chats say why", async
   const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => null);
   const answer = await ask(handle, "GET", "kuvo/groups");
   assert.equal(answer.status, 503);
+  const deleting = await ask(handle, "DELETE", "kuvo/groups/grp_box0000001");
+  assert.equal(deleting.status, 503);
+  assert.ok(deleting.json.message);
 });

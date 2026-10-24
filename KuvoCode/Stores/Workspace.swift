@@ -18,16 +18,10 @@ final class Workspace {
             for model in models.values where !RemoteFolder.isRemote(model.session.location.directory) && !OutsideAgents.isAgentSession(model.session) { model.reconnect(api) }
         }
     }
-    /// A session an agent started (its start_session tool), to show beside the conversation that
-    /// started it or in a tab of its own, as its metadata says (`kuvo.startedBy`, `kuvo.beside`):
-    /// asked once, as it's first seen, wherever it runs.
-    struct BesideRequest: Equatable {
-        var session: String
-        var startedBy: String
-        /// Beside the conversation that started it (the default); false: in a tab.
-        var beside = true
-    }
-    var besideRequest: BesideRequest?
+    /// The main window's tabs, where a fork, a move to the coding agents and an agent's new session
+    /// open (the app sets it; none in a test of the workspace alone).
+    @ObservationIgnored weak var tabs: WindowTabs?
+    /// Sessions agents started that have been shown (see `noteBeside`).
     @ObservationIgnored private var askedBeside: Set<String> = []
 
     /// The agents bridge: sessions with Claude Code, Codex, Cursor, Grok and Antigravity go to it,
@@ -372,10 +366,13 @@ final class Workspace {
     private static let pinnedKey = "kuvo.pinned"
 
     /// Archives a session, or brings it back.
-    func setArchived(_ id: String, _ archived: Bool) async {
+    /// Whether the engine took it.
+    @discardableResult
+    func setArchived(_ id: String, _ archived: Bool) async -> Bool {
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
-        guard await setFlag(Self.archivedKey, archived, of: id) else { return }
+        guard await setFlag(Self.archivedKey, archived, of: id) else { return false }
         onArchived?(id, archived)
+        return true
     }
 
     /// A session was archived, or brought back. The app sets it.
@@ -658,11 +655,27 @@ final class Workspace {
         return String(cString: resolved)
     }
 
-    func removeFolder(_ directory: String) {
-        folders.removeAll { $0 == directory }
-        UserDefaults.standard.set(folders, forKey: "projectFolders")
-        settings[directory] = nil
-        saveSettings()
+    /// Remove Project…: every session of the project, its worktrees' too, archived (Archived
+    /// Sessions brings them back), and the project off the sidebar. Its files, worktrees included,
+    /// stay, and so do its name and folders, for when a session brings it back. How many the
+    /// engine didn't take: those stay listed, and the project with them, as it was.
+    @discardableResult
+    func removeProject(_ directory: String) async -> Int {
+        let sessions = projects.first { $0.directory == directory }?.sessions ?? []
+        // Side by side: on a machine, each is a round trip.
+        let kept = await withTaskGroup(of: Bool.self) { group in
+            for session in sessions {
+                group.addTask { await self.setArchived(session.id, true) }
+            }
+            var kept = 0
+            for await archived in group where !archived { kept += 1 }
+            return kept
+        }
+        if kept == 0 {
+            folders.removeAll { $0 == directory }
+            UserDefaults.standard.set(folders, forKey: "projectFolders")
+        }
+        return kept
     }
 
     /// The project's name: its own, or its primary folder's. A worktree has its project's.
@@ -1025,17 +1038,6 @@ final class Workspace {
         UserDefaults.standard.set(try? JSONEncoder().encode(settings), forKey: "projectSettings")
     }
 
-    /// A session the window should open: a fork, say.
-    var requestedTab: String?
-
-    /// A session that carries on in another, whose tab takes its place.
-    struct TabSwap: Equatable {
-        var from: String
-        var to: String
-    }
-
-    var swappedTab: TabSwap?
-
     /// A new session with `id`'s conversation before `message`, opened in a tab with the
     /// message in its composer, ready to try another way.
     func fork(_ id: String, from message: Message.User) async throws {
@@ -1054,7 +1056,7 @@ final class Workspace {
         var draft = Drafts.Draft(text: words, files: files, quotes: quotes)
         draft.comments = comments
         Drafts.shared[session.id] = draft
-        requestedTab = session.id
+        tabs?.open(.session(session.id))
     }
 
     /// An engine session you picked a coding agent's model (or Auto) in: it carries on with the
@@ -1067,25 +1069,15 @@ final class Workspace {
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
         guard let moved = try await carryToAgents(id, model: model) else { return nil }
         Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
-        // The window with its tab (or pane) takes its place, before the old one goes.
-        let swap = TabSwap(from: id, to: moved.id)
-        swappedTab = swap
+        // Its tab (or its place beside one) takes the new one, before the old one goes.
+        let swapped = tabs?.swap(from: id, to: moved.id) == true
         // One something else keeps (a bot's conversation): it takes the new session, in its place.
         let kept = await onMovedToAgents?(id, moved) == true
-        if !kept { await setArchived(id, true) }
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
-        swapEnding = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(400))
-            if swappedTab == swap {
-                swappedTab = nil
-                if !kept, opens { requestedTab = swap.to }
-            }
-        }
+        if !swapped, !kept, opens { tabs?.open(.session(moved.id)) }
+        if !kept { await setArchived(id, true) }
         return moved
     }
-
-    /// A move's tab swap ending, a moment after it (what a test waits for).
-    @ObservationIgnored private(set) var swapEnding: Task<Void, Never>?
 
     /// Told when a conversation moved to the coding agents (from, to): true when something else
     /// keeps it (a bot), which then takes it over; the app sets it.
@@ -2108,23 +2100,23 @@ final class Workspace {
     }
 
     /// Sends a message to a session from outside its conversation (a notification's Reply), with
-    /// the model it last used. Says so in a notification if it didn't go.
+    /// the model it last used. While it moves to another computer it waits, and goes once it's
+    /// there (if the app quits first, it's in the conversation's composer the next time). Says so
+    /// in a notification if it didn't go.
     func send(_ text: String, to id: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let failure: String
-        if Moves.isFrozen(id) {
-            failure = Moves.Failure.moving.localizedDescription
-        } else if let api = api(forSession: id) {
-            do {
-                try await api.prompt(session: id, id: Identifier.message(), text: text, delivery: .queue)
-                Analytics.shared.track("notification_replied")
-                return
-            } catch {
-                failure = error.localizedDescription
-            }
-        } else {
-            failure = "Its engine isn’t connected."
+        // Kept until it's gone: one the app quits on while it waits is in the composer next time.
+        let kept = Drafts.shared.onItsWay(text, to: id)
+        defer { Drafts.shared.sent(kept) }
+        do {
+            // Moving to another computer: once it's there.
+            try await Deliveries.send(text, to: id, delivery: .queue, on: api(forSession: id))
+            Analytics.shared.track("notification_replied")
+            return
+        } catch {
+            failure = error.localizedDescription
         }
         Notifier.shared.notify(session: id, title: botName?(id) ?? session(id)?.title ?? AppInfo.name,
                                body: "Your reply didn’t go: \(failure) Open the conversation to send it again.")
@@ -2398,13 +2390,14 @@ final class Workspace {
         }
     }
 
-    /// Asks for an agent's new session to show beside the one that started it, or in a tab, the
-    /// first time it's seen, while it's new.
+    /// A session an agent started (its start_session tool) shows beside the conversation that
+    /// started it or in a tab of its own, as its metadata says (`kuvo.startedBy`, `kuvo.beside`):
+    /// once, the first time it's seen, while it's new, wherever it runs.
     private func noteBeside(_ session: Session) {
         guard let kuvo = session.metadata?["kuvo"], let starter = kuvo["startedBy"]?.string,
               Date.now.timeIntervalSince1970 * 1000 - session.time.created < 120_000,
               askedBeside.insert(session.id).inserted else { return }
-        besideRequest = BesideRequest(session: session.id, startedBy: starter, beside: kuvo["beside"]?.bool != false)
+        tabs?.agentStarted(session.id, by: starter, beside: kuvo["beside"]?.bool != false)
     }
 
     private func upsert(_ session: Session) {
@@ -2413,7 +2406,7 @@ final class Workspace {
             return
         }
         nameBranch(of: session)
-        noteBeside(session)
+        defer { noteBeside(session) }
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             let wasArchived = Self.isArchived(sessions[index])
             sessions[index] = session

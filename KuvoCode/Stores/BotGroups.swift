@@ -400,10 +400,10 @@ final class BotGroups {
 
     // MARK: Tabs
 
-    static func tabKey(_ id: String) -> String { "group:" + id }
+    static func tabKey(_ id: String) -> String { TabKey.group(id).text }
 
     static func groupID(fromTab key: String) -> String? {
-        key.hasPrefix("group:") ? String(key.dropFirst("group:".count)) : nil
+        TabKey(key).groupID
     }
 
     // MARK: Making, changing, deleting
@@ -916,7 +916,7 @@ final class BotGroups {
     /// `namedIn`: a guest's turn, asked in by that message.
     private func turn(of botID: String, in id: String, wrapUp: Bool = false, namedIn: GroupMessage? = nil) async -> Outcome {
         let guest = namedIn != nil
-        guard let app, let bot = app.bots.bot(botID) else { return .absent }
+        guard let app, var bot = app.bots.bot(botID) else { return .absent }
         speaking[id] = botID
         defer {
             if speaking[id] == botID {
@@ -924,10 +924,19 @@ final class BotGroups {
                 activity[id] = nil
             }
         }
-        if Moves.isFrozen(botID) {
+        // Moving to another computer: its turn once it's there (one whose move was cut short sits
+        // it out until that's finished).
+        if app.moves.isMoving(botID) { note("\(bot.name) is moving to another computer; it takes its turn once that’s done.", in: id) }
+        do {
+            try await Deliveries.settled(botID)
+        } catch is CancellationError {
+            return .absent
+        } catch {
             note("\(bot.name) is moving to another computer, so it sat this out.", in: id)
             return .absent
         }
+        guard let now = app.bots.bot(botID) else { return .absent }
+        bot = now
         if let machine = bot.machine, app.machines.engine(machine)?.isReady != true {
             note("\(bot.name) is on \(machine), which isn’t connected, so it sat this out.", in: id)
             return .absent
@@ -971,7 +980,7 @@ final class BotGroups {
             let prompt = guest
                 ? Self.guestText(bot: botID, name: bot.name, in: group, all: all, asker: namedIn?.author) { self.name(of: $0) }
                 : isNew ? seatStartText(for: bot, in: group, all: all, wrapUp: wrapUp) : turnText(for: bot, in: group, unheard: Array(unheard), wrapUp: wrapUp)
-            try await api.prompt(session: seat, id: promptID, text: prompt, delivery: .queue)
+            try await Deliveries.send(prompt, to: seat, id: promptID, delivery: .queue, on: api)
             if !guest, let last = all.last { setHeard(last.id, by: botID, in: id) }
             if !guest, let index = list.firstIndex(where: { $0.id == id }), list[index].retracted?[botID] != nil {
                 list[index].retracted?[botID] = nil
@@ -1033,7 +1042,7 @@ final class BotGroups {
               let api = seatAPI(of: bot, in: group(id)) else { return }
         // The chat's own bots are there already: only others named with "&" are described.
         let text = AgentReferences.text("The user, just now: \(message.text)", excludingAll: memberSessions(of: group(id)), here: bot.machine)
-        if (try? await api.prompt(session: seat, id: Identifier.message(), text: text, delivery: .steer)) != nil {
+        if (try? await Deliveries.send(text, to: seat, delivery: .steer, on: api)) == true {
             setHeard(message.id, by: botID, in: id)
         }
     }
@@ -1390,7 +1399,7 @@ final class BotGroups {
             scratch = session
             let chat = Self.chatText(bot: lead, in: group, all: Array(all[..<min(end + 1, all.count)])) { self.name(of: $0) }
             let ended = app.workspace.endedRuns[session, default: 0]
-            try await api.prompt(session: session, id: promptID, text: chat + "\n" + Self.splitText(members: members, said: said), delivery: .queue)
+            try await Deliveries.send(chat + "\n" + Self.splitText(members: members, said: said), to: session, id: promptID, delivery: .queue, on: api)
             // You writing meanwhile comes first: the list stops, and your message has the next turn.
             try await waitForRun(of: session, after: ended, since: sent, api: api, stops: { [weak self] in
                 self?.asked[id, default: 0] != epoch
@@ -1520,11 +1529,14 @@ final class BotGroups {
 
     /// One part, to its bot's conversation; then it's followed until the bot reports.
     private func hand(_ taskID: String, of wrapUpID: String, in id: String) async {
-        // A bot moving to another computer gets its part there, once it is (for ten minutes at
-        // most: a move cut short whose other computer doesn't answer leaves it to the checks below).
+        // A bot moving to another computer gets its part there, once it is.
         if let bot = group(id).flatMap({ group in messages(in: id).first { $0.id == wrapUpID }?.tasks?.first { $0.id == taskID }?.bot }) {
-            for _ in 0..<300 where Moves.isFrozen(bot) {
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            do {
+                try await Deliveries.settled(bot)
+            } catch is CancellationError {
+                return
+            } catch {
+                return fail(taskID, of: wrapUpID, in: id, error.localizedDescription)
             }
         }
         guard let app, let group = group(id), let wrapUp = messages(in: id).first(where: { $0.id == wrapUpID }),
@@ -1541,8 +1553,8 @@ final class BotGroups {
         }
         let promptID = Identifier.message()
         do {
-            try await api.prompt(session: bot.sessionID, id: promptID, text: GroupWork.compose(task, chat: group, wrapUp: wrapUp,
-                                                                                                    from: name(of: wrapUp.author) + (wrapUp.kind == .wrapUp ? "'s wrap-up" : "'s last message"), before: before), delivery: .queue)
+            try await Deliveries.send(GroupWork.compose(task, chat: group, wrapUp: wrapUp, from: name(of: wrapUp.author) + (wrapUp.kind == .wrapUp ? "'s wrap-up" : "'s last message"), before: before),
+                                      to: bot.sessionID, id: promptID, delivery: .queue, on: api)
             changeTask(taskID, of: wrapUpID, in: id) { $0.prompt = promptID }
             await awaitReport(taskID, of: wrapUpID, in: id)
         } catch {

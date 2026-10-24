@@ -15,7 +15,7 @@ import Testing
     init() {
         TestEnvironment.prepare()
         UserDefaults.standard.removeObject(forKey: PanelSettings.tidiesAgentTabs)
-        panel.sessionInView = "ses_you"
+        panel.inView = .init(session: "ses_you")
     }
 
     /// A page a bot opened, out of sight, as it browses.

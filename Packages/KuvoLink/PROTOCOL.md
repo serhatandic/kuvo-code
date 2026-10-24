@@ -840,6 +840,11 @@ held to the same route scenarios (`Vectors/routes`). A host serves:
   the chat does, a meeting as above), 404 for no such chat or bot, 409 while it moves. A Mac
   answers it for every chat it lists, a machine's bridge (from 0.9.14) for those that live there;
   `kuvo/groups/events` says what changed at once.
+- `DELETE kuvo/groups/<id>` deletes the chat as Delete Group Chat… does: its messages and seats
+  go, and its bots forget it. `200 {}`, for one that's gone already too; 409 `{"message"}` while it
+  moves; 503 `{"message"}` when its machine, or the coding agents' bridge there, can't be reached.
+  A Mac answers it for every chat it lists, a machine's bridge (from 0.9.28) for those that live
+  there; `kuvo/groups/events` leaves it out from then on. Before those, it's a 404 or 405.
 - A machine's bridge (from 0.9.5) answers the same three, with the Mac closed too: what New Bot
   offers there (`startingModel` has one key, the machine's name as its bots' `machine` has it,
   and `projects` are its own); a bot made there, with its folder, conversation and instructions,

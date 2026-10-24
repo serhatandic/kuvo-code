@@ -7,7 +7,7 @@ import Testing
 /// (B14): it carries on with the coding agents, in a session of theirs that has the whole
 /// conversation, without what an undo you haven't kept took back, and the messages you'd left
 /// waiting, still waiting; what you were typing comes along. The engine's session goes to
-/// Archived, and what waited there doesn't also run there. The new session opens in its place.
+/// Archived, and what waited there doesn't also run there. (Its tab: `WindowTabsTests`.)
 /// The engine and the agents' bridge are stubbed.
 @MainActor
 @Suite(.serialized) struct MoveToAgentsTests {
@@ -72,8 +72,6 @@ import Testing
         #expect(Drafts.shared["ses_agent"].text == "and a font size", "what you were typing comes along")
         #expect(workspace.session("ses_agent") != nil)
         #expect(Workspace.isArchived(try #require(workspace.session(id))), "the engine's goes to Archived")
-        try await eventually { workspace.requestedTab == "ses_agent" }
-        #expect(workspace.requestedTab == "ses_agent", "the new one opens in its place")
     }
 
     /// Its side panel goes with it: the page it had open (signed in, say) is the new session's,
@@ -93,16 +91,16 @@ import Testing
         bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_agent", title: "Docs", directory: folder)])
         await app.workspace.refresh()
         let panel = app.utilities
-        panel.sessionInView = id
+        panel.inView = .init(session: id)
         let page = panel.newBrowser("about:blank")
         panel.agentWorks(id, in: page)
         let pageID = try #require(panel.id(of: page))
 
         try await app.workspace.moveToAgents(id, model: ModelRef(id: "sonnet", providerID: "claude-code"))
-        panel.sessionInView = "ses_agent"
+        panel.inView = .init(session: "ses_agent")
         #expect(panel.visibleTabs.contains { $0.id == pageID }, "the page is in the new session's panel")
         #expect(panel.agentBrowser(for: "ses_agent") === page, "and its agent goes on in it")
-        panel.sessionInView = id
+        panel.inView = .init(session: id)
         #expect(!panel.visibleTabs.contains { $0.id == pageID }, "not left with the archived one")
     }
 }

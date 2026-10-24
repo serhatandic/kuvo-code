@@ -50,6 +50,8 @@ struct SidebarView: View {
     @State private var deleting: Session?
     /// A session in a worktree being archived, while the user decides about its worktree.
     @State private var archiving: Session?
+    /// The project waiting for the user to confirm its removal.
+    @State private var removingProject: Workspace.Project?
     /// The worktree of the session being archived or deleted has changes that aren't committed.
     @State private var worktreeIsDirty = false
 
@@ -70,10 +72,10 @@ struct SidebarView: View {
     private static let recentCount = 8
 
     /// The selection tag of a project's not-yet-sent new session.
-    static func draftTag(_ directory: String) -> String { "draft:" + directory }
+    static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
 
     static func draftDirectory(from tag: String) -> String? {
-        tag.hasPrefix("draft:") ? String(tag.dropFirst("draft:".count)) : nil
+        TabKey(tag).draftFolder
     }
 
     var body: some View {
@@ -157,6 +159,12 @@ struct SidebarView: View {
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { boxID = box.id }
             }
         }
+        // KUVO_DEMO_REMOVE_PROJECT: Remove Project…'s dialog for the project of that name.
+        .task {
+            guard let name = ProcessInfo.processInfo.environment["KUVO_DEMO_REMOVE_PROJECT"] else { return }
+            try? await Task.sleep(for: .seconds(4))
+            removingProject = workspace.projects.first { $0.name == name }
+        }
         // KUVO_DEMO_SEARCH: text in the sidebar's search field.
         .onAppear { if let text = ProcessInfo.processInfo.environment["KUVO_DEMO_SEARCH"] { search = text } }
         // KUVO_DEMO_RENAME=sidebar: the session in view, renamed in its row.
@@ -230,6 +238,12 @@ struct SidebarView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if let session = archiving { Text(worktreeNote(session)) }
+        }
+        .alert(removingProject.map { "Remove “\($0.name)”?" } ?? "Remove This Project?", isPresented: Binding(get: { removingProject != nil }, set: { if !$0 { removingProject = nil } })) {
+            Button("Remove") { if let project = removingProject { remove(project) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let project = removingProject { Text(removalNote(project)) }
         }
     }
 
@@ -490,6 +504,28 @@ struct SidebarView: View {
 
     // MARK: Projects
 
+    private func removalNote(_ project: Workspace.Project) -> String {
+        let files = "Its files stay as they are."
+        switch project.sessions.count {
+        case 0: return files
+        case 1: return "Its session goes to Archived Sessions in Settings, where you can bring it back. " + files
+        case let count: return "Its \(count) sessions go to Archived Sessions in Settings, where you can bring them back. " + files
+        }
+    }
+
+    private func remove(_ project: Workspace.Project) {
+        Task {
+            let kept = await workspace.removeProject(project.directory)
+            guard kept > 0 else { return }
+            let them = kept == 1 ? "One of its sessions couldn’t be archived" : "\(kept) of its sessions couldn’t be archived"
+            Modal.show(ProjectKept(errorDescription: them + ", so “\(project.name)” stays in the sidebar with them. Try Remove Project… again in a moment."))
+        }
+    }
+
+    private struct ProjectKept: LocalizedError {
+        var errorDescription: String?
+    }
+
     @ViewBuilder private func projectSection(_ project: Workspace.Project) -> some View {
         let isOpen = !collapsed.contains(project.directory)
         ProjectRow(project: project, isOpen: isOpen) {
@@ -514,10 +550,10 @@ struct SidebarView: View {
                 OpenInMenu(folder: URL(filePath: project.directory))
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(project.allFolders.map { URL(filePath: $0) }) }
             }
-            if project.sessions.isEmpty {
-                Divider()
-                Button("Remove from Sidebar") { workspace.removeFolder(project.directory) }
-            }
+            Divider()
+            // Its sessions are archived on its computer, so not while a machine's isn't connected.
+            Button("Remove Project…") { removingProject = project }
+                .disabled(!project.sessions.isEmpty && app.machines.engine(RemoteFolder.machine(of: project.directory)).map { !$0.isReady } ?? false)
         }
         if isOpen {
             if selection == Self.draftTag(project.directory) {

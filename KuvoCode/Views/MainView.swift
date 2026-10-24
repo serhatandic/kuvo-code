@@ -1,5 +1,4 @@
 import OpenCodeKit
-import os
 import SwiftUI
 
 /// The workspace, laid out like Rex: open sessions as tabs in the title bar, and
@@ -11,28 +10,24 @@ struct MainView: View {
     @Environment(Bots.self) private var bots
     @Environment(GroupChats.self) private var groups
 
-    /// Open tabs, in order: session IDs, or `draft:<folder>` for a new session
-    /// that doesn't exist on the server until its first message.
-    @SceneStorage("tabs") private var tabStorage = ""
-    /// The active tab.
-    @SceneStorage("selection") private var selection: String?
+    /// The tabs, the one in view, the split, the panel shown or expanded, the editor in the main
+    /// card: the window's, in a store of their own, which keeps them with this scene.
+    private var tabs: WindowTabs { app.tabs }
+    /// What the tabs were, kept with the scene for the next launch (`WindowTabs.saved`).
+    @SceneStorage("windowTabs") private var savedTabs = ""
+    /// How they were kept before, read once to bring them over.
+    @SceneStorage("tabs") private var olderTabs = ""
+    @SceneStorage("selection") private var olderSelection: String?
+    @SceneStorage("splitPairs") private var olderPairs = ""
+    @SceneStorage("showsPanel") private var olderShowsPanel = false
     @SceneStorage("showsSidebar") private var showsSidebar = true
     /// The row at the top: the project, its branch and the tabs. Hidden, sessions are switched
     /// from the sidebar or ⌘K.
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
     /// The window is being resized.
     @State private var window = WindowStateReader.State()
-    @SceneStorage("showsPanel") private var showsPanel = false
-    /// The panel over the conversation, for room.
     /// Goes up for ⌘F in the group chat in view.
     @State private var groupFind = 0
-    @State private var panelExpanded = false
-    /// Out of room, the side cards give way in this order: the one opened last stays. A split you
-    /// didn't just open (one restored, or met again on its tab) goes first.
-    @State private var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
-    /// The tab whose split you opened (or swapped) last: there it keeps its place in `givesWay`;
-    /// another tab's, met again, gives way first.
-    @State private var keptSplit: String?
     /// The room the conversation and the panel share: what the panel takes, expanded.
     @State private var mainAreaWidth: CGFloat = 0
     @AppStorage("sessionsWidth") private var sessionsWidth = 280.0
@@ -40,18 +35,6 @@ struct MainView: View {
     @AppStorage(Notifier.badgeKey) private var showsBadge = true
     /// New Project or Edit Project, in a popup while it's open.
     @State private var projectEditor: ProjectEditorRequest?
-    /// Making or changing a bot, in the main card while it's open.
-    @State private var botEditor: BotEditorRequest?
-    /// Making or changing a group chat, the same way.
-    @State private var groupEditor: GroupEditorRequest?
-    @State private var focus = Pane.conversation
-    /// The half of the conversation you worked in last (a click in the panel or the sidebar
-    /// isn't working in either): a tab you pick in the panel is its agent's.
-    @State private var lastHalf = Pane.conversation
-    /// Tabs you closed, last one last, with where they were: ⇧⌘T opens them again.
-    @State private var closedTabs: [ClosedTab] = []
-    /// Goes up to put the cursor in a new session's composer.
-    @State private var draftFocus = 0
     /// Open Quickly's palette is showing.
     @State private var showsOpenQuickly = false
     /// The command palette (⌘K) is showing.
@@ -67,101 +50,27 @@ struct MainView: View {
     @State private var mainPaneX: CGFloat = 0
     @State private var titleBarX: CGFloat = 0
     @State private var settingsBarX: CGFloat = 0
-
-    enum Pane { case sessions, conversation, split, changes }
-
-    /// Split views, as pairs: a tab and the session beside it, kept with the tab as a browser's split
-    /// tabs are, one "<tab>=<session>" a line. Choosing another tab shows it alone; the pair comes
-    /// back with its tab. Kept with the window's tabs, so the two never disagree.
-    @SceneStorage("splitPairs") private var splitStorage = ""
-
-    private var splitPairs: [String: String] {
-        get {
-            Dictionary(splitStorage.split(separator: "\n").compactMap { line in
-                let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
-                return parts.count == 2 ? (parts[0], parts[1]) : nil
-            }, uniquingKeysWith: { first, _ in first })
-        }
-        nonmutating set {
-            splitStorage = newValue.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
-        }
-    }
-
-    /// The session beside the tab in view, or empty.
-    private var splitSession: String { selection.flatMap { splitPairs[$0] } ?? "" }
     @AppStorage("splitWidth") private var splitWidth = 560.0
 
-    struct ClosedTab {
-        var key: String
-        var index: Int
-        /// The session that was beside it, back with it.
-        var beside: String?
-        /// The tab it was beside, which it goes back beside if it still can.
-        var besideOf: String?
-    }
-
-    private var tabs: [String] {
-        get { tabStorage.split(separator: "\n").map(String.init) }
-        nonmutating set { tabStorage = newValue.joined(separator: "\n") }
-    }
-
     private var utilities: Utilities { app.utilities }
-
-    private var sessionID: String? {
-        selection.flatMap { SidebarView.draftDirectory(from: $0) == nil && BotGroups.groupID(fromTab: $0) == nil && !MainTerminals.isTerminal($0) ? $0 : nil }
-    }
-
-    /// The group chat in view.
-    private var groupID: String? {
-        selection.flatMap(BotGroups.groupID(fromTab:))
-    }
-
-    /// The browser tabs of the bots on this Mac in view, a bot's or a group chat's, beside yours.
-    private func showBotTabs() {
-        let inView = groupID.flatMap { groups.group($0)?.members.compactMap { bots.bot($0) } } ?? [bots.bot(forSession: sessionID)].compactMap { $0 }
-        utilities.botsInView = Set(inView.filter { $0.machine == nil }.map(\.id))
-        // Its bots' seats are in view too: what they show you opens.
-        utilities.groupInView = groupID.map(BotGroups.tabKey)
-    }
-
-    private var draftDirectory: String? {
-        selection.flatMap(SidebarView.draftDirectory(from:))
-    }
-
-    private var activeModel: SessionModel? {
-        sessionID.flatMap(workspace.model(for:))
-    }
-
-    /// The session you're working in: the one beside, once you've clicked into it (and while you
-    /// use the panel or the sidebar after, as the panel stays its). The menus' commands (Stop,
-    /// Find, the modes) go to it.
-    private var focusedModel: SessionModel? {
-        worksBeside ? splitModel : activeModel
-    }
-
-    /// The last half you worked in is the one beside: the panel is its, and the commands go to it.
-    /// It stays so while the expanded panel covers it (the panel is still its), not once it gave
-    /// way for want of room.
-    private var worksBeside: Bool {
-        lastHalf == .split && splitModel != nil && paneLayout(available: contentWidth).split != nil
-    }
-
-    /// The session beside you work in, if you do.
-    private var workedBesideID: String? {
-        worksBeside ? splitModel?.id : nil
-    }
-
-    /// The sessions on screen: the tab's, and the one beside it.
-    private var sessionsInView: [String] {
-        [sessionID, besideID].compactMap(\.self)
-    }
-
-    /// The session beside the tab's, while it shows: with room for it in the window, and not under
-    /// the expanded panel. One that gave way is out of view: not read, nor working there.
-    private var besideID: String? {
-        guard let splitModel, paneLayout(available: contentWidth).split != nil, !(showsPanel && panelExpanded) else { return nil }
-        return splitModel.id
-    }
+    private var selection: TabKey? { tabs.selection }
+    private var focus: WindowTabs.Pane { tabs.focus }
+    private var showsPanel: Bool { tabs.showsPanel }
+    private var panelExpanded: Bool { tabs.panelExpanded }
+    private var sessionID: String? { tabs.sessionID }
+    private var groupID: String? { tabs.groupID }
+    private var draftDirectory: String? { tabs.draftDirectory }
+    private var activeModel: SessionModel? { tabs.activeModel }
+    private var focusedModel: SessionModel? { tabs.focusedModel }
+    private var splitModel: SessionModel? { tabs.splitModel }
+    private var besideID: String? { tabs.besideID }
+    private var sessionsInView: [String] { tabs.sessionsInView }
+    private var activeDirectory: String? { tabs.activeDirectory }
+    private var focusedDirectory: String? { tabs.focusedDirectory }
+    /// The active tab's folder, and the focused session's, when they're a project's: not the chats'
+    /// folder or a bot's own.
+    private var activeProject: String? { WindowTabs.project(activeDirectory) }
+    private var focusedProject: String? { WindowTabs.project(focusedDirectory) }
 
     /// When the sessions on screen last finished.
     private var idlesInView: [Milliseconds?] {
@@ -171,27 +80,6 @@ struct MainView: View {
     /// The sessions on screen count as seen.
     private func markViewed() {
         for id in sessionsInView { workspace.markViewed(id) }
-    }
-
-    /// The active tab's project folder.
-    private var activeDirectory: String? {
-        activeModel?.session.location.directory ?? draftDirectory ?? selection.flatMap { terminals.entry($0)?.directory }
-    }
-
-    /// The active tab's folder when it's a project's: not the chats' folder or a bot's own.
-    private var activeProject: String? {
-        activeDirectory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
-    }
-
-    /// The folder of the session you're working in: the one beside, once you've clicked into it.
-    /// Run, a new terminal and Open Quickly go there, as Stop goes to its session.
-    private var focusedDirectory: String? {
-        worksBeside ? splitModel?.session.location.directory ?? activeDirectory : activeDirectory
-    }
-
-    /// The focused session's folder when it's a project's.
-    private var focusedProject: String? {
-        focusedDirectory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
     }
 
     /// A bot's workspace: the folder of its own it works in when it has no project.
@@ -207,6 +95,11 @@ struct MainView: View {
     /// The agents, commands and models of the engine a folder's sessions run on.
     private func catalog(for folder: String?) -> Catalog {
         machine(for: folder)?.catalog ?? catalog
+    }
+
+    /// How wide the window and its cards are, for the tabs to lay them out.
+    private var room: WindowTabs.Room {
+        WindowTabs.Room(width: contentWidth, sessions: showsSidebar ? sessionsWidth : nil, changes: changesWidth, split: splitWidth)
     }
 
     /// The cards, the title bar and what shows over them.
@@ -370,7 +263,7 @@ struct MainView: View {
             window.makeFirstResponder(nil)
         }
         // The agent started browsing: show it.
-        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { showPanel() } }
+        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
         // button stays, so the window's buttons keep a toolbar's height, centered on the cards'
         // header row, and the sidebar is a click away. The panel is still ⌥⌘0, and sessions ⌘K.
@@ -429,7 +322,7 @@ struct MainView: View {
                     Color.black.opacity(0.001)
                         .onTapGesture { showsPalette = false }
                     CommandPalette(
-                        initialQuery: Self.demoPaletteQuery,
+                        initialQuery: DemoPalette.query,
                         actions: paletteActions,
                         sessions: paletteSessions,
                         roots: focusedDirectory.map { [$0] + workspace.extraFolders($0) } ?? [],
@@ -456,26 +349,10 @@ struct MainView: View {
         .onChange(of: sessionsInView) { if NSApp.isActive { markViewed() } }
         .onChange(of: idlesInView) { if NSApp.isActive { markViewed() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markViewed() }
-        // The panel's browser is that of the place the session in view runs: this Mac's, or its
-        // machine's.
-        .onChange(of: focusedDirectory, initial: true) { _, directory in
-            utilities.place = directory.flatMap(RemoteFolder.machine(of:))
-        }
-        // Its agent's browsing brings pages forward; others' stay where they are.
-        .onChange(of: sessionID, initial: true) { _, id in
-            utilities.sessionInView = id
-            showBotTabs()
-        }
-        // The one beside it shows you files in the panel too.
-        .onChange(of: besideID, initial: true) { _, id in utilities.besideInView = id }
-        // Another tab: you're back in its own conversation, not the one beside the last (whatever
-        // had the keyboard: the panel or the sidebar keep the last half otherwise).
-        .onChange(of: selection) {
-            if focus == .split { focus = .conversation }
-            lastHalf = .conversation
-        }
-        // Another session beside: you work in the tab's until you click into it.
-        .onChange(of: splitModel?.id) { lastHalf = .conversation }
+        // The panel follows what's in view, all at once: the conversations, the half you work in,
+        // its place, and the bots in view.
+        .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
+        .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
         .sheet(item: $projectEditor) { projectSheet($0) }
     }
@@ -492,7 +369,7 @@ struct MainView: View {
                 settings.terminal = given(settings.terminal) ?? existing.terminal
             }
             let primary = workspace.saveProject(primary, settings: settings)
-            if request.project == nil { newSession(in: primary) }
+            if request.project == nil { tabs.newSession(in: primary) }
         } close: {
             projectEditor = nil
         }
@@ -500,60 +377,32 @@ struct MainView: View {
 
     var body: some View {
         followingSessions
-        // A tab you pick is the agent's of the half you work in.
-        .onChange(of: focus) { _, pane in if pane == .conversation || pane == .split { lastHalf = pane } }
-        .onChange(of: workedBesideID, initial: true) { _, id in
-            utilities.workedBeside = id
-            utilities.worksBeside = id != nil
-        }
-        .onChange(of: groupID) { showBotTabs() }
-        .onChange(of: groupID.flatMap { groups.group($0)?.members } ?? []) { showBotTabs() }
         .task(id: activeDirectory) {
             if let activeDirectory { await workspace.loadBranch(for: activeDirectory) }
         }
-        .onChange(of: workspace.sessions.map(\.id)) { _, ids in dropClosedSessions(ids) }
-        .onChange(of: groups.list.map(\.id)) { dropClosedSessions(workspace.sessions.map(\.id)) }
+        .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
+        .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
-            dropClosedSessions(workspace.sessions.map(\.id))
-            startIfEmpty()
+            tabs.dropClosed()
+            tabs.startIfEmpty()
         }
-        .onAppear(perform: startIfEmpty)
-        .onAppear { Notifier.shared.open = { openTab($0) } }
-        .onAppear { utilities.addToMessage = { addToMessage($0) } }
-        .onAppear { utilities.attachToMessage = { attachToMessage($0) } }
-        .onChange(of: workspace.requestedTab) { _, id in
-            guard let id else { return }
-            openTab(id)
-            workspace.requestedTab = nil
+        .onAppear {
+            tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel))
+            (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
+            // Opened again after the window closed: the terminals went with it.
+            tabs.dropClosed()
+            tabs.startIfEmpty()
+            // What changed while the window was away, kept too.
+            savedTabs = tabs.saved
         }
-        .onChange(of: workspace.swappedTab) { _, swap in
-            // Only the window the session's tab is in (another window leaves it).
-            guard let swap, tabs.contains(swap.from) || splitPairs.values.contains(swap.from) else { return }
-            workspace.swappedTab = nil
-            swapTab(swap.from, with: swap.to)
-        }
-        // From outside the window: a folder opened with Kuvo Code, or the Dock menu.
-        .onChange(of: app.request, initial: true) { _, request in
-            guard let request else { return }
-            app.request = nil
-            switch request {
-            case .folder(let path):
-                newSession(in: workspace.addFolder(path))
-            case .session(let id):
-                openTab(id)
-            case .newSession:
-                newSession(in: nil)
-            case .bot(let recipe):
-                openBotEditor(bot: nil, recipe: recipe)
-            }
-        }
+        .onChange(of: tabs.snapshot) { _, saved in savedTabs = saved.text }
         .onChange(of: workspace.waitingCount, initial: true) { Notifier.shared.setBadge(workspace.waitingCount) }
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
         // Another tab: a rename in the last one's header ends, keeping what was typed.
-        .onChange(of: selection) { _, id in if renaming?.id != id { renaming = nil } }
+        .onChange(of: selection) { _, key in if renaming?.id != key?.sessionID { renaming = nil } }
         #if DEBUG
-        .task(id: workspace.isLoaded) { await runDemoIfAsked() }
+        .task(id: workspace.isLoaded) { await DemoDirector.run(app: app, window: demoWindow) }
         #endif
     }
 
@@ -600,10 +449,12 @@ struct MainView: View {
             .frame(width: identityWidth, alignment: .leading)
             .padding(.trailing, identityWidth == nil ? 16 : 0)
             if !tabItems.isEmpty {
-                TabStrip(tabs: tabItems, selection: $selection, close: { closeTab($0) }, closeAll: closeTabs(except:), openBeside: besideOpener, closeBeside: closeBeside, closeBesideTab: closeBesideTab, swapBeside: swapBeside) { id in
+                TabStrip(tabs: tabItems, selection: tabSelection, close: { tabs.close(TabKey($0)) }, closeAll: { tabs.closeAll(except: $0.map(TabKey.init)) },
+                         openBeside: besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
+                         swapBeside: { tabs.swapBeside(TabKey($0)) }) { id in
                     guard let session = workspace.session(id) else { return }
                     // Renamed in its card's header: its tab comes forward for it.
-                    selection = id
+                    tabs.selection = .session(id)
                     renaming = session
                 }
             }
@@ -632,35 +483,39 @@ struct MainView: View {
     }
 
     private var tabItems: [TabItem] {
-        let pairs = splitPairs
-        return tabs.compactMap { key in
+        tabs.keys.compactMap { key in
             guard var item = tabItem(for: key) else { return nil }
-            if let beside = pairs[key], let other = tabItem(for: beside) { item.companion = [other] }
+            if let beside = tabs.pairs[key], let other = tabItem(for: .session(beside)) { item.companion = [other] }
             return item
         }
     }
 
-    private func tabItem(for key: String) -> TabItem? {
-        do {
-            if let directory = SidebarView.draftDirectory(from: key) {
-                return TabItem(id: key, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
+    /// The tab strip's selection, by the tabs' written keys.
+    private var tabSelection: Binding<String?> {
+        Binding(get: { tabs.selection?.text }, set: { tabs.selection = $0.map(TabKey.init) })
+    }
+
+    private func tabItem(for key: TabKey) -> TabItem? {
+        let id = key.text
+        switch key {
+        case .draft(let directory):
+            return TabItem(id: id, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
+        case .terminal:
+            guard let entry = terminals.entry(id) else { return nil }
+            return TabItem(id: id, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
+        case .group(let group):
+            guard let group = groups.group(group) else { return nil }
+            let status: TabItem.Status = groups.discussing.contains(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
+            return TabItem(id: id, title: group.name, logo: nil, group: faces(of: group), status: status)
+        case .session(let sessionID):
+            if workspace.waitingMachine(for: sessionID) != nil {
+                return TabItem(id: id, title: workspace.remoteTitle(sessionID) ?? "Session", logo: nil, status: .idle)
             }
-            if let entry = terminals.entry(key) {
-                return TabItem(id: key, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
+            guard let session = workspace.session(sessionID) else { return nil }
+            if let bot = bots.bot(forSession: sessionID) {
+                return TabItem(id: id, title: bot.name, logo: nil, bot: bot.look, botMood: bots.mood(of: bot, in: workspace), status: status(of: session))
             }
-            if workspace.waitingMachine(for: key) != nil {
-                return TabItem(id: key, title: workspace.remoteTitle(key) ?? "Session", logo: nil, status: .idle)
-            }
-            if let id = BotGroups.groupID(fromTab: key) {
-                guard let group = groups.group(id) else { return nil }
-                let status: TabItem.Status = groups.discussing.contains(id) ? .working : groups.isUnread(group) && groupID != id ? .unread : .idle
-                return TabItem(id: key, title: group.name, logo: nil, group: faces(of: group), status: status)
-            }
-            guard let session = workspace.session(key) else { return nil }
-            if let bot = bots.bot(forSession: key) {
-                return TabItem(id: key, title: bot.name, logo: nil, bot: bot.look, botMood: bots.mood(of: bot, in: workspace), status: status(of: session))
-            }
-            return TabItem(id: key, title: session.title ?? "New Session", logo: logo(for: session.model, in: session.location.directory), status: status(of: session))
+            return TabItem(id: id, title: session.title ?? "New Session", logo: logo(for: session.model, in: session.location.directory), status: status(of: session))
         }
     }
 
@@ -668,8 +523,8 @@ struct MainView: View {
     /// edited): their sidebar rows hold still meanwhile, so each moves in one place at a time.
     /// An idle bot whose conversation is open moves in the sidebar, as nothing in its conversation does.
     private var stagedBots: Set<String> {
-        if let request = botEditor { return Set([request.bot?.id].compactMap(\.self)) }
-        if groupEditor != nil { return [] }
+        if let request = tabs.botEditor { return Set([request.bot?.id].compactMap(\.self)) }
+        if tabs.groupEditor != nil { return [] }
         if let id = sessionID, let bot = bots.bot(forSession: id), workspace.running.contains(id) { return [bot.id] }
         if let id = groupID, let speaker = groups.speaking[id] { return [speaker] }
         return []
@@ -704,17 +559,17 @@ struct MainView: View {
             EmptyView()
         } content: {
             SidebarView(
-                selection: Binding(get: { selection }, set: { id in if let id { openTab(id) } }),
-                newSession: { newSession(in: $0) },
+                selection: Binding(get: { selection?.text }, set: { id in if let id { tabs.open(TabKey(id)) } }),
+                newSession: { tabs.newSession(in: $0) },
                 newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
                 editProject: { openProjectEditor(ProjectEditorRequest(project: $0)) },
                 showProviders: { app.openSettings(.accounts) },
-                newBot: { openBotEditor(bot: nil) },
-                editBot: { openBotEditor(bot: $0) },
-                newGroup: { openGroupEditor(group: nil) },
-                editGroup: { openGroupEditor(group: $0) },
-                newConversation: { openTab(SidebarView.draftTag($0)) },
-                closeTerminal: { closeTab($0) },
+                newBot: { tabs.openBotEditor(bot: nil) },
+                editBot: { tabs.openBotEditor(bot: $0) },
+                newGroup: { tabs.openGroupEditor(group: nil) },
+                editGroup: { tabs.openGroupEditor(group: $0) },
+                newConversation: { tabs.open(.draft($0)) },
+                closeTerminal: { tabs.close(TabKey($0)) },
                 stagedBots: stagedBots,
                 openBeside: besideOpener
             )
@@ -724,13 +579,7 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .simultaneousGesture(TapGesture().onEnded { focus = .sessions })
-    }
-
-    /// The session in split view, while it's another than the one in view.
-    private var splitModel: SessionModel? {
-        guard !splitSession.isEmpty, splitSession != sessionID, workspace.session(splitSession) != nil else { return nil }
-        return workspace.model(for: splitSession)
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .sessions })
     }
 
     /// The session's title, renamed in its card's header, while it's the one being renamed.
@@ -757,128 +606,68 @@ struct MainView: View {
             } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
         } actions: {
             ContextGauge(model: model)
-            Button("Swap", systemImage: "arrow.left.arrow.right") { swapSplit() }
+            Button("Swap", systemImage: "arrow.left.arrow.right") { tabs.swapSplit() }
                 .help("Swap the two sessions")
-            Button("Close Split View", systemImage: "xmark") { if let selection { closeBeside(selection) } }
+            Button("Close Split View", systemImage: "xmark") { if let selection { tabs.closeBeside(selection) } }
                 .help("Close Split View")
         } content: {
             SessionView(model: model)
                 .environment(\.bot, bot)
                 // Return and Esc answer its cards once you've clicked or typed into it.
                 .environment(\.takesCardKeys, focus == .split)
-                .environment(\.composerFocused) { focus = .split }
+                .environment(\.composerFocused) { tabs.focus = .split }
                 .largeWidgetHost()
         }
-        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
+        .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
         .id("split-" + id)
-        .simultaneousGesture(TapGesture().onEnded { focus = .split })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .split })
     }
 
     /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
     /// draft or a group chat).
     private var besideOpener: ((String) -> Void)? {
         guard let sessionID, workspace.session(sessionID) != nil else { return nil }
-        return { openBeside($0) }
-    }
-
-    /// Shows `id` beside the tab in view, the two as one tab. Its own tab, if it had one, goes into
-    /// the pair; one beside before gets its tab back, next to it.
-    private func openBeside(_ id: String) {
-        guard let main = selection, main != id, workspace.session(main) != nil, workspace.session(id) != nil else { return }
-        var pairs = splitPairs
-        var tabs = tabs
-        // It's in no other pair, nor has one of its own.
-        if let other = pairs.removeValue(forKey: id), !tabs.contains(other) { tabs.insert(other, at: (tabs.firstIndex(of: id) ?? tabs.count - 1) + 1) }
-        for (key, value) in pairs where value == id { pairs[key] = nil }
-        if let previous = pairs[main], !tabs.contains(previous) { tabs.insert(previous, at: (tabs.firstIndex(of: main) ?? tabs.count - 1) + 1) }
-        tabs.removeAll { $0 == id }
-        pairs[main] = id
-        withAnimation(.ui) {
-            self.tabs = tabs
-            splitPairs = pairs
-            keep(.split)
-            keptSplit = main
-        }
-        // Its composer takes the keyboard, if there's room for it: the menus' commands go to it.
-        if paneLayout(available: contentWidth).split != nil { focus = .split }
-    }
-
-    /// Close Split View: the two go back to tabs of their own, the one beside next to `tab`.
-    private func closeBeside(_ tab: String) {
-        guard let beside = splitPairs[tab] else { return }
-        var tabs = tabs
-        if !tabs.contains(beside) { tabs.insert(beside, at: (tabs.firstIndex(of: tab) ?? tabs.count - 1) + 1) }
-        withAnimation(.ui) {
-            self.tabs = tabs
-            splitPairs[tab] = nil
-        }
-    }
-
-    /// Closes the session beside `tab`'s (its half of the tab): ⇧⌘T brings it back beside it.
-    private func closeBesideTab(_ tab: String) {
-        guard let beside = splitPairs[tab] else { return }
-        Analytics.shared.sessionEnded(beside)
-        rememberClosed([ClosedTab(key: beside, index: (tabs.firstIndex(of: tab) ?? tabs.count - 1) + 1, besideOf: tab)])
-        withAnimation(.ui) { splitPairs[tab] = nil }
-    }
-
-    /// The two in `tab`'s pair trade places, the tab staying where it is.
-    private func swapBeside(_ tab: String) {
-        guard let other = splitPairs[tab] else { return }
-        var pairs = splitPairs
-        pairs[tab] = nil
-        pairs[other] = tab
-        // One tab for the two: a tab of its own it had goes.
-        var tabs = tabs.filter { $0 != other }
-        if let index = tabs.firstIndex(of: tab) { tabs[index] = other }
-        self.tabs = tabs
-        splitPairs = pairs
-        if keptSplit == tab { keptSplit = other }
-        if selection == tab { selection = other }
-    }
-
-    private func swapSplit() {
-        if let selection { swapBeside(selection) }
+        return { tabs.openBeside($0) }
     }
 
     @ViewBuilder private var conversationCard: some View {
         Group {
-            if let request = groupEditor {
+            if let request = tabs.groupEditor {
                 Card(title: request.group.map { "Edit \($0.name)" } ?? "New Group Chat", isFocused: focus == .conversation) {
                     if let group = request.group { GroupAvatar(faces: faces(of: group), size: 20) } else { Image(systemName: "person.2") }
                 } actions: {
-                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { groupEditor = nil } }
+                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.groupEditor = nil } }
                         .help("Close")
                 } content: {
-                    GroupEditor(group: request.group, newBot: { openBotEditor(bot: nil) }) {
-                        withAnimation(.ui) { groupEditor = nil }
+                    GroupEditor(group: request.group, newBot: { tabs.openBotEditor(bot: nil) }) {
+                        withAnimation(.ui) { tabs.groupEditor = nil }
                     } created: { group in
-                        openTab(BotGroups.tabKey(group.id))
+                        tabs.open(.group(group.id))
                     }
                 }
                 .id(request.id)
-            } else if let request = botEditor {
+            } else if let request = tabs.botEditor {
                 Card(title: request.bot.map { "Edit \($0.name)" } ?? "New Bot", isFocused: focus == .conversation) {
                     if let bot = request.bot { BotAvatar(look: bot.look, size: 18, animates: false) } else { Image(systemName: "face.smiling") }
                 } actions: {
-                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { botEditor = nil } }
+                    Button("Close", systemImage: "xmark") { withAnimation(.ui) { tabs.botEditor = nil } }
                         .help("Close")
                 } content: {
                     BotEditor(bot: request.bot, recipe: request.recipe) {
                         // This editor's, not one opened since (a delete that took a while).
-                        if botEditor?.id == request.id { withAnimation(.ui) { botEditor = nil } }
+                        if tabs.botEditor?.id == request.id { withAnimation(.ui) { tabs.botEditor = nil } }
                     } created: { bot in
                         // Its tab opens in place of this editor, not of one opened since.
-                        if botEditor?.id == request.id { openTab(bot.sessionID) }
+                        if tabs.botEditor?.id == request.id { tabs.open(.session(bot.sessionID)) }
                     }
                 }
                 .id(request.id)
-            } else if let key = selection, let entry = terminals.entry(key) {
+            } else if let key = selection, let entry = terminals.entry(key.text) {
                 Card(title: entry.session.title == "Terminal" ? entry.label : entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
                     Image(systemName: "apple.terminal")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(key) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(key) }
                         .help("Close Tab")
                 } content: {
                     TerminalHost(session: entry.session)
@@ -888,17 +677,17 @@ struct MainView: View {
                 Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
                     GroupAvatar(faces: faces(of: group), size: 20)
                 } actions: {
-                    Button("Edit Group Chat", systemImage: "slider.horizontal.3") { openGroupEditor(group: group) }
+                    Button("Edit Group Chat", systemImage: "slider.horizontal.3") { tabs.openGroupEditor(group: group) }
                         .help("Edit Group Chat: its name, bots and lead")
                         .disabled(app.moves.isMoving(group.id))
-                    Button("Close Tab", systemImage: "xmark") { closeTab(BotGroups.tabKey(id)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.group(id)) }
                         .help("Close Tab")
                 } content: {
                     GroupChatView(group: group, findRequest: groupFind)
                         .largeWidgetHost()
                 }
-                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { openGroupEditor(group: group) })
-                .id(BotGroups.tabKey(id))
+                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
+                .id(TabKey.group(id))
             } else if let id = sessionID, let model = workspace.model(for: id) {
                 let directory = model.session.location.directory
                 let machine = machine(for: directory)
@@ -914,7 +703,7 @@ struct MainView: View {
                     } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
                 } actions: {
                     if let bot {
-                        Button("Edit Bot", systemImage: "slider.horizontal.3") { openBotEditor(bot: bot) }
+                        Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                             .help("Edit Bot: its look, job, wake-ups and memory")
                     }
                     if Workspace.isChat(directory) {
@@ -927,23 +716,23 @@ struct MainView: View {
                     }
                     ContextGauge(model: model)
                         .disabled(machine.map { !$0.isReady || !$0.isLive } ?? false)
-                    Button("Close Tab", systemImage: "xmark") { closeTab(id) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                         .help("Close Tab")
                 } content: {
                     SessionView(model: model)
                         .environment(\.bot, bot)
                         .environment(\.takesCardKeys, !(focus == .split && besideID != nil))
                         // Typing here is working here, however the keyboard got here.
-                        .environment(\.composerFocused) { focus = .conversation }
+                        .environment(\.composerFocused) { tabs.focus = .conversation }
                         .largeWidgetHost()
                 }
-                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { openBotEditor(bot: bot) } })
+                .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
                 .environment(catalog(for: directory))
             } else if let id = sessionID, let engine = app.machines.engine(workspace.waitingMachine(for: id)) {
                 Card(title: workspace.remoteTitle(id) ?? "Session", detail: engine.machine.name, isFocused: focus == .conversation) {
                     Image(systemName: "server.rack")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(id) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                         .help("Close Tab")
                 } content: {
                     MachineWaitingView(engine: engine)
@@ -953,7 +742,7 @@ struct MainView: View {
                 Card(title: "New Session", detail: workspace.projectName(directory), isFocused: focus == .conversation) {
                     Image(systemName: "square.and.pencil")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(SidebarView.draftTag(directory)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.draft(directory)) }
                         .help("Close Tab")
                 } content: {
                     MachineWaitingView(engine: engine)
@@ -965,18 +754,11 @@ struct MainView: View {
                 Card(title: isChat ? "New Chat" : "New Session", detail: isChat ? nil : workspace.projectName(directory), isFocused: focus == .conversation) {
                     Image(systemName: "square.and.pencil")
                 } actions: {
-                    Button("Close Tab", systemImage: "xmark") { closeTab(SidebarView.draftTag(directory)) }
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.draft(directory)) }
                         .help("Close Tab")
                 } content: {
-                    DraftSessionView(directory: directory, focusRequest: draftFocus) { session, text, files in
-                        // The first takes the draft's tab and stays in view; more attempts open at the end.
-                        let draft = SidebarView.draftTag(directory)
-                        if tabs.contains(draft) {
-                            utilities.adoptDraft(as: session.id)
-                            replaceTab(draft, with: session.id)
-                        } else if !tabs.contains(session.id) {
-                            tabs.append(session.id)
-                        }
+                    DraftSessionView(directory: directory, focusRequest: tabs.draftFocus) { session, text, files in
+                        tabs.draftSent(.draft(directory), as: session.id)
                         workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: directory))
                     }
                 }
@@ -986,36 +768,18 @@ struct MainView: View {
                 Card(title: AppInfo.name, isFocused: focus == .conversation) {
                     AppLogo(size: 16)
                 } content: {
-                    WelcomeView(openFolder: openFolder, newChat: { newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
+                    WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
                 }
             }
         }
-        .simultaneousGesture(TapGesture().onEnded { focus = .conversation })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .conversation })
         // What you open last keeps its place when the window is short of room (a split, from
         // Open Beside: coming back to a tab that has one isn't opening it).
-        .onChange(of: showsSidebar) { _, shows in if shows { keep(.sessions) } }
-        .onChange(of: showsPanel) { _, shows in if shows { keep(.changes) } }
-        // A session an agent started: beside the conversation that started it, if that's the one
-        // in view; otherwise (or asked to) in a tab of its own, for you to find.
-        .onChange(of: workspace.besideRequest) { _, request in
-            guard let request else { return }
-            workspace.besideRequest = nil
-            if request.beside, request.startedBy == sessionID {
-                openBeside(request.session)
-            } else if !tabs.contains(request.session), !splitPairs.values.contains(request.session) {
-                tabs.append(request.session)
-            }
-        }
+        .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
     }
 
     private func paneLayout(available: Double) -> PaneLayout {
-        PaneLayout(
-            available: available,
-            sessions: showsSidebar ? sessionsWidth : nil,
-            changes: showsPanel ? changesWidth : nil,
-            split: splitModel == nil ? nil : splitWidth,
-            givesWay: selection != nil && selection == keptSplit ? givesWay : [.split] + givesWay.filter { $0 != .split }
-        )
+        tabs.layout(available: available)
     }
 
     /// Whether the panel and the sidebar are on screen: wanted, and with room for them.
@@ -1028,29 +792,19 @@ struct MainView: View {
     }
 
     /// Showing one that's wanted but out of room makes room for it, as the one opened last.
-    private func showPanel(_ shows: Bool = true) {
-        showsPanel = shows
-        if shows { keep(.changes) }
-    }
-
     private func showSidebar(_ shows: Bool) {
         showsSidebar = shows
-        if shows { keep(.sessions) }
+        if shows { tabs.keep(.sessions) }
     }
 
     /// The panel's and the sidebar's buttons, which show what's on screen.
-    private var panelToggle: Binding<Bool> { Binding(get: { panelOnScreen }, set: { showPanel($0) }) }
+    private var panelToggle: Binding<Bool> { Binding(get: { panelOnScreen }, set: { tabs.showPanel($0) }) }
     /// Room kept free in the title bar while the window is dragged narrower: its width reaches
     /// the tabs a pass late, and a strip wider than the room left would be put away in the
     /// toolbar's overflow and back, again and again.
     private var resizeRoom: CGFloat { window.isResizing ? 72 : 0 }
 
     private var sidebarToggle: Binding<Bool> { Binding(get: { sidebarOnScreen }, set: { showSidebar($0) }) }
-
-    private func keep(_ pane: PaneLayout.Pane) {
-        givesWay.removeAll { $0 == pane }
-        givesWay.append(pane)
-    }
 
     private var utilitiesPane: some View {
         // The panel of the session you work in (the one beside, as its panel is then): its changes,
@@ -1061,31 +815,20 @@ struct MainView: View {
             folders: focusedDirectory.map { [$0] + workspace.extraFolders($0) } ?? [],
             model: focusedModel,
             environment: app.shellEnvironment,
-            isExpanded: $panelExpanded,
+            isExpanded: Binding(get: { tabs.panelExpanded }, set: { tabs.panelExpanded = $0 }),
             isFocused: focus == .changes
         )
         .environment(catalog(for: focusedDirectory))
-        .simultaneousGesture(TapGesture().onEnded { focus = .changes })
+        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .changes })
     }
 
     /// Opens the panel on a tool.
     private func showInPanel(_ open: () -> Void) {
         withAnimation(.ui) {
             open()
-            showPanel()
+            tabs.showPanel()
             app.showsSettings = false
         }
-    }
-
-    /// Makes a bot (from a shared one's `recipe`, if given), or changes `bot`, in the main card.
-    private func openBotEditor(bot: Bot?, recipe: BotRecipe? = nil) {
-        withAnimation(.ui) {
-            panelExpanded = false
-            app.showsSettings = false
-            groupEditor = nil
-            botEditor = BotEditorRequest(bot: bot, recipe: recipe)
-        }
-        focus = .conversation
     }
 
     /// Makes a project, or changes one, in a popup over what's in the window. One open already
@@ -1094,17 +837,6 @@ struct MainView: View {
     private func openProjectEditor(_ request: ProjectEditorRequest) {
         guard projectEditor == nil else { return }
         projectEditor = request
-    }
-
-    /// Makes a group chat, or changes `group`, in the main card.
-    private func openGroupEditor(group: BotGroup?) {
-        withAnimation(.ui) {
-            panelExpanded = false
-            app.showsSettings = false
-            botEditor = nil
-            groupEditor = GroupEditorRequest(group: group)
-        }
-        focus = .conversation
     }
 
     /// Under a group chat's name: who's in it.
@@ -1135,12 +867,6 @@ struct MainView: View {
             guard let id else { return }
             withAnimation(.ui) { app.settingsTabs.select(id) }
         })
-    }
-
-    /// A page of Settings as the demo variables name it: `permissions`, or `permissions@<machine>`.
-    private static func demoPage(_ text: String) -> (SettingsPage?, SidebarBox) {
-        let parts = text.split(separator: "@", maxSplits: 1).map(String.init)
-        return (SettingsPage(rawValue: parts[0]), parts.count > 1 ? .machine(parts[1]) : .mac)
     }
 
     /// The title bar keeps its row with the tab bar; without it, the cards reach the top, in
@@ -1178,169 +904,9 @@ struct MainView: View {
 
     // MARK: Tabs
 
-    /// Shows a session or draft, opening a tab for it next to the current one if needed.
-    private func openTab(_ key: String) {
-        // The session beside a tab: that tab, with it beside.
-        let key = splitPairs.first { $0.value == key && tabs.contains($0.key) }?.key ?? key
-        var tabs = tabs
-        if !tabs.contains(key) {
-            let index = selection.flatMap { tabs.firstIndex(of: $0) }.map { $0 + 1 } ?? tabs.count
-            tabs.insert(key, at: index)
-            self.tabs = tabs
-        }
-        withAnimation(.ui) {
-            selection = key
-            focus = .conversation
-            app.showsSettings = false
-            botEditor = nil
-            groupEditor = nil
-        }
-    }
-
-    /// Closes a tab; one you close (rather than a deleted session's) can be reopened.
-    private func closeTab(_ key: String, remember: Bool = true) {
-        var tabs = tabs
-        guard let index = tabs.firstIndex(of: key) else { return }
-        tabs.remove(at: index)
-        Analytics.shared.sessionEnded(key)
-        let beside = splitPairs[key]
-        if let beside {
-            Analytics.shared.sessionEnded(beside)
-            splitPairs[key] = nil
-        }
-        if remember && !MainTerminals.isTerminal(key) { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
-        terminals.close(key)
-        withAnimation(.ui) {
-            self.tabs = tabs
-            if selection == key {
-                selection = tabs.indices.contains(index) ? tabs[index] : tabs.last
-            }
-        }
-    }
-
-    /// Closes every tab but `key`, or all of them when it's nil.
-    private func closeTabs(except key: String?) {
-        // Reopened last first, so the leftmost comes back last.
-        let pairs = splitPairs
-        rememberClosed(tabs.enumerated().filter { $0.element != key && !MainTerminals.isTerminal($0.element) }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
-        for closed in tabs where closed != key {
-            Analytics.shared.sessionEnded(closed)
-            terminals.close(closed)
-            if let beside = splitPairs[closed] { Analytics.shared.sessionEnded(beside) }
-        }
-        withAnimation(.ui) {
-            tabs = tabs.filter { $0 == key }
-            splitPairs = splitPairs.filter { $0.key == key }
-            selection = key
-        }
-    }
-
-    private func rememberClosed(_ closed: [ClosedTab]) {
-        closedTabs.append(contentsOf: closed)
-        if closedTabs.count > 50 { closedTabs.removeFirst(closedTabs.count - 50) }
-    }
-
-    /// In a tab, or beside one.
-    private func isOpen(_ key: String) -> Bool {
-        tabs.contains(key) || splitPairs.values.contains(key)
-    }
-
-    /// Not open again already, and not a session deleted since.
-    private func canReopen(_ closed: ClosedTab) -> Bool {
-        !isOpen(closed.key) && (SidebarView.draftDirectory(from: closed.key) != nil || workspace.session(closed.key) != nil
-            || groups.group(BotGroups.groupID(fromTab: closed.key)) != nil)
-    }
-
-    /// Opens the tab closed last, where it was, skipping sessions deleted since. A pair comes back
-    /// as a pair, and a session closed from beside a tab goes back beside it.
-    private func reopenClosedTab() {
-        while let closed = closedTabs.popLast() {
-            guard canReopen(closed) else { continue }
-            var tabs = tabs
-            var pairs = splitPairs
-            let shown: String
-            if let partner = closed.besideOf, tabs.contains(partner), pairs[partner] == nil {
-                pairs[partner] = closed.key
-                shown = partner
-            } else {
-                tabs.insert(closed.key, at: min(closed.index, tabs.count))
-                if let beside = closed.beside, !isOpen(beside), workspace.session(beside) != nil { pairs[closed.key] = beside }
-                shown = closed.key
-            }
-            withAnimation(.ui) {
-                self.tabs = tabs
-                splitPairs = pairs
-                selection = shown
-                focus = .conversation
-            }
-            return
-        }
-    }
-
-    /// Where the panel's Add to Message goes: the session you work in, the one beside once you've
-    /// clicked into it (the panel is its), else the tab's.
-    private var messageTarget: String? { workedBesideID ?? selection }
-
-    /// Adds a file's lines ("@src/App.swift:12-20") or a terminal's output to what's in the
-    /// composer of the session you work in, and puts the cursor there.
-    private func addToMessage(_ addition: String) {
-        composerForAdding()
-        guard let key = messageTarget else { return }
-        var text = Drafts.shared[key].text
-        let isBlock = addition.hasPrefix("```")
-        if !text.isEmpty {
-            if isBlock { if !text.hasSuffix("\n") { text += "\n" } } else if !(text.last?.isWhitespace ?? true) { text += " " }
-        }
-        Drafts.shared[key].text = text + addition + (isBlock ? "\n" : " ")
-        if SidebarView.draftDirectory(from: key) != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
-        focus = worksBeside ? .split : .conversation
-    }
-
-    /// Attaches files to the message in the composer of the session you work in, and puts the
-    /// cursor there.
-    private func attachToMessage(_ files: [URL]) {
-        composerForAdding()
-        guard let key = messageTarget else { return }
-        Drafts.shared[key].files += files.filter { !Drafts.shared[key].files.contains($0) }
-        if SidebarView.draftDirectory(from: key) != nil { draftFocus += 1 } else { workspace.model(for: key)?.focusComposer() }
-        focus = worksBeside ? .split : .conversation
-    }
-
-    /// With no composer in view to add to (no tab open, or a terminal's): a new conversation, in
-    /// the terminal's folder if one's in view, never a terminal (which would start the project's
-    /// command, and not have the text).
-    private func composerForAdding() {
-        guard selection == nil || messageTarget.map(MainTerminals.isTerminal) == true else { return }
-        newSession(in: selection.flatMap { terminals.entry($0)?.directory }, conversation: true)
-    }
-
-    /// A session that carries on in another: the new one takes its tab (or its place beside
-    /// one), and is shown.
-    private func swapTab(_ old: String, with id: String) {
-        if let tab = splitPairs.first(where: { $0.value == old })?.key {
-            splitPairs[tab] = id
-            openTab(id)
-            return
-        }
-        guard tabs.contains(old) else { return openTab(id) }
-        if let beside = splitPairs[old] {
-            splitPairs[old] = nil
-            splitPairs[id] = beside
-        }
-        replaceTab(old, with: id)
-    }
-
-    /// A draft became a real session: it keeps its place in the tab strip.
-    private func replaceTab(_ key: String, with id: String) {
-        var tabs = tabs
-        if let index = tabs.firstIndex(of: key) { tabs[index] = id } else { tabs.append(id) }
-        self.tabs = tabs
-        selection = id
-    }
-
     /// Settings' tabs while Settings shows, else the sessions'.
     private func cycleAnyTabs(by offset: Int) {
-        if app.showsSettings { withAnimation(.ui) { app.settingsTabs.cycle(by: offset) } } else { cycleTabs(by: offset) }
+        if app.showsSettings { withAnimation(.ui) { app.settingsTabs.cycle(by: offset) } } else { tabs.cycle(by: offset) }
     }
 
     /// ⌘W: in Settings, closes its tab, and with one left goes back to the sessions. With no tab
@@ -1353,51 +919,10 @@ struct MainView: View {
                 closeSettings()
             }
         } else if let selection {
-            closeTab(selection)
+            tabs.close(selection)
         } else {
             NSApp.keyWindow?.performClose(nil)
         }
-    }
-
-    private func cycleTabs(by offset: Int) {
-        let tabs = tabs
-        guard !tabs.isEmpty else { return }
-        let index = selection.flatMap { tabs.firstIndex(of: $0) } ?? 0
-        withAnimation(.ui) { selection = tabs[(index + offset + tabs.count) % tabs.count] }
-    }
-
-    /// Deleted sessions lose their tabs; the one beside a deleted tab's session takes its tab.
-    /// Pairs whose tab or session beside is gone end.
-    private func dropClosedSessions(_ ids: [String]) {
-        guard workspace.isLoaded else { return }
-        let known = Set(ids)
-        // A machine's sessions wait for it to connect.
-        func isGone(_ key: String) -> Bool { !known.contains(key) && workspace.waitingMachine(for: key) == nil }
-        for key in tabs where SidebarView.draftDirectory(from: key) == nil && isGone(key) {
-            // A terminal's tab stays while its shell runs; one restored at launch has none.
-            if MainTerminals.isTerminal(key) {
-                if terminals.entry(key) != nil { continue }
-                closeTab(key, remember: false)
-                continue
-            }
-            // A group chat's tab stays as long as the chat does.
-            if let id = BotGroups.groupID(fromTab: key), groups.group(id) != nil { continue }
-            if let beside = splitPairs[key], !isGone(beside), !tabs.contains(beside) {
-                splitPairs[key] = nil
-                var tabs = tabs
-                if let index = tabs.firstIndex(of: key) { tabs[index] = beside }
-                self.tabs = tabs
-                if selection == key { selection = beside }
-                continue
-            }
-            closeTab(key, remember: false)
-        }
-        let open = Set(tabs)
-        let pairs = splitPairs.filter { open.contains($0.key) && !open.contains($0.value) && !isGone($0.value) }
-        if pairs != splitPairs { splitPairs = pairs }
-        // A selection that isn't one of the tabs (its session went while the app was closed)
-        // shows nothing; show the last tab instead.
-        if let selection, !tabs.contains(selection) { self.selection = tabs.last }
     }
 
     // MARK: Actions
@@ -1408,18 +933,18 @@ struct MainView: View {
             hasSession: model != nil,
             hasProject: focusedProject != nil,
             canStop: model?.isRunning == true,
-            canReopenTab: closedTabs.contains(where: canReopen),
-            newSession: { newSession(in: nil) },
-            newTerminalTab: { openTerminalTab(command: nil) },
+            canReopenTab: tabs.canReopenTab,
+            newSession: { tabs.newSession(in: nil) },
+            newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
             newProject: { openProjectEditor(ProjectEditorRequest(project: nil)) },
-            newBot: { openBotEditor(bot: nil) },
-            importBot: { if let recipe = BotRecipe.pick() { openBotEditor(bot: nil, recipe: recipe) } },
-            newGroup: { openGroupEditor(group: nil) },
-            newChat: { newSession(in: Workspace.chatsFolder) },
+            newBot: { tabs.openBotEditor(bot: nil) },
+            importBot: { if let recipe = BotRecipe.pick() { tabs.openBotEditor(bot: nil, recipe: recipe) } },
+            newGroup: { tabs.openGroupEditor(group: nil) },
+            newChat: { tabs.newSession(in: Workspace.chatsFolder) },
             stop: { model?.stop() },
             selectAgent: { model?.selectAgent($0) },
-            togglePanel: { withAnimation(.ui) { showPanel(!panelOnScreen) } },
+            togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },
             newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment) } },
@@ -1429,19 +954,16 @@ struct MainView: View {
             nextTab: { cycleAnyTabs(by: 1) },
             previousTab: { cycleAnyTabs(by: -1) },
             closeTab: closeAnyTab,
-            reopenTab: reopenClosedTab,
+            reopenTab: tabs.reopenClosedTab,
             find: {
-                if let model { model.showFind() } else if selection.flatMap(BotGroups.groupID(fromTab:)) != nil { groupFind += 1 }
+                if let model { model.showFind() } else if groupID != nil { groupFind += 1 }
             },
             showTab: { number in
                 if app.showsSettings {
                     withAnimation(.ui) { app.settingsTabs.show(number: number) }
                     return
                 }
-                let tabs = tabs
-                guard !tabs.isEmpty else { return }
-                let index = number == 9 ? tabs.count - 1 : number - 1
-                if tabs.indices.contains(index) { openTab(tabs[index]) }
+                tabs.show(number: number)
             },
             showProviders: { app.openSettings(.accounts) },
             openQuickly: {
@@ -1457,17 +979,11 @@ struct MainView: View {
 
     // MARK: Command palette
 
-    #if DEBUG
-    private static let demoPaletteQuery = ProcessInfo.processInfo.environment["KUVO_DEMO_PALETTE"] ?? ""
-    #else
-    private static let demoPaletteQuery = ""
-    #endif
-
     /// Every session and chat not put away, the latest first, with its project.
     private var paletteSessions: [PaletteItem] {
         (workspace.projects.flatMap(\.sessions) + workspace.chats).sorted { $0.time.updated > $1.time.updated }.map { session in
             PaletteItem(id: "session:" + session.id, kind: .session, title: session.title ?? "New Session", detail: workspace.projectName(session.location.directory),
-                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { openTab(session.id) }
+                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { tabs.open(.session(session.id)) }
         }
     }
 
@@ -1495,7 +1011,7 @@ struct MainView: View {
         add(sidebarOnScreen ? "Hide Sessions" : "Show Sessions", "sidebar.left", "⌘0", actions.toggleSidebar)
         add(showsTabBar ? "Hide Tab Bar" : "Show Tab Bar", "rectangle.topthird.inset.filled", "⌥⌘T") { showsTabBar.toggle() }
         add("New Project…", "folder.badge.plus", "⇧⌘N", actions.newProject)
-        add("New Bot…", "face.smiling", nil) { openBotEditor(bot: nil) }
+        add("New Bot…", "face.smiling", nil) { tabs.openBotEditor(bot: nil) }
         add("Open Folder…", "folder", "⌘O", actions.openFolder)
         if let directory = focusedProject {
             let primary = workspace.projectDirectory(directory)
@@ -1546,30 +1062,6 @@ struct MainView: View {
         showInPanel { utilities.run(command, in: directory, environment: app.shellEnvironment) }
     }
 
-    /// Starts a draft in `directory`, or in the current project (a worktree's, for a session in one).
-    /// A new session in `directory`, or the project in view, or the latest one; with no project
-    /// at all, a chat. A bot's own folder isn't a project: from its conversation, the latest one.
-    /// `conversation`: one, even in a project whose sessions open its terminal command.
-    private func newSession(in directory: String?, conversation: Bool = false) {
-        let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
-        let directory = directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.chatsFolder
-        // A project that has a terminal command for its sessions opens that, not a conversation.
-        if !conversation, let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
-            openTerminalTab(command: command, in: directory)
-            return
-        }
-        openTab(SidebarView.draftTag(directory))
-    }
-
-    /// A terminal as a tab, in the folder of the tab in view (or the one given), typing `command`
-    /// in it. Without one, a plain shell: where you start `omp` or any agent yourself.
-    private func openTerminalTab(command: String?, in directory: String? = nil) {
-        // A project's folder, not a bot's own or the chats' (their agents work there).
-        let directory = directory ?? activeProject ?? NSHomeDirectory()
-        Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        openTab(terminals.open(in: directory, command: command, environment: app.shellEnvironment))
-    }
-
     private func openFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -1579,640 +1071,20 @@ struct MainView: View {
         panel.message = "Choose a project folder for the agent to work in."
         Analytics.shared.onboardingStep("pick_project")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        newSession(in: workspace.addFolder(url.path))
-    }
-
-    /// With nothing open, pick up where the user left off.
-    private func startIfEmpty() {
-        guard workspace.isLoaded, tabs.isEmpty, let latest = workspace.projects.first?.sessions.first else { return }
-        openTab(latest.id)
+        tabs.newSession(in: workspace.addFolder(url.path))
     }
 
     #if DEBUG
-    /// The comment and prompt go in once, however often the view reappears.
-    private static var ranDemo = false
-
-    /// For trying the app without clicking: KUVO_DEMO_FOLDER opens a project, and
-    /// KUVO_DEMO_PROMPT (with KUVO_DEMO_MODEL as "provider/model") starts a session with it.
-    /// KUVO_DEMO_PROVIDERS opens Accounts, on that provider's sign-in if it names one.
-    /// KUVO_DEMO_APPEARANCE=light|dark forces an appearance. KUVO_DEMO_WINDOW sets the window size.
-    /// KUVO_DEMO_COMMENT adds a review comment.
-    private func runDemoIfAsked() async {
-        let environment = ProcessInfo.processInfo.environment
-        // Launched from Terminal for screenshots, the window would otherwise stay inactive.
-        // KUVO_DEMO_BACKGROUND leaves the copy behind other apps, so it doesn't take the keyboard.
-        if environment.keys.contains(where: { $0.hasPrefix("KUVO_DEMO_") }), environment["KUVO_DEMO_BACKGROUND"] == nil { NSApp.activate() }
-        if AppInfo.staysInBackground {
-            // Behind every other window, not just the one in front: when you close or hide that,
-            // macOS brings forward the app whose window is next.
-            Task {
-                for _ in 0..<3 {
-                    for window in NSApp.windows where window.isVisible { window.orderBack(nil) }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            }
-        }
-        switch environment["KUVO_DEMO_APPEARANCE"] {
-        case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
-        default: break
-        }
-        if environment["KUVO_DEMO_CHANGES"] != nil { showPanel() }
-        // KUVO_DEMO_PALETTE=<text>: the command palette, with that typed in it.
-        if workspace.isLoaded, environment["KUVO_DEMO_PALETTE"] != nil { showsPalette = true }
-        // KUVO_DEMO_RENAME=header: the session in view, renamed in its card's header.
-        if workspace.isLoaded, environment["KUVO_DEMO_RENAME"] == "header", let session = activeModel?.session { renaming = session }
-        // KUVO_DEMO_WINDOW=WIDTHxHEIGHT resizes the window, for checking narrow layouts;
-        // KUVO_DEMO_OFFSCREEN puts it past the screen's edge, where the pointer can't hover over it.
-        if let size = environment["KUVO_DEMO_WINDOW"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2,
-           let window = NSApp.windows.first(where: \.isVisible) {
-            var frame = window.frame
-            frame.size = CGSize(width: size[0], height: size[1])
-            if environment["KUVO_DEMO_OFFSCREEN"] != nil, let screen = window.screen ?? NSScreen.main {
-                frame.origin = CGPoint(x: screen.frame.maxX + 40, y: screen.frame.minY)
-            }
-            window.setFrame(frame, display: true, animate: false)
-            // Again once window restoration has settled.
-            try? await Task.sleep(for: .seconds(1))
-            window.setFrame(frame, display: true, animate: false)
-        }
-        if workspace.isLoaded, environment["KUVO_DEMO_PROVIDERS"] != nil { app.openSettings(.accounts) }
-        // KUVO_DEMO_NEW_PROJECT=<folder>,<folder>: the New Project sheet with these folders.
-        if workspace.isLoaded, let list = environment["KUVO_DEMO_NEW_PROJECT"] {
-            openProjectEditor(ProjectEditorRequest(project: nil, folders: list.split(separator: ",").map(String.init)))
-        }
-        // KUVO_DEMO_SETTINGS=<page>[@<machine>] opens Settings on that page, by its SettingsPage
-        // name: general, appearance, storage, accounts, agents, mcp, git, browser, passwords and so
-        // on; with a machine, that machine's.
-        if workspace.isLoaded, let tab = environment["KUVO_DEMO_SETTINGS"] {
-            let (page, box) = Self.demoPage(tab)
-            app.openSettings(page, on: box)
-        }
-        guard workspace.isLoaded, !Self.ranDemo else { return }
-        Self.ranDemo = true
-        // KUVO_DEMO_SETTINGS_TABS=<pages>: those pages too, each in a tab of its own, comma-separated;
-        // the first page (KUVO_DEMO_SETTINGS) stays in view.
-        if let pages = environment["KUVO_DEMO_SETTINGS_TABS"] {
-            let shown = app.settingsTabs.selectedID
-            for (page, box) in pages.split(separator: ",").map({ Self.demoPage(String($0)) }) {
-                if let page { app.settingsTabs.show(page, on: box, inNewTab: true) }
-            }
-            app.settingsTabs.select(shown)
-        }
-        // KUVO_DEMO_WELCOME: no tabs, so the welcome card shows.
-        if environment["KUVO_DEMO_WELCOME"] != nil {
-            tabs = []
-            selection = nil
-        }
-        // The folder's new session first, so the panel's tools open in it.
-        if let folder = environment["KUVO_DEMO_FOLDER"], environment["KUVO_DEMO_PROMPT"] == nil, environment["KUVO_DEMO_REPLAY"] == nil { newSession(in: folder) }
-        // KUVO_DEMO_PANEL: tools to open in the panel, comma-separated: terminal,
-        // browser=<address>, machine=<machine>[=<address>] (a tab in its browser, with a session
-        // there in view), files, file=<path>, changes, run (the project's run command), expand.
-        for item in (environment["KUVO_DEMO_PANEL"] ?? "").split(separator: ",").map(String.init) {
-            let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
-            switch parts.first {
-            case "terminal": utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment)
-            case "browser": utilities.newBrowser(parts.count > 1 ? parts[1] : nil)
-            case "machine" where parts.count > 1:
-                let rest = parts[1].split(separator: "=", maxSplits: 1).map(String.init)
-                // Once a session there is in view, so the tab shows.
-                Task {
-                    for _ in 0..<60 where utilities.place != rest[0] { try? await Task.sleep(for: .milliseconds(500)) }
-                    utilities.newMachinePage(rest[0], address: rest.count > 1 ? rest[1] : nil)
-                }
-            case "files": utilities.showFiles()
-            case "file" where parts.count > 1:
-                // Once the conversation is in view, so the tab is its panel's.
-                Task {
-                    try? await Task.sleep(for: .seconds(1.5))
-                    utilities.show(RemoteFolder.url(parts[1]))
-                }
-            case "changes": utilities.showChanges()
-            case "run": runProject()
-            case "expand": panelExpanded = true
-            // toggle=<seconds>: expands and collapses it a few times, that far apart.
-            case "toggle" where parts.count > 1:
-                let wait = Double(parts[1]) ?? 3
-                Task {
-                    for _ in 0..<4 {
-                        try? await Task.sleep(for: .seconds(wait))
-                        withAnimation(.ui) { panelExpanded.toggle() }
-                    }
-                }
-            default: continue
-            }
-            showPanel()
-        }
-        // KUVO_DEMO_IMPORT_BOT=<path>: New Bot, from that shared bot's file.
-        if let path = environment["KUVO_DEMO_IMPORT_BOT"], let data = FileManager.default.contents(atPath: path),
-           let recipe = try? JSONDecoder().decode(BotRecipe.self, from: data) {
-            openBotEditor(bot: nil, recipe: recipe)
-        }
-        // KUVO_DEMO_CHAT=<message>: a new chat, with this message sent; KUVO_DEMO_MOVE_CHAT=<folder>
-        // then moves the newest chat into that project.
-        if let message = environment["KUVO_DEMO_CHAT"] {
-            Task {
-                while app.api == nil { try? await Task.sleep(for: .seconds(1)) }
-                guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: nil, agent: nil) else { return }
-                openTab(session.id)
-                workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false, commands: [])
-            }
-        }
-        if let folder = environment["KUVO_DEMO_MOVE_CHAT"] {
-            Task {
-                while !workspace.isLoaded { try? await Task.sleep(for: .seconds(1)) }
-                // With KUVO_DEMO_CHAT, after its reply, while it's open.
-                try? await Task.sleep(for: .seconds(environment["KUVO_DEMO_CHAT"] == nil ? 3 : 16))
-                let log = Logger(subsystem: "run.kuvo.code", category: "demo")
-                guard let chat = workspace.chats.first else { return log.error("KUVO_DEMO_MOVE_CHAT: no chat") }
-                do {
-                    try await workspace.move(chat.id, toProject: folder)
-                    openTab(chat.id)
-                } catch {
-                    log.error("KUVO_DEMO_MOVE_CHAT failed: \(String(describing: error), privacy: .public)")
-                }
-            }
-        }
-        // KUVO_DEMO_UNDO_RESEND=<seconds>: in the session in view, undoes its last message, then
-        // sends it again after that many seconds.
-        if let wait = environment["KUVO_DEMO_UNDO_RESEND"].flatMap(Double.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(6))
-                guard let id = sessionID, let model = workspace.model(for: id) else { return }
-                if !model.isLoaded { await model.load() }
-                guard let last = model.transcript.messages.last(where: { if case .user = $0 { true } else { false } }), case .user(let user) = last else { return }
-                model.undo(from: user)
-                try? await Task.sleep(for: .seconds(wait))
-                model.submit(model.draftText, files: model.draftFiles, for: nil, queue: false, commands: [])
-                model.draftText = ""
-                model.draftFiles = []
-            }
-        }
-        // KUVO_DEMO_MACHINE_BROWSING=<machine>|<seconds>: as if an agent on that machine started
-        // using its browser that long after launch, through the same event the engine sends.
-        if let value = environment["KUVO_DEMO_MACHINE_BROWSING"] {
-            let parts = value.split(separator: "|").map(String.init)
-            Task { [workspace] in
-                try? await Task.sleep(for: .seconds(parts.count > 1 ? Double(parts[1]) ?? 3 : 3))
-                let json = #"{"id":"evt_demo","type":"session.tool.input.started","data":{"sessionID":"ses_demo","assistantMessageID":"msg_demo","id":"call_demo","name":"kuvo-browser_browser_navigate"}}"#
-                if let event = try? ServerEvent(json: Data(json.utf8)) { workspace.handle(event, machine: parts[0]) }
-            }
-        }
-        // KUVO_DEMO_ASKING[=<title>]: every few seconds, as if the agent of the session in view (the
-        // one with that title, once it shows) started asking in its browser; the ask itself comes
-        // from calling the browser's tools.
-        if let title = environment["KUVO_DEMO_ASKING"] {
-            Task { [workspace] in
-                var opened = false
-                while true {
-                    try? await Task.sleep(for: .seconds(5))
-                    if !opened, !["", "1"].contains(title), let session = workspace.sessions.first(where: { $0.title == title }) {
-                        openTab(session.id)
-                        opened = true
-                    }
-                    guard let id = sessionID, let session = workspace.session(id) else { continue }
-                    workspace.onBrowserAsk?(id, RemoteFolder.machine(of: session.location.directory))
-                }
-            }
-        }
-        // KUVO_DEMO_CYCLE_TABS=<seconds>: goes to the next session tab every so often, a few times.
-        if let wait = environment["KUVO_DEMO_CYCLE_TABS"].flatMap(Double.init) {
-            Task {
-                for _ in 0..<4 {
-                    try? await Task.sleep(for: .seconds(wait))
-                    cycleTabs(by: 1)
-                }
-            }
-        }
-        Task { await PerfLayers.run() }
-        // KUVO_PERF_SWITCH=<n>: ten seconds after launch, goes to the next session tab n times,
-        // a second and a half apart, and writes how the main thread kept up to KUVO_PERF_LOG.
-        if let count = environment["KUVO_PERF_SWITCH"].flatMap(Int.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                // KUVO_PERF_SWITCH_CHECK: each tab's session with a draft of its own, and after each
-                // switch, whether the composer shows it, and takes what's typed there.
-                let check = environment["KUVO_PERF_SWITCH_CHECK"] != nil
-                if check { for (index, tab) in tabs.enumerated() { workspace.model(for: tab)?.draftText = "draft \(index)" } }
-                var wrong: [String] = []
-                let meter = PerfMeter()
-                meter.start()
-                // KUVO_PERF_SWITCH_BY=<steps>: tabs to go by, in turn ("1,1,-1,-1": back and forth
-                // among three), rather than always the next.
-                let by = environment["KUVO_PERF_SWITCH_BY"].map { $0.split(separator: ",").compactMap { Int($0) } } ?? [1]
-                for step in 0..<count {
-                    cycleTabs(by: by[step % by.count])
-                    try? await Task.sleep(for: .milliseconds(1500))
-                    if check, let id = selection, let model = workspace.model(for: id),
-                       let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) {
-                        if editor.string != model.draftText { wrong.append("step \(step): shows \"\(editor.string)\", draft \"\(model.draftText)\"") }
-                        editor.insertText("+", replacementRange: NSRange(location: (editor.string as NSString).length, length: 0))
-                        try? await Task.sleep(for: .milliseconds(100))
-                        if !model.draftText.hasSuffix("+") { wrong.append("step \(step): typed, draft \"\(model.draftText)\"") }
-                    } else if check {
-                        wrong.append("step \(step): no field editor")
-                    }
-                }
-                let line = "switch x\(count) among \(tabs.count) tabs: " + meter.stop() + (check ? "; check: " + (wrong.isEmpty ? "all right" : wrong.prefix(6).joined(separator: "; ")) : "") + "\n"
-                if let file = environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
-                if let file = environment["KUVO_PERF_LOG"] {
-                    if let handle = FileHandle(forWritingAtPath: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() } else { FileManager.default.createFile(atPath: file, contents: Data(line.utf8)) }
-                }
-            }
-        }
-        // KUVO_PERF_TOGGLE=<n>: ten seconds after launch, the sidebar hidden and shown n times, then
-        // the panel, as their buttons do, a second apart; how the main thread kept up with the
-        // slides goes to KUVO_PERF_LOG.
-        if let count = environment["KUVO_PERF_TOGGLE"].flatMap(Int.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                func log(_ line: String) {
-                    guard let file = environment["KUVO_PERF_LOG"] else { return }
-                    if let handle = FileHandle(forWritingAtPath: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() } else { FileManager.default.createFile(atPath: file, contents: Data(line.utf8)) }
-                }
-                let sidebar = PerfMeter()
-                sidebar.start()
-                // KUVO_PERF_TOGGLE_ONLY=panel: the panel alone (and its profile alone).
-                let panelOnly = environment["KUVO_PERF_TOGGLE_ONLY"] == "panel"
-                for _ in 0..<(panelOnly ? 0 : count * 2) {
-                    withAnimation(.ui) { showSidebar(!showsSidebar) }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-                if !panelOnly {
-                    log("toggle sidebar x\(count * 2): " + sidebar.stop() + "\n")
-                    if let file = environment["KUVO_PERF_STALLS"] { try? sidebar.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
-                }
-                let panel = PerfMeter()
-                panel.start()
-                for _ in 0..<(count * 2) {
-                    withAnimation(.ui) { showPanel(!showsPanel) }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-                log("toggle panel x\(count * 2): " + panel.stop() + "\n")
-                if let file = environment["KUVO_PERF_STALLS"] { try? panel.stallReport().write(toFile: file + ".panel", atomically: true, encoding: .utf8) }
-            }
-        }
-        // KUVO_PERF_SIDEBAR=<n>: ten seconds after launch, the sidebar scrolled down and back up,
-        // n frames each way, as a trackpad does; then ten seconds left alone. How the main thread
-        // kept up with each goes to KUVO_PERF_LOG.
-        if let count = environment["KUVO_PERF_SIDEBAR"].flatMap(Int.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews) }
-                guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }), let content = window.contentView,
-                      let sidebar = scrollViews(in: content).first(where: { $0.convert($0.bounds, to: nil).minX < 60 && $0.frame.height > 200 }) else { return }
-                func log(_ line: String) {
-                    guard let file = environment["KUVO_PERF_LOG"] else { return }
-                    if let handle = FileHandle(forWritingAtPath: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() } else { FileManager.default.createFile(atPath: file, contents: Data(line.utf8)) }
-                }
-                let meter = PerfMeter()
-                meter.start()
-                let range = max(0, (sidebar.documentView?.frame.height ?? 0) - sidebar.contentView.bounds.height)
-                // KUVO_PERF_SIDEBAR_WHEEL: by a trackpad's events (began, changed, ended), as you
-                // scroll, so SwiftUI knows it's being scrolled; otherwise moved there directly.
-                let wheel = environment["KUVO_PERF_SIDEBAR_WHEEL"] != nil
-                func send(_ delta: CGFloat, phase: CGScrollPhase) {
-                    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else { return }
-                    event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-                    event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-                    if let ns = NSEvent(cgEvent: event) { sidebar.scrollWheel(with: ns) }
-                }
-                for step in 0..<(count * 2) {
-                    let done = Double(step < count ? step + 1 : count * 2 - step - 1) / Double(count)
-                    if wheel {
-                        let delta = (step < count ? -1.0 : 1.0) * range / Double(count)
-                        send(delta, phase: step == 0 || step == count ? .began : .changed)
-                        if step == count - 1 || step == count * 2 - 1 { send(0, phase: .ended) }
-                    } else {
-                        let clip = sidebar.contentView
-                        clip.scroll(to: NSPoint(x: 0, y: range * done))
-                        sidebar.reflectScrolledClipView(clip)
-                    }
-                    try? await Task.sleep(for: .milliseconds(16))
-                }
-                log("sidebar scroll x\(count * 2) over \(Int(range)) pt: " + meter.stop() + "\n")
-                // KUVO_PERF_SIDEBAR_IDLE=0: not the idle part (whose profile would replace this one's).
-                guard environment["KUVO_PERF_SIDEBAR_IDLE"] != "0" else { log("sidebar idle skipped\n"); return }
-                let idle = PerfMeter()
-                idle.start()
-                try? await Task.sleep(for: .seconds(10))
-                log("sidebar idle 10 s: " + idle.stop() + "\n")
-            }
-        }
-        // KUVO_PERF_RESIZE=<n>: ten seconds after launch, goes through the next three session tabs
-        // and back, then makes the window narrower and wider again, n frames each way, and writes
-        // how the main thread kept up to KUVO_PERF_LOG.
-        if let count = environment["KUVO_PERF_RESIZE"].flatMap(Int.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                for by in [1, 1, 1, -3] {
-                    cycleTabs(by: by)
-                    try? await Task.sleep(for: .milliseconds(1500))
-                }
-                guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { return }
-                let start = window.frame
-                let meter = PerfMeter()
-                meter.start()
-                for step in 0..<(count * 2) {
-                    let done = Double(step < count ? step + 1 : count * 2 - step - 1) / Double(count)
-                    var frame = start
-                    frame.size.width = start.width - 400 * done
-                    window.setFrame(frame, display: true)
-                    try? await Task.sleep(for: .milliseconds(16))
-                }
-                let line = "resize x\(count * 2): " + meter.stop() + "\n"
-                if let file = environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
-                if let file = environment["KUVO_PERF_LOG"] {
-                    if let handle = FileHandle(forWritingAtPath: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() } else { FileManager.default.createFile(atPath: file, contents: Data(line.utf8)) }
-                }
-            }
-        }
-        // KUVO_PERF_TYPE=<n>: ten seconds after launch, types n characters into the composer, one
-        // every 60 ms, and writes how the main thread kept up (and the longest a character took to
-        // be handled) to KUVO_PERF_LOG.
-        if let count = environment["KUVO_PERF_TYPE"].flatMap(Int.init) {
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                guard let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) else { return }
-                let meter = PerfMeter()
-                meter.start()
-                var longest = 0.0
-                let words = Array("the quick brown fox jumps over the lazy dog and keeps on running ")
-                for index in 0..<count {
-                    let started = CACurrentMediaTime()
-                    editor.insertText(String(words[index % words.count]), replacementRange: NSRange(location: (editor.string as NSString).length, length: 0))
-                    // Until the run loop has handled it and drawn.
-                    await Task.yield()
-                    longest = max(longest, (CACurrentMediaTime() - started) * 1000)
-                    try? await Task.sleep(for: .milliseconds(60))
-                }
-                let line = String(format: "type x%d: longest %.0f ms; ", count, longest) + meter.stop() + "\n"
-                if let file = environment["KUVO_PERF_LOG"] {
-                    if let handle = FileHandle(forWritingAtPath: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() } else { FileManager.default.createFile(atPath: file, contents: Data(line.utf8)) }
-                }
-            }
-        }
-        // KUVO_DEMO_REOPEN_WINDOW=<seconds>: closes the window after that long, and opens it again.
-        if let wait = environment["KUVO_DEMO_REOPEN_WINDOW"].flatMap(Double.init) {
-            Task { [app] in
-                try? await Task.sleep(for: .seconds(wait))
-                NSApp.windows.first { $0.isVisible && $0.canBecomeMain }?.performClose(nil)
-                try? await Task.sleep(for: .seconds(2))
-                app.openMainWindow?()
-            }
-        }
-        // KUVO_DEMO_TOGGLE_PANEL=<seconds>: shows and hides the panel every so often, a few times.
-        if let every = environment["KUVO_DEMO_TOGGLE_PANEL"].flatMap(Double.init) {
-            Task {
-                for _ in 0..<6 {
-                    try? await Task.sleep(for: .seconds(every))
-                    withAnimation(.ui) { showsPanel.toggle() }
-                }
-            }
-        }
-        // KUVO_DEMO_VIEW_IMAGE=<path>,…: those pictures in the image viewer.
-        if let paths = environment["KUVO_DEMO_VIEW_IMAGE"] {
-            ImageViewer.shared.show(paths.split(separator: ",").map { AttachmentItem.local(URL(filePath: String($0))) })
-        }
-        // KUVO_DEMO_NEW_BOT: the New Bot sheet.
-        if environment["KUVO_DEMO_NEW_BOT"] != nil { openBotEditor(bot: nil) }
-        // In a task of its own: SwiftUI cancels and restarts this view's task while the
-        // window settles, which would cut the session's creation short.
-        Task { await runDemoSession(environment) }
-        Task { await runDemoBot(environment) }
-        Task { await runDemoGroup(environment) }
-    }
-
-    /// KUVO_DEMO_GROUP=<name>|<bot>,<bot>,…[|<message>] makes that group chat of those bots unless
-    /// one has the name, opens it, and sends it the message; KUVO_DEMO_EDIT_GROUP opens its editor,
-    /// and KUVO_DEMO_MOVE_GROUP=<machine> moves it there first.
-    private func runDemoGroup(_ environment: [String: String]) async {
-        if environment["KUVO_DEMO_NEW_GROUP"] != nil { openGroupEditor(group: nil) }
-        guard let spec = environment["KUVO_DEMO_GROUP"] else { return }
-        let parts = spec.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard let name = parts.first, !name.isEmpty else { return }
-        let members = (parts.count > 1 ? parts[1] : "").split(separator: ",").compactMap { member in
-            bots.list.first { $0.name == member.trimmingCharacters(in: .whitespaces) }?.id
-        }
-        let group = groups.list.first { $0.name == name } ?? groups.create(name: name, members: members)
-        openTab(BotGroups.tabKey(group.id))
-        if environment["KUVO_DEMO_EDIT_GROUP"] != nil { openGroupEditor(group: group) }
-        // KUVO_DEMO_GROUP_UNDO=<seconds>: then undoes from your last message there, into the composer.
-        if let wait = environment["KUVO_DEMO_GROUP_UNDO"].flatMap(Double.init) {
-            try? await Task.sleep(for: .seconds(wait))
-            if let last = groups.messages(in: group.id).last(where: { $0.author == nil && $0.kind != .note }),
-               let text = await groups.undo(from: last.id, in: group.id) {
-                Drafts.shared[BotGroups.tabKey(group.id)].text = text
-            }
-        }
-        // KUVO_DEMO_MOVE_GROUP=<machine>: then it moves there (once the machines it moves between run
-        // group chats), or to this Mac when empty, before its message goes.
-        if let place = environment["KUVO_DEMO_MOVE_GROUP"], groups.machine(of: group.id) != (place.isEmpty ? nil : place) {
-            let machine = place.isEmpty ? nil : place
-            let ends = [machine, groups.machine(of: group.id)].compactMap { $0 }
-            for _ in 0..<180 where !ends.allSatisfy(app.machineGroups.running.contains) { try? await Task.sleep(for: .seconds(1)) }
-            do {
-                try await app.moves.move(group: group.id, to: machine)
-                print("KUVO_DEMO_MOVE_GROUP moved \(group.name)")
-            } catch {
-                print("KUVO_DEMO_MOVE_GROUP failed: \(error.localizedDescription)")
-            }
-        }
-        guard parts.count > 2, !parts[2].isEmpty else { return }
-        while app.api == nil { try? await Task.sleep(for: .seconds(1)) }
-        // One on a machine: once it's reached there, as its composer waits.
-        for _ in 0..<180 where groups.unreachable(group.id) != nil { try? await Task.sleep(for: .seconds(1)) }
-        try? await Task.sleep(for: .seconds(2))
-        groups.send(parts[2], to: group.id)
-        // KUVO_DEMO_GROUP_LATER=<seconds>|<message>: another message, sent while they talk.
-        let later = (environment["KUVO_DEMO_GROUP_LATER"] ?? "").split(separator: "|", maxSplits: 1).map(String.init)
-        if later.count == 2, let seconds = Double(later[0]) {
-            try? await Task.sleep(for: .seconds(seconds))
-            groups.send(later[1], to: group.id)
-        }
-    }
-
-    /// KUVO_DEMO_BOT=<name>|<job>|<instructions>[|<machine>[|<project>]] makes that bot unless one has the
-    /// name (on KUVO_DEMO_BOT_MODEL=<provider>/<model>, if given), and opens it;
-    /// KUVO_DEMO_BOT_PROMPT then gives it a task, and KUVO_DEMO_EDIT_BOT opens its Edit Bot sheet.
-    private func runDemoBot(_ environment: [String: String]) async {
-        guard let spec = environment["KUVO_DEMO_BOT"] else { return }
-        let parts = spec.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard let name = parts.first, !name.isEmpty else { return }
-        var bot = bots.list.first { $0.name == name }
-        if bot == nil {
-            let machine = parts.count > 3 && !parts[3].isEmpty ? parts[3] : nil
-            if let machine, let engine = app.machines.engine(machine) {
-                while !engine.isReady { try? await Task.sleep(for: .seconds(1)) }
-            }
-            do {
-                // Its job, as it would have written it in its memory.
-                let job = (line: parts.count > 1 ? parts[1] : "", details: parts.count > 2 ? parts[2] : "")
-                let model = environment["KUVO_DEMO_BOT_MODEL"].flatMap { spec -> ModelRef? in
-                    guard let slash = spec.firstIndex(of: "/") else { return nil }
-                    return ModelRef(id: String(spec[spec.index(after: slash)...]), providerID: String(spec[..<slash]))
-                }
-                // (The coding agents' list first, for a model of theirs.)
-                if OutsideAgents.runsInBridge(model?.providerID) {
-                    while workspace.agents(forFolder: machine.map { RemoteFolder.folder("/", on: $0) } ?? "/")?.api == nil { try? await Task.sleep(for: .seconds(1)) }
-                }
-                bot = try await bots.create(name: name, job: job.line.isEmpty && job.details.isEmpty ? nil : job,
-                                            look: .random(), model: model, machine: machine, project: parts.count > 4 && !parts[4].isEmpty ? parts[4] : nil)
-            } catch {
-                print("KUVO_DEMO_BOT failed: \(error.localizedDescription)")
-                return
-            }
-        }
-        guard let bot else { return }
-        openTab(bot.sessionID)
-        // KUVO_DEMO_EDIT_BOT: its Edit Bot sheet, open.
-        if environment["KUVO_DEMO_EDIT_BOT"] != nil { openBotEditor(bot: bot) }
-        // KUVO_DEMO_REPLY: a reply sent as a notification's Reply sends it.
-        if let reply = environment["KUVO_DEMO_REPLY"] { await workspace.send(reply, to: bot.sessionID) }
-        if let prompt = environment["KUVO_DEMO_BOT_PROMPT"], let model = workspace.model(for: bot.sessionID) {
-            try? await Task.sleep(for: .seconds(1))
-            model.submit(prompt, files: [], for: nil, queue: false, commands: [])
-        }
-        // KUVO_DEMO_MOVE_BOT=<machine, or nothing for this Mac>: once it's done, it moves there.
-        if let place = environment["KUVO_DEMO_MOVE_BOT"] {
-            let machine = place.isEmpty ? nil : place
-            if let machine, let engine = app.machines.engine(machine) {
-                while !engine.isReady { try? await Task.sleep(for: .seconds(1)) }
-            }
-            try? await Task.sleep(for: .seconds(3))
-            while workspace.isWorking(bot.sessionID) { try? await Task.sleep(for: .seconds(2)) }
-            do {
-                try await app.moves.move(bot: bot.id, to: machine)
-                print("KUVO_DEMO_MOVE_BOT moved \(bot.name)")
-            } catch {
-                print("KUVO_DEMO_MOVE_BOT failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func runDemoSession(_ environment: [String: String]) async {
-        // KUVO_DEMO_SHOW_IN_PANEL=<path>|<folder or file>: as if the agent of the session in view
-        // showed that in the panel (its show_in_panel tool), once it's been connected a while.
-        if let spec = environment["KUVO_DEMO_SHOW_IN_PANEL"] {
-            let parts = spec.split(separator: "|").map(String.init)
-            Task { [workspace] in
-                try? await Task.sleep(for: .seconds(18))
-                guard let id = sessionID, let session = workspace.session(id), parts.count == 2 else { return }
-                let machine = RemoteFolder.machine(of: session.location.directory)
-                let said = BrowserTools.shown(parts[0], isFolder: parts[1] == "folder", inView: true)
-                for (type, data) in [
-                    ("session.tool.input.started", #""name":"kuvo-browser_show_in_panel""#),
-                    ("session.tool.called", #""input":{"path":\#(String(decoding: try! JSONEncoder().encode(parts[0]), as: UTF8.self))}"#),
-                    ("session.tool.success", #""content":[{"type":"text","text":\#(String(decoding: try! JSONEncoder().encode(said), as: UTF8.self))}]"#),
-                ] {
-                    let json = #"{"id":"evt_demo","type":"\#(type)","data":{"sessionID":"\#(id)","assistantMessageID":"msg_demo","id":"call_show",\#(data)}}"#
-                    if let event = try? ServerEvent(json: Data(json.utf8)) { workspace.handle(event, machine: machine) }
-                }
-            }
-        }
-        // KUVO_DEMO_SESSION=<id>: that session's tab, in view (one on a machine waits for it).
-        if let id = environment["KUVO_DEMO_SESSION"] {
-            openTab(id)
-            // KUVO_DEMO_FIND=<words>: Find in it, looking for those (once it's read, on a machine).
-            if let words = environment["KUVO_DEMO_FIND"] {
-                Task { [workspace] in
-                    for _ in 0..<60 {
-                        if let model = workspace.model(for: id), model.isLoaded {
-                            try? await Task.sleep(for: .seconds(1))
-                            model.showFind(words)
-                            return
-                        }
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-            }
-            // KUVO_DEMO_WAITING=<text>|<text>…: those as messages waiting in its queue (not sent);
-            // a text of "<words>@<picture path>" has that picture attached.
-            if let waiting = environment["KUVO_DEMO_WAITING"] {
-                Task { [workspace] in
-                    for _ in 0..<60 {
-                        if let model = workspace.model(for: id), model.isLoaded {
-                            model.showWaiting(waiting.split(separator: "|").enumerated().map { index, entry in
-                                let parts = entry.split(separator: "@", maxSplits: 1).map(String.init)
-                                return Transcript.Pending(id: "msg_demo_waiting_\(index)", text: parts[0], delivery: .queue, isLocal: false,
-                                                          files: parts.count > 1 ? [URL(filePath: parts[1])] : [])
-                            })
-                            return
-                        }
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-            }
-            // KUVO_DEMO_QUOTES=<n>: that many quotes to answer in its composer.
-            if let count = Int(environment["KUVO_DEMO_QUOTES"] ?? "") {
-                Drafts.shared[id].quotes = []
-                for index in 1...max(count, 1) {
-                    let text = "Point \(index): " + String(repeating: "a quoted line from the agent's reply ", count: index % 3 + 1)
-                    if let model = workspace.model(for: id) { model.addQuote(text, how: "demo") } else { Drafts.shared.addQuote(text, to: id) }
-                }
-            }
-        }
-        // KUVO_DEMO_TABS: the project's sessions as tabs (KUVO_DEMO_TAB_COUNT=<n>: its latest n),
-        // the one in view staying in view.
-        if environment["KUVO_DEMO_TABS"] != nil,
-           let project = workspace.projects.first(where: { $0.directory == activeDirectory }) ?? workspace.projects.first {
-            let current = selection
-            let count = environment["KUVO_DEMO_TAB_COUNT"].flatMap(Int.init) ?? .max
-            for session in project.sessions.prefix(count).reversed() where !tabs.contains(session.id) { openTab(session.id) }
-            if let current { openTab(current) }
-        }
-        // KUVO_DEMO_COMMENT=<path in the project>:<line>:<text> adds a review comment to the
-        // session in view, on that line of the changes.
-        if let spec = environment["KUVO_DEMO_COMMENT"], let directory = activeDirectory {
-            let parts = spec.split(separator: ":", maxSplits: 2).map(String.init)
-            try? await Task.sleep(for: .seconds(2))
-            if parts.count == 3, let line = Int(parts[1]), let selection, let model = workspace.model(for: selection),
-               let text = try? String(contentsOfFile: directory + "/" + parts[0], encoding: .utf8) {
-                let lines = text.components(separatedBy: "\n")
-                let snippet = lines.indices.contains(line - 1) ? lines[line - 1].trimmingCharacters(in: .whitespaces) : ""
-                model.reviewComments.append(ReviewComment(file: parts[0], line: line, side: .new, snippet: snippet, text: parts[2]))
-            }
-        }
-        guard let folder = environment["KUVO_DEMO_FOLDER"] else { return }
-        // KUVO_DEMO_REPLAY=<file>: a recorded run, played into a new session there (see PerfReplay).
-        if let file = environment["KUVO_DEMO_REPLAY"] {
-            let catalog = catalog(for: folder)
-            guard let session = try? await workspace.createSession(in: folder, model: catalog.defaultModel?.ref, agent: nil) else { return }
-            openTab(session.id)
-            for _ in 0..<40 where workspace.model(for: session.id)?.isLoaded != true { try? await Task.sleep(for: .milliseconds(250)) }
-            try? await Task.sleep(for: .seconds(2))
-            await PerfReplay.play(file, into: session.id, workspace: workspace)
-            return
-        }
-        // KUVO_DEMO_DRAFT: a message typed, not sent, in the new session's composer.
-        if let draft = environment["KUVO_DEMO_DRAFT"] { Drafts.shared[SidebarView.draftTag(folder)].text = draft }
-        // KUVO_DEMO_DRAFT_FILES: comma-separated paths, attached there, not sent.
-        if let files = environment["KUVO_DEMO_DRAFT_FILES"] {
-            Drafts.shared[SidebarView.draftTag(folder)].files = files.split(separator: ",").map { URL(filePath: String($0)) }
-        }
-        guard let prompt = environment["KUVO_DEMO_PROMPT"] else { return newSession(in: folder) }
-        let parts = environment["KUVO_DEMO_MODEL"]?.split(separator: "/", maxSplits: 1).map(String.init)
-        let model = parts.flatMap { $0.count == 2 ? ModelRef(id: $0[1], providerID: $0[0]) : nil }
-        // Like a new session from the UI: the chosen model, or the default one. KUVO_DEMO_WORKTREE
-        // gives it a worktree of its own.
-        // A folder on a machine: once the machine is connected and its models are known.
-        if let engine = machine(for: folder) {
-            for _ in 0..<240 where !engine.isReady || engine.catalog.defaultModel == nil { try? await Task.sleep(for: .milliseconds(250)) }
-        }
-        let catalog = catalog(for: folder)
-        guard let session = try? await workspace.createSession(in: folder, model: model ?? catalog.defaultModel?.ref, agent: catalog.startingAgent(chosen: EngineConfig.of(catalog.machine)?.value(at: ["default_agent"])?.string), worktree: environment["KUVO_DEMO_WORKTREE"] != nil) else { return }
-        openTab(session.id)
-        // KUVO_DEMO_FILES: comma-separated paths to attach.
-        let files = environment["KUVO_DEMO_FILES"]?.split(separator: ",").map { URL(filePath: String($0)) } ?? []
-        // As the composer sends it: "/" runs a command, "!" a shell command.
-        workspace.model(for: session.id)?.submit(prompt, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: folder))
-        // KUVO_DEMO_QUEUE: messages separated by "|", queued once the agent is working.
-        guard let queue = environment["KUVO_DEMO_QUEUE"], let model = workspace.model(for: session.id) else { return }
-        for _ in 0..<40 where !model.isRunning { try? await Task.sleep(for: .milliseconds(250)) }
-        for message in queue.split(separator: "|") {
-            model.submit(String(message), files: [], for: catalog.model(session.model), queue: true, commands: catalog.commands(in: folder))
-        }
+    /// What the demo director may do here (KUVO_DEMO_*), as the window's own controls do it.
+    private var demoWindow: DemoWindow {
+        DemoWindow(
+            showsSidebar: { showsSidebar },
+            showSidebar: { showSidebar($0) },
+            showPalette: { showsPalette = true },
+            renameInView: { if let session = activeModel?.session { renaming = session } },
+            runProject: { runProject() },
+            newProject: { openProjectEditor(ProjectEditorRequest(project: nil, folders: $0)) }
+        )
     }
     #endif
 }

@@ -69,8 +69,7 @@ import Testing
         let imported = try #require(bridge.requests("POST", "/api/session/import").first)
         #expect((imported.body["messages"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["msg_01"])
         #expect(Workspace.isArchived(try #require(app.workspace.session(id))), "the engine's goes to Archived")
-        await app.workspace.swapEnding?.value
-        #expect(app.workspace.requestedTab == nil, "nothing opens on the Mac for a move from a phone")
+        #expect(app.tabs.keys.isEmpty, "nothing opens on the Mac for a move from a phone")
 
         // With them already: turned away.
         #expect(try await ask("kuvo/sessions/ses_phone_agent/agents", body: sonnet).status == 409)
