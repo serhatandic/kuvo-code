@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events",
+  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -2597,6 +2597,7 @@ export function listBots(machine, { memory = false } = {}) {
     if (!here) continue;
     const { folder, described, session, agents } = here;
     const { wakes, watches, paused } = readWakes(folder);
+    const job = jobOf(here);
     bots.push({
       created: String(described.created ?? ""),
       bot: {
@@ -2605,14 +2606,16 @@ export function listBots(machine, { memory = false } = {}) {
         name: described.name,
         look: described.look,
         machine: ON_MAC ? undefined : machine || undefined,
-        job: typeof described.job === "string" ? described.job : "",
+        job: job.line,
+        jobDetails: job.details,
         paused,
         wakes: wakes.length ? Math.min(...wakes.map(wake => wake.due)) : undefined,
         watching: watches.length,
         agents,
         personality: typeof described.personality === "string" ? described.personality : undefined,
         model: isModel(described.model) ? described.model : undefined,
-        memoryJob: memory && !ON_MAC ? memoryJob(folder) : undefined,
+        // What a Mac of an earlier version reads a machine's bots' jobs by.
+        memoryJob: memory && !ON_MAC ? { line: job.line, section: job.details } : undefined,
       },
     });
   }
@@ -2620,13 +2623,84 @@ export function listBots(machine, { memory = false } = {}) {
   return bots.sort((a, b) => a.created.localeCompare(b.created)).map(entry => entry.bot);
 }
 
-// A bot's job as its memory has it now: `{line, section}`, both empty for a memory without one;
-// undefined when its memory can't be read.
-function memoryJob(folder) {
-  const text = textOf(path.join(folder, "MEMORY.md"));
-  if (typeof text !== "string") return undefined;
-  const job = jobInMemory(text);
-  return { line: job?.line ?? "", section: job?.section ?? "" };
+// A bot's job, kept in its folder (`job.json`): `{line, details}`, what it does in a few words (what
+// shows under its name) and all of it, which the bot sets with its set_job tool and Edit Bot can
+// change (`PATCH kuvo/bots/<id>` with `job`). Its memory is its own to write as it likes.
+const JOB_FILE = "job.json";
+const MOST_JOB_LINE = 200, MOST_JOB_DETAILS = 8000;
+
+function readJob(folder) {
+  try {
+    const kept = JSON.parse(textOf(path.join(folder, JOB_FILE)) ?? "");
+    return isObject(kept) ? { line: typeof kept.line === "string" ? kept.line : "", details: typeof kept.details === "string" ? kept.details : "" } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeJob(here, job) {
+  const file = path.join(here.folder, JOB_FILE);
+  fs.writeFileSync(`${file}.new`, JSON.stringify({ line: job.line, details: job.details, updated: stamp() }, null, 2));
+  fs.renameSync(`${file}.new`, file);
+  // Its description says it in a few words too, for what reads only that (a Mac of an earlier version).
+  if ((here.described.job ?? "") !== job.line) {
+    const described = path.join(here.folder, "bot.json");
+    fs.writeFileSync(`${described}.new`, JSON.stringify({ ...here.described, job: job.line }, null, 2));
+    fs.renameSync(`${described}.new`, described);
+    here.described = { ...here.described, job: job.line };
+  }
+}
+
+// A bot's job. One from before bots kept it here is taken once from where it was: its memory's
+// Job section, as bots kept it, which stays in its memory as it is; or, without one, what Edit Bot
+// wrote before memories kept jobs (in the app's list, `bots.json`, for one of this Mac's; in its
+// description, for a machine's).
+function jobOf(here) {
+  const kept = readJob(here.folder);
+  if (kept) return kept;
+  const memory = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
+  // Without one in its memory, what its description said (a Mac kept a job Edit Bot gave it there).
+  let job = memory ? { line: memory.line, details: memory.section } : { line: plainName(here.described.job ?? ""), details: "" };
+  if (ON_MAC && !memory) {
+    const listed = macListed().find(each => each?.id === here.described.id);
+    if (listed && listed.jobInMemory !== true) job = { line: plainName(listed.job ?? ""), details: trimmed(String(listed.instructions ?? "")) };
+  }
+  // Not while it moves: its folder is the move's until it's there.
+  if (!isMoving(here.folder)) try { writeJob(here, job); } catch {}
+  return job;
+}
+
+// This Mac's app's list of its bots (`bots.json`, beside their folders), for a job from before:
+// read only for a bot whose job isn't kept yet, once each.
+function macListed() {
+  try {
+    const listed = JSON.parse(textOf(path.join(path.dirname(BOTS), "bots.json")) ?? "[]");
+    return Array.isArray(listed) ? listed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Every bot's job kept in its folder, for one from before (as the box starts): what reads a bot's
+// folder without asking the box (the coding agents' bridge, for group chats) finds it there.
+export function keepJobs() {
+  for (const id of listOf(BOTS)) {
+    const here = botHere(id);
+    if (here) jobOf(here);
+  }
+}
+
+// A job as a bot or Edit Bot gives it: its line on one line, as it shows under the bot's name
+// (Bots' `jobLine`), and its details as they are. An error's words for one that can't be.
+function givenJob(given) {
+  if (!isObject(given) || (given.line !== undefined && typeof given.line !== "string") || (given.details !== undefined && typeof given.details !== "string")) {
+    return { error: "A job is {line, details}: what it does in a few words, and the details." };
+  }
+  const line = jobLine(plainName(given.line ?? ""));
+  const details = trimmed(given.details ?? "");
+  if ([...line].length > MOST_JOB_LINE) return { error: "Say what it does in a few words: that line is too long." };
+  if ([...details].length > MOST_JOB_DETAILS) return { error: "That job is too long to keep: shorten its details." };
+  return { job: { line, details } };
 }
 
 // ---- Bots and group chats made here ----
@@ -2715,19 +2789,19 @@ async function call(target, method, route, body, signal, folder) {
 }
 
 // What a bot is told, from the kit's words with its own name, folder, personality and project,
-// and its job as its memory has it (`jobInMemory`), for one that has one.
+// and its job (`{line, section}`), for one that has one.
 export function botInstructions(kit, name, folder, personality, project, job) {
-  const working = Boolean(job?.section);
+  const working = Boolean(job?.section || job?.line);
   let text = (working ? kit.jobInstructions : kit.instructions).replaceAll("⟦name⟧", () => name).replaceAll("⟦folder⟧", () => folder);
   text = personality ? text.replace("⟦personality⟧", () => personality) : text.replace("\n⟦personality⟧\n", "");
   if (project) text = text.replace(`\n\n${kit.identityNote}`, () => `\n\n${kit.projectNote}\n\n${kit.identityNote}`);
-  if (working) text = text.replace(": ⟦job⟧", () => (job.line ? `: ${job.line}` : "")).replace("⟦jobDetails⟧", () => job.section);
+  if (working) text = text.replace(": ⟦job⟧", () => (job.line ? `: ${job.line}` : "")).replace("⟦jobDetails⟧", () => job.section || job.line);
   return text;
 }
 
-// A bot's job as its memory keeps it, as the Mac reads it (Bots.job(inMemory:), and the coding
-// agents' bridge's jobInMemory, all held to `Agents/test/box-vectors.json`): its line, what
-// shows under its name, and its section, all of it; null for a memory without one.
+// A bot's job as its memory kept it before bots kept it in a record (Bots.job(inMemory:), held to
+// `Agents/test/box-vectors.json`), for taking it from there once (`jobOf`): its line, what shows
+// under its name, and its section, all of it; null for a memory without one.
 const spaces = text => text.replace(/^[\p{Zs}\t]+|[\p{Zs}\t]+$/gu, "");
 const trimmed = text => text.replace(/^[\p{Z}\t\n\v\f\r\u0085]+|[\p{Z}\t\n\v\f\r\u0085]+$/gu, "");
 function headingLevel(line) {
@@ -2780,7 +2854,13 @@ export function jobInMemory(text) {
   let section = trimmed(all.slice(start + 1, end).join("\n"));
   const inline = jobInHeading(all[start]);
   if (inline && (inline.isColon || section.length === 0)) section = [inline.text, section].filter(part => part.length > 0).join("\n");
-  let line = section.split("\n").map(spaces).find(part => part.length > 0) ?? "";
+  return { line: jobLine(section.split("\n").map(spaces).find(part => part.length > 0) ?? ""), section };
+}
+
+// A job's line as it shows under a bot's name: no list mark, bold or "Job:", its first sentence when
+// it goes on, without the sentence's end ("Keeps the build green.").
+export function jobLine(text) {
+  let line = spaces(text);
   for (const mark of ["- ", "* ", "> "]) if (line.startsWith(mark)) line = line.slice(mark.length);
   line = line.replaceAll("**", "").replaceAll("__", "");
   if (line.toLowerCase().startsWith("job:")) line = line.slice(4);
@@ -2788,7 +2868,7 @@ export function jobInMemory(text) {
   // Long: its first sentence. (In characters as Swift counts them, what you'd see.)
   if ([...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(line)].length > 48 && line.includes(". ")) line = line.slice(0, line.indexOf(". "));
   if (line.endsWith(".") && !line.endsWith("..")) line = line.slice(0, -1);
-  return { line, section };
+  return line;
 }
 
 // A bot's job as the first message to it, for your composer (BotTemplate.firstMessage): what it does
@@ -2798,7 +2878,7 @@ export function firstMessageOf(line, details) {
   const job = trimmed(String(line ?? ""));
   let rest = trimmed(String(details ?? ""));
   const lines = rest.split("\n");
-  const lineOf = text => jobInMemory(`## Job\n${text}`)?.line;
+  const lineOf = text => jobLine(text);
   if (job && lines.length && lineOf(lines[0]) === job) {
     // Only the job's sentence: a line that goes on after it (its details) keeps the rest.
     const first = lines[0];
@@ -2938,7 +3018,8 @@ function noteTold(folder, changes) {
 // and its job as its memory has it.
 function toldNow(kit, here, described = here.described) {
   const personality = botPersonalities(kit).find(each => each.id === described.personality)?.instruction;
-  return botInstructions(kit, described.name, here.folder, personality, described.project, jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? ""));
+  const job = jobOf(here);
+  return botInstructions(kit, described.name, here.folder, personality, described.project, { line: job.line, section: job.details });
 }
 
 // Tells a bot's conversation (on `target`) `text`, and notes it. Whether it got there.
@@ -2983,26 +3064,6 @@ async function repairRules(target, here, sessionID) {
   const repaired = [...rules.filter(rule => !old(rule)), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
-}
-
-// A bot's run ended: its job as its memory has it now, in its description and what it's told, as
-// a Mac does when one of its own bots' runs ends (Bots.syncJob). `target` runs its conversation
-// (the engine, or the coding agents' bridge).
-export async function refreshBotJob(target, sessionID) {
-  const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
-  const kit = readKit();
-  if (!here || !kit || isMoving(here.folder)) return;
-  const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
-  if ((job?.line ?? "") !== (here.described.job ?? "")) {
-    // (Not an edit of its description's: a Mac takes its job from its memory too.)
-    const file = path.join(here.folder, "bot.json");
-    fs.writeFileSync(`${file}.new`, JSON.stringify({ ...here.described, job: job?.line ?? "" }, null, 2));
-    fs.renameSync(`${file}.new`, file);
-  }
-  const told = toldNow(kit, here);
-  const kept = toldOf(here.folder);
-  if (kept.session === sessionID && kept.instructions === toldDigest(told)) return;
-  await tellBot(target, here, sessionID, told);
 }
 
 // Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
@@ -3141,6 +3202,12 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
     else if (personalities.some(each => each.id === given.personality)) changed.personality = given.personality;
     else return no(400, `There’s no personality “${given.personality}”.`);
   }
+  let job;
+  if ("job" in given) {
+    const checked = givenJob(given.job);
+    if (checked.error) return no(400, checked.error);
+    job = checked.job;
+  }
   if ("model" in given) {
     if (!isModel(given.model)) return no(400, "That isn’t a model.");
     const model = { id: given.model.id, providerID: given.model.providerID, ...(typeof given.model.variant === "string" ? { variant: given.model.variant } : {}) };
@@ -3173,15 +3240,23 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   } catch {}
   if (!target) return no(503, here.agents ? "The coding agents aren’t running on this machine." : "The engine isn’t running.");
   const renamed = changed.name !== described.name;
-  const retold = renamed || changed.personality !== described.personality;
+  const was = jobOf(here);
+  const newJob = job !== undefined && (job.line !== was.line || job.details !== was.details);
+  const retold = renamed || changed.personality !== described.personality || newJob;
   const switched = !sameModel(changed.model, described.model);
   const looks = ["color", "shape", "face"].some(part => changed.look?.[part] !== described.look?.[part]);
   if (retold || switched || looks) {
-    changed.updated = stamp();
+    // (Its job isn't an edit of its description's: the bot keeps it, and Edit Bot can too.)
+    if (renamed || switched || looks || changed.personality !== described.personality) changed.updated = stamp();
     try {
+      if (newJob) {
+        writeJob(here, job);
+        changed.job = job.line;
+      }
       const file = path.join(here.folder, "bot.json");
       fs.writeFileSync(`${file}.new`, JSON.stringify(changed, null, 2));
       fs.renameSync(`${file}.new`, file);
+      here.described = changed;
     } catch (error) {
       return no(503, `The bot couldn’t be changed: ${error?.message ?? error}`);
     }
@@ -3870,7 +3945,6 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
         // its run ends.
         // A bot's run starting: what it's told brought up to date first.
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
-        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
         if (bots) continue;
         if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
@@ -6874,6 +6948,8 @@ async function run() {
   // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
   // work then): nothing reads them now.
   for (const folder of ["present", "connected"]) fs.rmSync(path.join(RUN, folder), { recursive: true, force: true });
+  // Its bots' jobs kept in their folders, taken once from where they were before.
+  try { keepJobs(); } catch {}
   // Its bots' folders' settings, as its integrations are now (after an update, say).
   try { refreshBotsKeys(); } catch {}
   // A link from an earlier bridge: its signing key made, and kept as this one keeps it.
@@ -7173,6 +7249,9 @@ async function serve() {
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
+  // Its bots' jobs kept in their folders, taken once from where they were before, once its app
+  // makes them this box's (it gives the box its kit then).
+  if (readKit()) try { keepJobs(); } catch {}
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents.
   watchEvents(readEngineFile, () => true, undefined, () => {}, { bots: true });
   watchEvents(readBridgeFile, () => true, undefined, () => {}, { bots: true });

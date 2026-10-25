@@ -25,10 +25,10 @@
         },
         {
           "send": "GET kuvo/bots?memory=1",
-          "why": "A Mac reads a machine's bots' jobs from their memory there (?memory=1, as it connects); it reads its own itself, so it leaves memoryJob out.",
+          "why": "A Mac of an earlier version reads a machine's bots' jobs as `memoryJob` (?memory=1, as it connects), from their record there; no Mac reads that of a Mac, so a Mac leaves it out.",
           "expect": {
             "mac": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": "<absent>" } ] } },
-            "machine": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": { "line": "", "section": "" } } ] } }
+            "machine": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": { "line": "Watches the build", "section": "" } } ] } }
           }
         }
       ]

@@ -28,9 +28,9 @@
             } } },
             "machine": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees", "worktrees.events",
-                "engine.start", "update", "wakes.events", "bots.events"],
+                "engine.start", "update", "wakes.events", "bots.events", "bots.job"],
               "<excludes>": ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 38
+              "<length>": 39
             } } }
           }
         }

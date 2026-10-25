@@ -258,3 +258,26 @@ test("a bot made from a shared one's job waits with it for your composer; one wi
   assert.equal(plain.json.firstMessage, null);
   assert.ok(fake.asked.some(each => each.url === `/api/session/${plain.json.bot.session}/synthetic`), "it writes first");
 });
+
+test("this Mac's bots' jobs are kept once from where they were: a memory's Job section, or what Edit Bot wrote before memories kept jobs", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  t.after(() => fs.rmSync(path.join(support, "bots.json"), { force: true }));
+  const remembers = bot("bot_remember01", { name: "Remembers" });
+  const memory = "# Remembers's memory\n\n## Job\nKeeps CI green.\nFix flaky tests.\n";
+  write(path.join(remembers, "MEMORY.md"), memory);
+  bot("bot_olderone01", { name: "Older" });
+  bot("bot_nothing001", { name: "Nothing" });
+  // The app's list, as a version before memories kept jobs left it.
+  write(path.join(support, "bots.json"), JSON.stringify([
+    { id: "bot_olderone01", name: "Older", job: "Sends the digest", instructions: "Every morning at 8.", jobInMemory: false },
+    { id: "bot_nothing001", name: "Nothing", job: "", instructions: "", jobInMemory: true },
+  ]));
+  const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
+  const byName = Object.fromEntries((await ask(handle, "GET", "kuvo/bots")).json.bots.map(each => [each.name, [each.job, each.jobDetails]]));
+  assert.deepEqual(byName, { Remembers: ["Keeps CI green", "Keeps CI green.\nFix flaky tests."], Older: ["Sends the digest", "Every morning at 8."], Nothing: ["", ""] });
+  assert.equal(fs.readFileSync(path.join(remembers, "MEMORY.md"), "utf8"), memory, "its memory stays as it was");
+  // Kept: the app's old list no longer counts.
+  fs.rmSync(path.join(support, "bots.json"));
+  assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.find(each => each.name === "Older").job, "Sends the digest");
+});

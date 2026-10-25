@@ -932,7 +932,8 @@ host serves:
   `409 {"message"}` on a machine never started from a Mac, as restart does. There's no stop: a
   machine's engine keeps running.
 - `kuvo/bots`: bots by their session, with their `id` (`bot_…`, as group chats name their
-  members), their name, look and job, whether their wake-ups are paused, the next one (`wakes`,
+  members), their name, look and job (`job`, what it does in a few words, shown under its name, and
+  `jobDetails`, all of it), whether their wake-ups are paused, the next one (`wakes`,
   left out when none waits), how many things each watches, `machine` (the machine it lives on,
   left out for the Mac), and `agents`: its conversation is with the coding agents, so it's read
   and written through `kuvo/agents/api/…` (a group chat's members carry the same flag).
@@ -941,11 +942,13 @@ host serves:
   lists the bots that live on that machine, as their folders are now, with the Mac closed too:
   their name, look and job as the Mac last wrote them there (`bot.json`, which the Mac writes
   when they change and each time it connects, and the bridge when a phone changes them; one it
-  hasn't written yet isn't listed). The bridge also reads a bot's job from its memory as each of
-  its runs ends, as a Mac does for its own, and tells its conversation when it changed, whether a
-  Mac is connected or not. `?memory=1` adds `memoryJob`, the job as its memory has it now:
-  `{line, section}` (both `""` for a memory without one; left out when its memory can't be read),
-  which a Mac takes for its copy of the machine's bots. For a machine's bot, its machine's list is
+  hasn't written yet isn't listed). A bot's job is its box's record of it (`job.json` in its
+  folder), which the bot keeps with its set_job tool (`{summary, details}`, through `PATCH
+  kuvo/bots/<id>` with `job`) and Edit Bot can change; its memory is its own to write as it likes.
+  A job from before that is taken once from where it was: the Job section of its memory (left
+  there as it is), or else what Edit Bot wrote before memories kept jobs. `?memory=1` adds
+  `memoryJob` (`{line, section}`, the same job), for a Mac of 0.8.0-beta.1 or earlier, which takes
+  a machine's bots' jobs from it. For a machine's bot, its machine's list is
   the newer while it answers. `GET kuvo/bots/events` follows the list (`application/x-ndjson`): the
   list now, then again each time it changes (`bots.events` in `features`). A box keeps each of its
   bots told what it is (its instructions): at once when it's made or changed, and otherwise as its
@@ -970,8 +973,10 @@ host serves:
   it: a `machine` there answers 400 `{"message"}`; one for a machine is made on that machine's box. Errors are `{"message"}`: 400 for a missing name or an unknown
   template, personality, machine or project; 409 while its machine isn't connected; 422 for a
   model that can't run there (its account isn't signed in there); 503 when it couldn't be made.
-- `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model}` changes a bot as Edit Bot
-  does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`):
+- `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model, job}` changes a bot as Edit
+  Bot does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`,
+  `job` as `{line, details}`, the whole job, which replaces the one it had: its line on one line,
+  without a sentence's end; both `""` for none; 400 for one too long):
   `200 {"bot": <as kuvo/bots lists one>}`, after a coding agent's model for a bot on the engine
   has moved its conversation to them (its `session` is the new one, `agents` true; if the move
   can't happen yet, its machine away, the model is kept and it moves once it can). Errors are `{"message"}`: 400 for an empty name, or a
@@ -1160,6 +1165,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `attention` | `kuvo/attention` |
 | `bots` | `kuvo/bots` |
 | `bots.events` | `kuvo/bots/events` |
+| `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
