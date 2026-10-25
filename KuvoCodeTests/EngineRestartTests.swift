@@ -15,11 +15,13 @@ import Testing
     var crashFile: String { folder.appending(path: "crash").path(percentEncoded: false) }
 
     /// Says where it answers (the stub), then runs until told to stop, and says why as it does.
-    private func fakeEngine() throws -> URL {
+    /// `box`: this Mac's box runs as it does with the engine's Bun, with Node (`TestBox.node`).
+    private func fakeEngine(box node: URL? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let box = node.map { "case \"$2\" in *kuvo-link.js) shift; exec '\($0.path(percentEncoded: false))' \"$@\";; esac\n" } ?? ""
         let script = """
             #!/bin/sh
-            # The coding agents' bridge, which runs with the engine's Bun: none here.
+            \(box)# The coding agents' bridge, which runs with the engine's Bun: none here.
             [ "$1" = "run" ] && exit 1
             echo '{"url":"\(engine.url)"}'
             while [ ! -e '\(crashFile)' ]; do sleep 0.05; done
@@ -76,5 +78,32 @@ import Testing
         #expect(reason.contains("the database disk image is malformed"), "with what the engine wrote: \(reason)")
         #expect(starts <= 4, "not started over for ever: \(starts) starts")
         #expect(!FileManager.default.fileExists(atPath: crashFile))
+    }
+
+    /// This Mac's box, as the app starts it before its engine: able to send this Mac's wake-ups
+    /// (the app's own kuvo-wake) and to reach your Keychain through the app, which it's told keeps
+    /// its keys. Started without them, its wake-ups never went, and bots' keys went to files of its
+    /// own. It starts the first time, as it does with the engine's Bun, so what it's started with
+    /// is what it runs with.
+    @Test func thisMacsBoxStartsAbleToSendWakeUpsAndReachYourKeychain() async throws {
+        let binary = try fakeEngine(box: try #require(TestBox.node, "Node runs this Mac's box in the tests"))
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let app = AppModel()
+        defer {
+            app.stop()
+            app.host.stop()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([])
+        await app.start()
+        #expect(app.box.endpoint != nil, "it's running")
+        let started = try #require(app.box.environment, "the box was started")
+        #expect(started["KUVO_WAKE_COMMAND"] == WakeUps.command.path)
+        #expect(started["KUVO_KEYS_ON_HOST"] == "1")
+        #expect(started["KUVO_HOST_URL"]?.hasPrefix("http://127.0.0.1:") == true)
+        #expect(started["KUVO_HOST_PASSWORD"] != nil)
     }
 }
