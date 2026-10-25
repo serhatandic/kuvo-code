@@ -2,7 +2,7 @@
 // keeps them (KUVO_BOTS, KUVO_WAKES, the app's own kuvo-wake), not in its own folder, and a client
 // follows them as they change, from the box or from kuvo-wake firing beside it. Watches are made as
 // an agent makes them, and kuvo-wake's own refusals come back as they're said. The engine is a
-// stand-in; kuvo-wake is the real one.
+// stand-in, and so is the system's word that a folder changed (below); kuvo-wake is the real one.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -17,6 +17,19 @@ process.env.KUVO_HOME = path.join(support, "box");
 process.env.KUVO_BOTS = path.join(support, "bots");
 process.env.KUVO_WAKES = path.join(support, "wakes");
 process.env.KUVO_WAKE_COMMAND = path.join(support, "bin", "kuvo-wake");
+
+// The system tells the box's folder watches of a change when it gets to it: on a busy Mac, FSEvents
+// tells them late or not at all (the box looks again for those, each half minute and each minute).
+// So the watches here hear of each change as a test makes it, only in a folder the box watches.
+const watches = new Set();
+fs.watch = (folder, options, listener) => {
+  const watch = { folder, listener, on: () => watch, close: () => watches.delete(watch) };
+  watches.add(watch);
+  return watch;
+};
+const changedOnDisk = file => {
+  for (const { folder, listener } of [...watches]) if (file.startsWith(folder + path.sep)) listener("rename", path.relative(folder, file));
+};
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
@@ -110,7 +123,10 @@ test("a client follows them: whole notes, each change from the box at once, and 
 
     // kuvo-wake firing one: the file goes, outside the box.
     const folder = path.join(support, "bots", "bot_ada", "wakes");
-    for (const name of fs.readdirSync(folder)) fs.rmSync(path.join(folder, name));
+    for (const name of fs.readdirSync(folder)) {
+      fs.rmSync(path.join(folder, name));
+      changedOnDisk(path.join(folder, name));
+    }
     await followed.until(line => !line.sessions.some(each => each.session === "ses_ada"));
   } finally {
     followed.stop();
@@ -165,19 +181,25 @@ test("a client that archived a conversation holds its wake-ups through the box, 
   assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "paused");
 });
 
-test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", { timeout: 20_000 }, async () => {
+test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", async t => {
+  // The box's timers on a clock of the test's: the minute can't pass unless the test moves it.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const folder = path.join(support, "wakes", "ses_due");
   const stop = link.sendWakes();
+  const before = prompted.length;
   try {
     // The box has nothing due (its timer is a minute out) when the agent adds one for now.
-    const before = prompted.length;
-    const sent = new Promise(resolve => { heard = () => prompted.length > before && resolve(); });
-    fs.writeFileSync(path.join(folder, "wakes", `${Math.floor(Date.now() / 1000)}-mnopqr`), "Read the release notes");
-    await sent;
-    assert.equal(prompted.at(-1).text, "[Wake-up] Read the release notes");
+    const file = path.join(folder, "wakes", `${Math.floor(Date.now() / 1000)}-mnopqr`);
+    fs.writeFileSync(file, "Read the release notes");
+    changedOnDisk(file);
+    // The folders settle, then it goes at its time (a second at most from now), well short of the minute.
+    t.mock.timers.tick(200);
+    t.mock.timers.tick(1_000);
   } finally {
-    stop();
+    // Once the run that started is over.
+    await stop();
   }
+  assert.deepEqual(prompted.slice(before).map(each => each.text), ["[Wake-up] Read the release notes"]);
 });
 
 test("archiving a conversation that's moving to another computer waits for the move", async () => {
