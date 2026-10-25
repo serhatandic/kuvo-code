@@ -30,6 +30,23 @@ struct HeldChat {
     var messages: JSONValue
 }
 
+/// What a chat says now, for the window: one object a chat, so what one of them says redraws only
+/// what shows that chat.
+@MainActor @Observable
+final class GroupLive {
+    var messages: [GroupMessage] = []
+    var speaking: String?
+    var discussing = false
+    var paused = false
+    /// What the bot talking is doing (see `GroupActivity`).
+    var activity: [GroupActivity] = []
+}
+
+/// A bridge event's `data`.
+private struct EventData<Value: Decodable>: Decodable {
+    var data: Value
+}
+
 /// One computer's group chats, as a move sees them (`GroupHome`), through `BoxGroups`: a machine's,
 /// or this Mac's (`machine` nil). The same steps either way.
 @MainActor
@@ -80,19 +97,25 @@ final class BoxGroups {
     /// window reads them for every row of every frame.
     @ObservationIgnored private(set) var shown: [Chat] = []
     @ObservationIgnored private var byID: [String: Chat] = [:]
-    /// The chats as the window lists them, and where each lives (a machine; none for this Mac):
-    /// changed only when one of them does, not with who's talking.
-    private(set) var groups: [BotGroup] = []
-    private var groupsByID: [String: BotGroup] = [:]
+    /// The chats as the window lists them: the window hears of a change only when something it
+    /// shows of one changes, not with each turn's bookkeeping (who heard what, a bot's seat),
+    /// which comes with nearly every word a chat's computer says of it.
+    var groups: [BotGroup] {
+        access(keyPath: \.groups)
+        return listed
+    }
+    @ObservationIgnored private var listed: [BotGroup] = []
+    @ObservationIgnored private var groupsByID: [String: BotGroup] = [:]
+    /// Where each lives (a machine; none for this Mac).
     private var machines: [String: String] = [:]
-    private(set) var speaking: [String: String] = [:]
-    private(set) var discussing: Set<String> = []
-    private(set) var paused: Set<String> = []
-    private var logs: [String: [GroupMessage]] = [:]
+    /// Each chat's messages as kept, by ID (one read whole has an entry, even empty); the window
+    /// reads them from each chat's `GroupLive`.
+    @ObservationIgnored private var logs: [String: [GroupMessage]] = [:]
+    /// What each chat says now, for the window, one object a chat: what one of them says redraws
+    /// only what shows that chat (its conversation, its row, its tab), not every chat's.
+    @ObservationIgnored private var live: [String: GroupLive] = [:]
     /// Machines whose bridge runs group chats (an older one doesn't yet).
     private(set) var running: Set<String> = []
-    /// What the bot talking is doing, by chat, as its computer last said (see `GroupActivity`).
-    private(set) var activity: [String: [GroupActivity]] = [:]
     @ObservationIgnored weak var app: AppModel?
     /// The settings each computer was last given, so they go again only when they change.
     @ObservationIgnored private var settingsGiven: [String: Data] = [:]
@@ -120,7 +143,7 @@ final class BoxGroups {
             chat.speaking = nil
             return chat
         }
-        for id in Set(chats.map(\.group.id)) { logs[id] = JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(id).json"), isoDates: true) ?? [] }
+        for id in Set(chats.map(\.group.id)) { setLog(id, JSONFile.read([GroupMessage].self, from: Self.folder.appending(path: "\(id).json"), isoDates: true) ?? []) }
         // (An observer doesn't run for what's set in `init`.)
         reindex()
     }
@@ -169,23 +192,96 @@ final class BoxGroups {
         let shown = order.compactMap { byID[$0] }
         self.shown = shown
         let groups = shown.map(\.group)
-        if groups != self.groups {
-            self.groups = groups
-            groupsByID = Dictionary(groups.map { ($0.id, $0) }) { first, _ in first }
+        if groups != listed {
+            let news = !Self.sameAsShown(groups, listed)
+            let byID = Dictionary(groups.map { ($0.id, $0) }) { first, _ in first }
+            if news {
+                withMutation(keyPath: \.groups) {
+                    listed = groups
+                    groupsByID = byID
+                }
+            } else {
+                listed = groups
+                groupsByID = byID
+            }
         }
         let machines = Dictionary(shown.compactMap { chat in chat.machine.map { (chat.group.id, $0) } }) { first, _ in first }
         if machines != self.machines { self.machines = machines }
-        let speaking = Dictionary(shown.compactMap { chat in chat.speaking.map { (chat.group.id, $0) } }) { first, _ in first }
-        if speaking != self.speaking { self.speaking = speaking }
-        let discussing = Set(shown.filter(\.discussing).map(\.group.id))
-        if discussing != self.discussing { self.discussing = discussing }
-        let paused = Set(shown.filter(\.paused).map(\.group.id))
-        if paused != self.paused { self.paused = paused }
+        // Each chat's own: who's talking, whether it's talking it over or paused. (A chat not
+        // shown any more says none.)
+        for id in Set(live.keys).union(byID.keys) {
+            let chat = byID[id]
+            let live = live(id)
+            if live.speaking != chat?.speaking { live.speaking = chat?.speaking }
+            if live.discussing != (chat?.discussing ?? false) { live.discussing = chat?.discussing ?? false }
+            if live.paused != (chat?.paused ?? false) { live.paused = chat?.paused ?? false }
+        }
     }
-    func group(_ id: String?) -> BotGroup? { id.flatMap { groupsByID[$0] } }
+
+    /// The same as the window shows them: what differs is only a turn's bookkeeping, which no
+    /// view shows (what each bot heard last, its seat, what it was told to set aside).
+    private static func sameAsShown(_ a: [BotGroup], _ b: [BotGroup]) -> Bool {
+        guard a.count == b.count else { return false }
+        func shown(_ group: BotGroup) -> BotGroup {
+            var group = group
+            group.seats = [:]
+            group.heard = [:]
+            group.agentSeats = nil
+            group.retracted = nil
+            return group
+        }
+        return zip(a, b).allSatisfy { shown($0) == shown($1) }
+    }
+
+    /// A chat's own, made the first time it's asked for (a view can follow one before its
+    /// computer says anything of it). Never let go of: a view following it hears it come back.
+    private func live(_ id: String) -> GroupLive {
+        if let kept = live[id] { return kept }
+        let made = GroupLive()
+        live[id] = made
+        return made
+    }
+
+    /// A chat's messages as kept (nil: none read, as for one gone), and as the window shows them.
+    private func setLog(_ id: String, _ messages: [GroupMessage]?) {
+        logs[id] = messages
+        let live = live(id)
+        if live.messages != messages ?? [] { live.messages = messages ?? [] }
+    }
+
+    /// What the bot talking in a chat is doing, as its computer last said (see `GroupActivity`).
+    private func setActivity(_ id: String, _ activity: [GroupActivity]) {
+        let live = live(id)
+        if live.activity != activity { live.activity = activity }
+    }
+
+    func group(_ id: String?) -> BotGroup? {
+        access(keyPath: \.groups)
+        return id.flatMap { groupsByID[$0] }
+    }
     /// The machine a chat lives on; nil for this Mac's (and for none).
     func machine(of id: String?) -> String? { id.flatMap { machines[$0] } }
-    func messages(in id: String) -> [GroupMessage] { logs[id] ?? [] }
+    /// A chat's messages: whoever reads them hears of that chat's alone.
+    func messages(in id: String) -> [GroupMessage] { live(id).messages }
+    /// Who's talking in a chat, its talk under way, Keep Going waiting, what the one talking is
+    /// doing: each heard of for that chat alone.
+    func speaker(in id: String) -> String? { live(id).speaking }
+    func isDiscussing(_ id: String) -> Bool { live(id).discussing }
+    func isPaused(_ id: String) -> Bool { live(id).paused }
+    func activity(in id: String) -> [GroupActivity] { live(id).activity }
+    /// Every chat's, for what asks of them all (whoever reads one of these hears of every chat).
+    var speaking: [String: String] {
+        access(keyPath: \.groups)
+        return Dictionary(uniqueKeysWithValues: live.compactMap { id, live in live.speaking.map { (id, $0) } })
+    }
+    var discussing: Set<String> {
+        access(keyPath: \.groups)
+        return Set(live.filter(\.value.discussing).keys)
+    }
+    var paused: Set<String> {
+        access(keyPath: \.groups)
+        return Set(live.filter(\.value.paused).keys)
+    }
     func group(seat: String) -> BotGroup? { chats.first { $0.group.seats.values.contains(seat) }?.group }
 
     var seatIDs: Set<String> { Set(chats.flatMap(\.group.seats.values)) }
@@ -297,7 +393,7 @@ final class BoxGroups {
         for index in chats.indices where chats[index].machine == machine {
             chats[index].discussing = false
             chats[index].speaking = nil
-            activity[chats[index].group.id] = nil
+            setActivity(chats[index].group.id, [])
         }
         settingsGiven[Self.key(machine)] = nil
     }
@@ -319,7 +415,7 @@ final class BoxGroups {
                 touchedWhileListing[key]?.insert(updated.id)
                 apply(updated.group, held: updated.status == "held", state: updated.state, on: machine)
                 let now = updated.state.speaking == nil ? [] : updated.state.activity ?? []
-                if activity[updated.id] ?? [] != now { activity[updated.id] = now.isEmpty ? nil : now }
+                setActivity(updated.id, now)
                 noteSeats(Set(updated.group.seats.values), agents: Set(updated.group.agentSeats ?? []))
             case "kuvo.group.message":
                 let changed = try decoded(event, as: Message.self)
@@ -327,7 +423,7 @@ final class BoxGroups {
                 arriving[changed.id]?.append(changed.message)
                 var messages = logs[changed.id] ?? []
                 if let index = messages.firstIndex(where: { $0.id == changed.message.id }) { messages[index] = changed.message } else { messages.append(changed.message) }
-                logs[changed.id] = messages
+                setLog(changed.id, messages)
                 saveLog(changed.id)
             case "kuvo.group.reset":
                 let id = try decoded(event, as: Named.self).id
@@ -408,11 +504,16 @@ final class BoxGroups {
     /// A time as a box says it: whole seconds.
     private static func seconds(_ date: Date) -> TimeInterval { date.timeIntervalSince1970.rounded(.down) }
 
+    /// An event's `data`, read once from the event as it came.
     private func decoded<Value: Decodable>(_ event: ServerEvent, as type: Value.Type) throws -> Value {
+        try Self.eventDecoder.decode(EventData<Value>.self, from: event.raw).data
+    }
+
+    private static let eventDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(type, from: JSONEncoder().encode(event.data))
-    }
+        return decoder
+    }()
 
     private func apply(_ group: BotGroup, held: Bool, state: State, on machine: String?) {
         var group = group
@@ -432,7 +533,7 @@ final class BoxGroups {
             chats[index] = chat
         } else {
             chats.append(chat)
-            if logs[group.id] == nil { logs[group.id] = [] }
+            if logs[group.id] == nil { setLog(group.id, []) }
         }
         save()
     }
@@ -459,7 +560,7 @@ final class BoxGroups {
         for message in arriving[id] ?? [] {
             if let index = messages.firstIndex(where: { $0.id == message.id }) { messages[index] = message } else { messages.append(message) }
         }
-        logs[id] = messages
+        setLog(id, messages)
         saveLog(id)
     }
 
@@ -468,9 +569,9 @@ final class BoxGroups {
         chats.removeAll { $0.group.id == id && $0.machine == machine }
         save()
         guard !has(id) else { return }
-        logs[id] = nil
+        setLog(id, nil)
         savingLogs.removeValue(forKey: id)?.cancel()
-        activity[id] = nil
+        setActivity(id, [])
         try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).json"))
     }
 
@@ -510,7 +611,7 @@ final class BoxGroups {
         let message = try await api.boxGroupAction(id, "send", ["text": .string(text)])
         Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": chat.machine == nil ? "mac" : "machine"])
         if let message = message.flatMap({ try? Self.message(from: $0) }), !(logs[id] ?? []).contains(where: { $0.id == message.id }) {
-            logs[id, default: []].append(message)
+            setLog(id, (logs[id] ?? []) + [message])
             saveLog(id)
         }
     }
@@ -620,7 +721,7 @@ final class BoxGroups {
         guard let group = try? Self.decode(BotGroup.self, from: held.group) else { return }
         apply(group, held: true, state: State(discussing: false, paused: false), on: machine)
         if logs[id]?.isEmpty != false, let messages = try? Self.decode([GroupMessage].self, from: held.messages) {
-            logs[id] = messages
+            setLog(id, messages)
             saveLog(id)
         }
     }

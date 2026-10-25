@@ -53,7 +53,7 @@ enum PerfGroups {
         // Until its talk is over: each bot's message as it reaches the chat, a frame after.
         let before = app.chats.messages(in: group.id).count
         while ContinuousClock.now - began < .seconds(600) {
-            await changed { _ = (app.chats.messages(in: group.id).count, app.chats.discussing.contains(group.id)) }
+            await changed { _ = (app.chats.messages(in: group.id).count, app.chats.isDiscussing(group.id)) }
             for message in app.chats.messages(in: group.id) where !seen.contains(message.id) {
                 seen.insert(message.id)
                 guard message.author != nil, message.kind != .note else { continue }
@@ -61,7 +61,7 @@ enum PerfGroups {
                 appeared.append(["at": (Date.now.timeIntervalSince1970 * 1000).rounded(), "text": String(message.text.prefix(80)), "kind": message.kind.rawValue])
             }
             // Over: nothing talking, and more than your question said since.
-            if !app.chats.discussing.contains(group.id), app.chats.messages(in: group.id).count > before + 1 { break }
+            if !app.chats.isDiscussing(group.id), app.chats.messages(in: group.id).count > before + 1 { break }
         }
         try? await Task.sleep(for: .seconds(1))
         let seconds = (ContinuousClock.now - began).components.seconds

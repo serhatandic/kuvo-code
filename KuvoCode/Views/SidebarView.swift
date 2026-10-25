@@ -1198,7 +1198,7 @@ private struct GroupRow: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        let speaker = groups.speaking[group.id].flatMap { bots.bot($0) }
+        let speaker = groups.speaker(in: group.id).flatMap { bots.bot($0) }
         let isUnread = groups.isUnread(group) && !isSelected
         let machine = groups.machine(of: group.id)
         FaceRow(title: group.name, isUnread: isUnread, isSelected: isSelected, action: action) {
@@ -1210,7 +1210,7 @@ private struct GroupRow: View {
                 ShimmerText(text: "Moving to \(destination.flatMap { place in app.machines.engine(place)?.machine.name ?? place } ?? "this Mac")…")
             } else if let speaker {
                 ShimmerText(text: "\(speaker.name) is thinking…")
-            } else if groups.discussing.contains(group.id) {
+            } else if groups.isDiscussing(group.id) {
                 ShimmerText(text: "Talking it over…")
             } else {
                 Text(lastLine)
