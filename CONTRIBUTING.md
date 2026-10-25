@@ -220,9 +220,10 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there.
 
 A demo copy left to run on its own must never show a macOS prompt, because nobody is
 there to answer it and the copy would wait for good. With `KUVO_DEMO_BACKGROUND`, or
-`KUVO_DEMO_NO_PROMPTS=1`, it asks nothing, as the test copy doesn't: no request to
-show notifications; Keychain reads and writes that would ask fail at once instead;
-Touch ID, Open at Login and the usage panel are skipped; and the engine leaves out
+`KUVO_DEMO_NO_PROMPTS=1`, it asks nothing, as the test copy doesn't: its notifications
+show only if macOS allowed them for its bundle ID before; Keychain reads and writes
+that would ask fail at once instead; Touch ID and Open at Login are skipped, and so is
+the usage panel unless `KUVO_DEMO_USAGE` names one of its screens; and the engine leaves out
 `~/.claude/skills`, where a link can lead into your Desktop. Each skip is in the log
 with where it was asked from (`log show --predicate 'subsystem == "run.kuvo.code" AND
 category == "prompts"'`). `KUVO_DEMO_NO_PROMPTS=0` lets a background copy ask after all,

@@ -410,6 +410,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         NSApp.dockTile.badgeLabel = Self.showsBadge && count > 0 ? "\(count)" : nil
     }
 
+    /// What macOS was told about this copy's notifications, without asking: nil when it never was.
+    nonisolated static func answered(_ status: UNAuthorizationStatus) -> Bool? {
+        switch status {
+        case .authorized, .provisional: true
+        case .denied: false
+        case .notDetermined: nil
+        default: nil
+        }
+    }
+
     /// Whether notifications may show. A yes is kept; a no is asked again each time (macOS shows
     /// its prompt once, and answers at once after), so turning them on in System Settings works
     /// without starting Kuvo Code again.
@@ -418,8 +428,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // The tests' copy never asks, nor posts: macOS would show its prompt for it, then the
         // tests' notifications.
         if AppInfo.isHostingTests { return false }
-        // Nor does a demo copy that never prompts.
-        guard AppInfo.mayPrompt("asking to show notifications") else { return false }
+        // A demo copy that never prompts goes by what macOS was told for it before, and asks
+        // only when it never was (the e2e copy, allowed once, keeps its banners).
+        if AppInfo.neverPrompts {
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            if let answer = Self.answered(status) {
+                if answer { isAuthorized = true }
+                return answer
+            }
+            _ = AppInfo.mayPrompt("asking to show notifications")
+            return false
+        }
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
         isAuthorized = granted
         return granted

@@ -242,11 +242,16 @@ final class AppModel {
 
     /// Puts the usage panel in the menu bar. It reads the engine's database for spend, so it
     /// starts with the app, not with the engine.
-    func startUsage() {
-        guard AppInfo.mayPrompt("the usage panel (it reads other apps' sign-ins from your Keychain)") else { return }
+    /// Whether it started (a copy that never prompts leaves it out, unless a demo asks for one of
+    /// its screens by name).
+    @discardableResult func startUsage() -> Bool {
+        if AppInfo.isHostingTests || AppInfo.demoUsageScreen(ProcessInfo.processInfo.environment) == nil {
+            guard AppInfo.mayPrompt("the usage panel (it reads other apps' sign-ins from your Keychain)") else { return false }
+        }
         usage.start(engineData: engineFolders.dataDirectory) { [weak self] in
             self?.openMainWindow?()
         }
+        return true
     }
 
     /// The engine this Mac runs (KUVO_OPENCODE_BINARY's, or the one installed), once it has started.

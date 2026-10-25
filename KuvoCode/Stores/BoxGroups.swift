@@ -245,8 +245,8 @@ final class BoxGroups {
     /// A chat's messages as kept (nil: none read, as for one gone), and as the window shows them.
     private func setLog(_ id: String, _ messages: [GroupMessage]?) {
         logs[id] = messages
-        let live = live(id)
-        if live.messages != messages ?? [] { live.messages = messages ?? [] }
+        // Set outright: a message event changes them, so comparing all of them first only costs.
+        live(id).messages = messages ?? []
     }
 
     /// What the bot talking in a chat is doing, as its computer last said (see `GroupActivity`).
@@ -302,6 +302,7 @@ final class BoxGroups {
     }
 
     func reach(_ id: String) -> Reach {
+        access(keyPath: \.groups)
         guard groupsByID[id] != nil else { return .ready }
         let machine = machines[id]
         if api(machine) != nil { return .ready }
