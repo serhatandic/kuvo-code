@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.46";
+export const BRIDGE_VERSION = "0.9.50";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -692,7 +692,9 @@ async function* forward(target, path, request, signal, allows) {
 // MARK: Integrations (PROTOCOL.md, "Integrations"), as the Mac's Settings › Integrations has them.
 
 const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
-const INTEGRATION_DATA = path.join(K, "integrations");
+// What integrations' servers keep (a sign-in), where the engine runs them with it (KUVO_INTEGRATIONS:
+// this Mac's in the app's own folder, a machine's in `integrations`).
+const INTEGRATION_DATA = process.env.KUVO_INTEGRATIONS || path.join(K, "integrations");
 // Bots' own keys (`answerBotKeys`), the box's own beside its shared ones: a start from a Mac
 // replaces what it sent in `keys`, and leaves `box` alone.
 const BOT_KEYS = path.join(K, "box", "bot-keys");
@@ -700,7 +702,8 @@ const BOT_KEYS = path.join(K, "box", "bot-keys");
 // MARK: Where keys are kept (PROTOCOL.md, "Host interface"): integrations' keys by their variable's
 // name (`KUVO_KEY_<ID>_<NAME>`, a bot's own `…__<BOT>`). A machine keeps them in files only you can
 // read (its shared ones in `box/keys`, its bots' own in `box/bot-keys`); this Mac's box asks its
-// app (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`), which keeps them in the Keychain.
+// app (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`), which keeps them in the Keychain and writes the files
+// its engine reads them from. What else only the app can tell (its browser's sign-ins) it asks there too.
 
 /** The only names the box ever asks for. */
 const STORED_KEY = /^KUVO_KEY_[A-Z0-9_]+$/;
@@ -710,7 +713,7 @@ class KeysUnavailable extends Error {}
 
 // Taken as the box starts, and its password out of its environment then, so nothing it runs (git,
 // kuvo-wake) has it.
-const KEY_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
+const APP_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
   ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
 // A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
@@ -719,8 +722,8 @@ delete process.env.KUVO_HOST_PASSWORD;
 
 /** The app that keeps this box's keys, or null for its files; this Mac's box without its app says so. */
 function keyHost() {
-  if (KEYS_ON_HOST && !KEY_HOST) throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
-  return KEY_HOST;
+  if (KEYS_ON_HOST && !APP_HOST) throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
+  return APP_HOST;
 }
 
 // Key work, one change at a time: on this Mac each key is a round trip to the app, and two changes
@@ -741,16 +744,16 @@ const checkedKeyName = name => {
 /** The file one is kept in on a machine: a bot's own beside the others, the shared ones in `box/keys`. */
 const keyFile = name => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS : BOX_KEYS, name);
 
-/** One of the app's host calls (`keys/<what>`): its answer's JSON, or null for a 404 when `missing` is fine. */
-async function askHost(host, what, body, missing = false) {
+/** One of the app's host calls (`keys/names`, `sites/signed-in`…): its answer's JSON, or null for a 404 when `missing` is fine. */
+async function askHost(host, call, body, missing = false) {
   let response;
   try {
-    response = await fetch(`${host.url}/keys/${what}`, {
+    response = await fetch(`${host.url}/${call}`, {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
       body: JSON.stringify(body),
       // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
-      signal: AbortSignal.timeout(what === "get" || what === "set" ? 120_000 : 15_000),
+      signal: AbortSignal.timeout(call === "keys/get" || call === "keys/set" ? 120_000 : 15_000),
     });
   } catch {
     throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
@@ -776,7 +779,7 @@ async function keyNames({ prefix = "", suffix = "" } = {}) {
   const host = keyHost();
   let names;
   if (host) {
-    const answer = await askHost(host, "names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
+    const answer = await askHost(host, "keys/names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
     // An answer without its list isn't "no keys" (a refresh would take every bot's servers away).
     if (!Array.isArray(answer.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
     names = answer.names;
@@ -791,7 +794,7 @@ async function readKey(name) {
   checkedKeyName(name);
   const host = keyHost();
   if (!host) return textOf(keyFile(name));
-  const answer = await askHost(host, "get", { name }, true);
+  const answer = await askHost(host, "keys/get", { name }, true);
   return typeof answer?.value === "string" ? answer.value : null;
 }
 
@@ -800,27 +803,48 @@ async function writeKey(name, value) {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
   const host = keyHost();
-  if (host) return void await askHost(host, "set", { name, value });
-  writePrivate(keyFile(name), value);
+  if (host) return void await askHost(host, "keys/set", { name, value });
+  // A shared one under the settings' lock, as a Mac making the machine's settings its own copies them.
+  if (name.includes("__")) writePrivate(keyFile(name), value);
+  else locked(CONFIG_LOCK, () => writePrivate(keyFile(name), value));
 }
 
 /** One key gone (nothing for one there wasn't). */
 async function deleteKey(name) {
   checkedKeyName(name);
   const host = keyHost();
-  if (host) return void await askHost(host, "delete", { name });
-  fs.rmSync(keyFile(name), { force: true });
+  if (host) return void await askHost(host, "keys/delete", { name });
+  if (name.includes("__")) fs.rmSync(keyFile(name), { force: true });
+  else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
 }
 
+/** Whether this Mac's browser is signed in to the sites the agent uses there, by integration, as its
+ * app reads their cookies; null where that can't be told (a machine's box, or its app not answering). */
+async function siteSignIns() {
+  if (!APP_HOST) return null;
+  try {
+    const answer = await askHost(APP_HOST, "sites/signed-in", {});
+    return isObject(answer?.sites) ? answer.sites : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The integrations this box offers, from the catalog its Mac leaves in `bin` (this Mac's app, as it
+ * starts its box): on a machine, not those that use a Mac's own apps. */
 function integrationCatalog(file = INTEGRATIONS_FILE) {
-  try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && !each.macOnly); } catch { return []; }
+  try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && (IS_MAC || !each.macOnly)); } catch { return []; }
 }
 
-/** How it's doing here, as the Mac's Integrations.health says it: `off`, turned off in MCP Servers. */
+/** How it's doing here, as Settings › Integrations says it: `off`, turned off in MCP Servers, so it
+ * won't start until it's turned on. Just turned on, while the engine still says it's off, it's
+ * starting. A server that signs in by itself with a code the first time it's used (Outlook's,
+ * `signInFile` in the catalog) waits for that code until its sign-in is there. */
 function integrationHealth(entry, server, off, signedIn) {
   if (off) return "disabled";
-  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed", disabled: "disabled" }[server?.status?.status] ?? "starting";
+  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
   if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
+  if (health === "connected" && typeof entry.signInFile === "string" && !fs.existsSync(path.join(INTEGRATION_DATA, entry.id, path.basename(entry.signInFile)))) health = "waitsForCode";
   return health;
 }
 
@@ -834,13 +858,22 @@ async function integrationEntries(catalog, engine, signal) {
     const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
     signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
   }
-  return catalog.map(({ settings: _, variables, ...entry }) => {
+  // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
+  let names = null;
+  try {
+    names = await keyNames();
+  } catch (error) {
+    if (!(error instanceof KeysUnavailable)) throw error;
+  }
+  const sites = catalog.some(entry => entry.way === "browser") ? await siteSignIns() : null;
+  return catalog.map(({ settings: _, variables, signInFile, ...entry }) => {
     const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
     const shown = { ...entry, added };
-    if (variables) shown.keysSaved = Object.values(variables).every(name => fs.existsSync(path.join(BOX_KEYS, name)));
+    if (variables && names) shown.keysSaved = Object.values(variables).every(name => names.includes(name));
+    if (entry.way === "browser" && typeof sites?.[entry.id] === "boolean") shown.siteSignedIn = sites[entry.id];
     if (added) {
       const server = (Array.isArray(servers) ? servers : []).find(each => each?.name === entry.id);
-      shown.health = integrationHealth(entry, server, valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true, signedIn);
+      shown.health = integrationHealth({ ...entry, signInFile }, server, valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true, signedIn);
       if (server?.integrationID) shown.signIn = server.integrationID;
     }
     return shown;
@@ -878,11 +911,27 @@ async function droppingBotsIntegration(entry) {
   for (const name of named) await deleteKey(name);
 }
 
+/** Whether this box keeps every one of `variables`. */
+async function keepsAll(variables) {
+  const kept = await keyNames();
+  return variables.every(variable => kept.includes(variable));
+}
+
 /** Runs `run` in `ms`, without keeping the bridge up for it. */
 const soon = (run, ms) => setTimeout(run, ms).unref?.();
 
-/** `kuvo/integrations…`, for this machine's own. `later` runs what waits a moment (a test's own). */
+/** `kuvo/integrations…`, for this box's own, its keys where it keeps them (a machine's files, this
+ * Mac's Keychain through its app). `later` runs what waits a moment (a test's own). */
 export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE, later = soon) {
+  try {
+    return await integrationsAnswer(method, requestPath, body, engine, signal, file, later);
+  } catch (error) {
+    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
+    throw error;
+  }
+}
+
+async function integrationsAnswer(method, requestPath, body, engine, signal, file, later) {
   const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return ""; } });
   const catalog = integrationCatalog(file);
   if (parts.length === 2) {
@@ -896,19 +945,22 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
   if (problem) return { status: 409, value: { message: `The engine's settings file can't be changed from here: ${problem}` } };
   const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
   if (method === "POST") {
-    if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on this machine.` } };
+    if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on ${IS_MAC ? "this Mac" : "this machine"}.` } };
     const variables = entry.variables ?? {};
     const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
     const names = Object.keys(variables);
+    if (!Object.values(variables).every(variable => typeof variable === "string" && STORED_KEY.test(variable))) {
+      return { status: 409, value: { message: `${entry.title} can't be added here: its keys aren't named as Kuvo Code names them.` } };
+    }
     let newKeys = false;
     if (names.length) {
       if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
-        for (const name of names) {
-          const saved = setBoxKey(variables[name], given[name].trim());
-          if (saved.status !== 200) return { status: saved.status, value: { message: saved.message } };
-        }
+        // All of them, one change at a time with any other key work here.
+        await keyWork(async () => {
+          for (const name of names) await writeKey(variables[name], given[name].trim());
+        });
         newKeys = true;
-      } else if (!names.every(name => fs.existsSync(path.join(BOX_KEYS, variables[name])))) {
+      } else if (!(await keepsAll(names.map(name => variables[name])))) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
       }
@@ -927,6 +979,14 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
   }
   if (method === "DELETE") {
     if (!added) return { status: 404, value: {} };
+    // Bots here with keys of their own for it stop using it first: where their keys can't be taken
+    // away, nothing goes, rather than leave a bot using an integration you removed.
+    try {
+      await dropBotsIntegration(entry);
+    } catch (error) {
+      if (!(error instanceof KeysUnavailable)) throw error;
+      return { status: 503, value: { message: `${entry.title} wasn't removed: its bots' own keys for it couldn't be taken away. ${error.message}` } };
+    }
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn;
     if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.(each => each?.name === entry.id)?.integrationID;
@@ -938,13 +998,15 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
         if (each?.integrationID === signIn) await call(engine, "DELETE", `/api/credential/${encodeURIComponent(each.id)}`, undefined, signal).catch(() => {});
       }
     }
-    for (const variable of Object.values(entry.variables ?? {})) setBoxKey(variable, null);
+    // What its server kept: its own folder (and the file it once kept).
     for (const name of [entry.id, `${entry.id}.json`]) fs.rmSync(path.join(INTEGRATION_DATA, name), { recursive: true, force: true });
     try {
-      await dropBotsIntegration(entry);
+      await keyWork(async () => {
+        for (const variable of Object.values(entry.variables ?? {})) if (STORED_KEY.test(variable)) await deleteKey(variable);
+      });
     } catch (error) {
       if (!(error instanceof KeysUnavailable)) throw error;
-      return { status: 503, value: { message: `${entry.title} is removed, but its bots' own keys for it are still kept. ${error.message}` } };
+      return { status: 503, value: { message: `${entry.title} is removed, but its key is still kept. ${error.message}` } };
     }
     return { status: 200, value: {} };
   }
@@ -1973,23 +2035,11 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       const adding = route.match(/^kuvo\/mcp\/catalog\/([^/]+)$/);
       if (adding && method === "POST") return yield* answered(addFromCatalog(decodeURIComponent(adding[1])));
-      if (route === "kuvo/keys") return yield* (method === "GET" ? json(200, { keys: boxKeyNames() }) : json(405, {}));
-      const key = route.match(/^kuvo\/keys\/([^/]+)$/);
-      if (key) {
-        let name = "";
-        try { name = decodeURIComponent(key[1]); } catch {}
-        if (!/^KUVO_KEY_[A-Za-z0-9_]+$/.test(name) || name.includes("__")) return yield* json(400, { message: "That isn't a key's name." });
-        if (method === "GET") {
-          const value = boxKey(name);
-          return yield* (value == null ? json(404, {}) : json(200, { value }));
-        }
-        if (method === "PUT") {
-          const value = parsed(request.body)?.value;
-          if (typeof value !== "string" || !value) return yield* json(400, { message: "Send {\"value\": \"…\"}." });
-          return yield* answered(setBoxKey(name, value));
-        }
-        if (method === "DELETE") return yield* answered(setBoxKey(name, null));
-        return yield* json(405, {});
+      // Its integrations' keys, where it keeps them (a machine's files, this Mac's Keychain through
+      // its app): a bot's own aren't among them.
+      if (route === "kuvo/keys" || route.startsWith("kuvo/keys/")) {
+        const { status, value } = await answerKeys(method, route, parsed(request.body));
+        return yield* json(status, value);
       }
       return yield* json(404, {});
     }
@@ -4532,17 +4582,36 @@ export function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
   locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
 }
 
-// The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).
-export function boxKeyNames(folder = BOX_KEYS) {
-  let names = [];
-  try { names = fs.readdirSync(folder); } catch {}
-  return names.filter(name => KEY_NAME.test(name) && !name.includes("__")).sort();
-}
-
-// One of them, as it's kept; null for one there isn't.
-export function boxKey(name, folder = BOX_KEYS) {
-  if (!KEY_NAME.test(String(name)) || String(name).includes("__")) return null;
-  try { return fs.readFileSync(path.join(folder, name), "utf8"); } catch { return null; }
+// `kuvo/keys…`: the box's integrations' keys, through its key store (`keyNames`, `readKey`…), a
+// bot's own not among them; where they can't be reached now (this Mac's app not answering), `503`.
+async function answerKeys(method, route, body) {
+  try {
+    if (route === "kuvo/keys") return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter(name => !name.includes("__")) } } : { status: 405, value: {} };
+    const parts = route.split("/");
+    let name = "";
+    try { name = parts.length === 3 ? decodeURIComponent(parts[2]) : ""; } catch {}
+    if (!STORED_KEY.test(name) || name.includes("__")) return { status: 400, value: { message: "That isn't a key's name." } };
+    switch (method) {
+      case "GET": {
+        const value = await readKey(name);
+        return value == null ? { status: 404, value: {} } : { status: 200, value: { value } };
+      }
+      case "PUT": {
+        const value = body?.value;
+        if (typeof value !== "string" || !value) return { status: 400, value: { message: "Send {\"value\": \"…\"}." } };
+        await keyWork(() => writeKey(name, value));
+        return { status: 200, value: {} };
+      }
+      case "DELETE":
+        await keyWork(() => deleteKey(name));
+        return { status: 200, value: {} };
+      default:
+        return { status: 405, value: {} };
+    }
+  } catch (error) {
+    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
+    throw error;
+  }
 }
 
 // A key of the box's own, set (`value`) or removed (null): integrations' servers read it there.

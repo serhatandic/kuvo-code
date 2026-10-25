@@ -765,18 +765,21 @@ host serves:
 - `kuvo/keys`: the computer's own integrations' keys (`KUVO_KEY_<INTEGRATION>_<NAME>`, as its
   settings name them; a bot's own aren't among them). `GET kuvo/keys` lists them, `{"keys":
   [name]}`; `GET kuvo/keys/<name>` answers `{"value"}` (404 for none, 400 for a name that
-  isn't a shared key's), `PUT` with `{"value"}` sets one and `DELETE` removes it. On a Mac they're
-  in its Keychain; on a machine in `~/.kuvo-code/box/keys` (`409 {"message"}` until its settings
+  isn't a shared key's), `PUT` with `{"value"}` sets one and `DELETE` removes it. This Mac's box
+  keeps them in its Keychain, through its app ("Host interface"; `503 {"message"}` while the app
+  can't be reached); a machine's in `~/.kuvo-code/box/keys` (`409 {"message"}` until its settings
   are its own).
   The engine reads one as it next reads its settings, so set the key before adding what names it
   (`kuvo/config`). An integration added on a machine names its keys
   `{file:~/.kuvo-code/box/keys/<name>}` there; on a Mac, `{file:<its keys' folder>/<name>}`.
   "Also Apply to…", from any client, is the same changes sent to each computer you pick
   (`kuvo/config/apply`), with the keys it names brought first from where you made them.
-- Integrations, as Settings › Integrations has them, each computer its own (a Mac for its own,
-  keys in its Keychain; a machine's bridge for the machine's, keys in
-  `~/.kuvo-code/box/keys`, from the catalog its Mac leaves in `bin/integrations.json`, with the
-  Mac closed too; `409 {"message"}` until its settings are its own).
+- Integrations, as Settings › Integrations has them, each computer's box its own (this Mac's,
+  keys in its Keychain through its app; a machine's, keys in `~/.kuvo-code/box/keys`, with the Mac
+  closed too; `409 {"message"}` until its settings are its own), from the catalog a Mac leaves in
+  the box's `bin/integrations.json` (this Mac's app in its own box's as it starts it, with the ones
+  that use its own apps). Where its keys can't be reached now (this Mac's app not answering),
+  `503 {"message"}`.
   - `GET kuvo/integrations` → `{"integrations": [{id, title, summary, kind, symbol, site, how,
     way, keys?, help?, redirect?, by?, macOnly?, added, keysSaved?, health?, signIn?, siteSignedIn?}],
     "problem"?}`, by kind in the page's order (`kind` is its title: "Mail and Calendar", "Chat",
@@ -785,12 +788,12 @@ host serves:
     then sign in), `package` (an open-source server, `by`, with the keys you bring; `macOnly` for
     one that uses the Mac's own apps, which a machine's catalog leaves out) or `browser`
     (the agent uses its site in the computer's browser: not added here; `siteSignedIn` says
-    whether it's signed in there, on a Mac). `keys`: `[{name, label, prompt}]`, `keysSaved`
-    whether the computer has them. `how` is the tag the page shows. Added: `health` is
-    `connected`, `starting`, `waitsForCode` (on a Mac: Outlook, until its first use's code), `needsSignIn`,
-    `failed` or `disabled` (turned off in MCP Servers, its settings' `disabled`: it won't start
-    until it's turned on, so there's nothing to wait for; a Mac's Settings says "Off", with Turn
-    On), and `signIn` is the
+    whether it's signed in there, on a Mac, when its app can tell). `keys`: `[{name, label, prompt}]`,
+    `keysSaved` whether the computer has them (left out while its keys can't be reached). `how` is the tag the page shows. Added: `health` is
+    `connected`, `starting` (also just turned on, while the engine still says it's off),
+    `waitsForCode` (Outlook, until its first use's code), `needsSignIn`, `failed` or `disabled`
+    (turned off in MCP Servers, its settings' `disabled`: it won't start until it's turned on, so
+    there's nothing to wait for; Settings says "Off", with Turn On), and `signIn` is the
     engine's integration to sign in with, through
     `api/integration/<signIn>/connect/oauth` as any (its page returns to `127.0.0.1:19876`:
     `kuvo/sign-in/return`). `problem`: the settings file can't be changed.
@@ -799,11 +802,13 @@ host serves:
     written again (the engine reads its keys again), and with new keys its server connects again a
     moment later. `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
     `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; on a Mac, `500 {"message"}` when the Keychain wouldn't keep its keys.
-  - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: its keys, its sign-in, what its
-    server kept, and bots' own keys for it there (each computer keeps its bots' keys itself: "Bots'
-    own keys"). `200 {}`, `404` for one not added, `409 {"message"}` for a settings file that can't
-    be changed. A Mac's Remove… for a machine is the machine's own, through `box route`.
+    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+  - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
+    (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
+    server kept and its keys. `200 {}`, `404` for one not added, `409 {"message"}` for a settings
+    file that can't be changed, `503 {"message"}` when its bots' keys can't be taken away (nothing
+    removed) or its own can't (removed, with its key still kept). A Mac's Remove… is its box's,
+    through `BoxClient` (a machine's through `box route`).
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
   lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host
@@ -1148,7 +1153,8 @@ host serves:
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
 (`app`, `bridge`), before it shows what needs a route. A route it names can still refuse for now,
-with a message to show: `503` while the engine or the coding agents' bridge is down, and on a
+with a message to show: `503` while the engine or the coding agents' bridge is down (or, on this
+Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
@@ -1265,16 +1271,19 @@ Mac's agents mail carries its bots' `id` and `look` and its `features`.
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
 app gives the box the engine's settings folder (`KUVO_ENGINE_CONFIG`, the engine's
-`XDG_CONFIG_HOME`), so nothing moves. They're its own from the start (never `409`). Its keys are
-in the Mac's Keychain, which the app answers for (`kuvo/keys`); the box names them where the app
-writes them for the engine to read (`KUVO_KEYS`). The app puts the popular servers in its
+`XDG_CONFIG_HOME`), so nothing moves. They're its own from the start (never `409`). Its keys
+(`kuvo/keys`, and those Settings › Integrations adds with, `kuvo/integrations`) stay in the Mac's
+Keychain, under the service they've always had: the box asks the app for them ("Host interface")
+and names them where the app writes them for the engine to read (`KUVO_KEYS`, in the app's
+temporary folder), never in its own folder. What integrations' servers keep (a sign-in) is in the
+app's `integrations` folder (`KUVO_INTEGRATIONS`), as the engine runs them with it. The app puts the popular servers in its
 `bin/mcp-catalog.json` as it starts it, and those that use a Mac's own apps are listed and added
 there.
 
 #### Host interface
 
-What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): today, its
-keys, which the app keeps in the Keychain. The app listens on `127.0.0.1` and passes the box
+What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
+which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to. The app listens on `127.0.0.1` and passes the box
 `KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
 starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
 <KUVO_HOST_PASSWORD>` and `content-type: application/json`:
@@ -1282,7 +1291,10 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
 - `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
 - `keys/get {"name"}` → `{"value"}`, or `404` for none;
 - `keys/set {"name", "value"}` → `{}`;
-- `keys/delete {"name"}` → `{}`, for one there wasn't too.
+- `keys/delete {"name"}` → `{}`, for one there wasn't too;
+- `sites/signed-in {}` → `{"sites": {"<integration>": <bool>}}`, whether the panel's browser is
+  signed in to the sites the agent uses there (X, LinkedIn, Reddit), as their cookies say: only
+  those it can tell.
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it

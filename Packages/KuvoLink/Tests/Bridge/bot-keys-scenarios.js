@@ -91,6 +91,9 @@ export async function standInHost(password) {
       case "/keys/delete":
         host.keys.delete(given.name);
         return answer(200, {});
+      // Whether its browser is signed in to the sites the agent uses there, as the test sets it.
+      case "/sites/signed-in":
+        return host.sites ? answer(200, { sites: host.sites }) : answer(503, { message: "It can't tell now." });
       default:
         return answer(404, {});
     }
