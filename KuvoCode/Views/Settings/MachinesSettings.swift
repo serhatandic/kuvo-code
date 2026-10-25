@@ -12,28 +12,28 @@ struct MachinesSettings: View {
     /// What keeps a machine from being reached, in a line, and why on hover.
     /// `again`: it can be set up again now (it's connected), with Set Up Again.
     private func problem(_ line: String, why: String, again engine: MachineEngine? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label {
+        Label {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(line)
                     .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle")
-            }
-            .foregroundStyle(.secondary)
-            .help(why)
-            .accessibilityHint(why)
-            if let engine, engine.isReady {
-                if app.phoneLink.settingUpNow.contains(engine.machine.id) {
-                    Spinner(size: 12)
-                        .accessibilityLabel("Setting it up")
-                } else {
-                    Button("Set Up Again") { Task { await app.phoneLink.sync(engine) } }
-                        .buttonStyle(TextButtonStyle(outset: true))
-                        .fixedSize()
+                    .help(why)
+                    .accessibilityHint(why)
+                if let engine, engine.isReady {
+                    if app.phoneLink.settingUpNow.contains(engine.machine.id) {
+                        Spinner(size: 12)
+                            .accessibilityLabel("Setting it up")
+                    } else {
+                        Button("Set Up Again") { Task { await app.phoneLink.sync(engine) } }
+                            .buttonStyle(TextButtonStyle(outset: true))
+                    }
                 }
             }
+        } icon: {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
         }
         .font(.subheadline)
+        .foregroundStyle(.secondary)
     }
 
     var body: some View {
