@@ -2,8 +2,9 @@
 # Keeps tests, measurements and demo copies off the real Kuvo Code. A script that starts a copy of
 # the app or its engine checks what it would use first, and stops, naming itself, when that's the
 # real app's: its bundle ID (run.kuvo.code), its folder in Application Support (where its engine,
-# sessions and sign-ins are) or anything in it, or the installed app in /Applications. A copy of
-# its own (run.kuvo.code.demo, .tests, .perf, .e2e, .shots) has folders of its own, and passes.
+# sessions and sign-ins are) or anything in it, the installed app in /Applications, or its folder
+# on machines (.kuvo-code, as KUVO_DEMO_MACHINE_ROOT). A copy of its own (run.kuvo.code.demo,
+# .tests, .perf, .e2e, .shots; .kuvo-code-demo…) has folders of its own, and passes.
 #
 #   . scripts/real-app-guard.sh; real_app_guard <caller> <value>...    (from a shell script)
 #   scripts/real-app-guard.sh <caller> <value>...                      (from anything else)
@@ -26,7 +27,8 @@ real_app_guard() {
             _guard_lower=$(printf '%s' "$_guard_candidate" | tr '[:upper:]' '[:lower:]')
             case "$_guard_lower" in
             run.kuvo.code | "$_guard_support" | "$_guard_support"/* | "$_guard_real_support" | "$_guard_real_support"/* | \
-                "$_guard_app" | "$_guard_app"/*)
+                "$_guard_app" | "$_guard_app"/* | \
+                .kuvo-code | .kuvo-code/ | ./.kuvo-code | "~/.kuvo-code" | */.kuvo-code | */.kuvo-code/)
                 echo "$_guard_caller: refusing to start, because $_guard_value is the real Kuvo Code's." >&2
                 echo "  Use a copy of its own (run.kuvo.code.demo, .tests, .perf, .e2e or .shots) and its own folders and engine." >&2
                 return 1
@@ -35,6 +37,13 @@ real_app_guard() {
         done
     done
     return 0
+}
+
+# The newest engine a copy of its own (demo, perf, e2e…) downloaded, by version (2.0.32 after
+# 2.0.9), never the real app's; nothing when there's none.
+newest_copy_engine() {
+    ls -d "$HOME/Library/Application Support/run.kuvo.code."*/engine/*/opencode 2>/dev/null |
+        awk -F/ '{ print $(NF-1) "\t" $0 }' | sort -V -k1,1 | tail -n 1 | cut -f2
 }
 
 # For the one script meant to work on the real app, with someone at the Mac
@@ -54,7 +63,7 @@ real_app_confirm() {
 
 case "$(basename -- "$0")" in
 real-app-guard.sh)
-    [ $# -ge 1 ] || { sed -n '2,11p' "$0" >&2; exit 2; }
+    [ $# -ge 1 ] || { sed -n '2,12p' "$0" >&2; exit 2; }
     real_app_guard "$@"
     exit $?
     ;;
