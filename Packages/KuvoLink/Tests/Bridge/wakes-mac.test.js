@@ -3,6 +3,7 @@
 // follows them as they change, from the box or from kuvo-wake firing beside it. Watches are made as
 // an agent makes them, and kuvo-wake's own refusals come back as they're said. The engine is a
 // stand-in, and so is the system's word that a folder changed (below); kuvo-wake is the real one.
+// Each test has conversations of its own, gone when it ends, so each runs alone too.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -20,15 +21,18 @@ process.env.KUVO_WAKE_COMMAND = path.join(support, "bin", "kuvo-wake");
 
 // The system tells the box's folder watches of a change when it gets to it: on a busy Mac, FSEvents
 // tells them late or not at all (the box looks again for those, each half minute and each minute).
-// So the watches here hear of each change as a test makes it, only in a folder the box watches.
+// So the watches here hear of each change as a test makes it, as the system tells them: a change
+// in a folder a watch has, or in one inside it only when it watches what's in them too.
 const watches = new Set();
 fs.watch = (folder, options, listener) => {
-  const watch = { folder, listener, on: () => watch, close: () => watches.delete(watch) };
+  const watch = { folder, recursive: Boolean(options?.recursive), listener, on: () => watch, close: () => watches.delete(watch) };
   watches.add(watch);
   return watch;
 };
 const changedOnDisk = file => {
-  for (const { folder, listener } of [...watches]) if (file.startsWith(folder + path.sep)) listener("rename", path.relative(folder, file));
+  for (const { folder, recursive, listener } of [...watches]) {
+    if (path.dirname(file) === folder || (recursive && file.startsWith(folder + path.sep))) listener("rename", path.relative(folder, file));
+  }
 };
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
@@ -39,18 +43,19 @@ const script = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").
 fs.mkdirSync(path.join(support, "bin"), { recursive: true });
 fs.writeFileSync(process.env.KUVO_WAKE_COMMAND, script + "\n", { mode: 0o755 });
 
-// The engine: the conversations here, its tools all connected, and the prompts it's sent.
+// The engine: the conversations it has (each test's), its tools all connected, and the prompts
+// it's sent.
+const conversations = new Set();
 const prompted = [];
-let heard = null;
 const engine = http.createServer((request, response) => {
   const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-  const asked = /^\/api\/session\/(ses_mac|ses_due)(\/prompt)?$/.exec(request.url);
+  const asked = /^\/api\/session\/(ses_[A-Za-z0-9_]+)(\/prompt)?$/.exec(request.url);
+  if (asked && !conversations.has(asked[1])) return reply(404, {});
   if (asked && asked[2]) {
     const chunks = [];
     request.on("data", chunk => chunks.push(chunk));
     request.on("end", () => {
       prompted.push({ session: asked[1], text: JSON.parse(Buffer.concat(chunks).toString()).text });
-      heard?.();
       reply(200, {});
     });
     return;
@@ -67,6 +72,39 @@ async function ask(method, p, body) {
   for await (const part of handle({ method, path: p, headers: {}, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0) }, {}, undefined)) parts.push(part);
   const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
   return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+}
+
+/** A conversation the engine has, for this test only: its wake-ups' folder beside the box goes when
+ * the test ends. With `folder`, the folder is there already, as kuvo-wake leaves it, and the app has
+ * told its box where its engine is. */
+function conversation(t, session, { folder: made = false } = {}) {
+  conversations.add(session);
+  const folder = path.join(support, "wakes", session);
+  t.after(() => {
+    conversations.delete(session);
+    fs.rmSync(folder, { recursive: true, force: true });
+  });
+  if (made) {
+    fs.mkdirSync(path.join(support, "box", "run"), { recursive: true });
+    fs.writeFileSync(path.join(support, "box", "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p" }));
+    fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
+    fs.writeFileSync(path.join(folder, "session"), session);
+    fs.writeFileSync(path.join(folder, "directory"), support);
+  }
+  return folder;
+}
+
+/** A bot of the Mac's, for this test only, its wake-ups in its folder there. */
+function bot(t, id, session) {
+  conversations.add(session);
+  const folder = path.join(support, "bots", id);
+  fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
+  fs.writeFileSync(path.join(folder, "session"), session);
+  t.after(() => {
+    conversations.delete(session);
+    fs.rmSync(folder, { recursive: true, force: true });
+  });
+  return folder;
 }
 
 /** `kuvo/wakes/events` followed: each line as it comes. */
@@ -95,34 +133,36 @@ function follow() {
   };
 }
 const inAnHour = () => Math.floor(Date.now() / 1000) + 3600;
+const now = () => Math.floor(Date.now() / 1000);
 
-test("the Mac's wake-ups are kept where the app keeps them, and nothing lands in the box's folder", async () => {
+test("the Mac's wake-ups are kept where the app keeps them, and nothing lands in the box's folder", async t => {
+  const folder = conversation(t, "ses_mac");
   const added = await ask("POST", "kuvo/wakes/ses_mac", { due: inAnHour(), note: "Ship the notes\nand tell Ada" });
   assert.equal(added.status, 200, JSON.stringify(added.json));
-  const folder = path.join(support, "wakes", "ses_mac");
   assert.equal(fs.readdirSync(path.join(folder, "wakes")).length, 1);
   assert.equal(fs.existsSync(path.join(support, "box", "wakes")), false);
   assert.deepEqual((await ask("GET", "kuvo/wakes")).json.sessions.map(each => each.session), ["ses_mac"]);
-  // A bot of the Mac's, its wake-ups in its folder there.
-  const bot = path.join(support, "bots", "bot_ada");
-  fs.mkdirSync(path.join(bot, "wakes"), { recursive: true });
-  fs.writeFileSync(path.join(bot, "session"), "ses_ada");
-  fs.writeFileSync(path.join(bot, "wakes", `${inAnHour()}-abcdef`), "Morning round");
+  const ada = bot(t, "bot_ada", "ses_ada");
+  fs.writeFileSync(path.join(ada, "wakes", `${inAnHour()}-abcdef`), "Morning round");
   assert.equal((await ask("GET", "kuvo/wakes/ses_ada")).json.wakes[0].note, "Morning round");
 });
 
-test("a client follows them: whole notes, each change from the box at once, and kuvo-wake's from beside it", async () => {
+test("a client follows them: whole notes, each change from the box at once, and kuvo-wake's from beside it", async t => {
+  conversation(t, "ses_follow");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_follow", { due: inAnHour(), note: "Ship the notes\nand tell Ada" })).status, 200);
+  const ada = bot(t, "bot_ada", "ses_ada");
+  fs.writeFileSync(path.join(ada, "wakes", `${inAnHour()}-abcdef`), "Morning round");
   const followed = follow();
   try {
-    const first = await followed.until(line => line.sessions.some(each => each.session === "ses_mac"));
-    assert.equal(first.sessions.find(each => each.session === "ses_mac").wakes[0].note, "Ship the notes\nand tell Ada", "the note whole, on two lines");
+    const first = await followed.until(line => line.sessions.some(each => each.session === "ses_follow"));
+    assert.equal(first.sessions.find(each => each.session === "ses_follow").wakes[0].note, "Ship the notes\nand tell Ada", "the note whole, on two lines");
     assert.ok(first.sessions.some(each => each.session === "ses_ada"), "bots' too");
 
-    await ask("POST", "kuvo/wakes/ses_mac/pause", { paused: true });
-    await followed.until(line => line.sessions.find(each => each.session === "ses_mac")?.paused === true);
+    await ask("POST", "kuvo/wakes/ses_follow/pause", { paused: true });
+    await followed.until(line => line.sessions.find(each => each.session === "ses_follow")?.paused === true);
 
     // kuvo-wake firing one: the file goes, outside the box.
-    const folder = path.join(support, "bots", "bot_ada", "wakes");
+    const folder = path.join(ada, "wakes");
     for (const name of fs.readdirSync(folder)) {
       fs.rmSync(path.join(folder, name));
       changedOnDisk(path.join(folder, name));
@@ -133,82 +173,88 @@ test("a client follows them: whole notes, each change from the box at once, and 
   }
 });
 
-test("a watch is made as its agent makes one, and kuvo-wake's refusal comes back in its words", async () => {
-  const made = await ask("POST", "kuvo/wakes/ses_mac/watch", { every: "1h", check: "curl -s https://example.com/status", note: "Tell me what changed" });
+test("a watch is made as its agent makes one, and kuvo-wake's refusal comes back in its words", async t => {
+  conversation(t, "ses_watch");
+  const made = await ask("POST", "kuvo/wakes/ses_watch/watch", { every: "1h", check: "curl -s https://example.com/status", note: "Tell me what changed" });
   assert.equal(made.status, 200, JSON.stringify(made.json));
   assert.deepEqual(made.json.watches.map(({ every, note }) => ({ every, note })), [{ every: "1h", note: "Tell me what changed" }]);
 
-  const refused = await ask("POST", "kuvo/wakes/ses_mac/watch", { every: "1s", check: "date", note: "Too often" });
+  const refused = await ask("POST", "kuvo/wakes/ses_watch/watch", { every: "1s", check: "date", note: "Too often" });
   assert.equal(refused.status, 400);
   assert.match(refused.json.message, /Use 5m or more/);
-  assert.equal((await ask("GET", "kuvo/wakes/ses_mac")).json.watches.length, 1, "nothing made");
+  assert.equal((await ask("GET", "kuvo/wakes/ses_watch")).json.watches.length, 1, "nothing made");
 
-  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/watch", { every: "1h" })).status, 400, "a check and a note are needed");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_watch/watch", { every: "1h" })).status, 400, "a check and a note are needed");
   assert.equal((await ask("POST", "kuvo/wakes/ses_gone/watch", { every: "1h", check: "date", note: "x" })).status, 404, "not a conversation here");
 });
 
-test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as a machine's keeper does", async () => {
-  // Where the app tells its box its engine is.
-  fs.mkdirSync(path.join(support, "box", "run"), { recursive: true });
-  fs.writeFileSync(path.join(support, "box", "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p" }));
-  const folder = path.join(support, "wakes", "ses_due");
-  fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
-  fs.writeFileSync(path.join(folder, "session"), "ses_due");
-  fs.writeFileSync(path.join(folder, "directory"), support);
-  fs.writeFileSync(path.join(folder, "wakes", `${Math.floor(Date.now() / 1000) - 5}-ghijkl`), "Send the weekly summary");
-  const sent = new Promise(resolve => { heard = () => prompted.some(each => each.session === "ses_due") && resolve(); });
+// The box's timers in these run on a clock of the test's: the minute can't pass unless the test
+// moves it. Each waits for the run its box started to be over, then looks at what was sent.
+
+test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as a machine's keeper does", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const folder = conversation(t, "ses_due", { folder: true });
+  fs.writeFileSync(path.join(folder, "wakes", `${now() - 5}-ghijkl`), "Send the weekly summary");
   const stop = link.sendWakes();
   try {
-    await sent;
+    // Due already: it goes in half a second.
+    t.mock.timers.tick(500);
   } finally {
-    // Stopped once its run is over: none is left sending into the next test.
     await stop();
   }
   assert.deepEqual(prompted.filter(each => each.session === "ses_due").map(each => each.text), ["[Wake-up] Send the weekly summary"]);
   assert.deepEqual(fs.readdirSync(path.join(folder, "wakes")), [], "sent, so it's gone and never goes twice");
 });
 
-test("a client that archived a conversation holds its wake-ups through the box, and a pause of your own outlasts it", async () => {
-  const folder = path.join(support, "wakes", "ses_mac");
-  fs.rmSync(path.join(folder, "paused"), { force: true });
-  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true })).json.paused, true);
-  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "archived");
-  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: false })).json.paused, false);
-  // Yours stays when it comes back.
-  await ask("POST", "kuvo/wakes/ses_mac/pause", { paused: true });
-  await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true });
-  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: false })).json.paused, true);
-  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "paused");
-});
-
 test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", async t => {
-  // The box's timers on a clock of the test's: the minute can't pass unless the test moves it.
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const folder = path.join(support, "wakes", "ses_due");
+  const folder = conversation(t, "ses_soon", { folder: true });
   const stop = link.sendWakes();
-  const before = prompted.length;
   try {
     // The box has nothing due (its timer is a minute out) when the agent adds one for now.
-    const file = path.join(folder, "wakes", `${Math.floor(Date.now() / 1000)}-mnopqr`);
+    const file = path.join(folder, "wakes", `${now()}-mnopqr`);
     fs.writeFileSync(file, "Read the release notes");
     changedOnDisk(file);
     // The folders settle, then it goes at its time (a second at most from now), well short of the minute.
     t.mock.timers.tick(200);
     t.mock.timers.tick(1_000);
   } finally {
-    // Once the run that started is over.
     await stop();
   }
-  assert.deepEqual(prompted.slice(before).map(each => each.text), ["[Wake-up] Read the release notes"]);
+  assert.deepEqual(prompted.filter(each => each.session === "ses_soon").map(each => each.text), ["[Wake-up] Read the release notes"]);
 });
 
-test("archiving a conversation that's moving to another computer waits for the move", async () => {
-  const folder = path.join(support, "wakes", "ses_mac");
-  fs.writeFileSync(path.join(folder, "paused"), "moving");
+test("one written beside the box that the system never tells it of still goes within the minute", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const folder = conversation(t, "ses_unheard", { folder: true });
+  const stop = link.sendWakes();
   try {
-    assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true })).status, 409);
-    assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "moving", "the move's hold stays its own");
+    fs.writeFileSync(path.join(folder, "wakes", `${now()}-stuvwx`), "Water the plants");
+    // No word of it from the system: the box's look each minute finds it.
+    t.mock.timers.tick(60_000);
   } finally {
-    fs.rmSync(path.join(folder, "paused"), { force: true });
+    await stop();
   }
+  assert.deepEqual(prompted.filter(each => each.session === "ses_unheard").map(each => each.text), ["[Wake-up] Water the plants"]);
+});
+
+test("a client that archived a conversation holds its wake-ups through the box, and a pause of your own outlasts it", async t => {
+  const folder = conversation(t, "ses_archive");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_archive", { due: inAnHour(), note: "Check in" })).status, 200);
+  assert.equal((await ask("POST", "kuvo/wakes/ses_archive/pause", { archived: true })).json.paused, true);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "archived");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_archive/pause", { archived: false })).json.paused, false);
+  // Yours stays when it comes back.
+  await ask("POST", "kuvo/wakes/ses_archive/pause", { paused: true });
+  await ask("POST", "kuvo/wakes/ses_archive/pause", { archived: true });
+  assert.equal((await ask("POST", "kuvo/wakes/ses_archive/pause", { archived: false })).json.paused, true);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "paused");
+});
+
+test("archiving a conversation that's moving to another computer waits for the move", async t => {
+  const folder = conversation(t, "ses_moving");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_moving", { due: inAnHour(), note: "Check in" })).status, 200);
+  fs.writeFileSync(path.join(folder, "paused"), "moving");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_moving/pause", { archived: true })).status, 409);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "moving", "the move's hold stays its own");
 });
