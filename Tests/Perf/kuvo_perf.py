@@ -313,6 +313,9 @@ def groups_bench(app, label):
                 os.remove(result)
             # KUVO_PERF_PROFILE / KUVO_PERF_STALLS given here go to the measured run (README).
             extra = {k: v for k, v in os.environ.items() if mode == "run" and k in ("KUVO_PERF_PROFILE", "KUVO_PERF_STALLS")}
+            if mode == "run":
+                # Every build measured over the same span from the question, however fast it answers.
+                extra["KUVO_PERF_GROUP_SECONDS"] = os.environ.get("KUVO_PERF_GROUP_SECONDS", "15")
             if engine():
                 extra["KUVO_OPENCODE_BINARY"] = engine()
             launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, **extra)

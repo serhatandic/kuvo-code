@@ -64,6 +64,12 @@ enum PerfGroups {
             if !app.chats.isDiscussing(group.id), app.chats.messages(in: group.id).count > before + 1 { break }
         }
         try? await Task.sleep(for: .seconds(1))
+        // KUVO_PERF_GROUP_SECONDS: measured that long from the question when the talk ends sooner, so
+        // builds that answer at different speeds are measured over the same span (the main thread's
+        // waits are sampled all along: a shorter run puts its few long waits higher in the percentiles).
+        if let span = ProcessInfo.processInfo.environment["KUVO_PERF_GROUP_SECONDS"].flatMap(Double.init) {
+            try? await Task.sleep(until: began + .seconds(span), clock: .continuous)
+        }
         let seconds = (ContinuousClock.now - began).components.seconds
         if let file = ProcessInfo.processInfo.environment["KUVO_PERF_STALLS"] { try? meter.stallReport().write(toFile: file, atomically: true, encoding: .utf8) }
         let measured = meter.stop()
