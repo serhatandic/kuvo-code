@@ -24,30 +24,63 @@ public enum ShellEnvironment {
         return fallback
     }
 
-    private static func run(shell: String, flags: String, timeout: Duration) async -> [String: String]? {
+    /// What `shell` run with `flags` gives `env -0`, or nil when it fails or hasn't finished in
+    /// `timeout`. Waited for without holding a thread: `Process.waitUntilExit()` on one of Swift's
+    /// threads could miss the exit and wait for ever (the shell long gone), and so could a read to
+    /// the end of its output that something it started in the background kept open.
+    static func run(shell: String, flags: String, timeout: Duration) async -> [String: String]? {
         let process = Process()
         process.executableURL = URL(filePath: shell)
         process.arguments = [flags, "/usr/bin/env -0"]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        let output = Pipe()
+        // Its own, so a terminal's shell started meanwhile doesn't keep it open (see `unshared`).
+        let output = Pipe.unshared()
         process.standardOutput = output
         // Keeps interactive shells from asking about things like oh-my-zsh updates.
         var environment = ProcessInfo.processInfo.environment
         environment["DISABLE_AUTO_UPDATE"] = "true"
         process.environment = environment
+        let exited = Arrival<Int32>()
+        process.terminationHandler = { exited.deliver($0.terminationStatus) }
+        let read = Arrival<Data>()
+        let buffer = LockedData()
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                read.deliver(buffer.data)
+            } else {
+                buffer.append(data)
+            }
+        }
 
         do { try process.run() } catch { return nil }
-        let reader = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }
-        let watchdog = Task {
-            try await Task.sleep(for: timeout)
-            if process.isRunning { process.terminate() }
+        let data = await withTaskGroup(of: Data?.self) { group in
+            group.addTask {
+                // All it said, once it has stopped (cancelled: nothing).
+                guard let data = await read.wait(), let status = await exited.wait() else { return nil }
+                return status == 0 ? data : Data?.none
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
-        let data = await reader.value
-        watchdog.cancel()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return parse(data)
+        if process.isRunning { process.terminate() }
+        // What it started in the background no longer holds the pipe's reading end here either.
+        output.fileHandleForReading.readabilityHandler = nil
+        return data.map(parse)
+    }
+
+    private final class LockedData: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = Data()
+        func append(_ more: Data) { lock.withLock { stored.append(more) } }
+        var data: Data { lock.withLock { stored } }
     }
 
     static func parse(_ data: Data) -> [String: String] {
