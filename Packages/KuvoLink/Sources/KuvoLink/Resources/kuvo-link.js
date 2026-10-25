@@ -5522,6 +5522,7 @@ export function writeLink(link) {
     // Phones no longer paired lose what they have open, whoever removed them.
     macLink.host?.keepOnly(new Set((link.phones ?? []).map(phone => phone.key)));
     for (const tell of macLink.phoneFollowers) tell();
+    macLinkCheck();
     return;
   }
   // For the box's keeper, which keeps this bridge running while it's needed.
@@ -7652,6 +7653,12 @@ function macNeeded(link, now = Date.now()) {
   return Boolean(config.phones && ((link?.phones ?? []).length || pairing));
 }
 
+// Off the relay once it's no longer wanted (the phone link turned off, the last phone gone, a
+// pairing that ran out, no machines any more).
+function macLinkCheck() {
+  if (macLink.host && !macNeeded(readLink())) macLink.host.disconnect?.();
+}
+
 function setLinkStatus(state, reason) {
   const next = reason ? { state, reason } : { state };
   if (JSON.stringify(next) === JSON.stringify(macLink.status)) return;
@@ -7709,6 +7716,21 @@ async function macKeys() {
   return true;
 }
 
+// Mail from your machines for the app, handed over in the order it came: one the app didn't take
+// (gone a moment, starting again) is tried again a few times, then let go, with a line in the
+// box's log saying so.
+let mailing = Promise.resolve();
+function mailToApp(from, frame) {
+  const given = { from: from.toString("base64url"), frame: frame.toString("base64") };
+  mailing = mailing.then(async () => {
+    for (let tries = 0; tries < 5; tries++) {
+      if (await linkHost("link/mailed", given)) return;
+      await new Promise(done => setTimeout(done, Math.min(8_000, 500 * 2 ** tries)));
+    }
+    console.error("Mail from one of your machines couldn't be handed to Kuvo Code, and was let go.");
+  });
+}
+
 // What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
 // at once, when the app isn't answering, and a stream that ends when the app goes.
 async function* toApp(request, phone, signal) {
@@ -7731,20 +7753,24 @@ async function* toApp(request, phone, signal) {
       response = null;
     }
   }
-  if (!response || response.status === 401 || response.status === 404) {
+  // The app's own answer says so (`x-kuvo-answer`), whatever its status: without it, the app
+  // isn't there to answer (gone, starting again, or an older one).
+  if (!response || response.headers.get("x-kuvo-answer") !== "1") {
     await response?.body?.cancel().catch(() => {});
     yield { head: { status: 503, headers: { "content-type": "application/json" } } };
     yield { body: Buffer.from(JSON.stringify({ message: NOT_ANSWERING })) };
     return;
   }
-  yield { head: { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } } };
+  const headers = { "content-type": response.headers.get("content-type") ?? "application/json" };
+  const cache = response.headers.get("cache-control");
+  if (cache) headers["cache-control"] = cache;
+  yield { head: { status: response.status, headers } };
   if (!response.body) return;
-  try {
-    for await (const chunk of response.body) {
-      if (signal?.aborted) break;
-      yield { body: Buffer.from(chunk) };
-    }
-  } catch {}
+  // One cut off as it came (the app gone halfway) ends as cut off, not as a whole answer.
+  for await (const chunk of response.body) {
+    if (signal?.aborted) break;
+    yield { body: Buffer.from(chunk) };
+  }
 }
 
 // A phone's request on this Mac: the box's own areas here, the rest from the app.
@@ -7812,6 +7838,7 @@ async function* macLinkRoute(route, request, signal) {
       if (before && (before.relay !== config.relay || before.name !== config.name)) macLink.host?.disconnect?.();
       // Its keys before this answers, so a pairing link can be made right after.
       await macKeys();
+      macLinkCheck();
       macLink.wake?.();
       return yield* json(200, macLink.status);
     }
@@ -7860,10 +7887,13 @@ async function* macLinkRoute(route, request, signal) {
       if (!host?.welcomed || !link?.key) return yield* json(503, { message: "Not connected to the relay now." });
       const phones = (link.phones ?? []).filter(each => each.address);
       const notice = Buffer.from(JSON.stringify(given.notice));
+      // Only those that went out count; none going out is not on the relay now.
+      let sent = 0;
       for (const each of phones) {
-        try { host.send(pushTo(each, notice, Buffer.from(link.key, "base64url"))); } catch {}
+        try { if (host.send(pushTo(each, notice, Buffer.from(link.key, "base64url")))) sent += 1; } catch {}
       }
-      return yield* json(200, { phones: phones.length });
+      if (phones.length && !sent) return yield* json(503, { message: "Not connected to the relay now." });
+      return yield* json(200, { phones: sent });
     }
     default:
       return yield* json(404, {});
@@ -7884,6 +7914,7 @@ export async function runMacLink() {
         await macLinkWait(30_000);
         continue;
       }
+      if (macLink.stopped) break;
       if (!macNeeded(readLink())) {
         setLinkStatus("off");
         attempt = 0;
@@ -7901,15 +7932,28 @@ export async function runMacLink() {
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
         // Mail from your machines, for the app until what it carries moves here.
-        mail: (from, _body, frame) => { linkHost("link/mailed", { from: from.toString("base64url"), frame: frame.toString("base64") }).catch(() => {}); },
+        mail: (from, _body, frame) => mailToApp(from, frame),
         handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))))),
         connect: engineConnect(readEngineFile),
         send: () => {},
       });
       macLink.host = host;
+      // A pairing can run out while it's up: looked at now and then.
+      const looking = setInterval(macLinkCheck, 30_000);
+      const started = Date.now();
       const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, () => setLinkStatus("connected"));
+      clearInterval(looking);
       if (macLink.host === host) macLink.host = null;
-      attempt = welcomed ? 0 : attempt + 1;
+      if (macLink.stopped) break;
+      // Not wanted any more: off now, not after a wait.
+      if (!macNeeded(readLink())) {
+        setLinkStatus("off");
+        attempt = 0;
+        continue;
+      }
+      // Well only once a connection's held a while: one dropped right after its welcome (another
+      // copy on the same address, say) backs off as one that never came up does.
+      attempt = welcomed && Date.now() - started >= 60_000 ? 0 : attempt + 1;
       if (!welcomed) setLinkStatus("failed", `Can't reach the relay at ${new URL(link.relay).host}.`);
       else setLinkStatus("connecting");
       await macLinkWait(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
@@ -7991,7 +8035,12 @@ export function connectOnce(relay, secret, host, onWelcome = machineWelcomed) {
       if (!welcomed) {
         if (message.kind !== "welcome" || !message.address.equals(self)) return socket.close();
         welcomed = true;
-        host.send = bytes => { if (socket.readyState === 1) socket.send(bytes); };
+        // Whether it went out (a connection that's closing takes nothing).
+        host.send = bytes => {
+          if (socket.readyState !== 1) return false;
+          socket.send(bytes);
+          return true;
+        };
         host.welcomed = true;
         try { onWelcome(host); } catch {}
         return;
@@ -8399,6 +8448,8 @@ async function serve() {
   // (a notice sent as the app quit), a moment at most.
   const leave = async () => {
     for (let tries = 0; tries < 30 && (macLink.host?.unsent?.() ?? 0) > 0; tries++) await sleep(50);
+    // What didn't get out in time isn't lost without a word.
+    if ((macLink.host?.unsent?.() ?? 0) > 0) console.error("Kuvo Code quit before what its link had for your phones and machines went out.");
     process.exit(0);
   };
   process.stdin.on("end", leave);
