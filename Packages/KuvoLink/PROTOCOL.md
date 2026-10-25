@@ -775,10 +775,14 @@ host serves:
     be changed. A Mac's Remove… for a machine is the machine's own, through `box route`.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
-  lives on (a Mac's bots' in its Keychain; a machine's in `~/.kuvo-code/box/bot-keys`, with the
-  Mac closed too). Each computer answers for its own bots; a Mac asked about a machine's
+  lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host
+  interface"; a machine's in `~/.kuvo-code/box/bot-keys`, with the Mac closed too). Each computer
+  answers for its own bots; a Mac asked about a machine's
   bot answers `409 {"message"}`. A bot that works in a project uses that project's keys, and
-  answers `409 {"message"}`.
+  answers `409 {"message"}`. Where a box's keys can't be reached (this Mac's app not answering),
+  `503 {"message"}`. Its folder's settings name each key's file where the engine reads it: on a
+  machine `{file:~/.kuvo-code/box/bot-keys/<variable>__<BOT>}`; on this Mac in the app's folder
+  for them (`KUVO_KEY_FILES`), each named by its variable.
   - `GET kuvo/bots/<id>/keys` → `{"keys": [{integration, own, shared, title, symbol, keys, help?}]}`:
     each integration a bot can have a key of its own for (those you bring a key for, `token` and
     `package` ones with keys), whether it has its own, whether the computer has a shared one, and,
@@ -790,7 +794,12 @@ host serves:
     connects again a moment later in its folder: `200 {integration, own, shared}`; `DELETE` takes
     them away (`404` for none). `409 {"message"}`, with nothing changed, when its folder's settings
     aren't plain JSON.
-  - `DELETE kuvo/bots/<id>/keys` takes away every one, as it moves off the computer.
+  - `DELETE kuvo/bots/<id>/keys` takes away every one, as it moves off the computer, those left
+    from integrations no longer there too.
+  - `POST kuvo/bots/keys/refresh` writes every bot's folder's settings again as its keys and the
+    box's integrations are now (bridge 0.9.46), as a client asks after it changes the box's
+    catalog (`bin/integrations.json`): `200 {}`. A box also does it as it starts. (A Mac before
+    0.9.46 ran `kuvo-link.js box bot-keys-refresh` over SSH, which still does the same.)
   - Moving a bot (Move to Computer), its keys go with it: read where it lived, given where it
     goes, then taken away where it was.
 - Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
@@ -1220,6 +1229,24 @@ on to that bridge as `kuvo-link.js` does. Until the box process holds the relay 
 phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the
 bridge who your machines and their bots are, carries what it sends by the same rules, and the
 Mac's agents mail carries its bots' `id` and `look` and its `features`.
+
+#### Host interface
+
+What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): today, its
+keys, which the app keeps in the Keychain. The app listens on `127.0.0.1` and passes the box
+`KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
+starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
+<KUVO_HOST_PASSWORD>` and `content-type: application/json`:
+
+- `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
+- `keys/get {"name"}` → `{"value"}`, or `404` for none;
+- `keys/set {"name", "value"}` → `{}`;
+- `keys/delete {"name"}` → `{}`, for one there wasn't too.
+
+Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
+answers no other. The app keeps the files the engine reads (`KUVO_KEY_FILES`) in step as it
+changes them. Anything else it answers is an error the box's route answers `503 {"message"}`
+with. Without these, as on a machine, the box keeps its keys in files only you can read.
 
 Areas move onto it one at a time. A moved area's routes are answered there for every client: a
 phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
