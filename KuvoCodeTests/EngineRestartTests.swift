@@ -12,19 +12,32 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct EngineRestartTests {
     let engine = StubEngine(port: 47998)
     let folder = AppInfo.testRoot.appending(path: "FakeEngine-\(UUID().uuidString.prefix(6))")
+    var folderPath: String { folder.path(percentEncoded: false) }
     var crashFile: String { folder.appending(path: "crash").path(percentEncoded: false) }
 
     /// Says where it answers (the stub), then runs until told to stop, and says why as it does.
     /// `box`: this Mac's box runs as it does with the engine's Bun, with Node (`TestBox.node`).
+    /// Without it, this Mac's box doesn't start, at once; or, once the test holds it (`holdBox`),
+    /// from its second start (the one after the engine is ready) only when it lets it go
+    /// (`letBoxGo`).
     private func fakeEngine(box node: URL? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let box = node.map { "case \"$2\" in *kuvo-link.js) shift; exec '\($0.path(percentEncoded: false))' \"$@\";; esac\n" } ?? ""
+        let box = node.map { "case \"$2\" in *kuvo-link.js) shift; exec '\($0.path(percentEncoded: false))' \"$@\";; esac\n" }
+            ?? """
+            case "$2" in *kuvo-link.js)
+              echo >> '\(boxStartsFile)'
+              if [ -e '\(holdFile)' ] && [ "$(wc -l < '\(boxStartsFile)')" -ge 2 ]; then while [ ! -e '\(goFile)' ] && [ -d '\(folderPath)' ]; do sleep 0.05; done; fi
+              exit 1;;
+            esac
+
+            """
         let script = """
             #!/bin/sh
             \(box)# The coding agents' bridge, which runs with the engine's Bun: none here.
             [ "$1" = "run" ] && exit 1
             echo '{"url":"\(engine.url)"}'
-            while [ ! -e '\(crashFile)' ]; do sleep 0.05; done
+            # (Gone with its test's folder too: one cut short leaves nothing running.)
+            while [ ! -e '\(crashFile)' ] && [ -d '\(folderPath)' ]; do sleep 0.05; done
             rm -f '\(crashFile)'
             echo 'Error: the database disk image is malformed' >&2
             exit 7
@@ -36,6 +49,12 @@ import Testing
     }
 
     private var starts: Int { engine.requests("GET", "/api/info").count }
+
+    var holdFile: String { folder.appending(path: "hold-box").path(percentEncoded: false) }
+    var goFile: String { folder.appending(path: "box-go").path(percentEncoded: false) }
+    var boxStartsFile: String { folder.appending(path: "box-starts").path(percentEncoded: false) }
+    private func holdBox() { FileManager.default.createFile(atPath: holdFile, contents: nil) }
+    private func letBoxGo() { FileManager.default.createFile(atPath: goFile, contents: nil) }
 
     /// The engine stops, as it would on a crash.
     private func crash() {
@@ -78,6 +97,32 @@ import Testing
         #expect(reason.contains("the database disk image is malformed"), "with what the engine wrote: \(reason)")
         #expect(starts <= 4, "not started over for ever: \(starts) starts")
         #expect(!FileManager.default.fileExists(atPath: crashFile))
+    }
+
+    /// The engine stops while its start is still finishing what comes once it's ready (this Mac's
+    /// box starting, held up): it's started again all the same, not left stopped with nothing said.
+    @Test func anEngineThatStopsWhileItsStartFinishesIsStartedAgain() async throws {
+        let binary = try fakeEngine()
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let app = AppModel()
+        defer {
+            letBoxGo()
+            app.stop()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_keep", title: "Keep going", directory: "/tmp/kuvo-tests-restart")])
+        // The box it starts once the engine is ready waits until it's let go.
+        holdBox()
+        let starting = Task { await app.start() }
+        try await until { app.engine == .ready }
+        crash()
+        try await until { starts == 2 && app.engine == .ready }
+        #expect(app.workspace.session("ses_keep") != nil)
+        letBoxGo()
+        await starting.value
     }
 
     /// This Mac's box, as the app starts it before its engine: able to send this Mac's wake-ups

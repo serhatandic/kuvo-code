@@ -96,8 +96,10 @@ final class AppModel {
     /// Opened at login (Open at Login): this Mac's box runs in the background, its engine, bots and
     /// phone link at work, and the window waits until you open Kuvo Code.
     var startedAtLogin = false
-    /// A start under way, from launch or from the window: one at a time.
-    @ObservationIgnored private var isStarting = false
+    /// The start under way, from launch or from the window: one at a time. A stop gives it up
+    /// (`stop`), so a start after it (a restart, the engine started again after it stopped while
+    /// its start was still finishing) isn't turned away by it.
+    @ObservationIgnored private var starting: UUID?
     /// Settings fill the main window in place of the sessions while this is on.
     var showsSettings = false
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
@@ -296,9 +298,10 @@ final class AppModel {
         case .preparing, .failed: break
         }
         // Asked twice before the first got as far as saying so (launch, and the window opening).
-        guard !isStarting else { return }
-        isStarting = true
-        defer { isStarting = false }
+        guard starting == nil else { return }
+        let start = UUID()
+        starting = start
+        defer { if starting == start { starting = nil } }
         // What you keep here, up to date with this version (once, after an update), before the
         // engine starts.
         await calibration.run(self)
@@ -653,6 +656,7 @@ final class AppModel {
     func stop() {
         // A start still on its way gives up, and the stopped engine's exit is expected.
         launch = UUID()
+        starting = nil
         #if DEBUG
         E2E.forget()
         #endif
