@@ -128,7 +128,7 @@ public struct EngineInstaller: Sendable {
         let staging = root.appending(path: ".staging-\(UUID().uuidString)")
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
-        try untar(download, into: staging)
+        try await untar(download, into: staging)
 
         let binary = staging.appending(path: "package/bin/opencode")
         try verifySignature(of: binary)
@@ -203,17 +203,32 @@ public struct EngineInstaller: Sendable {
         guard status == errSecSuccess else { throw EngineInstallError.badSignature(status) }
     }
 
-    private func untar(_ archive: URL, into directory: URL) throws {
+    /// Waited for without holding a thread (`waitUntilExit` on one of Swift's could miss the exit),
+    /// with what tar says read as it comes, so a lot of it never blocks tar on a full pipe.
+    private func untar(_ archive: URL, into directory: URL) async throws {
         let tar = Process()
         tar.executableURL = URL(filePath: "/usr/bin/tar")
         tar.arguments = ["-xzf", archive.path, "-C", directory.path]
-        let pipe = Pipe()
+        let pipe = Pipe.unshared()
         tar.standardError = pipe
+        let errors = LogTail()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                errors.close()
+            } else {
+                errors.append(data)
+            }
+        }
+        let exited = Arrival<Int32>()
+        tar.terminationHandler = { exited.deliver($0.terminationStatus) }
         try tar.run()
-        tar.waitUntilExit()
-        guard tar.terminationStatus == 0 else {
-            let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            throw EngineInstallError.extractionFailed(output)
+        let status = await withTaskCancellationHandler { await exited.wait() } onCancel: { tar.terminate() }
+        guard let status else { throw CancellationError() }
+        guard status == 0 else {
+            await errors.closed(within: .seconds(1))
+            throw EngineInstallError.extractionFailed(errors.text)
         }
     }
 

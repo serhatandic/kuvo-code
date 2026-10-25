@@ -79,6 +79,25 @@ struct EngineDownloadTests {
         }
     }
 
+    /// A download that isn't the engine's archive says it couldn't be unpacked, with what tar
+    /// said, and leaves nothing installed.
+    @Test func aDownloadThatIsntAnArchiveSaysWhy() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = Data("not an archive".utf8)
+        let (port, process) = try server(["ok"], file: file, in: folder)
+        defer { process.terminate() }
+        let installer = EngineInstaller(root: folder.appending(path: "engine"), release: release(port: port, file: file))
+        do {
+            _ = try await installer.install()
+            Issue.record("it installed")
+        } catch let error as EngineInstallError {
+            guard case .extractionFailed(let output) = error else { Issue.record("\(error)"); return }
+            #expect(!output.isEmpty, "with what tar said")
+        }
+        #expect(installer.installed() == nil)
+    }
+
     @Test func kindsOfTrouble() {
         #expect(EngineInstallError.kind(of: URLError(.notConnectedToInternet)) == "offline")
         #expect(EngineInstallError.kind(of: URLError(.cannotFindHost)) == "dns")
