@@ -9,6 +9,20 @@ struct MachinesSettings: View {
     /// Two machines you said were one computer, which said they're two.
     @State private var notSame: (String, String)?
 
+    /// What keeps a machine from being reached, in a line, and why on hover.
+    private func problem(_ line: String, why: String) -> some View {
+        Label {
+            Text(line)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle")
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .help(why)
+        .accessibilityHint(why)
+    }
+
     var body: some View {
         ScrollingSettingsForm {
             Section {
@@ -77,24 +91,12 @@ struct MachinesSettings: View {
                     }
                     MachineStatus(engine: engine)
                     // Set up for your phones and other computers: one that couldn't finish says so.
+                    // A line, the reason behind it on hover; connecting sets it up again.
                     if app.phoneLink.setupFailed.contains(engine.machine.id) {
-                        Label {
-                            Text("Your phones and other computers can’t reach it yet: Kuvo Code couldn’t set it up for them. It tries again when it next connects.")
-                                .fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle")
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    } else if let problem = app.phoneLink.peerProblem(of: engine.machine.id) {
-                        Label {
-                            Text(problem)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle")
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        problem("Your phones and other computers can’t reach it yet.",
+                                why: "Kuvo Code couldn’t set it up for them. It tries again when it next connects.")
+                    } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
+                        problem(line, why: why)
                     }
                 }
             }
