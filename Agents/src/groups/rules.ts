@@ -1,6 +1,6 @@
 // A group chat's rules, as the Mac's `BotGroups` has them, for the chats that live on a machine
 // (groups/runner.ts): who talks next, what a bot is told at its turn, what counts as a pass, who
-// does what after a wrap-up. Each is checked against what the Mac's own does (test/groups-vectors.json).
+// does what after a wrap-up. Each is held to test/groups-rules.json.
 
 import type { ToolCall } from "../wire"
 

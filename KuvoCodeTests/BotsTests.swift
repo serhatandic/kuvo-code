@@ -74,39 +74,4 @@ import Testing
         #expect(job.section.contains("Watch the main branch."))
         if sections.contains("Old note") { #expect(memory.contains("## Notes\nOld note")) }
     }
-
-    // MARK: Group chats
-
-    @Test(arguments: ["PASS", "Pass.", "pass", "[pass] nothing to add", "Pass, nothing new from me", "PASS — I agree with Ada"])
-    func passing(text: String) {
-        #expect(BotGroups.isPass(text))
-    }
-
-    /// A message that only starts with the word is something said.
-    @Test(arguments: ["Pass rate is 98% on main.", "Pass: CI is green now.", "Passing the tests needs a fix first", "Password reset is done"])
-    func notPassing(text: String) {
-        #expect(!BotGroups.isPass(text))
-    }
-
-    @Test func splittingTheWork() {
-        let wrapUp = """
-        Here's the plan:
-        1. **@Samantha**: write the release notes
-        - @Sam (after @Samantha): post them
-        - Sam: tag the release
-        * @Ghost: not in this chat
-        WAIT
-        GO
-        """
-        let (parts, go) = GroupWork.parts(in: wrapUp, names: ["Sam", "Samantha"])
-        #expect(go)
-        #expect(parts.map(\.name) == ["Samantha", "Sam"])
-        #expect(parts[0].task == "write the release notes")
-        #expect(parts[1].task == "- post them\n- tag the release")
-        #expect(parts[1].after == ["Samantha"])
-    }
-
-    @Test func theLastGoOrWaitWins() {
-        #expect(!GroupWork.parts(in: "@Sam: do it\nGO\nWAIT", names: ["Sam"]).go)
-    }
 }

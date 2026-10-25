@@ -16,6 +16,11 @@ enum Modal {
 
     /// An error's alert, shown without holding anything up.
     static func show(_ error: Error) {
+        // The test copy shows no window: a modal alert there would hold the run up for good.
+        if AppInfo.isHostingTests {
+            print("Modal.show (not shown in the test copy): \(error.localizedDescription)")
+            return
+        }
         later { _ = NSAlert(error: error).runModal() }
     }
 

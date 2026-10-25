@@ -171,6 +171,13 @@ struct SidebarView: View {
             try? await Task.sleep(for: .seconds(8))
             app.box.showFailure(text)
         }
+        // KUVO_DEMO_AGENTS_FAILED: this Mac's coding agents' bridge (and its group chats) as if it
+        // had stopped for good, with that reason.
+        .task {
+            guard let text = ProcessInfo.processInfo.environment["KUVO_DEMO_AGENTS_FAILED"] else { return }
+            try? await Task.sleep(for: .seconds(8))
+            app.agents.showFailure(text)
+        }
         // KUVO_DEMO_SEARCH: text in the sidebar's search field.
         .onAppear { if let text = ProcessInfo.processInfo.environment["KUVO_DEMO_SEARCH"] { search = text } }
         // KUVO_DEMO_RENAME=sidebar: the session in view, renamed in its row.
@@ -402,6 +409,22 @@ struct SidebarView: View {
                         .disabled(app.moves.isMoving(bot.id))
                     MoveToComputerMenu(thing: .bot(bot))
                 }
+            }
+            // This Mac's bridge runs its group chats: stopped, they show as last seen until it's back.
+            if box.machine == nil, !groupsHere.isEmpty, case .stopped(let failure) = groups.macReach {
+                SidebarRow(isSelected: false, action: { Task { await app.restartGroupChats() } }) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                } title: {
+                    Text("Group chats stopped")
+                        .foregroundStyle(.secondary)
+                } accessory: {
+                    Text("Restart")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.tint)
+                }
+                .help("What runs your group chats on this Mac stopped. \(failure)")
+                .accessibilityLabel("Group chats stopped. Restart")
             }
             // Group chats, under the bots they're with.
             ForEach(groupsHere) { group in
@@ -1175,7 +1198,7 @@ private struct GroupRow: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        let speaker = groups.speaking[group.id].flatMap { bots.bot($0) }
+        let speaker = groups.speaker(in: group.id).flatMap { bots.bot($0) }
         let isUnread = groups.isUnread(group) && !isSelected
         let machine = groups.machine(of: group.id)
         FaceRow(title: group.name, isUnread: isUnread, isSelected: isSelected, action: action) {
@@ -1187,7 +1210,7 @@ private struct GroupRow: View {
                 ShimmerText(text: "Moving to \(destination.flatMap { place in app.machines.engine(place)?.machine.name ?? place } ?? "this Mac")…")
             } else if let speaker {
                 ShimmerText(text: "\(speaker.name) is thinking…")
-            } else if groups.discussing.contains(group.id) {
+            } else if groups.isDiscussing(group.id) {
                 ShimmerText(text: "Talking it over…")
             } else {
                 Text(lastLine)

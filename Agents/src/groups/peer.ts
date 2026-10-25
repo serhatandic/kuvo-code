@@ -382,6 +382,7 @@ export class SeatServer {
     store.keepPeerWork(given.task, work)
     const bot = this.seats.bot(given.bot)
     if (!bot) return this.report(given.task, work, { ok: false, why: "the bot doesn’t live on this computer any more" })
+    if (bot.moving) return this.report(given.task, work, { ok: false, why: "it was moving to another computer", moving: true })
     try {
       const prompt = await this.seats.give(bot, given.text)
       store.keepPeerWork(given.task, { ...work, prompt })
@@ -535,6 +536,10 @@ export class SeatServer {
       if (anew.host !== host) return
       if (turn.seat && turn.fresh === undefined && anew.without++ < 1) return this.transport.send(host, { kind: "state", id: turn.id, state: { phase: "anew" } }, false)
       this.anew.delete(turn.id)
+    }
+    // A move holds its bot here (its folder says so): it sits this turn out, as it would in a chat here.
+    if (!this.turns.has(turn.id) && this.context?.store.bot(turn.bot)?.moving) {
+      return this.transport.send(host, { kind: "result", id: turn.id, result: { ok: false, why: "it’s moving to another computer", moving: true } }, false)
     }
     const known = this.turns.get(turn.id)
     if (known) {

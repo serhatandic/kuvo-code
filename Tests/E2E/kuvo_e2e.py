@@ -38,6 +38,17 @@ def log(*parts):
     print(dt.datetime.now().strftime("%H:%M:%S"), *parts, flush=True)
 
 
+GUARD = os.path.join(REPO, "scripts", "real-app-guard.sh")
+
+
+def guard(caller, *values):
+    """Stops here, naming `caller`, when any of `values` is the real Kuvo Code's: its bundle ID, its
+    folder in Application Support (its engine among what's there), or the installed app
+    (scripts/real-app-guard.sh says what counts)."""
+    if subprocess.run(["sh", GUARD, caller] + [str(v) for v in values if v]).returncode != 0:
+        sys.exit(1)
+
+
 def sh(command, cwd=None, check=True, env=None, timeout=None):
     """Runs a command; its output, stripped."""
     done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env, timeout=timeout,
@@ -51,6 +62,7 @@ def sh(command, cwd=None, check=True, env=None, timeout=None):
 
 def build(force=False):
     """The e2e copy, and the driver."""
+    guard("kuvo_e2e.py build", BUNDLE, SUPPORT)
     os.makedirs(os.path.dirname(DRIVE), exist_ok=True)
     source = os.path.join(HERE, "drive.swift")
     if force or not os.path.exists(DRIVE) or os.path.getmtime(DRIVE) < os.path.getmtime(source):
@@ -127,6 +139,11 @@ class App:
 
     def launch(self, appearance="dark", window="1300x820", wait_engine=True, model=MODEL, **env):
         """model: what new conversations and bots use (None leaves the app's own choice)."""
+        # Never the real app: its bundle ID, folders or engine.
+        import plistlib
+        plist = os.path.join(APP, "Contents", "Info.plist")
+        runs_as = plistlib.load(open(plist, "rb")).get("CFBundleIdentifier", "") if os.path.exists(plist) else ""
+        guard("kuvo_e2e.py launch", BUNDLE, SUPPORT, APP, runs_as, *env.values())
         self.quit()
         defaults("analytics.noticeShown", True)
         if model:
@@ -323,6 +340,7 @@ class Engine:
 
 def clean():
     """Removes everything the e2e copy keeps on this Mac: its folders, preferences and caches."""
+    guard("kuvo_e2e.py clean", BUNDLE, SUPPORT)
     App(None).quit()
     sh(["defaults", "delete", BUNDLE], check=False)
     lib = HOME + "/Library/"

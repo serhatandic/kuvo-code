@@ -116,21 +116,4 @@ import Testing
         #expect(Personalities.shared.custom.filter { $0.description == words }.count == 1)
         if let added = Personalities.shared.personality(first.id) { Personalities.shared.delete(added) }
     }
-
-    // MARK: Group work that waits
-
-    private func task(_ id: String, _ bot: String, after: [String]? = nil) -> GroupTask {
-        GroupTask(id: id, bot: bot, task: "do it", state: .waiting, after: after)
-    }
-
-    /// Parts that wait on each other in a ring would wait for ever: found, so the chat can say so.
-    @Test func partsWaitingInARing() {
-        let a = task("a", "ada", after: ["bob"]), b = task("b", "bob", after: ["cy"]), c = task("c", "cy", after: ["ada"])
-        #expect(BotGroups.ring(through: a, in: [a, b, c])?.map(\.id).sorted() == ["a", "b", "c"])
-    }
-
-    @Test func aChainIsntARing() {
-        let a = task("a", "ada", after: ["bob"]), b = task("b", "bob", after: ["cy"]), c = task("c", "cy")
-        #expect(BotGroups.ring(through: a, in: [a, b, c]) == nil)
-    }
 }

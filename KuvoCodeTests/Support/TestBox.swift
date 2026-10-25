@@ -5,8 +5,8 @@ import OpenCodeKit
 
 /// This Mac's box for a test: the real `kuvo-link.js serve`, run with Node, as the app runs it
 /// with the engine's Bun. It reaches the test's stand-in engine at its address, which listens on
-/// its port for it (StubWeb answers there as it answers this process), and keeps what it has in
-/// the tests' folder. `stop()` stops it and leaves nothing behind.
+/// its port for it (StubWeb answers there as it answers this process), keeps what it has in the
+/// tests' folder, and sends the test copy's wake-ups. `stop()` stops it and leaves nothing behind.
 @MainActor
 final class TestBox {
     let process = BoxProcess()
@@ -29,6 +29,13 @@ final class TestBox {
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
         try await StubWeb.listen(port: enginePort)
+        // As the app starts it: its environment, and the app's own wake-up folders and kuvo-wake,
+        // with which it sends this Mac's wake-ups.
+        try WakeUps.installCommand()
+        var environment = ProcessInfo.processInfo.environment.merging(environment) { _, given in given }
+        environment["KUVO_BOTS"] = Bots.root.path
+        environment["KUVO_WAKES"] = WakeUps.root.path
+        environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         await process.start(node: node, environment: environment)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }
         StubWeb.letThrough(port: endpoint.url.port ?? 0)

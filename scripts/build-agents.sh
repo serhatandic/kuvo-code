@@ -4,8 +4,8 @@
 # commit the result. The agents' SDKs aren't in it: the bridge downloads each one the first time
 # it's needed. Its last line names what it was built from (a hash of Agents/src and the
 # packages), and `--check` says whether that's what's here now, as CI checks.
-#   BUN   the Bun to build with (default: `bun` on PATH, else the engine Kuvo Code installed,
-#         which is Bun with BUN_BE_BUN=1)
+#   BUN   the Bun to build with (default: `bun` on PATH, else the engine a demo, perf or e2e copy
+#         installed, which is Bun with BUN_BE_BUN=1; never the real Kuvo Code's)
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -22,14 +22,16 @@ if [ "${1:-}" = "--check" ]; then
   exit 1
 fi
 
+. scripts/real-app-guard.sh
 if [ -z "${BUN:-}" ]; then
   if command -v bun >/dev/null 2>&1; then
     BUN=bun
   else
-    BUN=$(ls -d "$HOME/Library/Application Support/run.kuvo.code/engine/"*/opencode 2>/dev/null | tail -n 1)
-    [ -n "$BUN" ] || { echo "No Bun: install it, or launch Kuvo Code once so it downloads its engine." >&2; exit 1; }
+    BUN=$(newest_copy_engine)
+    [ -n "$BUN" ] || { echo "No Bun: install it, or launch a demo copy of Kuvo Code once so it downloads its engine." >&2; exit 1; }
   fi
 fi
+real_app_guard "scripts/build-agents.sh" "$BUN"
 
 BUN_BE_BUN=1 "$BUN" build Agents/src/main.ts --target=bun --outfile KuvoCode/Resources/kuvo-agents.js
 echo "$stamp" >>KuvoCode/Resources/kuvo-agents.js

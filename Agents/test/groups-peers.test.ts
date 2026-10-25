@@ -327,6 +327,17 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(relay.sent.every((each) => ["turn", "state", "result"].includes(each.mail.kind))).toBe(true)
   })
 
+  test("a bot a move holds on its own computer sits its turn out there, and the chat says why", async () => {
+    writeFileSync(join(home.root, "bots", "bot_ben", "paused"), "moving")
+    host.engine.lines = { Ada: ["&Ben, is the build green?", "PASS"] }
+    home.engine.lines = { Ben: ["Green since this morning."] }
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Ready to ship?")
+    await over(host, () => said(host).some((message) => message.kind === "note"))
+    expect(said(host).filter((message) => message.kind === "note").map((message) => message.text)).toContain("Ben is moving to another computer, so it sat this out.")
+    expect(home.engine.seatsMade()).toEqual([])
+  })
+
   test("your message while it talks there reaches it straight away", async () => {
     home.engine.slow.set("Ben", 800)
     host.engine.lines = { Ada: ["PASS", "PASS"] }

@@ -287,6 +287,9 @@ connection.
     given `fresh`; asked without it, the home answers `{phase: "anew"}` and forgets the turn, the host
     asks again at once with `fresh` (if it had it), and a home asked without it again says `anew`
     once more, then takes it as it is.
+  - A home whose bot a move holds (its folder's `paused` says `moving`) answers a turn at once
+    with `{ok: false, why, moving: true}`, and fails a part given to it the same way: the chat says
+    the bot is moving and sat this out.
   - **`state`** (home → host): `{id, state}`, `state` one of `{phase: "taken"}` (at once),
     `{phase: "seated", seat, agents, replaced?}`, `{phase: "started"}` (its words are with its
     seat), `{phase: "activity", activity}` (at most every 1.5 s, the latest), `{phase: "steered",
@@ -953,14 +956,14 @@ host serves:
   engine over to the coding agents (422 for a coding agent's model there); a deleted bot leaves
   the group chats there too, and is noted in `~/.kuvo-code/bots/deleted.json`. The Mac takes both
   in the next time it connects. Send them to the Mac while it answers.
-- On a Mac, `POST kuvo/groups` with `{name, members, purpose?, meeting?}` (members by bot `id`,
-  at least two) makes a group chat on the Mac, as New Group Chat does: `201 {"group": <as
-  kuvo/groups lists one>}`, 400 `{"message"}` without a name or two bots, 404 `{"message"}` for
-  a bot that isn't there. Moving it to a machine is the Mac's Move to Computer.
+- `POST kuvo/groups` with `{name, members, purpose?, meeting?}` (members by bot `id`, at least
+  two, of those `kuvo/groups/joinable` names) makes a group chat on the computer asked, as New
+  Group Chat does: `201 {"group": <as kuvo/groups lists one>}`, 400 `{"message"}` without a name
+  or two bots, 404 `{"message"}` for a bot that can't be in it. Moving it to another computer is
+  the Mac's Move to Computer.
   `meeting` is `{next, every?, topic?}`: `next` in seconds since 1970, `every` as kuvo-wake writes
   it (`1d`, `weekdays`, `1w`…; null or left out for once). The computer the chat lives on sets it
-  up as Edit Group Chat does (`BotGroup.Meeting.planned`, held to the agents bridge's
-  `planMeeting` by `Agents/test/groups-vectors.json`), on your clock, to the minute: a repeating one whose time
+  up (the agents bridge's `planMeeting`), on your clock, to the minute: a repeating one whose time
   has passed comes at its next round, weekdays skip the weekend, a time of day (and a week's day)
   is kept from then on, and an empty topic gets the default. 400 `{"message"}` for a one-off whose
   time has passed or a repeat there isn't. The chat lists it as `meeting: {next, every, topic,
@@ -968,15 +971,12 @@ host serves:
 - `PATCH kuvo/groups/<id>` with any of `{name, purpose, members, meeting}` changes the chat as
   Edit Group Chat does (an empty `purpose` is none, `meeting: null` none): `200 {"group"}`, 400
   `{"message"}` for what can't be (no name, fewer than two bots, a bot that doesn't live where
-  the chat does, a meeting as above), 404 for no such chat or bot, 409 while it moves. A Mac
-  answers it for every chat it lists, a machine's bridge for those that live there (a Mac passes
-  the change to a machine's chat on as it came, and that machine's rules and words answer it);
-  `kuvo/groups/events` says what changed at once.
+  the chat does, a meeting as above), 404 for no such chat or bot, 409 while it moves. Each
+  computer answers it for the chats that live there; `kuvo/groups/events` says what changed at once.
 - `DELETE kuvo/groups/<id>` deletes the chat as Delete Group Chat… does: its messages and seats
   go, and its bots forget it. `200 {}`, for one that's gone already too; 409 `{"message"}` while it
-  moves; 503 `{"message"}` when its machine, or the coding agents' bridge there, can't be reached.
-  A Mac answers it for every chat it lists, a machine's bridge for those that live there;
-  `kuvo/groups/events` leaves it out from then on.
+  moves; 503 `{"message"}` when the coding agents' bridge there can't be reached. Each computer
+  answers it for the chats that live there; `kuvo/groups/events` leaves it out from then on.
 - A machine's bridge answers the same three, with the Mac closed too: what New Bot
   offers there (`startingModel` has one key, the machine's name as its bots' `machine` has it,
   and `projects` are its own); a bot made there, with its folder, conversation and instructions,
@@ -995,7 +995,10 @@ host serves:
   (`Peers`). Insert
   `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
-  agent reads, so a machine's bridge, with the Mac closed, sends it without. Show a message
+  agent reads, so a machine's bridge, with the Mac closed, sends it without. A message to a group
+  chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
+  there are to name there (not the chat's own bots), for every client alike: send only the words,
+  and a block sent is not taken. Show a message
   without it: it ends the text, from a line `<named-agents>` (then a heading line, then
   `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
   `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
@@ -1026,19 +1029,30 @@ host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go. Both answer the list as it is then. `POST
+  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
+  list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still
   comes back at its time). Both answer `200 {}`, `404 {}` when there's no such one, `409
   {"message"}` while its conversation is on its way to another computer, or `503 {"message"}`
-  when it couldn't go. A Mac answers for its sessions and its machines'; a machine's bridge for
-  its own sessions and bots, with the Mac closed too (a session that keeps none answers an empty
-  list). A wake-up reaches the conversation as a
+  when it couldn't go. Each box answers for its own sessions and bots, a Mac's and a machine's
+  alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
+  an empty list). A wake-up reaches the conversation as a
   message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
   watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching}]}`
   (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
-  `kuvo/bots`. A Mac lists its sessions' and those it has read of its machines'; a machine's
-  bridge its own.
+  `kuvo/bots`. Each box lists its own.
+- `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
+  makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
+  that computer, `note` what to do when its output changes. It answers the list as it is then;
+  `400 {"message"}` in `kuvo-wake`'s own words for what can't be one (20 watches already, say),
+  `404 {}` for a conversation that isn't there, `409 {"message"}` while it moves.
+  `GET kuvo/wakes/events` follows every conversation's wake-ups, watches and pause on the box,
+  its bots' and sessions' (`wakes.events` in `features`), as ndjson: a line now and again each
+  time they change (added, fired, canceled, paused), `{"sessions": [{session, wakes: [{id, due,
+  note, every}], watches: [{letters, every, check, note}], paused}]}` with notes and checks whole,
+  and only conversations that have any or are paused.
 - On a Mac, `kuvo/asks`: what agents ask you for while they browse, on the Mac or a machine: a
   sign-in (the fields the page has, and the accounts Passwords keeps for the site, never
   their passwords), a one-time code, or a step only you can do. `kuvo/asks/events` is the same
@@ -1053,7 +1067,7 @@ host serves:
   lists the same asks, by the same `id`: the first answer counts, and the ask goes from both.
   The browser keeps them in `~/.kuvo-code/run/browser-asks.json` for the bridge, and waits the
   whole 15 minutes for an answer while the bridge runs, rather than a few for a Mac.
-- On a Mac, `kuvo/groups`: your group chats, with their bots (face, name, session), who's
+- `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
   talking, whether one is under way or paused, and the last thing said; `kuvo/groups/events`
   streams that list as it changes, and `kuvo/groups/<id>/events` one chat's latest messages,
   the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`); `…/stop`, `…/keep-going`
@@ -1070,17 +1084,13 @@ host serves:
   changed): keep the ones you have. The first line always has them.
   A bot's message with `report` (a task's id) is it reporting back on its part. Times are
   seconds since 1970.
-  A Mac lists all of yours: its own, and those that live on your machines (whose bots all live
-  there), which it follows from there; each with `machine`, the machine it lives on (by id, as a
-  bot's `machine`; none for the Mac), and `moving` while it's on its way to another computer
-  (one chat's events say it too): what you'd write waits until it's there, and `POST
-  kuvo/groups/<id>` and `…/undo` answer 409 meanwhile, as they do while its machine is away.
-  A machine's bridge answers the same routes, in the same shapes, for the chats that
-  live on it, with the Mac closed too: the coding agents' bridge there runs them, and answers
-  them itself (at `api/kuvo/link/groups…`, which the link passes on as it answers, a followed one
-  line by line), with every rule of what can be made or changed (503 while it isn't up or isn't
-  answering: ask again; 404 only when none run there). One moving between computers isn't listed
-  where it's going until it's there. Moving one is on the Mac (Move to Computer), not the phone.
+  Each computer lists only its own, a Mac's as a machine's: ask each for its chats. The coding
+  agents' bridge there runs them, and answers them itself (at `api/kuvo/link/groups…`, which
+  the link passes on as it answers, a followed one line by line; this Mac's PhoneLink as a
+  machine's `kuvo-link.js`), with every rule of what can be made or changed (503 while it isn't up
+  or isn't answering: ask again; 404 only when none run there). One moving between computers isn't
+  listed on either while it moves (held), and `POST kuvo/groups/<id>` and `…/undo` answer 409
+  meanwhile. Moving one is on the Mac (Move to Computer), not the phone.
   `kuvo/groups/joinable` says who can be in a group chat made there: `{"bots": [<as a chat's
   members list them>]}`, every bot that lives there, the first made first, then the bots of your
   other computers that take a chat's turns ("Peers", group chats), each with `computer` (its
@@ -1141,10 +1151,11 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
+| `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
 | `worktrees` | `kuvo/worktrees…` |
 | `engine.start` | a machine only: `POST kuvo/engine/start` |
-| `groups.joinable` | a machine only, for now: `kuvo/groups/joinable` |
-| `groups.seats` | a machine only, for now: its bots take turns in chats on other computers ("Peers", group chats) |
+| `groups.joinable` | `kuvo/groups/joinable` |
+| `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | a Mac only: `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
@@ -1207,6 +1218,17 @@ the relay does (403 for one that isn't what it seems), sends a stream as it come
 time for `application/x-ndjson`), and goes when its stdin closes. It finds the engine and the
 coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the app
 writes (only you can read them) as they start and removes as they stop.
+
+Its group chats run in its coding agents' bridge, as a machine's do, with folders in the app's
+own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
+of in `box/trash` (`KUVO_TRASH`; the bridge says `kuvo.group.trashed {id, path}` and the app moves
+it to the Finder's Trash), and who can be named with `&` in `box/run/agents.json`
+(`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the app writes). Its bots remember its
+chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client's `kuvo/groups…`
+on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the
+phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the
+bridge who your machines and their bots are, carries what it sends by the same rules, and the
+Mac's agents mail carries its bots' `id` and `look` and its `features`.
 
 Areas move onto it one at a time. A moved area's routes are answered there for every client: a
 phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
@@ -1382,6 +1404,23 @@ before connects (the box notes one: `run/attached`).
   (`cache/install`): the agents bridge takes those away as it starts.
 - **Updates**: the newest release on GitHub (0.7.2) has no `boxes.json`, which a box takes as
   "current", not a failure, until a release that has one is the newest.
+
+**This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
+app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves
+them into its coding agents' bridge at launch, before the bridge starts (`GroupMigration`), and
+can be cut short and run again: each chat's messages first, its record (`groups/<id>/group.json`,
+written whole and renamed) last, a chat with a record left as it is, one moving as the app last
+quit `held` for the move's recovery. A seat it made on a machine for a bot there (one the machine
+doesn't know as a seat, with no `kuvo.seat` metadata) is taken out of the chat, so the bot's next
+turn makes one there, and listed in `groups/orphan-seats.json` (by machine), which the app keeps out
+of the lists and deletes on that machine's engine once it connects. What a bot whose machine was
+away was still to be told goes to `groups/pending-memory.json` (the bridge tells it once that bot
+is known there); every bot here gets `bot.json` and `session` in its folder. Once every chat is
+there, the old files are copied to `Backups/groups-<version>-<the list's hash>` and left where they
+are, and what was taken is noted (`groups/imported.json`: the list's hash and every chat's ID); one
+that couldn't move is tried again at the next launch. A `groups.json` an older version writes later
+(after going back to it, where its chats are as it left them) is taken in by each chat's ID, and
+a chat deleted since it was taken stays deleted. It can go three months after 0.8.0 ships.
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or

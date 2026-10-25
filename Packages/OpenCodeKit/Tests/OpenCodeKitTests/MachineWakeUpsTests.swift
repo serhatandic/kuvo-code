@@ -134,17 +134,45 @@ import Testing
         #expect(prompts().count == 1)
     }
 
-    @Test func oneTheEngineCouldntTakeIsTriedAgainTheNextMinute() throws {
+    /// When a folder's next try is (`.retry`), and how long it waited, in seconds.
+    private func retry(of folder: URL) -> (at: Int, wait: Int)? {
+        guard let text = try? String(contentsOf: folder.appending(path: ".retry"), encoding: .utf8) else { return nil }
+        let parts = text.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
+        return parts.count == 2 ? (parts[0], parts[1]) : nil
+    }
+
+    /// As if its wait were over.
+    private func waitOver(_ folder: URL) throws {
+        let wait = try #require(retry(of: folder)).wait
+        try write(folder.appending(path: ".retry"), "\(Int(Date.now.timeIntervalSince1970) - 1) \(wait)\n")
+    }
+
+    @Test func oneTheEngineCouldntTakeWaitsLongerEachTimeUntilItGoes() throws {
         defer { cleanUp() }
         let bot = try folder("bot_a", session: "ses_a", wake: "Check the build")
         try answer(Self.enginePort, "POST", "api/session/ses_a/prompt", #"{"error":"busy"}"#, code: 503)
+        let now = Int(Date.now.timeIntervalSince1970)
         try fire()
         #expect(prompts().count == 1)
         #expect(wakes(of: bot).count == 1, "kept")
-        try FileManager.default.removeItem(at: k.appending(path: "answers"))
+        let first = try #require(retry(of: bot))
+        #expect(first.wait == 60)
+        #expect(first.at >= now + 60 && first.at <= now + 70, "a minute from now")
+        // Within the minute: not tried.
+        try fire()
+        #expect(prompts().count == 1)
+        // Its minute over, it still can't go: twice as long.
+        try waitOver(bot)
         try fire()
         #expect(prompts().count == 2)
+        #expect(retry(of: bot)?.wait == 120)
+        // And it goes.
+        try FileManager.default.removeItem(at: k.appending(path: "answers"))
+        try waitOver(bot)
+        try fire()
+        #expect(prompts().count == 3)
         #expect(wakes(of: bot).isEmpty, "sent")
+        #expect(retry(of: bot) == nil, "waiting no more")
     }
 
     @Test func aRepeatComesBackAtItsNextTimeAndIsntQueuedTwice() throws {

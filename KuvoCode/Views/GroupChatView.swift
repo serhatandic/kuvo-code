@@ -25,7 +25,9 @@ struct GroupChatView: View {
 
     var body: some View {
         let messages = groups.messages(in: group.id)
-        let speaker = groups.speaking[group.id].flatMap { bots.bot($0) }
+        let speaker = groups.speaker(in: group.id).flatMap { bots.bot($0) }
+        // Where it lives can't be reached now: what needs it (undo, the work, Keep Going) waits.
+        let reachable = groups.reach(group.id) == .ready
         // What you select, to reply to (over the composer) or copy.
         ConversationScroll(scroller: scroller, spacing: 18, change: [messages.last?.id, speaker?.id, String(messages.count)], quote: { text in
             addQuote(text, how: "selection")
@@ -35,12 +37,13 @@ struct GroupChatView: View {
                      text: { FindText.shown(markdown: $0.text, folders: []) }) { message, _ in
                 GroupMessageRow(message: message, author: message.author.flatMap { bots.bot($0) }, members: members,
                                 reply: { reply(to: message) }, undo: { undo(from: message) },
-                                startWork: message.tasks?.contains { $0.state == .proposed } == true ? { groups.startWork(message.id, in: group.id) } : nil)
+                                startWork: reachable && message.tasks?.contains { $0.state == .proposed } == true ? { groups.startWork(message.id, in: group.id) } : nil,
+                                isOffline: !reachable)
                     .equatable()
                     .environment(\.findHighlight, find.highlight(for: message.id))
             }
             if let speaker {
-                TypingRow(bot: speaker, activity: groups.activity[group.id] ?? [])
+                TypingRow(bot: speaker, activity: groups.activity(in: group.id))
                     .id("typing")
                     .transition(.opacity)
             }
@@ -59,14 +62,23 @@ struct GroupChatView: View {
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
-                // One on a machine that's away: as last seen, and what you write waits.
-                if let machine = groups.unreachable(group.id), let engine = app.machines.engine(machine) {
-                    MachineOfflineBar(engine: engine)
+                // Where it lives can't be reached now: as last seen, and what you write waits.
+                switch groups.reach(group.id) {
+                case .away(let machine):
+                    if let engine = app.machines.engine(machine) {
+                        MachineOfflineBar(engine: engine)
+                            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                            .transition(.opacity.combined(with: .offset(y: 6)))
+                    }
+                case .starting, .stopped:
+                    MacGroupsBar()
                         .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
                         .transition(.opacity.combined(with: .offset(y: 6)))
+                case .ready:
+                    EmptyView()
                 }
                 // Once the wrap-up after the limit is done: Keep Going does nothing before.
-                if groups.paused.contains(group.id) && !groups.discussing.contains(group.id) {
+                if reachable && groups.isPaused(group.id) && !groups.isDiscussing(group.id) {
                     PausedBar { groups.keepGoing(group.id) }
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
@@ -76,13 +88,14 @@ struct GroupChatView: View {
                     quoteFocus: quoteFocus,
                     placeholder: "Message \(group.name)…",
                     members: members,
-                    isTalking: groups.discussing.contains(group.id),
+                    isTalking: groups.isDiscussing(group.id),
                     focusRequest: composerFocus,
                     send: send,
                     stop: { groups.stop(group.id) }
                 )
             }
-            .animation(.ui, value: groups.paused.contains(group.id))
+            .animation(.ui, value: groups.isPaused(group.id))
+            .animation(.ui, value: groups.reach(group.id))
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
             .readableColumn()
@@ -140,8 +153,8 @@ struct GroupChatView: View {
         let message = Quoting.message(quotes: draft.quotes, text: draft.text)
         // A quote you didn't answer goes only with words of yours.
         guard !Quoting.words(of: message).isEmpty else { return }
-        // Its machine away, or it's moving: it waits in the composer.
-        guard groups.unreachable(group.id) == nil, groups.send(message, to: group.id) else { return NSSound.beep() }
+        // Where it lives can't be reached now, or it's moving: it waits in the composer.
+        guard groups.send(message, to: group.id) else { return NSSound.beep() }
         Drafts.shared[draftKey].text = ""
         Drafts.shared[draftKey].quotes = []
         scroller.toEnd()
@@ -181,7 +194,7 @@ private struct MeetingRow: View {
 private struct GroupMessageRow: View, Equatable {
     static func == (lhs: GroupMessageRow, rhs: GroupMessageRow) -> Bool {
         lhs.message == rhs.message && lhs.author == rhs.author && lhs.members == rhs.members && (lhs.reply == nil) == (rhs.reply == nil)
-            && (lhs.startWork == nil) == (rhs.startWork == nil)
+            && (lhs.startWork == nil) == (rhs.startWork == nil) && lhs.isOffline == rhs.isOffline
     }
 
     let message: GroupMessage
@@ -194,6 +207,8 @@ private struct GroupMessageRow: View, Equatable {
     let undo: () -> Void
     /// On a wrap-up whose work waits for you: hands each part to its bot.
     var startWork: (() -> Void)?
+    /// Where the chat lives can't be reached now: undoing waits.
+    var isOffline = false
     @State private var hovering = false
     @State private var confirmsUndo = false
     @Environment(\.answerAgent) private var answerAgent
@@ -219,7 +234,8 @@ private struct GroupMessageRow: View, Equatable {
         } else if message.author == nil {
             YourMessage(text: message.text, references: MessageMentions.agents(namedIn: message.text).map(\.reference),
                         sent: message.time, undo: undo,
-                        undoNote: "The chat goes back to before this message, and the message comes back to the composer. The bots are told to set aside what was taken back.")
+                        undoNote: "The chat goes back to before this message, and the message comes back to the composer. The bots are told to set aside what was taken back.",
+                        isOffline: isOffline)
         } else {
             HStack(alignment: .top, spacing: 10) {
                 if let author {

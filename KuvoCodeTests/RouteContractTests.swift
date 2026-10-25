@@ -130,6 +130,8 @@ final class MacBox {
     var vars: [String: Any] = [:]
     /// Bots given, for what they leave in the Keychain.
     private var bots: [String] = []
+    /// This Mac's coding agents' bridge, run for real for its group chats (`agentsBridge.groups`).
+    private var realBridge: RealBridge?
     private let previousMail = AgentMail.shared.app
 
     private static let support = AppInfo.supportDirectory
@@ -163,6 +165,7 @@ final class MacBox {
     }
 
     func finish() {
+        realBridge?.stop()
         box?.stop()
         engine.stop()
         for bot in bots { for name in IntegrationKeys.variables(ofBot: bot) { _ = IntegrationKeys.set(nil, for: name) } }
@@ -255,7 +258,7 @@ final class MacBox {
         let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: data)
         var answer = Answer(status: 0, type: "", body: Data())
         let link = app?.phoneLink
-        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: engine.url + "/")!, password: "test", agents: link?.agents?.address) {
+        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: engine.url + "/")!, password: "test", agents: realBridge?.agents.address ?? link?.agents?.address) {
             switch part {
             case .head(let status, let headers):
                 answer.status = status
@@ -282,6 +285,8 @@ final class MacBox {
             try manager.createDirectory(at: folder.appending(path: "wakes"), withIntermediateDirectories: true)
             try manager.createDirectory(at: folder.appending(path: "workspace"), withIntermediateDirectories: true)
             try Data("# \(string("name"))'s memory\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
+            // Its conversation, as the app notes it in its folder: what its box finds it by.
+            try Data(string("session").utf8).write(to: folder.appending(path: "session"))
             let look = (given["look"] as? [String: String]).flatMap { try? JSONDecoder().decode(BotLook.self, from: JSONSerialization.data(withJSONObject: $0)) }
                 ?? BotLook(color: .mint, shape: .round, face: .calm)
             let model = (given["model"] as? [String: String]).flatMap { try? JSONDecoder().decode(ModelRef.self, from: JSONSerialization.data(withJSONObject: $0)) }
@@ -293,6 +298,9 @@ final class MacBox {
             var list = JSONFile.read([Bot].self, from: file, isoDates: true) ?? []
             list.append(bot)
             JSONFile.write(list, to: file, isoDates: true)
+            // Beside its memory, as the app writes them: what this Mac's bridge reads a bot by.
+            try Bots.descriptorData(bot).map { try $0.write(to: folder.appending(path: Bot.Descriptor.file)) }
+            try Data(bot.sessionID.utf8).write(to: folder.appending(path: "session"))
             bots.append(id)
             state.add(StubEngine.session(bot.sessionID, title: bot.name, directory: bot.directory), running: false)
         case "wake":
@@ -345,11 +353,19 @@ final class MacBox {
             default: .signIn(username: given["username"] as? Bool ?? true, password: given["password"] as? Bool ?? true)
             }
             app?.browserAsks.add(.init(id: string("id"), kind: kind, host: string("host"), machine: nil), respond: { _ in })
-        case "agentsBridge", "peers":
-            // This Mac runs its group chats itself, and its coding agents' bridge isn't one this
-            // suite stands in for (nor are your other computers, whose bots join its chats from D1b
-            // step 4): nothing to give.
-            break
+        case "agentsBridge":
+            // This Mac's group chats run in its coding agents' bridge, as the app starts it: the
+            // real one, for them (what else it answers isn't this suite's).
+            guard given["groups"] as? Bool == true, realBridge == nil else { break }
+            realBridge = try await RealBridge.start(engine: engine, folder: work.appending(path: "agents"), environment: [
+                "KUVO_GROUPS": GroupMigration.root.path, "KUVO_BOTS": Bots.root.path, "KUVO_TRASH": work.appending(path: "trash").path,
+                "KUVO_GROUPS_MEMORY_KEY": BotGroups.memoryKey,
+            ])
+        case "peers":
+            // Your machines and their bots, as this Mac's link tells its bridge (SeatRelay.tellPeers).
+            let api = try #require(realBridge?.api, "\(at): peers are told to the real coding agents' bridge: give agentsBridge.groups first")
+            let body = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: given))
+            _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/peers", body: body), as: JSONValue.self)
         default:
             throw TestFailure("\(at): no fixture “\(kind)”")
         }

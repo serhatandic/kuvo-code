@@ -101,7 +101,16 @@ script won't run the tests otherwise.
 happen, with the app's real parts; leave out what only restates the code.
 Some run the agents bridge the app ships for real (`RealBridge`, with a stand-in
 engine that listens on a loopback port): the script gives them a Bun
-(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine Kuvo Code downloaded).
+(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine a demo, perf or e2e copy
+downloaded).
+
+Nothing that starts a copy of the app or its engine for a test, a demo or a
+measurement may use the real Kuvo Code: its bundle ID (`run.kuvo.code`), its
+folder in Application Support (its engine, sessions and sign-ins) or the app in
+Applications. The scripts check with `scripts/real-app-guard.sh` and stop, naming
+themselves, and a debug build launched with any `KUVO_DEMO_*`, `KUVO_PERF_*` or
+`KUVO_E2E` variable won't start under the real bundle ID or with the real
+engine. `python3 -m unittest discover -s Tests/Guard` checks each of them.
 
 Recorded engine responses in `Tests/OpenCodeKitTests/Fixtures` drive most of
 OpenCodeKit's tests. `LiveServerTests` run against a real binary when
@@ -189,10 +198,14 @@ is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource) runs with the
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
 JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
-Group chats that live on a machine run in the agents bridge there (`Agents/src/groups`), by the
-same rules as the Mac's `BotGroups`. After changing those rules on either side, run
-`./scripts/group-vectors.sh` (it writes `Agents/test/groups-vectors.json` from the Swift side),
-then `cd Agents && bun test`.
+Group chats run in each computer's agents bridge (`Agents/src/groups`), this Mac's as a
+machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
+their rules. Their own tests are the bridge's (`cd Agents && bun test`). What the app still reads
+the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
+quotes) is held to `Agents/test/box-vectors.json`: after changing one on either side, run
+`./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
+Until this Mac's box process holds the relay connection, `SeatRelay` carries this Mac's group
+chats' mail to your machines over the phone link's connection, by `kuvo-link.js`'s rules.
 
 It's off until the iPhone app is out: `defaults write run.kuvo.code phoneLink -bool true` (or
 `KUVO_DEMO_PHONE=1`) turns it on, with Settings › Phone, and `phoneLink.relay` points it at a
@@ -203,7 +216,18 @@ relay other than one on this Mac (`ws://127.0.0.1:8790`).
 Debug builds read these environment variables to open the app in a given state
 without clicking, for trying a change or taking screenshots. What the window does
 for them (tabs, the panel, prompts, bots, Settings) is in `KuvoCode/App/Demo`, and
-the `KUVO_PERF_*` runs are in `DemoPerf` there:
+the `KUVO_PERF_*` runs are in `DemoPerf` there.
+
+A demo copy left to run on its own must never show a macOS prompt, because nobody is
+there to answer it and the copy would wait for good. With `KUVO_DEMO_BACKGROUND`, or
+`KUVO_DEMO_NO_PROMPTS=1`, it asks nothing, as the test copy doesn't: its notifications
+show only if macOS allowed them for its bundle ID before; Keychain reads and writes
+that would ask fail at once instead; Touch ID and Open at Login are skipped, and so is
+the usage panel unless `KUVO_DEMO_USAGE` names one of its screens; and the engine leaves out
+`~/.claude/skills`, where a link can lead into your Desktop. Each skip is in the log
+with where it was asked from (`log show --predicate 'subsystem == "run.kuvo.code" AND
+category == "prompts"'`). `KUVO_DEMO_NO_PROMPTS=0` lets a background copy ask after all,
+when you're there to answer.
 
 | Variable | Effect |
 | --- | --- |
@@ -224,7 +248,8 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 | `KUVO_DEMO_QUEUE` | Messages to queue once that session's agent is working, separated by `\|` |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
-| `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere |
+| `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |
+| `KUVO_DEMO_NO_PROMPTS` | `1`: never show a macOS prompt (above); `0`: a background copy may ask after all |
 | `KUVO_DEMO_TAB_IDLE` | Seconds an agent's tab you haven't looked at stays once no agent works in it (an hour otherwise) |
 | `KUVO_DEMO_FILES` | Comma-separated paths to attach to that prompt |
 | `KUVO_DEMO_COMPOSER_FILES` | Comma-separated paths to show as attached in the composer |
@@ -314,6 +339,28 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 | `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
+| `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |
+| `KUVO_DEMO_GROUP_REPLAY` | `setup`, then `run`: a three-bot group chat discussion measured (`Tests/Perf`, `groups`) |
+| `KUVO_PERF_PROVIDER` | The stand-in model that discussion talks on, an OpenAI-compatible URL (`kuvo_perf.py` serves it) |
+
+### Rehearsing the group chats' upgrade
+
+This Mac's group chats moved into its box from what 0.5 to 0.8.0-beta.1 kept (`GroupMigration`).
+`scripts/groups-rehearsal.sh` rehearses it with the real released builds. They can only run as
+Kuvo Code itself, so it saves your Kuvo Code's folder and settings first and puts them back at the
+end (its Keychain items are shared too: an old build may ask for them). Have someone at the Mac:
+each step but `check` asks you to type yes at the terminal first.
+
+1. `./scripts/groups-rehearsal.sh prepare` downloads 0.5.22, 0.6.6, 0.7.2 and 0.8.0-beta.1 and
+   builds this checkout as `run.kuvo.code`, then `save`.
+2. For each version: `fresh`, then `open <version>`. Make two bots (one on a machine, if you have
+   one) and a group chat of both with a weekday meeting, talk until a wrap-up splits the work, start
+   it, and take one message back. For one version, quit while Move to Computer moves a chat.
+3. `open this`: the chats show at once, as they were; write in one and see the bots answer.
+   `check` says what moved, what was taken, the copy in Backups, and any seat left on a machine.
+4. `open <version>` again (the rollback): its chats are there, as it left them. Make another chat,
+   quit, `open this`: only the new one comes in, and one you deleted stays deleted.
+5. `restore` when done.
 
 ### The icon
 

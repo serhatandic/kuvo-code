@@ -6,6 +6,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { emit } from "../events"
 import type { ModelRef } from "../wire"
 import type { SeatResult } from "./seat"
 import { jobInMemory, type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
@@ -145,6 +146,8 @@ export interface MachineBot extends SeatBot {
   look?: unknown
   /** When it was made. */
   created?: string
+  /** A move holds it (`paused` in its folder says "moving", as the Mac's Moves writes it): it sits its turns out until it's there. */
+  moving?: boolean
 }
 
 const read = (file: string): any => {
@@ -173,6 +176,8 @@ export class GroupStore {
   constructor(
     readonly root: string,
     readonly bots: string,
+    /** Who there is to name with "&" (`named.ts`): the agents file the box's link writes. */
+    readonly agentsFile?: string,
   ) {
     mkdirSync(root, { recursive: true, mode: 0o700 })
   }
@@ -222,12 +227,16 @@ export class GroupStore {
     if (!awake) rmSync(file, { force: true })
   }
 
-  /** The chat's folder, to Kuvo Code's trash on the machine. */
+  /**
+   * The chat's folder, to Kuvo Code's trash on the computer. Said as it goes (`kuvo.group.trashed`,
+   * with where it went): on the Mac the app puts it in the Finder's Trash, where you look for it.
+   */
   trash(id: string, trash: string) {
     if (!existsSync(this.folder(id))) return
     const into = join(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`)
     mkdirSync(into, { recursive: true, mode: 0o700 })
     renameSync(this.folder(id), join(into, id))
+    emit("kuvo.group.trashed", { id, path: into })
   }
 
   settings(): Settings | undefined {
@@ -280,6 +289,7 @@ export class GroupStore {
       agents: text(join(folder, "via"))?.trim() === "bridge",
       ...(described.look !== undefined ? { look: described.look } : {}),
       ...(typeof described.created === "string" ? { created: described.created } : {}),
+      ...(text(join(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}),
     }
   }
 
@@ -343,6 +353,22 @@ export class GroupStore {
     const all = this.peerWork()
     change(all)
     write(join(this.root, "peer-work.json"), all)
+  }
+
+  /**
+   * Bots whose memory of their chats is still to be told, each with the chats it forgets
+   * (`pending-memory.json`): what the Mac's own runner couldn't tell a bot whose machine was away,
+   * brought here as the Mac's chats moved into this bridge.
+   */
+  pendingMemory(): Record<string, string[]> {
+    const value = read(join(this.root, "pending-memory.json"))
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings(chats))) as Record<string, string[]>
+  }
+
+  setPendingMemory(pending: Record<string, string[]>) {
+    if (Object.keys(pending).length === 0) rmSync(join(this.root, "pending-memory.json"), { force: true })
+    else write(join(this.root, "pending-memory.json"), pending)
   }
 
   /** Turns that chats on other computers gave bots here, by the turn's id: so one asked again after the bridge restarted goes on where it was. */

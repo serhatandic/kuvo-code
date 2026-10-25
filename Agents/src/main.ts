@@ -122,8 +122,7 @@ const sessions = new Sessions(
 
 // The group chats that live on this computer, run here: on a machine, in its Kuvo Code folder; on
 // the Mac, where the app says (KUVO_GROUPS, with its bots in KUVO_BOTS and its trash in
-// KUVO_TRASH), once it does (until then the app runs its own). One that fails to start leaves the
-// rest of the bridge as it is.
+// KUVO_TRASH). One that fails to start leaves the rest of the bridge as it is.
 let self: ReturnType<typeof requester> | undefined
 let groups: { runner: GroupRunner; store: GroupStore; peers: PeerParts } | undefined
 const groupFolders = onMachine
@@ -132,11 +131,13 @@ const groupFolders = onMachine
     ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH }
     : undefined
 const groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined
+// Who there is to name with "&" in a chat: the agents the box's link lists (on the Mac, where the app says).
+const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
 // Nor do the agents get these.
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {
   try {
-    const store = new GroupStore(groupFolders.root, groupFolders.bots)
+    const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile)
     // Its bots in chats on your other computers, and theirs in chats here, through the box's link.
     const post = new PeerPost(join(groupFolders.root, "peer-outbox.json"))
     const directory = new LinkDirectory(post)
@@ -185,6 +186,12 @@ void link.whenReady().then(() => {
   try {
     groups?.runner.start()
     groups?.peers.server.start()
+    // What bots are still to be told of their chats, now and each minute, as your other computers' bots become known.
+    if (groups) {
+      const runner = groups.runner
+      void runner.catchUpMemory().catch((error) => console.error("group memory:", error))
+      setInterval(() => void runner.catchUpMemory().catch(() => {}), 60_000).unref?.()
+    }
   } catch (error) {
     console.error("group chats:", error)
   }

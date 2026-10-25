@@ -505,7 +505,7 @@ struct MainView: View {
             return TabItem(id: id, title: entry.session.title == "Terminal" ? entry.label : entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
         case .group(let group):
             guard let group = groups.group(group) else { return nil }
-            let status: TabItem.Status = groups.discussing.contains(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
+            let status: TabItem.Status = groups.isDiscussing(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
             return TabItem(id: id, title: group.name, logo: nil, group: faces(of: group), status: status)
         case .session(let sessionID):
             if workspace.waitingMachine(for: sessionID) != nil {
@@ -526,13 +526,13 @@ struct MainView: View {
         if let request = tabs.botEditor { return Set([request.bot?.id].compactMap(\.self)) }
         if tabs.groupEditor != nil { return [] }
         if let id = sessionID, let bot = bots.bot(forSession: id), workspace.running.contains(id) { return [bot.id] }
-        if let id = groupID, let speaker = groups.speaking[id] { return [speaker] }
+        if let id = groupID, let speaker = groups.speaker(in: id) { return [speaker] }
         return []
     }
 
     /// A group chat's bots, the one talking at work.
     private func faces(of group: BotGroup) -> [GroupAvatar.Face] {
-        let speaker = groups.speaking[group.id]
+        let speaker = groups.speaker(in: group.id)
         return group.members.compactMap { id in
             bots.bot(id).map { GroupAvatar.Face(look: $0.look, mood: $0.id == speaker ? .working : .idle) }
         }

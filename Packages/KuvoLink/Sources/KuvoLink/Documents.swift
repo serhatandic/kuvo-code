@@ -15,7 +15,8 @@ public enum Documents {
     public static let partLength = 40_000
     /// A body with room to spare in a document.
     public static let mostBody = mostBytes - 4096
-    static let mostParts = Int((Double(mostBytes) * 4 / 3 / Double(partLength)).rounded(.up)) + 1
+    /// The most parts one is put together from, wherever it goes (a document, a group chat's mail).
+    public static let mostParts = Int((Double(mostBytes) * 4 / 3 / Double(partLength)).rounded(.up)) + 1
     static let signed = Data("kuvo-link doc v1\0".utf8)
     static let mostVersion = 9_007_199_254_740_991
 
@@ -97,6 +98,18 @@ public enum Documents {
         return value.rounded() == value && abs(value) <= Double(mostVersion)
     }
 
+    /// `d` (base64url) in parts of `partLength`, each `{whole, i, of, d, s}`, `whole` its SHA-256:
+    /// what `Assembler` puts together where it goes. A document's, and a group chat's mail.
+    public static func parts(of d: String, s: String) -> [[String: Any]] {
+        let whole = Data(SHA256.hash(data: Data(d.utf8))).base64URL
+        let characters = Array(d.utf8)
+        let of = (characters.count + partLength - 1) / partLength
+        return (0..<of).map { i in
+            let piece = String(decoding: characters[(i * partLength)..<min(characters.count, (i + 1) * partLength)], as: UTF8.self)
+            return ["whole": whole, "i": i, "of": of, "d": piece, "s": s]
+        }
+    }
+
     /// What goes to one box (`give`, `have`, `reply`), as the mails it takes: documents together while
     /// they fit, a bigger one in parts, the digest last.
     public static func mails(give: [Envelope], have: [[Any]]? = nil, reply: Bool = false) -> [[String: Any]] {
@@ -106,13 +119,7 @@ public enum Documents {
         for envelope in give {
             let length = envelope.d.utf8.count + envelope.s.utf8.count + 16
             if length > 48_000 {
-                let whole = Data(SHA256.hash(data: Data(envelope.d.utf8))).base64URL
-                let characters = Array(envelope.d.utf8)
-                let of = (characters.count + partLength - 1) / partLength
-                for i in 0..<of {
-                    let piece = String(decoding: characters[(i * partLength)..<min(characters.count, (i + 1) * partLength)], as: UTF8.self)
-                    mails.append(["part": ["whole": whole, "i": i, "of": of, "d": piece, "s": envelope.s]])
-                }
+                mails += parts(of: envelope.d, s: envelope.s).map { ["part": $0] }
                 continue
             }
             if size + length > 48_000, !batch.isEmpty {

@@ -669,7 +669,7 @@ final class Workspace {
         // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
         // their sessions are archived there with the rest.
         guard await takeWorktrees(from: box) != nil else {
-            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "This Mac’s box isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
+            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)))
         switch status {
@@ -1034,7 +1034,7 @@ final class Workspace {
     /// A request to `box`'s routes (`boxes`): its answer, or what it said when it said no
     /// (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ box: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
-        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "This Mac’s box isn’t running." : "\(box) isn’t connected.") }
+        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t running." : "\(box) isn’t connected.") }
         let (status, data) = try await client.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) })
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(Answer.self, from: data)
@@ -1262,6 +1262,9 @@ final class Workspace {
     /// Sessions known to be the agents bridge's before it has told of them (a bot's conversation,
     /// a seat in a group chat): asked there from the start.
     func runsOnAgents(_ ids: some Sequence<String>) {
+        // Only when it's news: what's drawn from it is drawn again on each change.
+        let ids = Set(ids)
+        guard !ids.isSubset(of: bridgeSessions) else { return }
         bridgeSessions.formUnion(ids)
     }
 
@@ -1939,10 +1942,6 @@ final class Workspace {
     /// A run was refused its model's sign-in (it ran out and couldn't be renewed), or a step on it
     /// ended well (`ended` false): the provider, and the machine whose engine it is (nil: this Mac's).
     @ObservationIgnored var onSignInEnded: ((_ provider: String, _ machine: String?, _ ended: Bool) -> Void)?
-    /// A session nothing here shows (a group chat's seat at work), thinking or writing: its
-    /// thinking reaches its messages only as each step ends, so the chat follows it here.
-    @ObservationIgnored var onUnshownStream: ((ServerEvent) -> Void)?
-    private static let streamTypes: Set<String> = ["session.reasoning.started", "session.reasoning.delta", "session.text.started", "session.text.delta"]
 
     /// An event from this Mac's engine, or from `machine`'s.
     func handle(_ event: ServerEvent, machine: String? = nil) {
@@ -2002,7 +2001,6 @@ final class Workspace {
         }
         noteQuestions(event)
         guard let id = event.sessionID else { return }
-        if models[id] == nil, Self.streamTypes.contains(event.type) { onUnshownStream?(event) }
         // A sign-in that couldn't be renewed (the engine says only "Request failed: 400" then), and
         // one that works again (a step that ended well).
         if event.type == "session.execution.failed" {

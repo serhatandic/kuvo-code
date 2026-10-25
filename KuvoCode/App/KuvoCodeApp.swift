@@ -1,6 +1,7 @@
 import SwiftUI
 import OpenCodeKit
 import UsageKit
+import os
 
 /// Starts the app, or, when it only hosts the app's tests, an app that does nothing: no window,
 /// engine, menu bar item or stores reading the real data. The tests build what they need.
@@ -35,6 +36,18 @@ enum Launch {
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.run()
         } else {
+            #if DEBUG
+            // A demo, test or measurement never runs as the real app, or with its engine. Said and
+            // left at once: an alert would wait on someone who isn't there.
+            if let refusal = AppInfo.realAppRefusal(bundleID: AppInfo.bundleID, environment: ProcessInfo.processInfo.environment) {
+                FileHandle.standardError.write(Data((refusal + "\n").utf8))
+                Logger(subsystem: AppInfo.realBundleID, category: "launch").fault("\(refusal, privacy: .public)")
+                exit(78)
+            }
+            // A demo copy left to run on its own asks nothing: what would wait on the Keychain's
+            // prompt fails at once instead (see `AppInfo.neverPrompts`).
+            if AppInfo.neverPrompts { Keychain.neverAsk() }
+            #endif
             KuvoCodeApp.main()
         }
     }
@@ -123,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.startUsage()
         #if DEBUG
         // KUVO_DEMO_USAGE=dashboard|customize|settings opens the usage panel, for screenshots.
-        if let screen = ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"] {
+        // (Asked for by name, it starts in a copy that never prompts too: see `AppInfo.demoUsageScreen`.)
+        if let screen = AppInfo.demoUsageScreen(ProcessInfo.processInfo.environment) {
             Task {
                 while !UsageMenuBar.shared.isRunning { try? await Task.sleep(for: .milliseconds(250)) }
                 try? await Task.sleep(for: .seconds(3))
@@ -148,6 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // You've gone: what your phones' notices waited for goes now, here and on your machines.
         model.attention.stop()
         model.phoneLink.flushBeforeQuit()
+        // What the window shows of your group chats next time, as it is now.
+        model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
         // This Mac's box, and its record of the agents bridge, which goes with the app too.

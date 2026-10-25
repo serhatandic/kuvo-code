@@ -33,8 +33,26 @@ the engine says it was. The cases:
 The window sits past the screen's edge, out of your way. A debug build is slower than what
 people use, so compare builds with each other rather than with a target.
 
+## Group chats
+
+`python3 kuvo_perf.py groups <app> [label]` measures a group chat: three bots on a stand-in model
+that `kuvo_perf.py` serves (an OpenAI-compatible server on 127.0.0.1 answering each bot's turn with
+its line of `groups/discussion.json`, a word at a time), in one of 40 chats on the Mac. It opens the
+app twice from a clean copy: once to make the bots and chats, then to measure, with the chats kept
+from before in its first frame. It prints when each bot's message reached the chat against when
+the stand-in finished it (reply-to-row), the main thread's waits, its CPU and the app's, and the
+coding agents' bridge's and engine's CPU. Run it on a build from before a change to compare.
+Each build is measured for the same 15 s from the question (`KUVO_PERF_GROUP_SECONDS`), however
+fast it answers, since a shorter run puts its few long waits higher in the percentiles; an older
+build compared with it needs that line of `PerfGroups.swift` too.
+
+The perf copy downloads its own engine on its first run, and later runs reuse it
+(`KUVO_PERF_ENGINE` names another). Every mode stops at once, naming itself, if the bundle ID,
+folder, app or engine it would use is the real Kuvo Code's (`scripts/real-app-guard.sh`).
+
 ## What it leaves
 
 - The perf copy keeps its data where any copy of the app does, under the bundle ID
   `run.kuvo.code.perf`; `clean` removes it.
-- Builds, recordings, projects and results are in `kuvo-perf` in your temporary folder.
+- Builds, recordings, projects and results are in `kuvo-perf` in your temporary folder, and the
+  engine group chat runs reuse in `kuvo-perf-engine` there.

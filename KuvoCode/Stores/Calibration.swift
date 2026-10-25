@@ -159,7 +159,8 @@ nonisolated enum Backups {
         for name in names where name.hasPrefix(partialPrefix) {
             try? manager.removeItem(at: folder.appending(path: name))
         }
-        for name in names.filter({ !$0.hasPrefix(".") }).sorted().dropLast(kept) {
+        // Those made before an update, named by when (not the old group chat files, `GroupMigration`).
+        for name in names.filter({ $0.first?.isNumber == true }).sorted().dropLast(kept) {
             try? manager.removeItem(at: folder.appending(path: name))
         }
     }

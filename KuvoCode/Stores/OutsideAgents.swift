@@ -206,6 +206,26 @@ final class OutsideAgents {
         }
     }
 
+    /// Whether it was started (there was a Bun to run it with), so it can be started again.
+    var wasStarted: Bool { engine != nil }
+
+    /// Started again after it stopped for good (Restart where that shows), as it was started.
+    func startAgain() async {
+        guard server == nil, !isStarting, let engine else { return }
+        restarts.removeAll()
+        failure = nil
+        await start(engine: engine, environment: environment)
+    }
+
+    #if DEBUG
+    /// KUVO_DEMO_AGENTS_FAILED: as if it had stopped for good, to see how that shows.
+    func showFailure(_ text: String) {
+        stop()
+        failure = text
+        onStopped?()
+    }
+    #endif
+
     func stop() {
         eventTask?.cancel()
         eventTask = nil

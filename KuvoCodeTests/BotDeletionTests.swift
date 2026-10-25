@@ -5,16 +5,18 @@ import Testing
 
 /// Deleting a bot (F8): the bot, its conversation, its wake-ups and what you'd written to it go,
 /// and its folder (its memory, what it made) goes to the Trash rather than for good; after a
-/// relaunch it's still gone. The engine is stubbed.
+/// relaunch it's still gone. The engine is stubbed; this Mac's box, which keeps its wake-ups, is real.
 @MainActor
 @Suite(.serialized) struct BotDeletionTests {
     let engine = StubEngine(port: 47986)
-    let folder = AppInfo.testRoot.appending(path: "Bots/bot_gone_\(UUID().uuidString.prefix(6))")
+    let folder = Bots.root.appending(path: "bot_gone_\(UUID().uuidString.prefix(6))")
     let file = AppInfo.supportDirectory.appending(path: "bots.json")
 
     init() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("# Ci's memory\n\n## Job\nKeeps CI green.\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
+        // Its conversation, as the app notes it in its folder.
+        try Data("ses_bot_gone".utf8).write(to: folder.appending(path: "session"))
         let bot: [String: Any] = [
             "id": "bot_gone", "name": "Ci", "job": "Keeps CI green", "instructions": "Keeps CI green.", "jobInMemory": true,
             "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": folder.path(percentEncoded: false),
@@ -38,11 +40,13 @@ import Testing
 
     @Test func deletingABotLeavesNothingButTheTrash() async throws {
         defer { done() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
         let app = AppModel()
         // As the app sets them up when it starts.
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
+        app.boxGroups.app = app
         app.workspace.api = engine.api
         engine.list([StubEngine.session("ses_bot_gone", title: "Ci", directory: folder.path(percentEncoded: false))])
         engine.on("DELETE", "/api/session/ses_bot_gone", json: [:])

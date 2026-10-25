@@ -6,8 +6,8 @@ import Testing
 /// What's sent to a bot while it moves to another computer: nothing reaches it on the way, and
 /// each wake-up, agent's letter and reply from a notification that came meanwhile arrives exactly
 /// once, where it lives once the move is over: where it went, or where it was if the move failed.
-/// A letter or a reply waits for that; a wake-up's file goes along with its folder (the machine's
-/// own kuvo-wake sends it there). The machine is a folder of the test's own and a second engine,
+/// A letter or a reply waits for that; a wake-up's file goes along with its folder (each computer's
+/// own kuvo-wake sends it: this Mac's box's, the machine's keeper's). The machine is a folder of the test's own and a second engine,
 /// stubbed; the move is held at its first step while things are sent to it.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MoveDeliveriesTests {
@@ -36,7 +36,7 @@ import Testing
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
-        app.groups.app = app
+        app.boxGroups.app = app
         app.moves.app = app
         app.workspace.api = mac.api
         let boxAPI = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: box.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
@@ -86,6 +86,27 @@ import Testing
         engine.on("POST", "/api/session/\(session)/prompt", json: [:])
     }
 
+    /// One round of this Mac's wake-ups, as its box sends them: `kuvo-wake fire` over the Mac's
+    /// folders, reaching this Mac's engine at its address (listened on for the round).
+    private func fireMac() async throws {
+        let port = try #require(URL(string: mac.url)?.port)
+        try await StubWeb.listen(port: UInt16(port))
+        defer { StubWeb.stopListening(port: UInt16(port)) }
+        try WakeUps.installCommand()
+        let run = FileManager.default.temporaryDirectory.appending(path: "kuvo-fire-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: run) }
+        let engine = run.appending(path: "engine.json")
+        try Data(#"{"port":\#(port),"password":"test"}"#.utf8).write(to: engine)
+        let fire = Process()
+        fire.executableURL = URL(filePath: "/bin/sh")
+        fire.arguments = [WakeUps.command.path, "fire", Bots.root.path, engine.path]
+        fire.environment = ProcessInfo.processInfo.environment
+        try fire.run()
+        await Task.detached { fire.waitUntilExit() }.value
+        #expect(fire.terminationStatus == 0)
+    }
+
     /// A letter from an agent on another machine, by mail.
     private func letter(_ id: String, to session: String) -> [String: Any] {
         let at = (Date.now.timeIntervalSince1970 * 1000).rounded()
@@ -112,7 +133,7 @@ import Testing
 
         let move = Task { try await app.moves.move(bot: id, to: machine) }
         await waypoint.arrived()
-        await app.wakeUps.wakeDue()
+        try await fireMac()
         #expect(prompts(mac, session, saying: "check the build") == 0, "nothing goes to it on the way")
         waypoint.open()
         try await move.value
@@ -120,7 +141,7 @@ import Testing
         let there = boxRoot.appending(path: "bots/\(id)/wakes")
         #expect(try FileManager.default.contentsOfDirectory(atPath: there.path).count == 1, "it went along")
         #expect(!FileManager.default.fileExists(atPath: boxRoot.appending(path: "bots/\(id)/paused").path))
-        await app.wakeUps.wakeDue()
+        try await fireMac()
         #expect(prompts(mac, session, saying: "check the build") == 0, "the machine sends it, not this Mac")
     }
 
@@ -150,7 +171,7 @@ import Testing
         let again = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
         // These reach it before it goes on (the main actor takes them in turn).
         await Task.yield()
-        await app.wakeUps.wakeDue()
+        try await fireMac()
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
         waypoint.open()
         try await move.value
@@ -163,8 +184,8 @@ import Testing
 
         // Its sender tries again (as a machine does, until it hears it's there).
         await AgentMail.shared.mailed(mail, from: "peer.invalid")
-        await app.wakeUps.wakeDue()
-        await app.wakeUps.wakeDue()
+        try await fireMac()
+        try await fireMac()
         #expect(prompts(mac, session, saying: "The API's deployed.") == 1)
         #expect(prompts(mac, session, saying: "check the build") == 1)
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
@@ -194,7 +215,7 @@ import Testing
         let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
         // Both reach it before it goes on (the main actor takes them in turn).
         await Task.yield()
-        await app.wakeUps.wakeDue()
+        try await fireMac()
         #expect(mac.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
         waypoint.open()
         await #expect(throws: (any Error).self) { try await move.value }
@@ -205,8 +226,8 @@ import Testing
         #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
 
         await AgentMail.shared.mailed(mail, from: "peer.invalid")
-        await app.wakeUps.wakeDue()
-        await app.wakeUps.wakeDue()
+        try await fireMac()
+        try await fireMac()
         #expect(prompts(mac, session, saying: "The API's deployed.") == 1)
         #expect(prompts(mac, session, saying: "check the build") == 1)
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
@@ -248,30 +269,6 @@ import Testing
         #expect(Drafts(defaults: .standard)[session].isEmpty, "once it's gone, it isn't put back")
     }
 
-    /// A bot whose move was cut short after it switched (the app quit), before it went over to its
-    /// copy, takes nothing where it was until that's finished: its turn in a group chat is sat
-    /// out, and nothing goes to an engine for it.
-    @Test func aBotCutShortSitsOutItsTurnUntilItsThere() async throws {
-        defer { Self.clean(); mac.stop() }
-        let id = "bot_deliver004", session = "ses_deliver4"
-        let original = try bot(id, session: session, in: Bots.root)
-        try Data(Moves.hold.utf8).write(to: original.appending(path: "paused"))
-        let record: [String: Any] = ["kind": "bot", "id": id, "sessions": [session], "original": original.path, "to": machine,
-                                     "copy": boxRoot.appending(path: "bots/\(id)").path, "wasPaused": false, "stage": "switched"]
-        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: [record]), forKey: "movesUnderWay")
-        let app = app()
-        // The machine away: the move can't be finished yet.
-        app.workspace.machineAPI = { _ in nil }
-        await app.moves.recover()
-        let group = app.groups.create(name: "Crew", members: [id])
-
-        app.groups.send("Where are we?", to: group.id)
-        try await until { app.groups.messages(in: group.id).contains { $0.kind == .note } && !app.groups.discussing.contains(group.id) }
-
-        #expect(app.groups.messages(in: group.id).contains { $0.kind == .note && $0.text.contains("sat this out") })
-        #expect(mac.asked.allSatisfy { !$0.hasPrefix("POST") }, "nothing went to an engine for it: \(mac.asked)")
-        app.groups.stop(group.id)
-    }
 }
 
 /// A machine whose first step waits at `waypoint`.

@@ -28,11 +28,25 @@ import {
 } from "../src/groups/rules"
 import { next, parseRepeat, planMeeting } from "../src/groups/time"
 
-// What the Mac's group chat rules say (KuvoCodeTests/GroupRulesVectorsTests, written by
-// scripts/group-vectors.sh): a group chat that lives on a machine goes by the same.
-const vectors = JSON.parse(readFileSync(join(import.meta.dir, "groups-vectors.json"), "utf8"))
+// The rules every computer's group chats go by (`groups-rules.json`: once what the Mac's own
+// runner said, kept here since this Mac's chats run in its bridge too), and how a bot's job and a
+// repeat are read, as this Mac's app still reads them (`box-vectors.json`, written by
+// scripts/box-vectors.sh from KuvoCodeTests/BoxVectorsTests).
+const vectors = {
+  ...JSON.parse(readFileSync(join(import.meta.dir, "groups-rules.json"), "utf8")),
+  ...JSON.parse(readFileSync(join(import.meta.dir, "box-vectors.json"), "utf8")),
+}
 
-describe("a group chat on a machine goes by the Mac's rules", () => {
+describe("what the app reads as a box does", () => {
+  test("box-vectors.json is what the app's own test wrote (scripts/box-vectors.sh), not edited by hand", () => {
+    const swift = readFileSync(join(import.meta.dir, "../../KuvoCodeTests/BoxVectorsTests.swift"), "utf8")
+    const recorded = swift.match(/static let recorded = "([0-9a-f]+)"/)?.[1]
+    const hash = new Bun.CryptoHasher("sha256").update(readFileSync(join(import.meta.dir, "box-vectors.json"))).digest("hex")
+    expect(hash).toBe(recorded!)
+  })
+})
+
+describe("a group chat goes by its rules", () => {
   test("what counts as a pass", () => {
     for (const { text, pass } of vectors.isPass) expect([text, isPass(text)]).toEqual([text, pass])
   })
@@ -150,7 +164,7 @@ describe("a group chat on a machine goes by the Mac's rules", () => {
     }
   })
 
-  test("a meeting as you set it up, as the Mac plans it", () => {
+  test("a meeting as you set it up, planned on the chat's computer", () => {
     const wrong: string[] = []
     for (const vector of vectors.planMeeting) {
       const planned = planMeeting({ next: vector.next, every: vector.every ?? null, topic: vector.topic }, vector.before, vector.zone, vector.now * 1000)
