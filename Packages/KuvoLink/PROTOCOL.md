@@ -849,18 +849,23 @@ host serves:
     which stays as it came, as in Settings); `DELETE` puts its folder away, in Recently Deleted.
     `400 {"message"}` for a name that isn't a folder's. A 404 or 405 answers `{}`.
   - Recently Deleted (`skills.trash`): each box keeps a skill it put away for 30 days, in
-    `trash/skills` in its folder (`<folder>-<seconds>`), and clears what's older whenever its
-    list is read, a restore is asked for or another skill is put away. The box decides it all;
-    a client shows the list and sends Restore.
+    `trash/skills` in its folder, as `<folder>-<seconds>`: its name says when it was put away,
+    never the folder's date. It clears what's older as it starts, once a day while it runs (a
+    machine's while its bridge runs), and whenever its list is read, a restore is asked for or
+    another skill is put away. The box decides it all; a client shows the list and sends Restore.
     - `GET kuvo/skill-trash` → `{"entries": [{id, folder, name, description?, deleted, goes}]}`,
       newest first: `id` names the entry, `folder` the name it goes back under, `name` and
       `description` are what its SKILL.md says (`name` is the folder's when it doesn't say),
       `deleted` when it was put away and `goes` when it's cleared, in seconds since 1970.
     - `POST kuvo/skill-trash/<id>/restore` → `{"name"}`: its folder back whole, under its name.
-      `409 {"message"}` when a skill has that folder's name now ("There's a skill called pdf
-      now. Delete it first to restore this one."): neither changes, and the entry stays. `400
-      {"message"}` for what isn't an entry's id (a path, a hidden name), `404 {}` for one that
-      isn't there (restored, or past its 30 days).
+      `409 {"message"}` when a skill has that folder's name now ("There’s a skill called pdf
+      now. Delete it first to restore this one."), or the engine lists one by that name from
+      elsewhere ("There’s a skill called pdf in ~/.claude/skills, so this one can’t be restored
+      under that name"; the one put away, which the engine can list a moment longer, doesn't
+      count): neither changes, and the entry stays. `400 {"message"}` for what isn't an entry's
+      id (a path, a hidden name), `404 {}` for one that isn't there (restored, or past its 30
+      days). The skills routes' messages are written to show as they are, with curly
+      apostrophes.
   - GitHub's collections, which a box reaches, never a client (the Mac app browses them through
     this Mac's box, and adds a skill through the box it's for): `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET

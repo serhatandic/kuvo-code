@@ -77,7 +77,7 @@ struct BoxSkills {
         var name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         for prefix in ["https://github.com/", "http://github.com/", "github.com/"] where name.hasPrefix(prefix) { name.removeFirst(prefix.count) }
         let parts = name.split(separator: "/").prefix(2).map(String.init)
-        guard parts.count == 2 else { throw BoxRefusal(status: 404, message: "\(typed) wasn't found on GitHub.") }
+        guard parts.count == 2 else { throw BoxRefusal(status: 404, message: "\(typed) wasn’t found on GitHub.") }
         return try await library.value(CollectionListing.self, "GET", "kuvo/skill-library/\(Self.part(parts[0]))/\(Self.part(parts[1]))")
     }
 

@@ -85,9 +85,9 @@ import Testing
         try await routes.write("release-notes", "---\nname: release-notes\n---\nAnd kind.\n", isNew: false)
         #expect(FileManager.default.contents(atPath: folder.appending(path: "release-notes/SKILL.md").path) == Data("---\nname: release-notes\n---\nAnd kind.\n".utf8))
         let again = await #expect(throws: BoxRefusal.self) { try await routes.write("release-notes", "Again", isNew: true) }
-        #expect(again?.message == "There's a skill called release-notes already.")
+        #expect(again?.message == "There’s a skill called release-notes already.")
         let fromGitHub = await #expect(throws: BoxRefusal.self) { try await routes.write("pdf", "Mine now", isNew: false) }
-        #expect(fromGitHub?.message == "pdf came from GitHub, so it isn't edited here.")
+        #expect(fromGitHub?.message == "pdf came from GitHub, so it isn’t edited here.")
 
         // A new one, then put away: in the box's Recently Deleted, never the Mac's Trash.
         try await routes.write("changelog", "---\nname: changelog\n---\nOne line each.\n", isNew: true)
@@ -135,9 +135,9 @@ import Testing
 
         // What can't be opened says why.
         let notAName = await #expect(throws: BoxRefusal.self) { try await routes.listing("acme") }
-        #expect(notAName?.message == "acme wasn't found on GitHub.")
+        #expect(notAName?.message == "acme wasn’t found on GitHub.")
         let missing = await #expect(throws: BoxRefusal.self) { try await routes.listing("acme/missing") }
-        #expect(missing?.message == "acme/missing wasn't found on GitHub.")
+        #expect(missing?.message == "acme/missing wasn’t found on GitHub.")
         let limited = await #expect(throws: BoxRefusal.self) { try await routes.listing("acme/busy") }
         #expect(limited?.message == "GitHub is limiting requests for now. Try again in a while.")
     }
@@ -170,7 +170,7 @@ import Testing
         await deleted.load()
         let old = try #require(deleted.entries?.first)
         #expect(await deleted.restore(old) == false)
-        #expect(deleted.refusals[old.id] == "There's a skill called release-notes now. Delete it first to restore this one.")
+        #expect(deleted.refusals[old.id] == "There’s a skill called release-notes now. Delete it first to restore this one.")
         #expect(deleted.entries?.map(\.id) == [old.id], "the entry stays, to restore later")
         #expect(try await routes.text(of: "release-notes") == "---\nname: release-notes\n---\nA new one.\n")
         // Once the new one's deleted, the old one comes back, and its refusal goes.

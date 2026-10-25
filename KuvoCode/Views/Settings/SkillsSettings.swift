@@ -517,7 +517,7 @@ private struct SkillEditor: View {
     private var nameNote: (text: String, isProblem: Bool) {
         let typed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !typed.isEmpty, id.isEmpty { return ("Names use the letters a to z and digits, and this one has none.", true) }
-        if !id.isEmpty, isTaken { return ("There's a skill called \(id) already.", true) }
+        if !id.isEmpty, isTaken { return ("There’s a skill called \(id) already.", true) }
         if !typed.isEmpty, id != typed { return ("It's saved as \(id).", false) }
         return ("Names use lowercase letters a to z, digits and hyphens.", false)
     }
@@ -597,7 +597,7 @@ private struct SkillEditor: View {
 
     private func save() {
         guard name != nil || !isTaken else {
-            failure = "There's a skill called \(id) already."
+            failure = "There’s a skill called \(id) already."
             return
         }
         let id = id, isNew = name == nil

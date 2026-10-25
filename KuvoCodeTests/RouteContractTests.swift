@@ -322,13 +322,12 @@ final class MacBox {
                           to: folder.appending(path: ".kuvo-source.json"))
             }
         case "trashedSkill":
-            // One in Recently Deleted, put away `daysAgo` days ago, as this Mac's box keeps them
+            // One in Recently Deleted, put away `daysAgo` days ago, named by when, as this Mac’s box keeps them
             // (given once it runs: it starts in a folder of its own).
             if app == nil { await start() }
             let when = Date.now.addingTimeInterval(-(given["daysAgo"] as? Double ?? 0) * 86_400)
             let folder = BoxProcess.home.appending(path: "trash/skills/\(string("name"))-\(Int(when.timeIntervalSince1970))")
             try write(string("text"), to: folder.appending(path: "SKILL.md"))
-            try FileManager.default.setAttributes([.modificationDate: when], ofItemAtPath: folder.path)
         case "settings":
             let value = try JSONSerialization.data(withJSONObject: given["value"] ?? [String: Any]())
             let text = given["text"] as? String ?? String(decoding: value, as: UTF8.self)

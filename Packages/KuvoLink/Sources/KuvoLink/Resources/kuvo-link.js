@@ -1673,24 +1673,37 @@ function skillFolders() {
 }
 
 // Recently Deleted: a skill put away, in this box's own trash, as `<its folder's name>-<when, in
-// seconds>`, dated when it was put away and kept 30 days from then.
+// seconds>`, kept 30 days from then. Its name says when, never its folder's date, which a Finder
+// visit or a backup put back can change.
 const SKILL_TRASH = path.join(K, "trash", "skills");
 const SKILL_TRASH_DAYS = 30;
 const DAY = 86_400_000;
 
 const isDirectory = file => { try { return fs.statSync(file).isDirectory(); } catch { return false; } };
 
-/** The folder's name a Recently Deleted entry goes back to, or null for what isn't an entry's id
- * (a path, a hidden name, anything not `<name>-<seconds>`). */
-export function skillTrashName(entry) {
-  const found = typeof entry === "string" && entry.length <= 141 ? /^(.+)-\d{1,12}$/.exec(entry) : null;
-  return found && isSkillFolder(found[1]) && isSkillFolder(entry) ? found[1] : null;
+/** A Recently Deleted entry's id read: the folder's name it goes back to and when it was put away
+ * (seconds since 1970), or null for what isn't an entry's id (a path, a hidden name, anything not
+ * `<name>-<seconds>`). */
+export function skillTrashEntry(entry) {
+  const found = typeof entry === "string" && entry.length <= 141 ? /^(.+)-(\d{1,12})$/.exec(entry) : null;
+  return found && isSkillFolder(found[1]) && isSkillFolder(entry) ? { folder: found[1], deleted: Number(found[2]) } : null;
 }
 
 /** What's been in Recently Deleted 30 days or more, gone for good. */
-function clearSkillTrash() {
-  const old = Date.now() - SKILL_TRASH_DAYS * DAY;
-  for (const each of listOf(SKILL_TRASH)) try { if (fs.statSync(path.join(SKILL_TRASH, each)).mtimeMs <= old) fs.rmSync(path.join(SKILL_TRASH, each), { recursive: true, force: true }); } catch {}
+function clearSkillTrash(now = Date.now()) {
+  for (const id of listOf(SKILL_TRASH)) {
+    const entry = skillTrashEntry(id);
+    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY) try { fs.rmSync(path.join(SKILL_TRASH, id), { recursive: true, force: true }); } catch {}
+  }
+}
+
+/** Recently Deleted cleared as the box starts and once a day while it runs, so what's past its 30
+ * days goes with no client there too. Its timer, which never keeps the process up. */
+export function keepSkillTrashClear() {
+  clearSkillTrash();
+  const timer = setInterval(() => clearSkillTrash(), DAY);
+  timer.unref?.();
+  return timer;
 }
 
 /** Recently Deleted, newest first: each with what its SKILL.md says it is, when it was put away and
@@ -1698,14 +1711,13 @@ function clearSkillTrash() {
 function skillTrashEntries() {
   const entries = [];
   for (const id of listOf(SKILL_TRASH)) {
-    const folder = skillTrashName(id);
+    const entry = skillTrashEntry(id);
     const away = path.join(SKILL_TRASH, id);
-    if (!folder || !isDirectory(away)) continue;
-    const deleted = fs.statSync(away).mtimeMs;
+    if (!entry || !isDirectory(away)) continue;
     const about = skillAbout(textOf(path.join(away, "SKILL.md")) ?? "");
     entries.push({
-      id, folder, name: about.name || folder, ...(about.description ? { description: about.description } : {}),
-      deleted: Math.floor(deleted / 1000), goes: Math.floor((deleted + SKILL_TRASH_DAYS * DAY) / 1000),
+      id, folder: entry.folder, name: about.name || entry.folder, ...(about.description ? { description: about.description } : {}),
+      deleted: entry.deleted, goes: entry.deleted + SKILL_TRASH_DAYS * 86_400,
     });
   }
   return entries.sort((a, b) => b.deleted - a.deleted || a.id.localeCompare(b.id));
@@ -1742,16 +1754,16 @@ async function skillRepository(owner, name) {
   if (kept && Date.now() - kept.at < 15 * 60_000) return kept.repository;
   const response = await github(`${GITHUB.api}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
   const info = response.status === 200 ? await response.json().catch(() => null) : null;
-  if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn't found on GitHub.`);
+  if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn’t found on GitHub.`);
   const repository = { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
   if (lookedUp.size > 50) lookedUp.clear();
   lookedUp.set(key, { repository, at: Date.now() });
   return repository;
 }
 
-/** The names of the skills the engine lists (its own, and those in other tools' folders), which a
+/** The skills the engine lists (its own, and those in other tools' folders), `{id, path?}`, which a
  * new one mustn't take; none when it doesn't answer. */
-async function engineSkillNames(engine) {
+async function engineSkills(engine) {
   if (!engine?.port) return [];
   try {
     const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
@@ -1759,10 +1771,23 @@ async function engineSkillNames(engine) {
       signal: AbortSignal.timeout(5_000),
     });
     const listed = response.ok ? (await response.json())?.data : null;
-    return Array.isArray(listed) ? listed.map(skill => skill?.id).filter(id => typeof id === "string") : [];
+    return Array.isArray(listed)
+      ? listed.filter(skill => typeof skill?.id === "string").map(skill => ({ id: skill.id, ...(typeof skill.path === "string" ? { path: skill.path } : {}) }))
+      : [];
   } catch {
     return [];
   }
+}
+
+const engineSkillNames = async engine => (await engineSkills(engine)).map(skill => skill.id);
+
+/** Where a skill the engine lists is, said short: "in ~/.claude/skills", "built in". */
+function skillPlace(file) {
+  if (typeof file !== "string" || !file) return "elsewhere";
+  if (file.startsWith("/builtin/")) return "built in";
+  const folder = path.dirname(path.dirname(file));
+  const home = os.homedir();
+  return `in ${folder === home || folder.startsWith(home + path.sep) ? "~" + folder.slice(home.length) : folder}`;
 }
 
 /** A repository's skills, from its file list (one request to GitHub's API): each folder with a
@@ -1770,7 +1795,7 @@ async function engineSkillNames(engine) {
  * repository itself when its SKILL.md is at the top (without its hidden folders). */
 export async function skillsIn(repository) {
   const response = await github(`${GITHUB.api}/repos/${repository.owner}/${repository.name}/git/trees/${repository.branch}?recursive=1`);
-  if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn't found on GitHub.`);
+  if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn’t found on GitHub.`);
   const tree = await response.json();
   const files = (tree.tree ?? []).filter(entry => entry.type === "blob").map(entry => entry.path);
   const dirname = file => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
@@ -1855,7 +1880,7 @@ async function installSkill(repository, skill) {
   try {
     for (const file of skill.files) {
       const response = await github(rawURL(repository, file), false);
-      if (response.status !== 200) throw new SkillFailure(404, `${file} wasn't found on GitHub.`);
+      if (response.status !== 200) throw new SkillFailure(404, `${file} wasn’t found on GitHub.`);
       const relative = skill.path ? file.slice(skill.path.length + 1) : file;
       const into = path.join(staging, relative);
       if (!into.startsWith(staging + path.sep)) continue;
@@ -1875,7 +1900,7 @@ async function installSkill(repository, skill) {
 export async function answerSkills(method, requestPath, body, engine = null) {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
-  if (parts.includes(null)) return { status: 400, value: { message: "That isn't a path." } };
+  if (parts.includes(null)) return { status: 400, value: { message: "That isn’t a path." } };
   const message = text => ({ message: text });
   try {
     if (parts[1] === "skills" && parts.length === 2) {
@@ -1884,7 +1909,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
     }
     if (parts[1] === "skills" && parts.length === 3) {
       const name = parts[2];
-      if (!isSkillFolder(name)) return { status: 400, value: message("That isn't a skill's name.") };
+      if (!isSkillFolder(name)) return { status: 400, value: message("That isn’t a skill’s name.") };
       const folder = path.join(SKILLS, name);
       const file = path.join(folder, "SKILL.md");
       if (method === "GET") {
@@ -1896,12 +1921,12 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         if (typeof text !== "string" || !text.trim()) return { status: 400, value: message('Send the skill\'s SKILL.md as {"text": …}.') };
         if (body?.new === true) {
           if (skillName(name) !== name) return { status: 400, value: message("Names use lowercase letters a to z, digits and hyphens.") };
-          if (fs.existsSync(folder) || (await engineSkillNames(engine)).includes(name)) return { status: 409, value: message(`There's a skill called ${name} already.`) };
+          if (fs.existsSync(folder) || (await engineSkillNames(engine)).includes(name)) return { status: 409, value: message(`There’s a skill called ${name} already.`) };
         } else if (!fs.existsSync(folder)) {
           return { status: 404, value: {} };
         } else if (skillSources()[name]) {
           // As Settings has it: one from GitHub is as it came, not edited.
-          return { status: 409, value: message(`${name} came from GitHub, so it isn't edited here.`) };
+          return { status: 409, value: message(`${name} came from GitHub, so it isn’t edited here.`) };
         }
         fs.mkdirSync(folder, { recursive: true });
         fs.writeFileSync(`${file}.new`, text);
@@ -1914,11 +1939,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         fs.mkdirSync(SKILL_TRASH, { recursive: true });
         let when = Math.floor(Date.now() / 1000);
         while (fs.existsSync(path.join(SKILL_TRASH, `${name}-${when}`))) when++;
-        const away = path.join(SKILL_TRASH, `${name}-${when}`);
-        fs.renameSync(folder, away);
-        // Dated now: moving it kept its own date, and an old one would go at once.
-        const now = new Date();
-        fs.utimesSync(away, now, now);
+        fs.renameSync(folder, path.join(SKILL_TRASH, `${name}-${when}`));
         clearSkillTrash();
         return { status: 200, value: {} };
       }
@@ -1934,13 +1955,17 @@ export async function answerSkills(method, requestPath, body, engine = null) {
       if (parts.length === 4 && parts[3] === "restore") {
         if (method !== "POST") return { status: 405, value: {} };
         const entry = parts[2];
-        const name = skillTrashName(entry);
-        if (!name) return { status: 400, value: message("That isn't an entry in Recently Deleted.") };
+        const name = skillTrashEntry(entry)?.folder;
+        if (!name) return { status: 400, value: message("That isn’t an entry in Recently Deleted.") };
         const away = path.join(SKILL_TRASH, entry);
         if (!isDirectory(away)) return { status: 404, value: {} };
         const back = path.join(SKILLS, name);
         // Never over another: one by its name now stays, and so does this one, to restore later.
-        if (fs.existsSync(back)) return { status: 409, value: message(`There's a skill called ${name} now. Delete it first to restore this one.`) };
+        if (fs.existsSync(back)) return { status: 409, value: message(`There’s a skill called ${name} now. Delete it first to restore this one.`) };
+        // Nor beside one the engine finds elsewhere by that name (another tool's folder), which it
+        // would hide; the one put away, which the engine can list a moment longer, doesn't count.
+        const elsewhere = (await engineSkills(engine)).find(skill => skill.id === name && !skill.path?.startsWith(SKILLS + path.sep));
+        if (elsewhere) return { status: 409, value: message(`There’s a skill called ${name} ${skillPlace(elsewhere.path)}, so this one can’t be restored under that name.`) };
         fs.mkdirSync(SKILLS, { recursive: true });
         fs.renameSync(away, back);
         return { status: 200, value: { name } };
@@ -1954,7 +1979,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         if (!owner || !name || typeof body?.path !== "string") return { status: 400, value: message('Send {"repository": "owner/name", "path": …}.') };
         const repository = await skillRepository(owner, name);
         const skill = (await skillsIn(repository)).skills.find(each => each.path === body.path);
-        if (!skill) return { status: 404, value: message(`There's no skill at ${body.path} in ${repository.id}.`) };
+        if (!skill) return { status: 404, value: message(`There’s no skill at ${body.path} in ${repository.id}.`) };
         await installSkill(repository, skill);
         return { status: 200, value: { name: skill.name } };
       }
@@ -1971,7 +1996,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         // As written: a "+" is a plus.
         const pair = query.split("&").find(each => each.startsWith("path="));
         let at = "";
-        try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn't a path.") }; }
+        try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn’t a path.") }; }
         return { status: 200, value: await aboutSkill(repository, at) };
       }
     }
@@ -7137,6 +7162,8 @@ async function run() {
   };
   setTimeout(nightly, 60_000);
   setInterval(nightly, 600_000);
+  // Recently Deleted's skills past their 30 days, gone with no client there too.
+  keepSkillTrashClear();
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
@@ -7345,6 +7372,8 @@ async function serve() {
   refreshBotsKeys().catch(() => {});
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
+  // Recently Deleted's skills past their 30 days, gone with no client there too.
+  keepSkillTrashClear();
   // Its app gone (its stdin closed): so is it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.on("close", () => process.exit(0));

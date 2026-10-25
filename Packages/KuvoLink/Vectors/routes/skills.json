@@ -15,7 +15,7 @@
         { "given": { "skill": { "name": "pdf", "text": "---\nname: pdf\n---\nPDFs.\n", "github": { "repository": "anthropics/skills", "path": "skills/pdf" } } } },
         { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nKeep them short.\n", "new": true }, "expect": { "status": 200, "json": {} } },
         { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nKeep them short.\n" } } },
-        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "Again", "new": true }, "expect": { "status": 409, "json": { "message": "There's a skill called release-notes already." } } },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "Again", "new": true }, "expect": { "status": 409, "json": { "message": "There’s a skill called release-notes already." } } },
         { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nAnd kind.\n" }, "expect": { "status": 200, "json": {} } },
         { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nAnd kind.\n" } } },
         { "send": "PUT kuvo/skills/release-notes", "body": { "text": "  " }, "expect": { "status": 400, "json": { "message": "<string>" } } },
@@ -23,15 +23,15 @@
         {
           "send": "PUT kuvo/skills/..%2Fescape", "body": { "text": "Hi" },
           "why": "Refused on both: a Mac's link checks every path it hands its box as the relay checks the engine's (403), and a machine's skills route reads the name itself (400).",
-          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn't a skill's name." } } }
+          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn’t a skill’s name." } } }
         },
         {
           "send": "GET kuvo/skills/%E0%A4%A",
           "why": "Refused on both, as above: a path that doesn't decode.",
-          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn't a path." } } }
+          "expect": { "mac": { "status": 403 }, "machine": { "status": 400, "json": { "message": "That isn’t a path." } } }
         },
         { "send": "PUT kuvo/skills/nowhere", "body": { "text": "Hi" }, "expect": { "status": 404, "json": {} } },
-        { "send": "PUT kuvo/skills/pdf", "body": { "text": "Mine now" }, "expect": { "status": 409, "json": { "message": "pdf came from GitHub, so it isn't edited here." } } },
+        { "send": "PUT kuvo/skills/pdf", "body": { "text": "Mine now" }, "expect": { "status": 409, "json": { "message": "pdf came from GitHub, so it isn’t edited here." } } },
         { "send": "GET kuvo/skills/nowhere", "expect": { "status": 404, "json": {} } }
       ]
     },
@@ -61,7 +61,7 @@
           "save": { "entry": "entries.0.id" }
         },
         { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nA new one.\n", "new": true }, "expect": { "status": 200, "json": {} } },
-        { "send": "POST kuvo/skill-trash/{{entry}}/restore", "expect": { "status": 409, "json": { "message": "There's a skill called release-notes now. Delete it first to restore this one." } } },
+        { "send": "POST kuvo/skill-trash/{{entry}}/restore", "expect": { "status": 409, "json": { "message": "There’s a skill called release-notes now. Delete it first to restore this one." } } },
         { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nA new one.\n" } } },
         { "send": "GET kuvo/skill-trash", "expect": { "status": 200, "json": { "entries": [{ "id": "{{entry}}" }] } } },
         { "send": "DELETE kuvo/skills/release-notes", "expect": { "status": 200, "json": {} } },
@@ -84,8 +84,8 @@
             { "folder": "older-but-kept", "name": "Older" }
           ] } }
         },
-        { "send": "POST kuvo/skill-trash/not-an-entry/restore", "expect": { "status": 400, "json": { "message": "That isn't an entry in Recently Deleted." } } },
-        { "send": "POST kuvo/skill-trash/.hidden-1761400000/restore", "expect": { "status": 400, "json": { "message": "That isn't an entry in Recently Deleted." } } },
+        { "send": "POST kuvo/skill-trash/not-an-entry/restore", "expect": { "status": 400, "json": { "message": "That isn’t an entry in Recently Deleted." } } },
+        { "send": "POST kuvo/skill-trash/.hidden-1761400000/restore", "expect": { "status": 400, "json": { "message": "That isn’t an entry in Recently Deleted." } } },
         { "send": "POST kuvo/skill-trash/nowhere-1761400000/restore", "expect": { "status": 404, "json": {} } },
         { "send": "POST kuvo/skill-trash", "expect": { "status": 405, "json": {} } },
         { "send": "GET kuvo/skill-trash/nowhere-1761400000/restore", "expect": { "status": 405, "json": {} } }
