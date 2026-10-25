@@ -806,9 +806,21 @@ host serves:
     "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
     hyphens, and `409 {"message"}` when the name is taken, by a folder there or a skill the engine
     lists from elsewhere; without it, `404` for none, and `409 {"message"}` for one from GitHub,
-    which stays as it came, as in Settings); `DELETE` puts its folder away (in `trash/skills` in
-    the box's folder, kept 30 days from then). `400 {"message"}` for a name that isn't
-    a folder's. A 404 or 405 answers `{}`.
+    which stays as it came, as in Settings); `DELETE` puts its folder away, in Recently Deleted.
+    `400 {"message"}` for a name that isn't a folder's. A 404 or 405 answers `{}`.
+  - Recently Deleted (`skills.trash`): each box keeps a skill it put away for 30 days, in
+    `trash/skills` in its folder (`<folder>-<seconds>`), and clears what's older whenever its
+    list is read, a restore is asked for or another skill is put away. The box decides it all;
+    a client shows the list and sends Restore.
+    - `GET kuvo/skill-trash` → `{"entries": [{id, folder, name, description?, deleted, goes}]}`,
+      newest first: `id` names the entry, `folder` the name it goes back under, `name` and
+      `description` are what its SKILL.md says (`name` is the folder's when it doesn't say),
+      `deleted` when it was put away and `goes` when it's cleared, in seconds since 1970.
+    - `POST kuvo/skill-trash/<id>/restore` → `{"name"}`: its folder back whole, under its name.
+      `409 {"message"}` when a skill has that folder's name now ("There's a skill called pdf
+      now. Delete it first to restore this one."): neither changes, and the entry stays. `400
+      {"message"}` for what isn't an entry's id (a path, a hidden name), `404 {}` for one that
+      isn't there (restored, or past its 30 days).
   - GitHub's collections, which a box reaches, never a client (the Mac app browses them through
     this Mac's box, and adds a skill through the box it's for): `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
@@ -1149,6 +1161,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
+| `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |

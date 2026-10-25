@@ -120,6 +120,119 @@ test("one written long ago is kept in the trash 30 days from when it's put away"
   assert.equal(fs.readdirSync(path.join(home, "trash", "skills")).filter(name => name.startsWith("old-one-")).length, 1);
 });
 
+const trash = path.join(home, "trash", "skills");
+const DAY = 86_400_000;
+/** Recently Deleted's entries, as a client lists them. */
+const deleted = async () => {
+  const answer = await ask("GET", "kuvo/skill-trash");
+  assert.equal(answer.status, 200);
+  return answer.value.entries;
+};
+/** An entry put away `days` ago (its date is when it was put away). */
+const age = (id, days) => {
+  const then = new Date(Date.now() - days * DAY);
+  fs.utimesSync(path.join(trash, id), then, then);
+};
+
+test("Recently Deleted: a skill put away is listed, newest first, with what its SKILL.md says and when it goes, and restored whole", async () => {
+  fs.rmSync(trash, { recursive: true, force: true });
+  assert.deepEqual(await deleted(), [], "nothing put away yet, and no trash folder");
+  const text = "---\nname: release-notes\ndescription: \"Writes the release notes: short\"\n---\nKeep them short.\n";
+  assert.equal((await ask("PUT", "kuvo/skills/release-notes", { text, new: true })).status, 200);
+  fs.writeFileSync(path.join(skills, "release-notes", "template.md"), "# Notes\n");
+  assert.equal((await ask("PUT", "kuvo/skills/no-header", { text: "Just instructions.\n", new: true })).status, 200);
+  assert.equal((await ask("DELETE", "kuvo/skills/release-notes")).status, 200);
+  const [notes] = await deleted();
+  age(notes.id, 3);
+  assert.equal((await ask("DELETE", "kuvo/skills/no-header")).status, 200);
+
+  const before = Math.floor(Date.now() / 1000);
+  const entries = await deleted();
+  assert.deepEqual(entries.map(entry => entry.folder), ["no-header", "release-notes"], "newest first");
+  const [plain, old] = entries;
+  // One without a header goes by its folder's name, without a description.
+  assert.equal(plain.name, "no-header");
+  assert.equal("description" in plain, false);
+  assert.match(plain.id, /^no-header-\d+$/);
+  assert.ok(Math.abs(plain.deleted - before) <= 2);
+  assert.equal(plain.goes - plain.deleted, 30 * 86_400);
+  assert.deepEqual({ name: old.name, description: old.description }, { name: "release-notes", description: "Writes the release notes: short" });
+  assert.ok(Math.abs(before - old.deleted - 3 * 86_400) <= 2, "put away three days ago");
+  assert.equal(old.goes - old.deleted, 30 * 86_400);
+
+  // Restored whole, under its folder's name, and out of the list.
+  assert.deepEqual(await ask("POST", `kuvo/skill-trash/${encodeURIComponent(old.id)}/restore`), { status: 200, value: { name: "release-notes" } });
+  assert.equal(fs.readFileSync(path.join(skills, "release-notes", "SKILL.md"), "utf8"), text);
+  assert.equal(fs.readFileSync(path.join(skills, "release-notes", "template.md"), "utf8"), "# Notes\n");
+  assert.deepEqual((await deleted()).map(entry => entry.folder), ["no-header"]);
+  assert.equal((await ask("POST", `kuvo/skill-trash/${old.id}/restore`)).status, 404, "restored once");
+  // Methods each route takes.
+  assert.equal((await ask("POST", "kuvo/skill-trash")).status, 405);
+  assert.equal((await ask("GET", `kuvo/skill-trash/${plain.id}/restore`)).status, 405);
+  assert.equal((await ask("GET", `kuvo/skill-trash/${plain.id}`)).status, 404);
+  await ask("DELETE", "kuvo/skills/release-notes");
+  fs.rmSync(trash, { recursive: true, force: true });
+});
+
+test("Recently Deleted never restores over a skill by that name: it says so, and both stay", async () => {
+  fs.rmSync(trash, { recursive: true, force: true });
+  assert.equal((await ask("PUT", "kuvo/skills/pdf", { text: "---\nname: pdf\n---\nOld.\n", new: true })).status, 200);
+  assert.equal((await ask("DELETE", "kuvo/skills/pdf")).status, 200);
+  assert.equal((await ask("PUT", "kuvo/skills/pdf", { text: "---\nname: pdf\n---\nNew.\n", new: true })).status, 200);
+  const [entry] = await deleted();
+  assert.deepEqual(await ask("POST", `kuvo/skill-trash/${entry.id}/restore`),
+    { status: 409, value: { message: "There's a skill called pdf now. Delete it first to restore this one." } });
+  assert.equal(fs.readFileSync(path.join(skills, "pdf", "SKILL.md"), "utf8"), "---\nname: pdf\n---\nNew.\n");
+  assert.deepEqual((await deleted()).map(each => each.id), [entry.id]);
+  // Two put away in the same second are two entries.
+  assert.equal((await ask("DELETE", "kuvo/skills/pdf")).status, 200);
+  assert.equal((await ask("PUT", "kuvo/skills/pdf", { text: "---\nname: pdf\n---\nThird.\n", new: true })).status, 200);
+  assert.equal((await ask("DELETE", "kuvo/skills/pdf")).status, 200);
+  assert.equal(new Set((await deleted()).map(each => each.id)).size, 3);
+  fs.rmSync(trash, { recursive: true, force: true });
+});
+
+test("Recently Deleted keeps an entry 30 days: one past it goes as the list is read, and can't be restored", async () => {
+  fs.rmSync(trash, { recursive: true, force: true });
+  for (const name of ["kept", "gone", "also-gone"]) {
+    assert.equal((await ask("PUT", `kuvo/skills/${name}`, { text: `---\nname: ${name}\n---\n`, new: true })).status, 200);
+    assert.equal((await ask("DELETE", `kuvo/skills/${name}`)).status, 200);
+  }
+  const id = name => fs.readdirSync(trash).find(each => each.startsWith(`${name}-`));
+  const [kept, gone, alsoGone] = ["kept", "gone", "also-gone"].map(id);
+  age(kept, 29.9);
+  age(gone, 30.1);
+  age(alsoGone, 31);
+  assert.deepEqual((await deleted()).map(entry => entry.id), [kept]);
+  assert.deepEqual(fs.readdirSync(trash), [kept], "gone for good");
+  // One that passed its 30 days since the list was read isn't restored.
+  age(kept, 30.5);
+  assert.equal((await ask("POST", `kuvo/skill-trash/${kept}/restore`)).status, 404);
+  assert.equal(fs.existsSync(path.join(skills, "kept")), false);
+  fs.rmSync(trash, { recursive: true, force: true });
+});
+
+test("Recently Deleted's entries are named strictly: no paths, hidden names or other folders", async () => {
+  fs.rmSync(trash, { recursive: true, force: true });
+  fs.mkdirSync(path.join(trash, "not-an-entry"), { recursive: true });
+  fs.mkdirSync(path.join(trash, ".hidden-1761400000"), { recursive: true });
+  fs.writeFileSync(path.join(trash, "a-file-1761400000"), "");
+  fs.mkdirSync(path.join(home, "outside-1761400000"), { recursive: true });
+  assert.deepEqual(await deleted(), [], "only entries are listed");
+  for (const entry of ["..%2Foutside-1761400000", "..", ".hidden-1761400000", "not-an-entry", "-1761400000", "a%00b-1761400000", "a-12345678901234", `${"x".repeat(129)}-1761400000`]) {
+    const answer = await ask("POST", `kuvo/skill-trash/${entry}/restore`);
+    assert.equal(answer.status, 400, entry);
+    assert.equal(answer.value.message, "That isn't an entry in Recently Deleted.");
+  }
+  assert.equal((await ask("POST", "kuvo/skill-trash/%E0%A4%A/restore")).status, 400);
+  assert.equal((await ask("POST", "kuvo/skill-trash/nowhere-1761400000/restore")).status, 404);
+  assert.equal((await ask("POST", "kuvo/skill-trash/a-file-1761400000/restore")).status, 404, "a file isn't an entry");
+  assert.equal(fs.existsSync(path.join(home, "outside-1761400000")), true);
+  assert.equal(fs.existsSync(path.join(skills, "outside")), false);
+  fs.rmSync(path.join(home, "outside-1761400000"), { recursive: true });
+  fs.rmSync(trash, { recursive: true, force: true });
+});
+
 test("GitHub's collections, listed, described and installed from by the machine itself", async () => {
   const library = await ask("GET", "kuvo/skill-library");
   assert.ok(library.value.repositories.some(each => each.id === "anthropics/skills"));

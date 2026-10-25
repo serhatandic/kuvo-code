@@ -127,7 +127,7 @@ run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the M
 bridge's real handler. Only the engine is a stand-in, the same small one on both. To add one:
 
 - Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
-  each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `settings`, `key`, `credential`,
+  each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `trashedSkill`, `settings`, `key`, `credential`,
   `file`, `repository`, `write`, `ask`, `agentsBridge`, `peers`; bots before anything else), a request
   `{"send": "PATCH kuvo/bots/bot_ada", "body": {…}, "expect": {"status", "json"?, "type"?,
   "text"?}, "save": {"name": "bot.id"}}`, or `{"engineGot": {"method", "path", "json"}}`.

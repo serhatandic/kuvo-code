@@ -1,5 +1,5 @@
 {
-  "about": "kuvo/skills and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: SkillsOnBoxTests (this Mac's box, as the app reaches it) and skills.test.js cover those, each against its own stand-in.",
+  "about": "kuvo/skills, kuvo/skill-trash and kuvo/skill-library (PROTOCOL.md, \"Skills\"): each box's own skills folder, written and read as Settings › Skills does, its Recently Deleted, and GitHub's well-known collections. Listing a collection's skills and installing one reach GitHub, which this suite doesn't stand in for: SkillsOnBoxTests (this Mac's box, as the app reaches it) and skills.test.js cover those, each against its own stand-in.",
   "scenarios": [
     {
       "name": "the skills folder, its folders, and which skills came from GitHub",
@@ -45,6 +45,50 @@
         { "send": "POST kuvo/skills", "expect": { "status": 405, "json": {} } },
         { "send": "PATCH kuvo/skills/release-notes", "expect": { "status": 405, "json": {} } },
         { "send": "GET kuvo/skills/a/b", "expect": { "status": 404, "json": {} } }
+      ]
+    },
+    {
+      "name": "Recently Deleted: a skill put away is listed with what its SKILL.md says, restored whole, and never over another by its name",
+      "steps": [
+        { "given": { "skill": { "name": "release-notes", "text": "---\nname: release-notes\ndescription: Writes the release notes\n---\nKeep them short.\n" } } },
+        { "send": "GET kuvo/skill-trash", "expect": { "status": 200, "json": { "entries": [] } } },
+        { "send": "DELETE kuvo/skills/release-notes", "expect": { "status": 200, "json": {} } },
+        {
+          "send": "GET kuvo/skill-trash",
+          "expect": { "status": 200, "json": { "entries": [
+            { "id": { "<contains>": "release-notes-" }, "folder": "release-notes", "name": "release-notes", "description": "Writes the release notes", "deleted": "<number>", "goes": "<number>" }
+          ] } },
+          "save": { "entry": "entries.0.id" }
+        },
+        { "send": "PUT kuvo/skills/release-notes", "body": { "text": "---\nname: release-notes\n---\nA new one.\n", "new": true }, "expect": { "status": 200, "json": {} } },
+        { "send": "POST kuvo/skill-trash/{{entry}}/restore", "expect": { "status": 409, "json": { "message": "There's a skill called release-notes now. Delete it first to restore this one." } } },
+        { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\n---\nA new one.\n" } } },
+        { "send": "GET kuvo/skill-trash", "expect": { "status": 200, "json": { "entries": [{ "id": "{{entry}}" }] } } },
+        { "send": "DELETE kuvo/skills/release-notes", "expect": { "status": 200, "json": {} } },
+        { "send": "POST kuvo/skill-trash/{{entry}}/restore", "expect": { "status": 200, "json": { "name": "release-notes" } } },
+        { "send": "GET kuvo/skills/release-notes", "expect": { "status": 200, "json": { "text": "---\nname: release-notes\ndescription: Writes the release notes\n---\nKeep them short.\n" } } },
+        { "send": "GET kuvo/skill-trash", "expect": { "status": 200, "json": { "entries": [{ "folder": "release-notes", "description": "<absent>" }] } } },
+        { "send": "POST kuvo/skill-trash/{{entry}}/restore", "expect": { "status": 404, "json": {} } }
+      ]
+    },
+    {
+      "name": "Recently Deleted keeps an entry 30 days, newest first; its ids are checked, and the methods each route takes",
+      "steps": [
+        { "given": { "trashedSkill": { "name": "old", "text": "---\nname: old\n---\n", "daysAgo": 31 } } },
+        { "given": { "trashedSkill": { "name": "older-but-kept", "text": "---\nname: Older\n---\n", "daysAgo": 29 } } },
+        { "given": { "trashedSkill": { "name": "recent", "text": "No header.\n", "daysAgo": 3 } } },
+        {
+          "send": "GET kuvo/skill-trash",
+          "expect": { "status": 200, "json": { "entries": [
+            { "folder": "recent", "name": "recent", "description": "<absent>" },
+            { "folder": "older-but-kept", "name": "Older" }
+          ] } }
+        },
+        { "send": "POST kuvo/skill-trash/not-an-entry/restore", "expect": { "status": 400, "json": { "message": "That isn't an entry in Recently Deleted." } } },
+        { "send": "POST kuvo/skill-trash/.hidden-1761400000/restore", "expect": { "status": 400, "json": { "message": "That isn't an entry in Recently Deleted." } } },
+        { "send": "POST kuvo/skill-trash/nowhere-1761400000/restore", "expect": { "status": 404, "json": {} } },
+        { "send": "POST kuvo/skill-trash", "expect": { "status": 405, "json": {} } },
+        { "send": "GET kuvo/skill-trash/nowhere-1761400000/restore", "expect": { "status": 405, "json": {} } }
       ]
     },
     {

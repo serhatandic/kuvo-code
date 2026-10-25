@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -1504,6 +1504,45 @@ function skillFolders() {
   return listOf(SKILLS).filter(name => !name.startsWith(".") && (() => { try { return fs.statSync(path.join(SKILLS, name)).isDirectory(); } catch { return false; } })()).sort();
 }
 
+// Recently Deleted: a skill put away, in this box's own trash, as `<its folder's name>-<when, in
+// seconds>`, dated when it was put away and kept 30 days from then.
+const SKILL_TRASH = path.join(K, "trash", "skills");
+const SKILL_TRASH_DAYS = 30;
+const DAY = 86_400_000;
+
+const isDirectory = file => { try { return fs.statSync(file).isDirectory(); } catch { return false; } };
+
+/** The folder's name a Recently Deleted entry goes back to, or null for what isn't an entry's id
+ * (a path, a hidden name, anything not `<name>-<seconds>`). */
+export function skillTrashName(entry) {
+  const found = typeof entry === "string" && entry.length <= 141 ? /^(.+)-\d{1,12}$/.exec(entry) : null;
+  return found && isSkillFolder(found[1]) && isSkillFolder(entry) ? found[1] : null;
+}
+
+/** What's been in Recently Deleted 30 days or more, gone for good. */
+function clearSkillTrash() {
+  const old = Date.now() - SKILL_TRASH_DAYS * DAY;
+  for (const each of listOf(SKILL_TRASH)) try { if (fs.statSync(path.join(SKILL_TRASH, each)).mtimeMs <= old) fs.rmSync(path.join(SKILL_TRASH, each), { recursive: true, force: true }); } catch {}
+}
+
+/** Recently Deleted, newest first: each with what its SKILL.md says it is, when it was put away and
+ * when it goes, in seconds since 1970. */
+function skillTrashEntries() {
+  const entries = [];
+  for (const id of listOf(SKILL_TRASH)) {
+    const folder = skillTrashName(id);
+    const away = path.join(SKILL_TRASH, id);
+    if (!folder || !isDirectory(away)) continue;
+    const deleted = fs.statSync(away).mtimeMs;
+    const about = skillAbout(textOf(path.join(away, "SKILL.md")) ?? "");
+    entries.push({
+      id, folder, name: about.name || folder, ...(about.description ? { description: about.description } : {}),
+      deleted: Math.floor(deleted / 1000), goes: Math.floor((deleted + SKILL_TRASH_DAYS * DAY) / 1000),
+    });
+  }
+  return entries.sort((a, b) => b.deleted - a.deleted || a.id.localeCompare(b.id));
+}
+
 /** Skills installed from GitHub, by their folder's name, with where they came from. */
 function skillSources() {
   const sources = {};
@@ -1664,7 +1703,7 @@ async function installSkill(repository, skill) {
   }
 }
 
-/** `kuvo/skills…` and `kuvo/skill-library…`, for this box's own folder. */
+/** `kuvo/skills…`, `kuvo/skill-trash…` and `kuvo/skill-library…`, for this box's own folder. */
 export async function answerSkills(method, requestPath, body, engine = null) {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
@@ -1703,19 +1742,42 @@ export async function answerSkills(method, requestPath, body, engine = null) {
       }
       if (method === "DELETE") {
         if (!fs.existsSync(folder)) return { status: 404, value: {} };
-        // To this box's own trash, kept 30 days.
-        const trash = path.join(K, "trash", "skills");
-        fs.mkdirSync(trash, { recursive: true });
-        const away = path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`);
+        // To this box's own trash (Recently Deleted), kept 30 days.
+        fs.mkdirSync(SKILL_TRASH, { recursive: true });
+        let when = Math.floor(Date.now() / 1000);
+        while (fs.existsSync(path.join(SKILL_TRASH, `${name}-${when}`))) when++;
+        const away = path.join(SKILL_TRASH, `${name}-${when}`);
         fs.renameSync(folder, away);
         // Dated now: moving it kept its own date, and an old one would go at once.
         const now = new Date();
         fs.utimesSync(away, now, now);
-        const old = Date.now() - 30 * 86_400_000;
-        for (const each of listOf(trash)) try { if (fs.statSync(path.join(trash, each)).mtimeMs < old) fs.rmSync(path.join(trash, each), { recursive: true, force: true }); } catch {}
+        clearSkillTrash();
         return { status: 200, value: {} };
       }
       return { status: 405, value: {} };
+    }
+    if (parts[1] === "skill-trash") {
+      // Recently Deleted: what's past its 30 days goes first, whatever's asked.
+      clearSkillTrash();
+      if (parts.length === 2) {
+        if (method !== "GET") return { status: 405, value: {} };
+        return { status: 200, value: { entries: skillTrashEntries() } };
+      }
+      if (parts.length === 4 && parts[3] === "restore") {
+        if (method !== "POST") return { status: 405, value: {} };
+        const entry = parts[2];
+        const name = skillTrashName(entry);
+        if (!name) return { status: 400, value: message("That isn't an entry in Recently Deleted.") };
+        const away = path.join(SKILL_TRASH, entry);
+        if (!isDirectory(away)) return { status: 404, value: {} };
+        const back = path.join(SKILLS, name);
+        // Never over another: one by its name now stays, and so does this one, to restore later.
+        if (fs.existsSync(back)) return { status: 409, value: message(`There's a skill called ${name} now. Delete it first to restore this one.`) };
+        fs.mkdirSync(SKILLS, { recursive: true });
+        fs.renameSync(away, back);
+        return { status: 200, value: { name } };
+      }
+      return { status: 404, value: {} };
     }
     if (parts[1] === "skill-library") {
       if (parts.length === 2 && method === "GET") return { status: 200, value: { repositories: SKILL_REPOSITORIES.map(({ branch, ...shown }) => shown) } };
@@ -1812,9 +1874,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
-    // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, and GitHub's
+    // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
     // collections, which it reaches itself (a machine's with the Mac closed too).
-    if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {
+    if (/^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
       const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
