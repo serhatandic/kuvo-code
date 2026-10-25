@@ -75,7 +75,8 @@ struct PhoneSettings: View {
                 Text("Pair")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if app.box.failure == nil { Text(statusText) }
+                    // A pairing code says how the link stands under it.
+                    if app.box.failure == nil, link.pairing == nil { Text(statusText) }
                     Text("Your phones reach this Mac through Kuvo Code’s relay. Everything between them is encrypted end to end, so the relay only passes along what it can’t read.")
                 }
                 .foregroundStyle(.secondary)
