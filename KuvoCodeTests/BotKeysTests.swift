@@ -12,7 +12,6 @@ import Testing
 @Suite(.serialized) struct BotKeysTests {
     let root = Bots.root
     let app = AppModel()
-    let engine = StubEngine(port: 47905)
 
     /// A bot here, its folder where the app keeps bots' and described there as it writes it.
     private func bot(_ id: String, project: String? = nil) throws -> Bot {
@@ -43,10 +42,7 @@ import Testing
         let service = try #require(BotKeys.services.first { !Integrations.keys(of: $0.way).isEmpty })
         let names = Integrations.keys(of: service.way).map(\.name)
         let ada = try bot("bot_ada"), ben = try bot("bot_ben")
-        let box = try await TestBox(engine: engine.url)
         defer {
-            box.stop()
-            engine.stop()
             for name in names { _ = IntegrationKeys.set(nil, for: IntegrationKeys.variable(service.id, name, bot: ada.id)) }
             for id in [ada.id, ben.id] { try? FileManager.default.removeItem(at: root.appending(path: id)) }
         }
@@ -85,7 +81,6 @@ import Testing
     /// for next time. The machine is a stand-in (its own side has the bridge's tests).
     @Test func keysThisMacKeptForAMachinesBotGoToIt() async throws {
         TestEnvironment.prepare()
-        defer { engine.stop() }
         app.bots.app = app
         defer { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "bots.json")) }
         let encoder = JSONEncoder()
@@ -129,10 +124,9 @@ import Testing
         let project = AppInfo.testRoot.appending(path: "BotKeysProject-\(UUID().uuidString.prefix(6))").path(percentEncoded: false)
         try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let helper = try bot("bot_helper", project: project)
-        let box = try await TestBox(engine: engine.url)
+        let box = try await SettingsBox(port: 47_905)
         defer {
             box.stop()
-            engine.stop()
             for name in names { _ = IntegrationKeys.set(nil, for: IntegrationKeys.variable(service.id, name, bot: helper.id)) }
             try? FileManager.default.removeItem(atPath: project)
             try? FileManager.default.removeItem(at: root.appending(path: helper.id))
