@@ -60,6 +60,9 @@ import Testing
     /// Keychain, its folder's settings naming its server with it; read back, and taken away.
     @Test func aPhoneGivesABotHereAKeyOfItsOwn() async throws {
         defer { done() }
+        // This Mac's box keeps them, in the test copy's Keychain through the app.
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
         let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
         let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
         let name = try #require(Integrations.keys(of: service.way).first?.name)

@@ -68,8 +68,6 @@ final class PhoneLink {
     @ObservationIgnored var forgetSignIn: (String) -> Bool = { _ in false }
     /// Whether a group chat or a bot is on its way to another computer; set by AppModel.
     @ObservationIgnored var isMoving: (String) -> Bool = { Moves.isFrozen($0) }
-    /// This Mac's engine settings, for `kuvo/config` and `kuvo/mcp/catalog`; set by AppModel.
-    @ObservationIgnored weak var engineConfig: EngineConfig?
     /// Starts this Mac's engine over, as Settings › Engine's Restart does; set by AppModel.
     @ObservationIgnored var restartEngine: () -> Void = {}
     /// When the engine running now came up, for `kuvo/info`; set by AppModel.
@@ -770,7 +768,7 @@ final class PhoneLink {
             return Self.forwardGroups(request, route: route, agents: agents)
         }
         // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
-        if Self.boxRoutes.contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
+        if Self.movedToBox(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -825,17 +823,6 @@ final class PhoneLink {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.makeBot(request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // A bot's keys of its own, as Edit Bot shows and changes them.
-        if Self.isBotKeys(request.path) {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerBotKeys(request) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1142,7 +1129,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1224,7 +1211,7 @@ final class PhoneLink {
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
-        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart",
+        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
@@ -1259,7 +1246,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/bots", "kuvo/named", "kuvo/asks", "kuvo/mcp/catalog"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if ["kuvo/bots", "kuvo/named", "kuvo/asks"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
@@ -1322,12 +1309,8 @@ final class PhoneLink {
             return answerAsk(String(path.dropFirst("kuvo/asks/".count)), with: request.body)
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
-        case "kuvo/config":
-            return answerConfig(request)
         case "kuvo/mac":
             return answerMac(request)
-        case "kuvo/mcp/catalog":
-            return catalogJSON()
         case "kuvo/personalities":
             return answerPersonalities(nil, request)
         case let path where path.hasPrefix("kuvo/personalities/"):
@@ -1337,8 +1320,6 @@ final class PhoneLink {
             return (200, (try? JSONSerialization.data(withJSONObject: ["keys": IntegrationKeys.shared])) ?? Data("{}".utf8))
         case let path where path.hasPrefix("kuvo/keys/"):
             return answerKey(String(path.dropFirst("kuvo/keys/".count)).removingPercentEncoding ?? "", request)
-        case let path where path.hasPrefix("kuvo/mcp/catalog/") && request.method.uppercased() == "POST":
-            return addFromCatalog(String(path.dropFirst("kuvo/mcp/catalog/".count)))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (`kuvo/info` answers again).
@@ -1421,62 +1402,6 @@ final class PhoneLink {
         }
     }
 
-    /// `kuvo/config`: this Mac's engine settings, as Settings shows them, its own (each machine
-    /// has its own, from its bridge). PATCH changes some, as Settings does, with
-    /// `{"changes": [{"path": [keys…], "value": …}]}` (null removes it), and answers with them all.
-    /// A change can say what it read there (`"was"`, null for nothing): changed since, nothing is
-    /// changed and it answers 409. A path goes through objects only; a list is sent whole.
-    private func answerConfig(_ request: LinkRequest) -> (Int, Data) {
-        guard let config = engineConfig else { return (503, Data()) }
-        // As the file is now, edited elsewhere or not.
-        config.reload()
-        if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
-        switch request.method.uppercased() {
-        case "GET":
-            break
-        case "PATCH":
-            struct Change: Decodable {
-                var path: [String]
-                var value: JSONValue
-                /// Absent: not checked; `.null`: nothing was there.
-                var was: JSONValue?
-
-                enum CodingKeys: String, CodingKey { case path, value, was }
-                init(from decoder: Decoder) throws {
-                    let container = try decoder.container(keyedBy: CodingKeys.self)
-                    path = try container.decode([String].self, forKey: .path)
-                    value = try container.decode(JSONValue.self, forKey: .value)
-                    was = container.contains(.was) ? try container.decode(JSONValue.self, forKey: .was) : nil
-                }
-            }
-            struct Given: Decodable { var changes: [Change] }
-            guard let changes = (try? JSONDecoder().decode(Given.self, from: request.body))?.changes, (1...100).contains(changes.count),
-                  changes.allSatisfy({ (1...16).contains($0.path.count) && $0.path.allSatisfy { !$0.isEmpty && $0.count <= 200 } })
-            else { return (400, Self.message("Send {\"changes\": [{\"path\": [keys…], \"value\": …}]}.")) }
-            // Keys go through objects only: one through a list or a plain value would replace it
-            // whole (every permission rule, for "permissions", "0"). A list is sent whole.
-            if changes.contains(where: { change in (1..<change.path.count).contains { config.value(at: Array(change.path[..<$0])).map { $0.object == nil } ?? false } }) {
-                return (400, Self.message("A path goes through objects only; send a list whole, at its own path."))
-            }
-            if changes.contains(where: { change in change.was.map { (config.value(at: change.path) ?? .null) != $0 } ?? false }) {
-                return (409, Self.message("It changed since you read it."))
-            }
-            // A phone's, not one to offer other computers here: the phone offers its own. A key
-            // named where another computer keeps its keys is named where this Mac keeps them.
-            config.set(changes.map { (path: $0.path, value: $0.value == .null ? nil : AlsoApply.keysNamed($0.value, on: nil)) }, noted: false)
-            if let problem = config.problem { return (500, Self.message(problem)) }
-        default:
-            return (405, Data())
-        }
-        return (200, Self.settingsJSON(config.settings))
-    }
-
-    private static func settingsJSON(_ settings: [String: JSONValue]) -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(settings)) ?? Data("{}".utf8)
-    }
-
     nonisolated static func message(_ text: String) -> Data {
         (try? JSONEncoder().encode(["message": text])) ?? Data()
     }
@@ -1524,44 +1449,6 @@ final class PhoneLink {
         guard (values?.fileSize ?? 0) <= fileLimit else { return (413, json, message("That file is too big to open here.")) }
         guard let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return (404, json, message("That file isn’t there anymore.")) }
         return (200, UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream", data)
-    }
-
-    /// `kuvo/mcp/catalog`: Settings › MCP Servers' popular servers, each with whether it's added
-    /// (`integration` too when Integrations added it, and keeps it there), and `macOnly` for one
-    /// that runs on this Mac alone (its Chrome), which never reaches your machines.
-    private func catalogJSON() -> (Int, Data) {
-        guard let config = engineConfig else { return (503, Data()) }
-        struct Listed: Encodable {
-            struct Entry: Encodable {
-                var id: String, title: String, summary: String, access: String
-                var added: Bool, integration: Bool, macOnly: Bool
-            }
-            var servers: [Entry]
-        }
-        config.reload()
-        let entries = MCPCatalog.servers.map { server in
-            let added = config.value(at: MCPSettings.path + [server.id]) != nil
-            let access = switch server.access {
-            case .signIn: "signIn"
-            case .open: "open"
-            case .local: "local"
-            }
-            return Listed.Entry(id: server.id, title: server.title, summary: server.summary, access: access, added: added,
-                                integration: added && Integrations.service(server.id) != nil, macOnly: MCPCatalog.macOnly.contains(server.id))
-        }
-        return (200, (try? JSONEncoder().encode(Listed(servers: entries))) ?? Data())
-    }
-
-    /// `POST kuvo/mcp/catalog/<id>`: adds one of them, as its Add button does, and answers with
-    /// the settings (as `kuvo/config`). One already added stays as it is.
-    private func addFromCatalog(_ id: String) -> (Int, Data) {
-        guard let config = engineConfig else { return (503, Data()) }
-        guard let server = MCPCatalog.servers.first(where: { $0.id == id }) else { return (404, Data()) }
-        config.reload()
-        if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
-        if config.value(at: MCPSettings.path + [server.id]) == nil { MCPCatalog.add(server, to: config) }
-        if let problem = config.problem { return (500, Self.message(problem)) }
-        return (200, Self.settingsJSON(config.settings))
     }
 
     /// `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back
@@ -1953,6 +1840,12 @@ final class PhoneLink {
         let parts = path.split(separator: "/")
         guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
         return String(parts[2]).removingPercentEncoding
+    }
+
+    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`), or
+    /// bots' own keys, as Edit Bot shows and changes them (ahead of the rest of `kuvo/bots`).
+    nonisolated static func movedToBox(_ route: String) -> Bool {
+        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") } || isBotKeys(route) || route == "kuvo/bots/keys/refresh"
     }
 
     /// `kuvo/bots/<id>/keys`, or one integration's.

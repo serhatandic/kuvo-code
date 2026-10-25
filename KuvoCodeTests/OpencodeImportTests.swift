@@ -16,7 +16,7 @@ import Testing
         TestEnvironment.prepare()
         folder = AppInfo.testRoot.appending(path: "Import/\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        config = EngineConfig(file: folder.appending(path: "opencode.json"))
+        config = EngineConfig.inMemory()
     }
 
     /// opencode's settings as the engine reads them, naming a file of instructions beside them.

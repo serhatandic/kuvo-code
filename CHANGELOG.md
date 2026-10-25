@@ -8,6 +8,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - Each computer keeps its own skills through its box, your Mac's too, where they've always been, and a machine downloads a skill you add there from GitHub itself.
 - A skill you delete in Settings › Skills goes to Recently Deleted on that computer, where it's kept for 30 days and you can restore it, on your Mac as on a machine.
+- A bot's own keys are kept and put to use by the computer it lives on, your Mac the same way as a machine (in your Keychain on your Mac). Giving one to a bot whose folder's settings file isn't plain JSON now says so, rather than saving a key its server never reads.
 - Each computer sends its own wake-ups and watches, your Mac the same way as a machine. A wake-up that can't be delivered is tried again after a minute, then less and less often, up to every half hour, on machines too.
 - Your Mac's group chats run the same way as a machine's now, in what Kuvo Code keeps running in the background on your Mac: they meet, talk and hand out work with the window closed, and a group chat on your Mac can have bots from your machines, each taking its turn on its own machine. Your chats move over the first time you open this version, as they were; the old files are kept in Kuvo Code's Backups folder.
 - While your Mac's group chats are starting, or if they stop, a chat shows as you last saw it and says so above the composer, and what you write waits there; stopped, the chat and the sidebar offer Restart.

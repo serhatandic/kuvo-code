@@ -3,10 +3,10 @@ import OpenCodeKit
 
 /// Making changes made on one computer's settings on another too, when you ask ("Also Apply
 /// to…"): each computer keeps its own settings, and nothing goes from one to another otherwise.
-/// A list of rules (Settings › Permissions' rules and blocks, an agent's) gets what was added to
-/// it and loses what was taken out, keeping the rest of the other computer's own; anything else
-/// (another list, like a server's command, too) is set as it is here. An integration's keys go
-/// along, from where this computer keeps them to where the other does, unless it has its own.
+/// The same changes go to each box you pick (`kuvo/config/apply`), which makes them as its own
+/// settings have room for (PROTOCOL.md): a list of rules gets what was added and loses what was
+/// taken out, keeping the rest of its own. The keys they name go first, from where one box keeps
+/// them to where the other does, unless it has its own.
 enum AlsoApply {
     enum Failure: LocalizedError {
         /// Its settings couldn't be read: `connected`, though it's connected.
@@ -75,48 +75,7 @@ enum AlsoApply {
         }
     }
 
-    /// What `changes` make of `target`'s settings, there: the path and the value to set.
-    static func translated(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [(path: [String], value: JSONValue?)] {
-        translation(changes, onto: target, to: machine).made
-    }
-
-    /// What `target` doesn't have that `changes` are to (an agent, a command, a server, a
-    /// provider), so they aren't made there: by entry (`describe` says each), once each.
-    static func leftOut(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> [[String]] {
-        translation(changes, onto: target, to: machine).leftOut
-    }
-
-    /// The servers among `changes` that use a Mac's own apps (Apple Calendar & Reminders, Chrome's
-    /// tools), which stay on Macs: as the bar names them.
-    static func macOnly(_ changes: [EngineConfig.Change]) -> [String] {
-        var named: [String] = []
-        for change in changes where change.path.count >= 3 && change.path[0] == "mcp" && change.path[1] == "servers" {
-            let id = change.path[2]
-            guard Integrations.macOnly.contains(id) || MCPCatalog.macOnly.contains(id) else { continue }
-            let name = Integrations.service(id)?.title ?? MCPCatalog.servers.first { $0.id == id }?.title ?? id
-            if !named.contains(name) { named.append(name) }
-        }
-        return named
-    }
-
-    /// What each computer keeps its own, as the bar says it, among `changes`: its shell (each
-    /// picks from its own), and a worktrees folder on its disk (one relative to each project goes).
-    static func keptOwn(_ changes: [EngineConfig.Change]) -> [String] {
-        var kept: [String] = []
-        for change in changes {
-            if let own = ownSetting(change), !kept.contains(own) { kept.append(own) }
-        }
-        return kept
-    }
-
-    private static func ownSetting(_ change: EngineConfig.Change) -> String? {
-        if change.path == ["shell"] { return "shell" }
-        if change.path == ["worktree", "directory"], let folder = change.after?.string ?? change.before?.string,
-           folder.hasPrefix("/") || folder.hasPrefix("~") { return "worktrees folder" }
-        return nil
-    }
-
-    /// An entry `leftOut` names, as the bar says it: "the agent review".
+    /// Something a box doesn't have that some changes were to, as the bar says it: "the agent review".
     static func describe(_ entry: [String]) -> String {
         let name = entry.last ?? ""
         return switch entry.first {
@@ -127,155 +86,115 @@ enum AlsoApply {
         }
     }
 
-    private static func translation(_ changes: [EngineConfig.Change], onto target: [String: JSONValue], to machine: String?) -> (made: [(path: [String], value: JSONValue?)], leftOut: [[String]]) {
-        var settings = target
-        var result: [(path: [String], value: JSONValue?)] = []
-        var leftOut: [[String]] = []
-        for change in changes {
-            // Integrations that use a Mac's own apps stay on Macs.
-            if machine != nil, change.path.count >= 3, change.path[0] == "mcp", change.path[1] == "servers",
-               Integrations.macOnly.contains(change.path[2]) || MCPCatalog.macOnly.contains(change.path[2]) { continue }
-            // What each computer keeps its own (`keptOwn`).
-            if ownSetting(change) != nil { continue }
-            // A field of a server, agent or command the target doesn't have, or the mode new
-            // sessions start in when it's an agent it doesn't have: none made there with only
-            // that (adding or removing a whole one still goes).
-            if let entry = Self.needs(change), EngineConfig.value(at: entry, in: settings) == nil {
-                if !leftOut.contains(entry) { leftOut.append(entry) }
-                continue
-            }
-            var value = change.after.map { keysNamed($0, on: machine) }
-            // Rules: none is an empty list, so the first one added (or the last taken out) joins
-            // (or leaves) the other's, rather than standing in for them.
-            if isRules(change.path), change.before?.array != nil || change.after?.array != nil,
-               change.before == nil || change.before?.array != nil, change.after == nil || change.after?.array != nil {
-                let before = change.before?.array ?? []
-                let after = change.after?.array ?? []
-                let there = EngineConfig.value(at: change.path, in: settings)?.array ?? []
-                let removed = before.filter { !after.contains($0) }
-                let added = after.filter { !before.contains($0) }.map { keysNamed($0, on: machine) }
-                let kept = there.filter { !removed.contains($0) }
-                let merged = kept + added.filter { !kept.contains($0) }
-                value = merged.isEmpty ? nil : .array(merged)
-            }
-            result.append((change.path, value))
-            settings = setting(value, at: change.path[...], in: settings)
-        }
-        return (result, leftOut)
-    }
-
-    /// What a computer needs to have for `change` to be made there: the entry it's a field of, or
-    /// the agent `default_agent` names (the engine's own are on every computer).
-    static func needs(_ change: EngineConfig.Change) -> [String]? {
-        if change.path == ["default_agent"], let agent = change.after?.string, !BuiltInAgents.contains(agent) { return ["agents", agent] }
-        return entry(of: change.path)
-    }
-
-    /// The named entry (an MCP server, an agent, a command, a provider) `path` is a field of,
-    /// when it's one a computer may not have. (The engine's own agents are on every one, named or
-    /// not.)
-    static func entry(of path: [String]) -> [String]? {
-        switch path.first {
-        case "mcp" where path.count >= 4 && path[1] == "servers": Array(path.prefix(3))
-        case "agents" where path.count >= 3 && BuiltInAgents.contains(path[1]): nil
-        case "agents", "commands", "providers": path.count >= 3 ? Array(path.prefix(2)) : nil
-        default: nil
+    /// Something each computer keeps its own, as the bar says it: "shell".
+    static func describeKept(_ path: [String]) -> String {
+        switch path {
+        case ["shell"]: "shell"
+        case ["worktree", "directory"]: "worktrees folder"
+        default: path.joined(separator: " ")
         }
     }
 
-    /// A list of rules, merged item by item: Settings › Permissions' rules and blocks, and an
-    /// agent's own rules.
-    static func isRules(_ path: [String]) -> Bool {
-        guard let last = path.last else { return false }
-        return last == "permissions" || last == "policies"
+    /// A server that uses a Mac's own apps, which stays on Macs, as the bar names it.
+    static func describeServer(_ id: String) -> String {
+        Integrations.service(id)?.title ?? MCPCatalog.servers.first { $0.id == id }?.title ?? id
     }
 
-    /// The keys `changes` name (integrations' shared keys, not a bot's own).
-    static func keys(in changes: [(path: [String], value: JSONValue?)]) -> Set<String> {
-        Set(changes.compactMap(\.value).flatMap(Integrations.keyNames).filter { !IntegrationKeys.isBots($0) })
-    }
-
-    /// What applying did on one computer: whether anything there changed or was already so, and
-    /// what it doesn't have that some of the changes were to (`describe`d).
+    /// What applying did on one computer, as the bar says it: what it doesn't have that some of
+    /// the changes were to, what it keeps its own, the servers that stayed on Macs, and whether
+    /// anything there changed or was already so.
     struct Outcome {
         var leftOut: [String] = []
-        /// Something was made there, or every change was already so.
+        var kept: [String] = []
+        var macOnly: [String] = []
         var applied = true
     }
 
-    /// `changes`, made on `source`, made on `target` too: its settings, then the keys they name.
+    /// `changes`, made on `source`, made on `target` too; `target`'s settings, as its box answers,
+    /// shown at once.
     @discardableResult
     @MainActor static func apply(_ changes: [EngineConfig.Change], from source: SidebarBox, to target: SidebarBox, app: AppModel) async throws -> Outcome {
-        let config = app.config(for: target)
-        if !config.isLoaded {
-            config.reload()
-            for _ in 0..<150 where !config.isLoaded && config.problem == nil { try await Task.sleep(for: .milliseconds(100)) }
-            guard config.isLoaded else {
-                throw Failure.unread(connected: target.machine.map { app.machines.engine($0)?.isReady == true } ?? true)
-            }
-        }
-        let (made, missing) = translation(net(changes), onto: config.settings, to: target.machine)
-        // Nothing made, and nothing said of what it doesn't have: what stays with every computer
-        // (its shell, a server only Macs run) is said once, by the bar.
-        let stays = !keptOwn(net(changes)).isEmpty || (target.machine != nil && !macOnly(net(changes)).isEmpty)
-        let outcome = Outcome(leftOut: missing.map(describe), applied: !made.isEmpty || (missing.isEmpty && !stays))
-        guard !made.isEmpty else { return outcome }
-        // The keys first, so the settings that name them find them there; one the other computer
-        // has of its own (another account's token, say) stays.
-        for name in keys(in: made) {
-            if let there = try await key(name, on: target), !there.isEmpty { continue }
-            guard let value = try await key(name, on: source), !value.isEmpty else { continue }
-            try await setKey(name, value, on: target)
-        }
-        config.set(made, noted: false)
-        // Applied once it's there, or why it isn't.
-        if let failure = await config.settled() { throw Failure.refused(failure) }
+        let (outcome, settings) = try await apply(changes, from: app.box(source.id), to: app.box(target.id))
+        app.config(for: target).took(settings)
         return outcome
     }
 
-    /// A key's value where `box` keeps it.
-    @MainActor private static func key(_ name: String, on box: SidebarBox) async throws -> String? {
-        guard let machine = box.machine else { return IntegrationKeys.value(name) }
-        let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-key-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: file) }
-        try await SSHConnection(destination: machine).run(RemoteEngineInstaller.script("cat \"$K/box/keys/\"\(SSHConnection.quoted(name)) 2>/dev/null; true"), output: file)
-        return try? String(contentsOf: file, encoding: .utf8)
-    }
-
-    @MainActor private static func setKey(_ name: String, _ value: String, on box: SidebarBox) async throws {
-        guard let machine = box.machine else {
-            IntegrationKeys.set(value, for: name)
-            return
-        }
-        try await MachineBox.setKey(name, value, on: SSHConnection(destination: machine))
-    }
-
-    /// Keys named as `machine` (nil: this Mac) keeps them.
-    static func keysNamed(_ value: JSONValue, on machine: String?) -> JSONValue {
-        switch value {
-        case .string(let text):
-            guard text.contains("KUVO_KEY_"), let regex = try? NSRegularExpression(pattern: #"\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}"#) else { return value }
-            let original = text as NSString
-            let result = NSMutableString(string: text)
-            for match in regex.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
-                result.replaceCharacters(in: match.range, with: IntegrationKeys.reference(original.substring(with: match.range(at: 1)), on: machine))
+    /// `changes`, made on `source`'s box, made on `target`'s: a look first, which changes nothing
+    /// and names the keys they'd need; those keys, from `source` where `target` hasn't its own; then
+    /// the changes. Its settings after.
+    static func apply(_ changes: [EngineConfig.Change], from source: BoxClient, to target: BoxClient) async throws -> (Outcome, [String: JSONValue]) {
+        let sent = net(changes).map { Request.Change(path: $0.path, before: $0.before, after: $0.after) }
+        let look = try await ask(target, Request(changes: sent, dry: true))
+        // The keys first, so the settings that name them find them there; one the other computer
+        // has of its own (another account's token, say) stays.
+        var brought: [String] = []
+        do {
+            for name in look.keys {
+                if let there = try await key(name, on: target), !there.isEmpty { continue }
+                guard let value = try await key(name, on: source), !value.isEmpty else { continue }
+                let (status, data) = try await target.send("PUT", "kuvo/keys/\(name)", body: try JSONEncoder().encode(["value": value]))
+                guard (200..<300).contains(status) else { throw Failure.refused(BoxRefusal(status: status, data: data).message) }
+                brought.append(name)
             }
-            return .string(result as String)
-        case .object(let object): return .object(object.mapValues { keysNamed($0, on: machine) })
-        case .array(let array): return .array(array.map { keysNamed($0, on: machine) })
-        default: return value
+            let done = look.made.isEmpty ? look : try await ask(target, Request(changes: sent, dry: false))
+            // A key brought for a change that wasn't made after all (its settings changed there
+            // meanwhile) doesn't stay there.
+            await forget(brought.filter { !done.keys.contains($0) }, on: target)
+            let outcome = Outcome(leftOut: done.leftOut.map(describe), kept: done.kept.map(describeKept), macOnly: done.macOnly.map(describeServer), applied: done.applied)
+            return (outcome, done.settings)
+        } catch {
+            // Nothing applied: nor the keys brought for it.
+            await forget(brought, on: target)
+            throw error
         }
     }
 
-    private static func setting(_ value: JSONValue?, at path: ArraySlice<String>, in object: [String: JSONValue]) -> [String: JSONValue] {
-        var object = object
-        let key = path.first!
-        if path.count == 1 {
-            object[key] = value
-        } else {
-            let inner = setting(value, at: path.dropFirst(), in: object[key]?.object ?? [:])
-            object[key] = inner.isEmpty ? nil : .object(inner)
+    /// Keys brought to `box` for changes that weren't made there, taken away again.
+    private static func forget(_ names: [String], on box: BoxClient) async {
+        for name in names { _ = try? await box.send("DELETE", "kuvo/keys/\(name)") }
+    }
+
+    private struct Request: Encodable {
+        struct Change: Encodable {
+            var path: [String]
+            var before: JSONValue?
+            var after: JSONValue?
         }
-        return object
+        var changes: [Change]
+        var dry: Bool
+    }
+
+    /// What a box answers `kuvo/config/apply` with.
+    private struct Answer: Decodable {
+        struct Made: Decodable { var path: [String] }
+        var made: [Made]
+        var leftOut: [[String]]
+        var kept: [[String]]
+        var macOnly: [String]
+        var keys: [String]
+        var applied: Bool
+        var settings: [String: JSONValue]
+    }
+
+    private static func ask(_ box: BoxClient, _ request: Request) async throws -> Answer {
+        do {
+            return try await box.value(Answer.self, "POST", "kuvo/config/apply", body: request)
+        } catch let refusal as BoxRefusal {
+            // A machine whose box hasn't this route yet: its Kuvo Code comes up to date as it connects.
+            throw Failure.refused(refusal.status == 404 ? "connect to it once first, to bring it up to date." : refusal.message)
+        } catch is DecodingError {
+            throw Failure.unread(connected: true)
+        } catch {
+            throw Failure.unread(connected: false)
+        }
+    }
+
+    /// A key's value where `box` keeps it; nil for none.
+    private static func key(_ name: String, on box: BoxClient) async throws -> String? {
+        struct Value: Decodable { var value: String }
+        let (status, data) = try await box.send("GET", "kuvo/keys/\(name)")
+        if status == 404 { return nil }
+        guard (200..<300).contains(status) else { throw Failure.refused(BoxRefusal(status: status, data: data).message) }
+        return try? JSONDecoder().decode(Value.self, from: data).value
     }
 }

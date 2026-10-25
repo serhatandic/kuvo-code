@@ -387,15 +387,15 @@ struct ConfigProblem: View {
             Section {
                 Label {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(config.remote == nil ? "The engine's settings file can't be changed here" : "\(app.name(of: box))’s settings can't be changed here")
+                        Text(config.file != nil ? "The engine's settings file can't be changed here" : "\(app.name(of: box))’s settings can't be changed here")
                         Text(problem).foregroundStyle(.secondary)
                     }
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
                 HStack {
-                    if config.remote == nil {
-                        Button("Open Settings File") { NSWorkspace.shared.open(config.file) }
+                    if let file = config.file {
+                        Button("Open Settings File") { NSWorkspace.shared.open(file) }
                     }
                     Button("Try Again") { config.reload() }
                 }

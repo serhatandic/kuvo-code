@@ -65,7 +65,7 @@ for Linux's tools).
 | I2 A project on a machine | MachineFoldersTests, AttachmentRoutesTests, SignInSyncTests, MachineSignOutTests | |
 | I3 A machine that's away | MachineAwayTests | |
 | A machine's connection: what it's sent once it's connected (its bots' kit), and what runs for it ending with it (Disconnect, Remove, a reconnect) | MachineConnectionTests | |
-| I4 What machines share with this Mac, and what's their own; Also Apply to… | MachineSettingsTests, BoxSettingsTests, AlsoApplyTests, CustomAutoPlacesTests, SignInSyncTests | a connected machine's engine starting over with new settings (needs SSH) |
+| I4 What machines share with this Mac, and what's their own; Also Apply to… | MachineSettingsTests, BoxSettingsTests, AlsoApplyTests (this Mac's box and a machine's, both real), CustomAutoPlacesTests, SignInSyncTests; the route scenarios (Also Apply) | a connected machine's engine starting over with new settings (needs SSH) |
 | F9, L46 A bot on a machine works and wakes while the Mac's app is closed; the machine restarting brings its engine back | OpenCodeKit's MachineWakeUpsTests (kuvo-wake, each minute: a due one reaches its bot once, one the engine couldn't take is tried again) and RebootTests (kuvo-start from the crontab, the watchdog: what keeps the engine up, a day without the app stops it); the bridge's bots tests (Packages/KuvoLink/Tests/Bridge) | the real crontab and restart (the end-to-end runs) |
 | Group chats on each computer, run there with the window closed (a machine's with the Mac off), this Mac's moved there from what 0.5 to 0.8.0-beta.1 kept; the stopped or starting bridge said in the chat | BoxGroupTests, RealBridgeGroupTests, GroupMigrationTests; Agents' groups, groups-runner and groups-box tests; the bridge's groups tests | the upgrade from real 0.5, 0.6, 0.7.2 and 0.8.0-beta.1 builds (`scripts/groups-rehearsal.sh`, by hand) |
 | One group chat's talk redraws only what shows that chat (its conversation, row and tab), not the other chats' nor the list | RealBridgeGroupTests | how smooth it is (`Tests/Perf`, `groups`) |
@@ -80,8 +80,8 @@ for Linux's tools).
 | J1 The network goes away mid-reply | NetworkDropTests | |
 | J3 The engine stops; the app brings it back | EngineRestartTests | |
 | J4 A huge file, a binary file in the changes; a command that prints a lot | ChangesDiscardTests, ChangesBinaryTests, CommandOutputTests | how much output the engine keeps (its own) |
-| K1 Settings keep what you change; its tabs | EngineSettingsFileTests, SettingsTabsTests | |
-| L42 Web search works from the start (the engine has no search chosen; every search failed) | EngineSettingsFileTests | |
+| K1 Settings keep what you change, in this Mac's settings file through its box; a phone's change shows; a file with comments left alone; its tabs | SettingsOnBoxTests, SettingsTabsTests; the route scenarios (settings.json) and the bridge's config tests | |
+| L42 Web search works from the start (the engine has no search chosen; every search failed) | SettingsOnBoxTests | |
 | K3, L41 Notifications, and answering from one; on your phones, each once, from the computer it happened on, held a little while you're at a computer (never sent if answered or seen meanwhile, sent at once as you leave) | NotificationMaskingTests, NotificationRepliesTests, PhoneNoticesTests, PhoneAttentionTests (this Mac's, and the app saying you've left on sleep and lock); the bridge's box-work.test.js (a machine's, Mac connected or not) and attention.test.js (held on a machine) | macOS showing them (Notification Center), the real sleep, lock and idle time |
 | ⌘K: find a session in any project, a file in this one, or an action | CommandPaletteTests | its window and keys (UI) |
 | K2 Menu commands and shortcuts | | menus and keys (UI; the end-to-end runs check each against Settings › Keyboard Shortcuts) |

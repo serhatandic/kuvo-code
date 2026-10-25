@@ -9,7 +9,9 @@ import OpenCodeKit
 /// tests' folder, and sends the test copy's wake-ups. `stop()` stops it and leaves nothing behind.
 @MainActor
 final class TestBox {
-    let process = BoxProcess()
+    let process: BoxProcess
+    /// What it asks the app for (the test copy's own Keychain, in memory).
+    let host = HostInterface()
     private let enginePort: UInt16
 
     /// Node, where it usually is (CI's, Homebrew's, nvm's).
@@ -21,13 +23,17 @@ final class TestBox {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(filePath: $0) }
     }
 
-    /// Started, finding the engine at `engine` (StubWeb's, started already). `environment`: what
-    /// else it runs with (GitHub's stand-in, `KUVO_TEST_GITHUB`).
-    init(engine: String, password: String = "test", environment: [String: String] = [:]) async throws {
+    /// Started, finding the engine at `engine` (StubWeb's, started already). `process`: an app's
+    /// own (`AppModel.box`), else one of its own. `defaultsAdded`: it starts as one that added its
+    /// defaults to this Mac's settings before (a test's settings stay as it gives them).
+    /// `environment`: what else it runs with (GitHub's stand-in, `KUVO_TEST_GITHUB`).
+    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true, environment: [String: String] = [:]) async throws {
         guard let node = Self.node else { throw TestFailure("Node runs this Mac's box in the tests, and there's none.") }
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
+        self.process = process
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
+        if defaultsAdded { BoxProcess.noteDefaultsAdded(["bot-memory", "websearch", "search-exa"]) }
         try await StubWeb.listen(port: enginePort)
         // As the app starts it: its environment, and the app's own wake-up folders and kuvo-wake,
         // with which it sends this Mac's wake-ups.
@@ -36,6 +42,9 @@ final class TestBox {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
+        environment["KUVO_KEYS_ON_HOST"] = "1"
+        environment.merge(try await host.start()) { _, new in new }
+        MachineBox.writeMacCatalog()
         await process.start(node: node, environment: environment)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }
         StubWeb.letThrough(port: endpoint.url.port ?? 0)
@@ -56,6 +65,7 @@ final class TestBox {
     }
 
     func stop() {
+        host.stop()
         process.stop()
         BoxProcess.engineChanged(nil, version: nil, pid: nil)
         StubWeb.stopListening(port: enginePort)
