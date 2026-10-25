@@ -3,13 +3,13 @@ import OpenCodeKit
 import os
 
 /// Keys a bot has of its own for integrations you bring a key for (a GitHub token of its own),
-/// used only in its conversation and kept on the computer it lives on: for a bot on this Mac, in
-/// your Keychain beside the shared ones; for one on a machine, on that machine (its bridge's
-/// `kuvo/bots/<id>/keys`, which a phone reaches too, in `~/.kuvo-code/box/bot-keys`), never on
-/// this Mac. Where it works, a settings
-/// file of its folder's own, `.opencode/opencode.json`, names each such integration's server with
-/// its keys over the shared ones, and no other bot's or session's settings name them. A bot that
-/// works in a project shares that folder with your sessions there, so it uses the keys they do.
+/// used only in its conversation and kept on the computer it lives on, by that computer's box
+/// (`kuvo/bots/<id>/keys`, which a phone reaches too): for a bot on this Mac, in your Keychain
+/// beside the shared ones (its box asks the app for them, `HostInterface`); for one on a machine,
+/// on that machine, in `~/.kuvo-code/box/bot-keys`. Where it works, a settings file of its folder's
+/// own, `.opencode/opencode.json`, names each such integration's server with its keys over the
+/// shared ones, and no other bot's or session's settings name them. A bot that works in a project
+/// shares that folder with your sessions there, so it uses the keys they do.
 @MainActor
 enum BotKeys {
     private static let log = Logger(subsystem: "run.kuvo.code", category: "integrations")
@@ -37,15 +37,12 @@ enum BotKeys {
     }
 
     static func status(of bot: Bot, app: AppModel) async -> Status {
-        guard let machine = bot.machine else {
-            let (own, shared) = await keychainStatus(of: bot.id)
-            return .read(own: own, shared: shared)
-        }
+        let place = bot.machine ?? "This Mac"
         do {
-            let (status, body) = try await onMachine(machine, "GET", path(bot), app: app)
+            let (status, body) = try await ask(bot, "GET", path(bot), app: app)
             if let failure = refusal(status, body) { return .unreadable(failure) }
             guard let listed = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [[String: Any]] else {
-                return .unreadable("\(machine) didn’t say which keys it has. Its Kuvo Code may be older than this Mac’s.")
+                return .unreadable("\(place) didn’t say which keys it has. Its Kuvo Code may be older than this Mac’s.")
             }
             let ids = { (flag: String) in Set(listed.filter { $0[flag] as? Bool == true }.compactMap { $0["integration"] as? String }) }
             return .read(own: ids("own"), shared: ids("shared"))
@@ -54,59 +51,33 @@ enum BotKeys {
         }
     }
 
-    /// The same for a bot on this Mac, from your Keychain. (Read off the main thread: it can wait on you.)
-    nonisolated static func keychainStatus(of bot: String) async -> (own: Set<String>, shared: Set<String>) {
-        let keyed = await MainActor.run { services.map { (id: $0.id, keys: Integrations.keys(of: $0.way).map(\.name)) } }
-        return await Task.detached {
-            var own: Set<String> = [], shared: Set<String> = []
-            for service in keyed where !service.keys.isEmpty {
-                if service.keys.allSatisfy({ IntegrationKeys.value(IntegrationKeys.variable(service.id, $0, bot: bot)) != nil }) { own.insert(service.id) }
-                if service.keys.allSatisfy({ IntegrationKeys.value(IntegrationKeys.variable(service.id, $0)) != nil }) { shared.insert(service.id) }
-            }
-            return (own, shared)
-        }.value
-    }
-
     /// Saves `values` as `bot`'s own keys for `service` where it lives and puts them to use; why
     /// not, when they couldn't be.
     static func save(_ values: [String: String], for service: Integrations.Service, bot: Bot, app: AppModel) async -> String? {
-        if let machine = bot.machine {
-            do {
-                let (status, body) = try await onMachine(machine, "PUT", path(bot, service), body: ["keys": values], app: app)
-                if let failure = refusal(status, body) { return failure }
-                reconnect(service, bot: bot, app: app)
-                return nil
-            } catch {
-                return error.localizedDescription
-            }
+        do {
+            let (status, body) = try await ask(bot, "PUT", path(bot, service), body: ["keys": values], app: app)
+            if let failure = refusal(status, body) { return failure }
+            reconnect(service, bot: bot, app: app)
+            return nil
+        } catch {
+            return error.localizedDescription
         }
-        let variables = Integrations.keys(of: service.way).map { (IntegrationKeys.variable(service.id, $0.name, bot: bot.id), values[$0.name]?.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        let saved = await Task.detached { variables.allSatisfy { IntegrationKeys.set($0.1, for: $0.0) } }.value
-        guard saved else { return "Couldn’t save it in your Keychain. Try again, or check Keychain Access." }
-        await apply(to: bot, app: app)
-        return nil
     }
 
     /// Takes away `bot`'s own keys for `service`, where it lives: it uses the shared one again, if
     /// there is one. Why not, when they couldn't be.
     @discardableResult
     static func remove(_ service: Integrations.Service, bot: Bot, app: AppModel) async -> String? {
-        if let machine = bot.machine {
-            do {
-                let (status, body) = try await onMachine(machine, "DELETE", path(bot, service), app: app)
-                // Gone already: nothing to take away.
-                if status == 404 { return nil }
-                if let failure = refusal(status, body) { return failure }
-                reconnect(service, bot: bot, app: app)
-                return nil
-            } catch {
-                return error.localizedDescription
-            }
+        do {
+            let (status, body) = try await ask(bot, "DELETE", path(bot, service), app: app)
+            // Gone already: nothing to take away.
+            if status == 404 { return nil }
+            if let failure = refusal(status, body) { return failure }
+            reconnect(service, bot: bot, app: app)
+            return nil
+        } catch {
+            return error.localizedDescription
         }
-        let variables = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) }
-        await Task.detached { for variable in variables { IntegrationKeys.set(nil, for: variable) } }.value
-        await apply(to: bot, app: app, removing: variables)
-        return nil
     }
 
     /// When it's deleted: those this Mac keeps go from your Keychain (a machine's bot's go with its
@@ -123,16 +94,9 @@ enum BotKeys {
         guard let own = await status(of: bot, app: app).own else { return nil }
         var keys: [String: [String: String]] = [:]
         for service in services where own.contains(service.id) {
-            if let machine = bot.machine {
-                guard let (status, body) = try? await onMachine(machine, "GET", path(bot, service), app: app), status == 200,
-                      let values = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [String: String] else { return nil }
-                keys[service.id] = values
-            } else {
-                let names = Integrations.keys(of: service.way).map(\.name)
-                keys[service.id] = await Task.detached {
-                    Dictionary(uniqueKeysWithValues: names.compactMap { name in IntegrationKeys.value(IntegrationKeys.variable(service.id, name, bot: bot.id)).map { (name, $0) } })
-                }.value
-            }
+            guard let (status, body) = try? await ask(bot, "GET", path(bot, service), app: app), status == 200,
+                  let values = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [String: String] else { return nil }
+            keys[service.id] = values
         }
         return keys
     }
@@ -146,11 +110,7 @@ enum BotKeys {
                 log.error("A moved bot's own key didn't reach where it lives now: \(failure, privacy: .public)")
             }
         }
-        if let machine = bot.machine, let engine = app.machines.engine(machine), engine.isReady {
-            try? await MachineBox.refreshBotKeys(on: engine.machine.connection)
-        } else {
-            await apply(to: bot, app: app)
-        }
+        await refresh(on: bot.machine, app: app)
     }
 
     /// A bot moving off where it lived (`Moves`, `bot` as it was there), once it's moved: its own
@@ -159,33 +119,25 @@ enum BotKeys {
         guard let app, let now = app.bots.bot(bot.id), now.machine != bot.machine,
               let there = await status(of: now, app: app).own else { return }
         for service in services where there.contains(service.id) {
-            if let machine = bot.machine {
-                _ = try? await onMachine(machine, "DELETE", path(bot, service), app: app)
-            } else {
-                let variables = Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) }
-                await Task.detached { for variable in variables { IntegrationKeys.set(nil, for: variable) } }.value
-            }
+            _ = try? await ask(bot, "DELETE", path(bot, service), app: app)
         }
     }
 
-    /// As an engine starts (on `machine`, or this Mac's): each bot's there, in case its keys or the
-    /// integrations' settings changed meanwhile. On this Mac, only bots with keys of their own or
-    /// a folder's settings file, which change only where they name their servers. On a machine,
-    /// the machine sees to its own (its catalog may be new); keys this Mac kept for its bots from
-    /// before they lived there go to it first.
-    static func applyAll(on machine: String?, app: AppModel) async {
-        guard let machine else {
-            let names = await Task.detached { IntegrationKeys.names }.value
-            for bot in app.bots.list where bot.machine == nil && bot.project == nil {
-                let hasKeys = !IntegrationKeys.variables(ofBot: bot.id, in: names).isEmpty
-                let hadSome = FileManager.default.fileExists(atPath: URL(filePath: bot.directory).appending(path: ".opencode/opencode.json").path)
-                if hasKeys || hadSome { await apply(to: bot, app: app) }
-            }
-            return
-        }
+    /// As a machine's engine starts: keys this Mac kept for its bots from before they lived there
+    /// go to it first, then each bot's folder settings there are made right for its catalog (which
+    /// may be new). This Mac's box sees to its own as it starts.
+    static func applyAll(on machine: String, app: AppModel) async {
         guard let engine = app.machines.engine(machine), engine.isReady else { return }
-        await handOver(on: machine, app: app) { try await onMachine(machine, $0, $1, body: $2, app: app) }
-        try? await MachineBox.refreshBotKeys(on: engine.machine.connection)
+        let box = app.box(machine)
+        await handOver(on: machine, app: app) { method, path, body in try await box.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) }) }
+        await refresh(on: machine, app: app)
+    }
+
+    /// Each bot's folder settings on a box made right for its keys and its integrations as they
+    /// are now (after Settings › Integrations changed, or a bot moved there).
+    static func refresh(on machine: String?, app: AppModel) async {
+        if let machine, app.machines.engine(machine)?.isReady != true { return }
+        _ = try? await app.box(machine ?? BoxClient.mac).send("POST", "kuvo/bots/keys/refresh")
     }
 
     /// A request to a machine's box: method, path and body in, status and body out.
@@ -212,8 +164,8 @@ enum BotKeys {
     }
 
     /// Its server connected again in its folder a moment after its keys changed on its machine,
-    /// once the engine there has read them. (What the machine does for a phone ends with the
-    /// SSH command that asked it.)
+    /// once the engine there has read them. (What a machine's box does ends with the SSH command
+    /// that asked it; this Mac's, which keeps running, does it itself.)
     private static func reconnect(_ service: Integrations.Service, bot: Bot, app: AppModel) {
         guard let machine = bot.machine, let api = app.machines.engine(machine)?.api else { return }
         Task {
@@ -227,10 +179,11 @@ enum BotKeys {
         "kuvo/bots/\(bot.id)/keys" + (service.map { "/\($0.id)" } ?? "")
     }
 
-    /// A request to `machine`'s box, as a phone's goes (`MachineBox.route`).
-    private static func onMachine(_ machine: String, _ method: String, _ path: String, body: [String: Any]? = nil, app: AppModel) async throws -> (status: Int, body: Data) {
-        guard let engine = app.machines.engine(machine), engine.isReady else { throw Unreachable(machine: machine) }
-        return try await MachineBox.route(method, path, body: body, on: engine.machine.connection)
+    /// A request to the box `bot` lives on, as a phone's goes: this Mac's, or its machine's while
+    /// it's connected.
+    private static func ask(_ bot: Bot, _ method: String, _ path: String, body: [String: Any]? = nil, app: AppModel) async throws -> (status: Int, body: Data) {
+        if let machine = bot.machine, app.machines.engine(machine)?.isReady != true { throw Unreachable(machine: machine) }
+        return try await app.box(bot.machine ?? BoxClient.mac).send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) })
     }
 
     private struct Unreachable: LocalizedError {
@@ -238,79 +191,9 @@ enum BotKeys {
         var errorDescription: String? { "\(machine) isn’t connected, so its bots’ keys can’t be changed now." }
     }
 
-    /// Nil for a change the machine made; else what it said.
+    /// Nil for a change its box made; else what it said.
     private static func refusal(_ status: Int, _ body: Data) -> String? {
         if (200..<300).contains(status) { return nil }
-        return (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["message"] as? String ?? "The machine said no (\(status))."
-    }
-
-    /// Names a server in its folder's settings for each integration it has its own keys for, and
-    /// takes away those it named for keys it no longer has, for a bot on this Mac (a machine's bot's
-    /// its machine sees to). The rest of those settings is the folder's own (the bot's, or yours)
-    /// and stays as it is; the file goes only once nothing is left in it, and its `.opencode`
-    /// folder only if that held nothing else. Each of those servers connects again in its folder.
-    static func apply(to bot: Bot, app: AppModel, removing removed: [String] = []) async {
-        guard bot.project == nil, bot.machine == nil else { return }
-        let (own, _) = await keychainStatus(of: bot.id)
-        let chosen = services.filter { own.contains($0.id) }
-        var servers: [String: JSONValue] = [:]
-        for service in chosen { servers[service.id] = Integrations.settings(for: service, bot: bot.id) }
-        let touched = Set(chosen.map(\.id) + services.filter { service in removed.contains { $0.hasPrefix(IntegrationKeys.variable(service.id, "")) } }.map(\.id))
-        let folder = URL(filePath: bot.directory).appending(path: ".opencode")
-        let file = folder.appending(path: "opencode.json")
-        let exists = FileManager.default.fileExists(atPath: file.path)
-        let current = exists ? try? String(contentsOf: file, encoding: .utf8) : nil
-        switch exists && current == nil ? .notPlainJSON : change(current, servers: servers, bot: bot.id) {
-        case .write(let settings):
-            if let text = text(settings) {
-                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                FileManager.default.createFile(atPath: file.path, contents: Data((text + "\n").utf8), attributes: [.posixPermissions: 0o600])
-            }
-        case .remove:
-            try? FileManager.default.removeItem(at: file)
-            // The folder too, if that was all it held: rmdir leaves one that isn't empty.
-            rmdir(folder.path)
-        case .notPlainJSON:
-            log.error("A bot's folder settings aren't plain JSON, so its own keys aren't named there")
-        case .same:
-            break
-        }
-        if let api = app.workspace.api(forFolder: bot.directory) { for id in touched { try? await api.connectMCP(id, directory: bot.directory) } }
-    }
-
-    /// What becomes of a folder's settings file.
-    nonisolated enum SettingsChange: Equatable {
-        case same, write([String: JSONValue]), remove
-        /// Not plain JSON (comments, say): left alone, as Settings leaves the engine's own.
-        case notPlainJSON
-    }
-
-    /// `text`, a bot's folder's settings file (nil when there's none), with `servers` in place of
-    /// those it named for `bot`'s own keys before (each reads one of them), and everything else in
-    /// it as it was.
-    nonisolated static func change(_ text: String?, servers: [String: JSONValue], bot: String) -> SettingsChange {
-        var old: [String: JSONValue] = [:]
-        if let text, !text.allSatisfy(\.isWhitespace) {
-            guard let settings = try? JSONDecoder().decode([String: JSONValue].self, from: Data(text.utf8)) else { return .notPlainJSON }
-            old = settings
-        }
-        guard old["mcp"] == nil || old["mcp"]?.object != nil,
-              old["mcp"]?["servers"] == nil || old["mcp"]?["servers"]?.object != nil else { return .notPlainJSON }
-        var mcp = old["mcp"]?.object ?? [:]
-        var named = (mcp["servers"]?.object ?? [:]).filter { IntegrationKeys.variables(ofBot: bot, in: Integrations.keyNames(in: $0.value)).isEmpty }
-        named.merge(servers) { $1 }
-        mcp["servers"] = named.isEmpty ? nil : .object(named)
-        var new = old
-        new["mcp"] = mcp.isEmpty ? nil : .object(mcp)
-        if new == old { return .same }
-        return new.isEmpty ? .remove : .write(new)
-    }
-
-    /// Settings as a file's text. Slashes as they are: the engine finds `{file:…}` in the text
-    /// before it reads it.
-    private static func text(_ settings: [String: JSONValue]) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(settings)).map { String(decoding: $0, as: UTF8.self) }
+        return (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["message"] as? String ?? "It said no (\(status))."
     }
 }

@@ -770,7 +770,7 @@ final class PhoneLink {
             return Self.forwardGroups(request, route: route, agents: agents)
         }
         // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
-        if Self.boxRoutes.contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
+        if Self.movedToBox(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -825,17 +825,6 @@ final class PhoneLink {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = await link?.makeBot(request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // A bot's keys of its own, as Edit Bot shows and changes them.
-        if Self.isBotKeys(request.path) {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerBotKeys(request) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1956,6 +1945,12 @@ final class PhoneLink {
         let parts = path.split(separator: "/")
         guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
         return String(parts[2]).removingPercentEncoding
+    }
+
+    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`), or
+    /// bots' own keys, as Edit Bot shows and changes them (ahead of the rest of `kuvo/bots`).
+    nonisolated static func movedToBox(_ route: String) -> Bool {
+        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") } || isBotKeys(route) || route == "kuvo/bots/keys/refresh"
     }
 
     /// `kuvo/bots/<id>/keys`, or one integration's.

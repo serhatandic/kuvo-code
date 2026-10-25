@@ -71,6 +71,8 @@ final class AppModel {
     let agents = OutsideAgents()
     /// This Mac's box (`kuvo-link.js serve`), which answers the areas that have moved onto it.
     let box = BoxProcess()
+    /// What this Mac's box asks the app for (your Keychain's keys).
+    let host = HostInterface()
     /// This Mac's worktrees and projects followed from its box, once started.
     @ObservationIgnored private var boxFollowed: Task<Void, Never>?
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
@@ -396,8 +398,6 @@ final class AppModel {
             wireStores()
             // A move cut short (the app quit) is finished or taken back.
             Task { await moves.recover() }
-            // Bots' keys of their own, in their folders' settings as integrations are now.
-            Task { await BotKeys.applyAll(on: nil, app: self) }
             usage.api = api
             engineStarted = .now
             engine = .ready
@@ -411,6 +411,10 @@ final class AppModel {
             // It sends this Mac's wake-ups with the app's own kuvo-wake, as a machine's keeper does.
             try? WakeUps.installCommand()
             var boxEnvironment = shell
+            // It keeps bots' keys in your Keychain through the app, and reads Settings ›
+            // Integrations' catalog with this Mac's own paths.
+            if let hosting = try? await host.start() { boxEnvironment.merge(hosting) { _, new in new } }
+            MachineBox.writeMacCatalog()
             boxEnvironment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
