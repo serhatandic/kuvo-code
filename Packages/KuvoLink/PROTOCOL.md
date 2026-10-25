@@ -959,9 +959,11 @@ host serves:
     Edit Bot wrote before memories kept jobs. `?memory=1` adds `memoryJob` (`{line, section}`, the
     same job), for a Mac of 0.8.0-beta.1 or earlier, which takes a machine's bots' jobs from it.
   - A box keeps each of its bots told what it is (its instructions, from its kit's words): at once
-    when it's made or changed, and otherwise as its next run starts, when what it would be told
-    has changed (new words in an update, a personality's), rather than every bot at once as the
-    box starts; its own rules for its folder are put right then too.
+    when it's made or changed, and otherwise when what its conversation is told now isn't what it
+    would be told (new words in an update or a personality's, or words an older Mac gave it): as
+    the box finds its engine or its coding agents' bridge, as the bot's next run starts, and when a
+    client asks (`POST kuvo/bots/retell` → `200 {}`, as this Mac's app does after it changes the
+    kit). Its own rules for its folder are put right then too.
 - Making a bot as New Bot does, on the computer it's to live on. `GET kuvo/bots/templates` is
   what New Bot offers there: `{"templates": [{id, name, job, instructions, look, personality,
   wantsProject}], "personalities": [{id, name, description, custom}], "looks": {colors, shapes,
@@ -990,7 +992,8 @@ host serves:
   be changed (the engine is stopped). `DELETE kuvo/bots/<id>` deletes it as Delete Bot… does: its
   conversation, wake-ups, keys of its own and folder (to Kuvo Code's trash folder on a machine; on
   a Mac on to the Finder's Trash, through the app: "Host interface"); it leaves the group chats
-  there too. `200 {}`, 404, or 409 `{"message"}` while it moves. A machine's box notes a deleted
+  there too. `200 {}`, 404, or 409 `{"message"}` while it moves. Keys of its own that can't be
+  reached as it's deleted (this Mac's app not answering) go the next time they can be. A machine's box notes a deleted
   bot in `~/.kuvo-code/bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier.
 - What a box makes and tells its bots with (its kit, `bots/kit.json` in its bots' folder): a
   machine's from a Mac, which gives it each time it connects, or from the box's own release
