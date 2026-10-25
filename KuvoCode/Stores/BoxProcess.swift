@@ -159,7 +159,7 @@ final class BoxProcess {
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
         guard restarts.count < 3, let runtime else {
-            failure = "It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))"
+            failure = "Kuvo Code’s background service stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))"
             return
         }
         restarts.append(.now)

@@ -23,6 +23,23 @@ struct PhoneSettings: View {
                         Text("Scan this with Kuvo Code on your iPhone. It works once, for ten minutes.")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
+                        // The code reaches this Mac only through the relay: until it's connected,
+                        // scanning it would fail, so it says so.
+                        if link.status != .connected {
+                            HStack(spacing: 6) {
+                                if case .failed = link.status {
+                                    Image(systemName: "exclamationmark.triangle")
+                                } else {
+                                    Spinner(size: 12)
+                                }
+                                Text(waitingText)
+                            }
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityElement(children: .combine)
+                        }
                         Button("Done") { link.endPairing() }
                     }
                     .frame(maxWidth: .infinity)
@@ -30,7 +47,8 @@ struct PhoneSettings: View {
                 } else {
                     // This Mac's box holds the link: stopped for good, it says why, and starts again.
                     if let failure = app.box.failure {
-                        FailureLabel(title: "Your phones can’t reach this Mac", detail: failure, retrying: "this Mac’s link") {
+                        FailureLabel(title: "Your phones can’t reach this Mac", detail: failure, retrying: "this Mac’s link",
+                                     retryLabel: "Start Kuvo Code’s background service again") {
                             Task { await app.box.startAgain() }
                         }
                     }
@@ -96,6 +114,12 @@ struct PhoneSettings: View {
         } message: { _ in
             Text("It won’t reach this Mac or your machines any more. A machine that’s off drops it when it’s next connected.")
         }
+    }
+
+    /// Under a pairing code while this Mac isn't on the relay yet.
+    private var waitingText: String {
+        if case .failed(let message) = link.status { return "Not connected yet, so scanning it won’t work. \(message)" }
+        return "Connecting to the relay. Scan it once this Mac is connected."
     }
 
     private var statusText: String {

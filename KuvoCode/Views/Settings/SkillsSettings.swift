@@ -344,6 +344,8 @@ struct FailureLabel: View {
     let detail: String
     /// What Try Again reads again, for VoiceOver ("the collections").
     let retrying: String
+    /// What Try Again does, for VoiceOver, where it does more than read again.
+    var retryLabel: String?
     let retry: () -> Void
 
     var body: some View {
@@ -361,7 +363,7 @@ struct FailureLabel: View {
             }
             Spacer()
             Button("Try Again", action: retry)
-                .accessibilityLabel("Try reading \(retrying) again")
+                .accessibilityLabel(retryLabel ?? "Try reading \(retrying) again")
         }
     }
 }

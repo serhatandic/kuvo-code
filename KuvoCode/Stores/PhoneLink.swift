@@ -24,7 +24,6 @@ final class PhoneLink {
     /// The relay your computers and phones meet at. `defaults write run.kuvo.code phoneLink.relay
     /// wss://…` points elsewhere (a relay of your own, or one for tests).
     static let defaultRelay = URL(string: "wss://kuvolink.porigam.com.tr")!
-    static let pairingTime: Duration = .seconds(600)
 
     /// A paired phone: its key, name, when it paired, where it is and its pairing.
     typealias Phone = PairedPhones.Phone
@@ -86,12 +85,16 @@ final class PhoneLink {
         var removed: [PairedPhones.Removal] = []
         var machines: [String: MachineHost] = [:]
         var documents = MacDocuments()
+        /// Removals this Mac's box hasn't taken yet (`removePhones`).
+        var toRemove: [PairedPhones.Entry] = []
 
-        init(phones: [Phone] = [], removed: [PairedPhones.Removal] = [], machines: [String: MachineHost] = [:], documents: MacDocuments = MacDocuments()) {
+        init(phones: [Phone] = [], removed: [PairedPhones.Removal] = [], machines: [String: MachineHost] = [:], documents: MacDocuments = MacDocuments(),
+             toRemove: [PairedPhones.Entry] = []) {
             self.phones = phones
             self.removed = removed
             self.machines = machines
             self.documents = documents
+            self.toRemove = toRemove
         }
 
         init(from decoder: Decoder) throws {
@@ -100,6 +103,7 @@ final class PhoneLink {
             removed = try container.decodeIfPresent([PairedPhones.Removal].self, forKey: .removed) ?? []
             machines = try container.decodeIfPresent([String: MachineHost].self, forKey: .machines) ?? [:]
             documents = try container.decodeIfPresent(MacDocuments.self, forKey: .documents) ?? MacDocuments()
+            toRemove = try container.decodeIfPresent([PairedPhones.Entry].self, forKey: .toRemove) ?? []
         }
     }
     /// How this Mac's link stands, as its box says (`kuvo/link/status`).
@@ -109,6 +113,12 @@ final class PhoneLink {
     private(set) var pairing: PairingLink?
     /// Why a pairing link couldn't be made just now, shown where it would be.
     private(set) var pairingProblem: String?
+    /// Why a phone you removed is still let in for now, shown in Settings › Phone until this Mac's
+    /// box takes the removal.
+    private(set) var removalProblem: String?
+    /// Phones removed here or on a machine that this Mac's box hasn't taken off yet: kept (in
+    /// phone-link.json) and sent again until it does, and left out of what's shown meanwhile.
+    @ObservationIgnored private var toRemove: [PairedPhones.Entry] = []
 
     var relay: URL {
         UserDefaults.standard.string(forKey: "phoneLink.relay").flatMap(URL.init(string:)) ?? Self.defaultRelay
@@ -121,8 +131,12 @@ final class PhoneLink {
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
     @ObservationIgnored var box: () -> BoxClient? = { nil }
-    /// Its connection, for what the app still sends on it (`BoxRelay`).
-    @ObservationIgnored private var server: BoxRelay?
+    /// Its connection, for what the app still sends on it (`BoxRelay`): only while it's wanted, so
+    /// this Mac's keys are made only then.
+    private var server: BoxRelay? {
+        guard relayWanted, hasIdentity, let client = box() else { return nil }
+        return BoxRelay(key: key, box: client)
+    }
     /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
@@ -138,7 +152,8 @@ final class PhoneLink {
     init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil) {
         savedFile = file ?? AppInfo.supportDirectory.appending(path: "phone-link.json")
         let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
-        paired = PairedPhones(phones: saved.phones, removed: saved.removed)
+        toRemove = saved.toRemove
+        paired = Self.without(saved.toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
         machineHosts = saved.machines
         documents = saved.documents
         if let identity {
@@ -210,18 +225,18 @@ final class PhoneLink {
         self.endpoint = endpoint
         guard running == nil else { return }
         running = Task { [weak self] in await self?.follow() }
-        #if DEBUG
-        pairForDemo()
-        #endif
     }
 
     #if DEBUG
-    /// KUVO_DEMO_PHONE_PAIR=<file>: once the box is on the relay, a pairing code, its link written
-    /// to that file, for pairing a simulator (or a test) without a camera or the window.
+    /// KUVO_DEMO_PHONE_PAIR=<file>: once the box has been told of the link (the first time), a
+    /// pairing code, its link written to that file, for pairing a simulator (or a test) without a
+    /// camera or the window. The phone gets in once the box is on the relay.
+    @ObservationIgnored private var pairedForDemo = false
+
     private func pairForDemo() {
-        guard let file = ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_PAIR"] else { return }
+        guard !pairedForDemo, let file = ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_PAIR"] else { return }
+        pairedForDemo = true
         Task { [weak self] in
-            for _ in 0..<60 where self?.status == .off || self?.status == .connecting { try? await Task.sleep(for: .milliseconds(500)) }
             guard let self, pairing == nil else { return }
             await beginPairing()
             try? pairing?.url.absoluteString.write(toFile: file, atomically: true, encoding: .utf8)
@@ -233,7 +248,6 @@ final class PhoneLink {
     func stop() {
         running?.cancel()
         running = nil
-        server = nil
     }
 
     /// What this Mac's box is told of its link: whether the phone link is on, whether there are
@@ -248,12 +262,18 @@ final class PhoneLink {
     /// kept of your phones (once, or again after going back to one), and follows how its link
     /// stands and its phones. Each time the box comes back (started again, it knows nothing of what
     /// it was told), it's told again.
+    /// Its phones are followed only once what an older Kuvo Code kept of them, and what was
+    /// removed meanwhile, is the box's: its first word would otherwise stand for your phones.
     private func follow() async {
+        var missed = 0
         while !Task.isCancelled {
-            if hasIdentity, let client = box(),
-               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200 {
-                server = BoxRelay(key: key, box: client)
-                await takePhonesFromFile(client)
+            if let client = box(),
+               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
+               await takePhonesFromFile(client), await sendRemovals(client) {
+                missed = 0
+                #if DEBUG
+                pairForDemo()
+                #endif
                 let phones = Task { [weak self] in
                     do {
                         for try await line in client.follow("kuvo/link/phones/events") { self?.followed(phones: line) }
@@ -265,11 +285,16 @@ final class PhoneLink {
                 phones.cancel()
             }
             guard !Task.isCancelled else { return }
-            status = hasIdentity ? .failed("Kuvo Code’s background service on this Mac isn’t running. It starts again in a moment.")
-                : .failed("Kuvo Code couldn’t read this Mac’s link from your Keychain. Quit and open Kuvo Code again to try again.")
+            // Starting, or starting again: still coming for a few tries, then said.
+            missed += 1
+            status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
+                : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
             try? await Task.sleep(for: .seconds(2))
         }
     }
+
+    /// Tries of the box (two seconds apart) before Settings › Phone says it isn't answering.
+    private static let graceTries = 4
 
     private func followed(status line: Data) {
         struct Said: Decodable { var state: String; var reason: String? }
@@ -296,9 +321,9 @@ final class PhoneLink {
             var pairing: Bool?
         }
         guard let kept = try? JSONDecoder().decode(Kept.self, from: line) else { return }
-        let now = PairedPhones(phones: kept.phones.map {
+        let now = Self.without(toRemove, PairedPhones(phones: kept.phones.map {
             Phone(key: $0.key, name: $0.name ?? "", added: Date(timeIntervalSince1970: $0.added ?? 0), address: $0.address, pairing: $0.pairing ?? "")
-        }, removed: kept.removed)
+        }, removed: kept.removed))
         // The link shown was used, or ran out: it's done.
         if kept.pairing == false { pairing = nil }
         guard now != paired else { return }
@@ -310,10 +335,11 @@ final class PhoneLink {
 
     /// What an older Kuvo Code kept of your phones (phone-link.json), met with the box's, where
     /// it's changed since this one last wrote it: the first time, and after going back to one.
-    private func takePhonesFromFile(_ client: BoxClient) async {
+    /// False: the box didn't take them (it's starting again), so they're tried again.
+    private func takePhonesFromFile(_ client: BoxClient) async -> Bool {
         let written = UserDefaults.standard.double(forKey: Self.writtenKey)
         guard let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date,
-              changed.timeIntervalSince1970 > written + 0.5 else { return }
+              changed.timeIntervalSince1970 > written + 0.5 else { return true }
         let older = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
         let given: [String: Any] = [
             "phones": older.phones.map { phone -> [String: Any] in
@@ -324,8 +350,9 @@ final class PhoneLink {
             "removed": older.removed.map { ["key": $0.key, "pairing": $0.pairing] },
         ]
         guard let body = try? JSONSerialization.data(withJSONObject: given),
-              (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return }
+              (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return false }
         UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey)
+        return true
     }
 
     /// When this Kuvo Code last wrote phone-link.json (its file's date then): one newer was an
@@ -348,27 +375,43 @@ final class PhoneLink {
     /// own, apart from one a phone asks for, so neither ends the other.
     func beginPairing() async {
         pairingProblem = nil
+        pairingRound += 1
+        let round = pairingRound
         struct Made: Decodable { var link: String }
         guard let client = box() else {
             pairingProblem = "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
             return
         }
+        // The last one shown ended first, so its end never ends this one.
+        await endingPairing?.value
         do {
             let made = try await client.value(Made.self, "POST", "kuvo/phones/pair")
+            // Closed (or another begun) meanwhile: not shown.
+            guard round == pairingRound else { return }
             pairing = URL(string: made.link).flatMap(PairingLink.init)
             if pairing == nil { pairingProblem = "This Mac’s link made a pairing code this version can’t show." }
         } catch {
+            guard round == pairingRound else { return }
             pairingProblem = error.localizedDescription
         }
     }
 
     func endPairing() {
         pairingProblem = nil
+        pairingRound += 1
         guard pairing != nil else { return }
         pairing = nil
         guard let client = box() else { return }
-        Task { _ = try? await client.send("DELETE", "kuvo/phones/pair") }
+        let previous = endingPairing
+        endingPairing = Task {
+            await previous?.value
+            _ = try? await client.send("DELETE", "kuvo/phones/pair")
+        }
     }
+
+    /// Each pairing link asked for or closed: one that comes after it was closed isn't shown.
+    @ObservationIgnored private var pairingRound = 0
+    @ObservationIgnored private var endingPairing: Task<Void, Never>?
 
     /// Removes a phone you've paired (Settings › Phone): here and on your machines, for good, until
     /// it's paired again. This Mac's box takes it off, and ends what it has open.
@@ -377,11 +420,50 @@ final class PhoneLink {
     }
 
     /// `entries` taken off this Mac's phones, as the Mac takes them off (Settings › Phone, or a
-    /// removal one of your machines' documents brought).
+    /// removal one of your machines' documents brought): gone from what's shown at once, and kept
+    /// until this Mac's box has taken them off too (which ends what they have open), tried again
+    /// until it does.
     private func removePhones(_ entries: [PairedPhones.Entry]) {
-        guard !entries.isEmpty, let client = box(),
-              let body = try? JSONSerialization.data(withJSONObject: ["phones": entries.map { ["key": $0.key, "pairing": $0.pairing as Any] }]) else { return }
-        Task { _ = try? await client.send("POST", "kuvo/phones/remove", body: body) }
+        let new = entries.filter { !toRemove.contains($0) }
+        guard !new.isEmpty else { return }
+        toRemove = Array((toRemove + new).suffix(PairedPhones.mostKept))
+        paired = Self.without(toRemove, paired)
+        save()
+        guard removing == nil else { return }
+        removing = Task { [weak self] in
+            while let self, !Task.isCancelled, !toRemove.isEmpty {
+                if let client = box(), await sendRemovals(client) { break }
+                removalProblem = "Kuvo Code’s background service on this Mac isn’t answering, so the phone can still reach this Mac. It’s removed as soon as the service is back."
+                try? await Task.sleep(for: .seconds(2))
+            }
+            self?.removing = nil
+        }
+    }
+
+    @ObservationIgnored private var removing: Task<Void, Never>?
+
+    /// Once this Mac's box has taken the removals handed to it so far.
+    func removalsTaken() async { await removing?.value }
+
+    /// Hands this Mac's box the removals it hasn't taken yet; true once it has them all.
+    private func sendRemovals(_ client: BoxClient) async -> Bool {
+        let sending = toRemove
+        guard !sending.isEmpty else { return true }
+        guard let body = try? JSONSerialization.data(withJSONObject: ["phones": sending.map { ["key": $0.key, "pairing": $0.pairing as Any] }]),
+              (try? await client.send("POST", "kuvo/phones/remove", body: body))?.status == 200 else { return false }
+        toRemove.removeAll { sending.contains($0) }
+        if toRemove.isEmpty { removalProblem = nil }
+        save()
+        return toRemove.isEmpty
+    }
+
+    /// `phones` without those named in `removals` (a removal without a pairing names every pairing
+    /// of its phone).
+    private static func without(_ removals: [PairedPhones.Entry], _ phones: PairedPhones) -> PairedPhones {
+        guard !removals.isEmpty else { return phones }
+        var left = phones
+        left.phones.removeAll { phone in removals.contains { $0.key == phone.key && ($0.pairing == nil || $0.pairing == phone.pairing) } }
+        return left
     }
 
     // MARK: Machines
@@ -505,7 +587,7 @@ final class PhoneLink {
     /// Mails `payload` to one of your machines' bridges (one that talks to other computers
     /// itself): `offline` when it can't go now (no relay connection, or it isn't such a machine),
     /// `tooBig` for one the relay won't take.
-    func mail(_ payload: [String: Any], to machine: String) async -> LinkServer.MailOutcome {
+    func mail(_ payload: [String: Any], to machine: String) async -> MailOutcome {
         guard let server, status == .connected, let host = machineHosts[machine], host.peers == true, host.anotherMac != true,
               let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes) else { return .offline }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return .tooBig }
@@ -905,13 +987,20 @@ final class PhoneLink {
     /// wanted (nothing's made for it then), or the Keychain won't give them out.
     func boxIdentity() -> [String: String]? {
         guard relayWanted, hasIdentity else { return nil }
-        return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": signing.rawRepresentation.base64URL]
+        // Read before the check: one the Keychain won't give out isn't stood in for.
+        let sign = signing.rawRepresentation.base64URL
+        guard !Self.unreadable else { return nil }
+        return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
     }
 
     /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
     /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        let endpoint = endpoint ?? ServerEndpoint(url: URL(string: "http://127.0.0.1:9/")!, password: nil)
+        // The engine not up yet (the app's starting): its routes say so, as a machine's do.
+        guard let endpoint else {
+            guard request.path.hasPrefix("kuvo/") else { return Self.engineStarting() }
+            return Self.respond(to: request, link: self, engine: URL(string: "http://127.0.0.1:9/")!, password: nil, agents: agents?.address, asking: phone ?? Data())
+        }
         let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
         return Self.respond(to: request, link: self, engine: base, password: endpoint.password, agents: agents?.address, asking: phone ?? Data())
     }
@@ -1053,6 +1142,14 @@ final class PhoneLink {
         configuration.httpMaximumConnectionsPerHost = 64
         return URLSession(configuration: configuration)
     }()
+
+    nonisolated private static func engineStarting() -> AsyncThrowingStream<LinkResponsePart, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+            continuation.yield(.body(Self.message("This Mac’s engine is starting. Try again in a moment.")))
+            continuation.finish()
+        }
+    }
 
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
@@ -1571,7 +1668,8 @@ final class PhoneLink {
     /// Kept in phone-link.json, as an older Kuvo Code reads it too (going back to one finds your
     /// phones), with when this one wrote it.
     private func save() {
-        guard (try? JSONEncoder().encode(Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents)).write(to: savedFile, options: .atomic)) != nil,
+        guard (try? JSONEncoder().encode(Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents, toRemove: toRemove))
+            .write(to: savedFile, options: .atomic)) != nil,
               let written = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date else { return }
         UserDefaults.standard.set(written.timeIntervalSince1970, forKey: Self.writtenKey)
     }

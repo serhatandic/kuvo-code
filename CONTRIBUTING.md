@@ -212,8 +212,8 @@ their rules. Their own tests are the bridge's (`cd Agents && bun test`). What th
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
 quotes) is held to `Agents/test/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
-Until this Mac's box process holds the relay connection, `SeatRelay` carries this Mac's group
-chats' mail to your machines over the phone link's connection, by `kuvo-link.js`'s rules.
+`SeatRelay` carries this Mac's group chats' mail to your machines on this Mac's box's relay
+connection (`kuvo/link/send`), by `kuvo-link.js`'s rules.
 
 It's off until the iPhone app is out: `defaults write run.kuvo.code phoneLink -bool true` (or
 `KUVO_DEMO_PHONE=1`) turns it on, with Settings › Phone, and `phoneLink.relay` points it at a

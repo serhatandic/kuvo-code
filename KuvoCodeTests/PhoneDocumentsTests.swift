@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
@@ -38,12 +39,30 @@ import Testing
 
     private func body(_ envelope: Documents.Envelope) -> [String: Any] { Documents.read(envelope)?.object ?? [:] }
 
-    @Test func aPhoneRemovedOnAMachineLeavesThisMacToo() throws {
+    /// Removed on a machine: gone here, and from this Mac's box, which lets phones in (the box is
+    /// the real one, its relay one nobody answers).
+    @Test(.timeLimit(.minutes(1))) func aPhoneRemovedOnAMachineLeavesThisMacToo() async throws {
         let lab = Machine(id: "lab.invalid")
         let lost = Data(repeating: 1, count: 32).base64URL, kept = Data(repeating: 2, count: 32).base64URL
         let phone = { (key: String, pairing: String) -> [String: Any] in ["key": key, "name": "iPhone", "added": 0, "pairing": pairing] }
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
+        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
         let (link, file) = try link(phones: [phone(lost, "p1"), phone(kept, "p2")], machines: [lab])
-        defer { try? FileManager.default.removeItem(at: file) }
+        let box = try await SettingsBox(port: 47_951)
+        let client = box.client
+        link.box = { client }
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        defer {
+            link.stop()
+            box.stop()
+            try? FileManager.default.removeItem(at: file)
+            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        struct Kept: Decodable { struct Phone: Decodable { var key: String }; var phones: [Phone] }
+        let onTheBox = { try await client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.key).sorted() }
+        try await until { if case .failed = link.status { true } else { false } }
+        #expect(try await onTheBox() == [lost, kept].sorted())
         // Signed by another key, as if by the machine: nothing.
         let forged = Documents.sign(Documents.SigningKey(), kind: "phones", n: 1, body: Data(#"{"phones":[],"removed":[{"key":"\#(lost)","pairing":"p1"}]}"#.utf8))
         link.takeDocuments(["give": [forged.json]], from: lab.id)
@@ -52,6 +71,9 @@ import Testing
         link.takeDocuments(["give": [try lab.sign("phones", 1, ["phones": [], "removed": [["key": lost, "pairing": "p1"]]])]], from: lab.id)
         #expect(link.phones.map(\.key) == [kept])
         #expect(link.paired.removed.contains(.init(key: lost, pairing: "p1")))
+        // This Mac's box no longer lets it in.
+        await link.removalsTaken()
+        #expect(try await onTheBox() == [kept])
         // Kept so after a restart.
         #expect(PhoneLink(file: file).phones.map(\.key) == [kept])
     }

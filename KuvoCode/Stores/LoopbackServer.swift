@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// HTTP on a free loopback port, for the app's own helpers to call: the agent's browser tools
 /// (`BrowserToolServer`), and this Mac's box asking for what only the app can do (`HostInterface`).
@@ -95,8 +96,9 @@ struct HTTPResponse {
     var status: Int
     var headers: [String: String] = [:]
     var body = Data()
-    /// A body that comes as it's made (a route that follows something), sent as it comes; the
-    /// connection closes when it ends, which is how the client knows it has.
+    /// A body that comes as it's made (a route that follows something), sent as it comes, in chunks:
+    /// one that ends with an error is cut off without its last chunk, so the client knows it isn't
+    /// whole. The connection closes after it.
     var stream: AsyncThrowingStream<Data, Error>?
 
     static func json(_ object: Any) -> HTTPResponse {
@@ -117,7 +119,12 @@ final class HTTPConnection {
     private var buffer = Data()
     /// The request being answered.
     private var answering: Task<Void, Never>?
-    private var closing = false
+    /// Closed, or closing: what's sent off the main actor (a stream) reads it too.
+    private let gone = Gone()
+    private var closing: Bool {
+        get { gone.value }
+        set { if newValue { gone.set() } }
+    }
 
     init(connection: NWConnection, handler: @escaping (HTTPRequest) async -> HTTPResponse, closed: @escaping (ObjectIdentifier) -> Void) {
         self.connection = connection
@@ -212,23 +219,35 @@ final class HTTPConnection {
         })
     }
 
-    /// A body that comes as it's made: each piece as it comes, then the connection closed. One the
-    /// client leaves stops (`close`, cancelling `answering`).
+    /// A body that comes as it's made: each piece as a chunk as it comes, then the last chunk and
+    /// the connection closed; one that fails closes with no last chunk. One the client leaves stops
+    /// (`close`, cancelling `answering`). Sent off the main actor, so a phone following something
+    /// (the engine's events) never waits on the window, nor adds to its work.
     private func send(head: Data, stream: AsyncThrowingStream<Data, Error>) {
+        let connection = connection, gone = gone
         connection.send(content: head, completion: .contentProcessed { _ in })
-        answering = Task { [weak self] in
+        answering = Task.detached {
+            var whole = false
             do {
-                for try await piece in stream {
-                    guard let self, !self.closing else { return }
-                    self.connection.send(content: piece, completion: .contentProcessed { _ in })
+                for try await piece in stream where !piece.isEmpty {
+                    guard !gone.value else { return }
+                    connection.send(content: Self.chunk(piece), completion: .contentProcessed { _ in })
                 }
+                whole = true
             } catch {}
-            guard let self, !self.closing else { return }
-            self.closing = true
-            self.connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
-                MainActor.assumeIsolated { self?.connection.cancel() }
+            guard !gone.value else { return }
+            gone.set()
+            // Cut off: closed with no last chunk, so it's never read as if it had ended.
+            guard whole else { return connection.cancel() }
+            connection.send(content: Data("0\r\n\r\n".utf8), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+                connection.cancel()
             })
         }
+    }
+
+    /// `piece` as a chunk of a chunked body.
+    private nonisolated static func chunk(_ piece: Data) -> Data {
+        Data((String(piece.count, radix: 16) + "\r\n").utf8) + piece + Data("\r\n".utf8)
     }
 
     private func send(_ response: HTTPResponse) {
@@ -250,7 +269,9 @@ final class HTTPConnection {
             headers["Content-Length"] = String(response.body.count)
             headers["Connection"] = "keep-alive"
         } else {
-            headers["Connection"] = "close"
+            // Chunked, and not said to close: a client then takes a close before the last chunk
+            // as cut off, where with "Connection: close" Node's fetch takes it as the end.
+            headers["Transfer-Encoding"] = "chunked"
         }
         for (name, value) in headers { head += "\(name): \(value)\r\n" }
         head += "\r\n"
@@ -265,4 +286,11 @@ final class HTTPConnection {
             }
         })
     }
+}
+
+/// Whether a connection's gone, from any thread.
+nonisolated final class Gone: Sendable {
+    private let flag = OSAllocatedUnfairLock(initialState: false)
+    var value: Bool { flag.withLock { $0 } }
+    func set() { flag.withLock { $0 = true } }
 }

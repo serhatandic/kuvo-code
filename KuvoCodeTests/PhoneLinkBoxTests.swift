@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import KuvoLink
+import os
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -40,14 +41,28 @@ import Testing
         for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    /// This Mac's link, as the app starts it: reaching its box, which reaches it back.
-    private func link(on box: SettingsBox) -> PhoneLink {
+    /// This Mac's link, as the app starts it: reaching its box, which reaches it back. `refusing`:
+    /// a route the box doesn't take the first time (it's starting again just then).
+    private func link(on box: SettingsBox, refusing: String? = nil) -> PhoneLink {
         let link = PhoneLink(file: file, identity: (mac, secret))
-        let client = box.client
+        let client = refusing.map { Self.flaky(box, refusing: $0) } ?? box.client
         link.box = { client }
         box.box.host.phoneLink = link
         link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
         return link
+    }
+
+    /// `box`, as the app reaches it, but `route`'s first request fails, as when the box restarts
+    /// as it's asked.
+    private static func flaky(_ box: SettingsBox, refusing route: String) -> BoxClient {
+        let refused = OSAllocatedUnfairLock(initialState: false)
+        let base = URL(string: box.engine.url + "/")!
+        return BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            guard request.path == route, !refused.withLock({ let was = $0; $0 = true; return was }) else {
+                return PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil)
+            }
+            return AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) }
+        })
     }
 
     /// Once this Mac's box has been told, given its keys and taken your phones: its link tries
@@ -91,6 +106,38 @@ import Testing
         let again = self.link(on: box)
         defer { again.stop() }
         try await until { again.phones.map(\.name).sorted() == ["Mine", "New"] }
+    }
+
+    /// The box restarting just as the app first hands it your phones: they're handed again, and
+    /// none is lost, here or where an older version reads them.
+    @Test func yourPhonesSurviveTheBoxNotTakingThemTheFirstTime() async throws {
+        let box = try await SettingsBox(port: 47_948)
+        let link = link(on: box, refusing: "kuvo/link/phones/take")
+        defer { done(box, link) }
+        try await linked(link)
+        struct Kept: Decodable { struct Phone: Decodable { var name: String }; var phones: [Phone] }
+        #expect(try await box.client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.name).sorted() == ["Lost", "Mine"])
+        #expect(link.phones.map(\.name).sorted() == ["Lost", "Mine"])
+        #expect(try olderKeeps().sorted() == ["Lost", "Mine"])
+    }
+
+    /// A phone removed while the box doesn't take it (restarting): gone from Settings › Phone at
+    /// once, saying it can still reach this Mac for now, and taken off the box once it's back, so
+    /// it isn't let in again.
+    @Test func aPhoneRemovedWhileTheBoxIsAwayIsRemovedOnceItsBack() async throws {
+        let box = try await SettingsBox(port: 47_949)
+        let link = link(on: box, refusing: "kuvo/phones/remove")
+        defer { done(box, link) }
+        try await linked(link)
+        link.remove(try #require(link.phones.first { $0.name == "Lost" }))
+        #expect(link.phones.map(\.name) == ["Mine"])
+        try await until { link.removalProblem != nil }
+        // Back: it takes it off.
+        try await until { link.removalProblem == nil }
+        struct Kept: Decodable { struct Phone: Decodable { var name: String }; var phones: [Phone] }
+        #expect(try await box.client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.name) == ["Mine"])
+        #expect(link.phones.map(\.name) == ["Mine"])
+        #expect(try olderKeeps() == ["Mine"])
     }
 
     @Test func settingsPhonesPairingLinkIsTheBoxsAsYourPhonesKnowThisMac() async throws {

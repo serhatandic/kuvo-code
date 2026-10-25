@@ -1,7 +1,13 @@
 import Foundation
 
-/// A host's side: answers the phones it's paired with, over its relay connection. The Mac app
-/// runs one; machines run the same in JavaScript (`Resources/kuvo-link.js`).
+/// How a mail to another computer went: on its way, not now (no relay connection), or too big for
+/// the relay.
+public enum MailOutcome: Sendable, Equatable {
+    case sent, offline, tooBig
+}
+
+/// A host's side: answers the phones it's paired with, over its relay connection, as each box's
+/// bridge does in JavaScript (`Resources/kuvo-link.js`). The tests' host for a phone's side.
 public actor LinkServer {
     public struct Phone: Sendable, Hashable {
         public var key: Data
@@ -127,10 +133,7 @@ public actor LinkServer {
         return true
     }
 
-    /// How a mail went: on its way, not now (no relay connection), or too big for the relay.
-    public enum MailOutcome: Sendable, Equatable {
-        case sent, offline, tooBig
-    }
+    public typealias MailOutcome = KuvoLink.MailOutcome
 
     /// Sends `payload` to another host (a machine's bridge), sealed for its key alone, through the
     /// relay. Nothing comes back: one that isn't connected now doesn't get it (the relay says it's

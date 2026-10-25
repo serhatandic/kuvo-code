@@ -11,7 +11,7 @@ struct BoxRelay: Sendable {
 
     /// `payload` to a machine's bridge (`remote` its key, at `address`): sent, not now (the box
     /// isn't on the relay, or isn't answering), or too big for the relay.
-    func mail(_ payload: Data, to remote: Data, at address: LinkAddress) async -> LinkServer.MailOutcome {
+    func mail(_ payload: Data, to remote: Data, at address: LinkAddress) async -> MailOutcome {
         guard let frame = try? Mail.seal(payload, from: key, to: remote), frame.count <= RelayMessage.maxPayload else { return .tooBig }
         struct Sending: Encodable { var to: String; var frame: String }
         guard let body = try? JSONEncoder().encode(Sending(to: address.text, frame: frame.base64EncodedString())),

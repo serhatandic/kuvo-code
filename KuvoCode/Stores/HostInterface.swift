@@ -1,5 +1,6 @@
 import Foundation
 import KuvoLink
+import os
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
@@ -33,30 +34,40 @@ final class HostInterface {
             && name.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
     }
 
-    /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), which
-    /// stops when the box goes.
+    /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), read
+    /// off the main actor. It stops when the box goes, before its head too (the phone left, and
+    /// what it asked stops with it), and one that fails partway ends cut off, not whole.
     private static func answer(_ parts: AsyncThrowingStream<LinkResponsePart, Error>) async -> HTTPResponse {
         let (body, sending) = AsyncThrowingStream<Data, Error>.makeStream()
-        let head: (status: Int, headers: [String: String]) = await withCheckedContinuation { said in
-            let reading = Task {
-                var told = false
-                do {
-                    for try await part in parts {
-                        switch part {
-                        case .head(let status, let headers):
-                            if !told { said.resume(returning: (status, Self.passed(headers))) }
-                            told = true
-                        case .body(let data):
-                            if !told { said.resume(returning: (200, Self.passed([:]))) }
-                            told = true
-                            sending.yield(data)
+        let reader = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+        let head: (status: Int, headers: [String: String]) = await withTaskCancellationHandler {
+            await withCheckedContinuation { said in
+                let reading = Task.detached {
+                    var told = false
+                    do {
+                        for try await part in parts {
+                            switch part {
+                            case .head(let status, let headers):
+                                if !told { said.resume(returning: (status, Self.passed(headers))) }
+                                told = true
+                            case .body(let data):
+                                if !told { said.resume(returning: (200, Self.passed([:]))) }
+                                told = true
+                                sending.yield(data)
+                            }
                         }
+                        sending.finish()
+                    } catch {
+                        sending.finish(throwing: error)
                     }
-                } catch {}
-                if !told { said.resume(returning: (502, Self.passed([:]))) }
-                sending.finish()
+                    if !told { said.resume(returning: (502, Self.passed([:]))) }
+                }
+                reader.withLock { $0 = reading }
+                sending.onTermination = { _ in reading.cancel() }
+                if Task.isCancelled { reading.cancel() }
             }
-            sending.onTermination = { _ in reading.cancel() }
+        } onCancel: {
+            reader.withLock { $0 }?.cancel()
         }
         return HTTPResponse(status: head.status, headers: head.headers, stream: body)
     }

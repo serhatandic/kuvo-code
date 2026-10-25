@@ -273,7 +273,7 @@ final class SeatRelay {
         var key: (String) -> String?
         var machine: (String) -> String?
         var reaches: (String) -> Bool
-        var mail: ([String: Any], String) async -> LinkServer.MailOutcome
+        var mail: ([String: Any], String) async -> MailOutcome
         /// Your machines and their bots, as the bridge takes them (`{boxes, bots}`).
         var peers: () -> [String: Any]?
     }

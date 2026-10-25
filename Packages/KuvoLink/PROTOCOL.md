@@ -1389,9 +1389,11 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
     key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
     Keychain won't give them;
   - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
-    phone's key, base64url) → that request's answer as the app gives it: its status and
-    `content-type`, and its body as it comes, the connection closed at its end (a followed route
-    streams);
+    phone's key, base64url) → that request's answer as the app gives it: its status, its
+    `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
+    status), and its body as it comes, chunked (a followed route streams). One cut off partway
+    (the engine went) ends without its last chunk, so the box tells the phone it was cut off. The
+    box closing the request (the phone went) stops what it asked, before any answer too;
   - `link/mailed {"from", "frame"}` (the sender's relay address, base64url; the mail frame whole,
     base64) → `{}`.
 
