@@ -1,4 +1,8 @@
 {
+  "macOnly" : [
+    "apple-calendar",
+    "chrome-devtools"
+  ],
   "servers" : [
     {
       "access" : "signIn",

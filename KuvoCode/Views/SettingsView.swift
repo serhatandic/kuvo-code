@@ -167,6 +167,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     /// accounts and its models. The rest are the app's, on this Mac.
     static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .mcp, .engine, .worktrees]
 
+    /// The pages that are a computer's engine settings, and nothing else: they wait for them to be
+    /// read. (Engine shows its status too, and says so in a group.)
+    var isEngineSettings: Bool {
+        [.agents, .permissions, .commands, .skills, .integrations, .mcp].contains(self)
+    }
+
     /// The pages Settings lists for `box`.
     static func shown(on box: SidebarBox) -> [SettingsPage] {
         box.machine == nil ? shown : shown.filter(boxPages.contains)
@@ -563,8 +569,9 @@ private struct SettingsPageHeader: View {
 }
 
 /// A page of one computer's settings: with its settings, models, engine and coding agents in
-/// the environment. A machine's are read from it as its page opens; until then, or while it
-/// can't be reached, the page says so, with the way to connect it or start its engine.
+/// the environment. Its settings are read from its box (this Mac's as it starts, a machine's as
+/// its page opens); until then, or while they can't be read, the page says so, with the way to
+/// try again (and to connect a machine or start its engine).
 private struct BoxPage: View {
     let page: SettingsPage
     let box: SidebarBox
@@ -577,13 +584,16 @@ private struct BoxPage: View {
                     if engine.config.isLoaded {
                         content
                     } else {
-                        Unread(engine: engine)
+                        SettingsUnread(engine: engine)
                     }
                 } else {
                     ContentUnavailableView("This Machine Was Removed", systemImage: "server.rack")
                 }
-            } else {
+            } else if app.engineConfig.isLoaded || !page.isEngineSettings {
+                // This Mac's own pages show whatever its box is doing; Engine says so in a group.
                 content
+            } else {
+                SettingsUnread(engine: nil)
             }
         }
     }
@@ -599,46 +609,111 @@ private struct BoxPage: View {
                 if app.boxes.count > 1 { AlsoApplyBar(box: box) }
             }
     }
+}
 
-    /// A machine's settings, not read yet: read now, or why they can't be.
-    private struct Unread: View {
-        let engine: MachineEngine
-        @Environment(AppModel.self) private var app
+/// A computer's engine settings, not read yet: being read, or why they can't be, with Try Again
+/// (and, for a machine, Connect or Start). A whole page (`Agents`, `MCP Servers`…), or a group on
+/// a page that shows more (`Engine`). `engine`: a machine's; nil for this Mac's, whose box keeps
+/// them and starts with its engine.
+struct SettingsUnread: View {
+    let engine: MachineEngine?
+    var asGroup = false
+    @Environment(AppModel.self) private var app
 
-        var body: some View {
-            VStack(spacing: 14) {
-                if let problem = engine.config.problem {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
-                    Text("\(engine.machine.name)’s settings can’t be read")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(problem)
-                        .settingsText()
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
-                    HStack(spacing: 10) {
-                        Button("Try Again") { engine.config.reload() }
-                        if !engine.isReady, !engine.connection.isUnderWay {
-                            Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
+    private var config: EngineConfig { engine?.config ?? app.engineConfig }
+    private var name: String { engine?.machine.name ?? PhoneLink.computerName }
+
+    /// This Mac's box never started: the engine's start, which starts it, didn't get that far.
+    private var boxNeverStarted: Bool { engine == nil && app.box.endpoint == nil && !app.box.canStartAgain }
+
+    /// Why they can't be read, or nil while they're being read.
+    private var problem: String? {
+        if boxNeverStarted {
+            if case .failed(let reason) = app.engine { return "Kuvo Code’s background service on this Mac starts with the agent engine, which couldn’t start: \(reason)" }
+            return nil
+        }
+        return config.problem
+    }
+
+    private var waiting: String {
+        boxNeverStarted ? "Getting the agent engine ready…" : "Reading \(name)’s settings…"
+    }
+
+    private var ready: Bool { engine?.isReady ?? (app.box.endpoint != nil) }
+
+    var body: some View {
+        Group {
+            if asGroup {
+                Section {
+                    if let problem {
+                        Label {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(name)’s settings can’t be read")
+                                Text(problem).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
+                        buttons
+                    } else {
+                        HStack(spacing: 10) {
+                            Spinner(size: 13)
+                            Text(waiting).foregroundStyle(.secondary)
                         }
                     }
-                } else {
-                    Spinner()
-                    Text("Reading \(engine.machine.name)’s settings…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 60)
-            // Read as the page opens, and again once it's reached.
-            .task(id: engine.isReady) {
-                if !engine.config.isLoaded, engine.config.problem == nil || engine.isReady { engine.config.reload() }
+            } else {
+                VStack(spacing: 14) {
+                    if let problem {
+                        Image(systemName: engine == nil ? "laptopcomputer" : "server.rack")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("\(name)’s settings can’t be read")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(problem)
+                            .settingsText()
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                        buttons
+                    } else {
+                        Spinner()
+                        Text(waiting)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 60)
             }
         }
+        // Read as it shows, and again once it can be (a machine reached, this Mac's box up).
+        .task(id: ready) {
+            if !config.isLoaded, config.problem == nil || ready { config.reload() }
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 10) {
+            Button("Try Again") { Task { await tryAgain() } }
+            if let engine, !engine.isReady, !engine.connection.isUnderWay {
+                Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
+            }
+        }
+    }
+
+    /// This Mac's: its engine started again when that's what never got as far as its box (it
+    /// starts the box), or its box when it stopped; then read again.
+    private func tryAgain() async {
+        if engine == nil {
+            if boxNeverStarted {
+                await app.start()
+                return
+            }
+            if app.box.endpoint == nil { await app.box.startAgain() }
+        }
+        await config.refresh()
     }
 }
 
@@ -800,6 +875,8 @@ private struct AlsoApplyBar: View {
             var notes: [String] = []
             var failures: [(name: String, error: any Error)] = []
             var missed: [SidebarBox] = []
+            var own: [String] = []
+            var macOnly: [String] = []
             for target in targets {
                 let name = app.name(of: target)
                 applying = name
@@ -810,6 +887,8 @@ private struct AlsoApplyBar: View {
                         let what = outcome.leftOut.formatted(.list(type: .or))
                         notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
                     }
+                    own += outcome.kept.filter { !own.contains($0) }
+                    macOnly += outcome.macOnly.filter { !macOnly.contains($0) }
                 } catch {
                     failures.append((name, error))
                     missed.append(target)
@@ -818,12 +897,9 @@ private struct AlsoApplyBar: View {
             applying = nil
             Analytics.shared.track("settings_also_applied", ["computers": done.count])
             // What stays with every computer, said once.
-            let net = AlsoApply.net(changes)
-            let own = AlsoApply.keptOwn(net)
             if !own.isEmpty {
                 notes.append("Each computer keeps its own \(own.formatted(.list(type: .and))), so \(own.count == 1 ? "that" : "those") stayed here.")
             }
-            let macOnly = targets.contains { $0.machine != nil } ? AlsoApply.macOnly(net) : []
             if !macOnly.isEmpty {
                 notes.append("\(macOnly.formatted(.list(type: .and))) \(macOnly.count == 1 ? "stays on Macs: it uses" : "stay on Macs: they use") a Mac’s own apps.")
             }

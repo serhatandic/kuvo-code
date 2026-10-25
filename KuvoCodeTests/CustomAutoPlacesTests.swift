@@ -75,14 +75,16 @@ import Testing
 @Suite(.serialized) struct MachineSettingsTests {
     @Test func aModeAddedHereIsThisMacsAndANewMachinesStart() async throws {
         TestEnvironment.prepare()
+        // This Mac's box, which keeps its settings.
+        let box = try await SettingsBox(port: 47_929)
+        defer { box.stop() }
         let app = AppModel()
         let config = app.engineConfig
-        #expect((await app.machineSeed()).settings["agents"]?["security-audit"] == nil)
-        defer { config.set(nil, at: ["agents", "security-audit"]) }
+        #expect((try await app.machineSeed()).settings["agents"]?["security-audit"] == nil)
 
         config.set(.object(["description": .string("Audits the code for security problems"), "mode": .string("primary"),
                             "prompt": .string("Look for security problems.")]), at: ["agents", "security-audit"])
-        let seed = await app.machineSeed()
+        let seed = try await app.machineSeed()
         #expect(seed.settings["agents"]?["security-audit"]?["description"]?.string == "Audits the code for security problems", "a new machine starts with it")
 
         // What a machine's engine starts with carries none of it.
