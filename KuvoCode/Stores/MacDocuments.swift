@@ -29,11 +29,12 @@ struct MacDocuments: Codable, Equatable {
     var left: [String] = []
 
     /// `other` (the box's, as it is now) met with this copy: each count the higher of the two, so the
-    /// copy an older Kuvo Code goes on from never goes back; the machines removed, `other`'s.
+    /// copy an older Kuvo Code goes on from never goes back; the machines' documents only those the
+    /// box still keeps; the machines removed, `other`'s.
     func merged(with other: MacDocuments) -> MacDocuments {
         var merged = other
         for (kind, mine) in own where mine.n > (other.own[kind]?.n ?? 0) { merged.own[kind] = mine }
-        for (key, mine) in held {
+        for (key, mine) in held where other.held[key] != nil {
             let n = { (envelope: Documents.Envelope?) in envelope.flatMap(Documents.read)?.n ?? 0 }
             if n(mine) > n(other.held[key]) { merged.held[key] = mine }
         }

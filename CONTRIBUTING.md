@@ -345,7 +345,7 @@ when you're there to answer.
 | `KUVO_DEMO_PHONE` | Turns on the phone link and Settings › Phone |
 | `KUVO_DEMO_PHONE_PAIR` | A file: once this Mac's box has taken the link's settings, a pairing code starts (no window needed) and its link is written there, for pairing a simulator or a test (launch the iPhone app with `KUVO_DEMO_PAIR` set to it) |
 | `KUVO_DEMO_PHONE_REMOVING` | Settings › Phone as when a phone you removed waits for the background service to take it off |
-| `KUVO_DEMO_MACHINE_SETUP_FAILED` | `<machine>\|<why>`: Settings › Machines as when that machine couldn't be set up for your phones and other computers |
+| `KUVO_DEMO_MACHINE_SETUP_FAILED` | `<machine>`: Settings › Machines as when that machine couldn't be set up for your phones and other computers |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |

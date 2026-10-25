@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -179,6 +181,50 @@ import Testing
         engine.list([StubEngine.session("ses_\(UUID().uuidString.prefix(8))", directory: "/home/tests/project")])
         engine.on("GET", "/api/mcp", json: ["location": ["directory": "/"], "data": []])
         engine.on("GET", "/api/credential", json: ["data": []])
+    }
+
+    /// A machine that couldn't be set up for your phones and other computers (its SSH failed, say)
+    /// says so in Settings › Machines, and stops once it's set up. This Mac's box is the real one.
+    @Test func aMachineThatCouldntBeSetUpForYourPhonesSaysSoUntilItIs() async throws {
+        defer { done() }
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
+        // The app's own link keeps what it set up, and its keys, where the app keeps them: gone after.
+        defer {
+            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+            try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
+            _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
+        }
+        let box = try await SettingsBox(port: 47_967, alongside: true)
+        defer { box.stop() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        let link = app.phoneLink
+        let client = box.client
+        link.box = { client }
+        // It has a machine, as the app says once its engine's up.
+        link.hasMachines = { true }
+        box.box.host.phoneLink = link
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        defer { link.stop() }
+        // Its box up, trying the relay nobody answers.
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
+        await app.connect(engine).value
+        #expect(link.setupFailed.contains(id), "its SSH answered nothing")
+        // It answers now: set up.
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            guard script.contains(" setup") else { return "" }
+            return #"{"address":"\#(Data(repeating: 7, count: 16).base64URL)","key":"\#(LinkKey().publicBytes.base64URL)","peers":true,"sign":"\#(Documents.origin(of: Documents.SigningKey()))","docs":[]}"#
+        }
+        await link.sync(engine)
+        #expect(!link.setupFailed.contains(id))
+        // Its SSH fails again, so it says so again, until the machine is removed.
+        SSHConnection.standIn = { _, _ in nil }
+        await link.sync(engine)
+        #expect(link.setupFailed.contains(id))
+        app.removeMachine(id)
+        #expect(!link.setupFailed.contains(id))
     }
 
     /// `id` added, its engine `stub` once it connects.

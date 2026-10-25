@@ -241,8 +241,10 @@ test("this Mac's documents from before its box held them, and after, reach a mac
   // Removed in Settings › Machines: it hears this Mac's peers document, and lets this Mac go.
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [], moved: [], removed: [lab.key] })).status, 200);
   await onTheMachine(() => !(machineLink()?.macs ?? []).includes(mac));
-  // Set up again over SSH: this Mac's again, whatever it said before.
-  const again = await ask("GET", `kuvo/link/setup?key=${lab.key}`);
+  // Set up again over SSH, as the app does once it forgot it (no `?key=`: the peers document it
+  // carries still names it as removed): this Mac's again, whatever it said before.
+  const again = await ask("GET", "kuvo/link/setup");
+  assert.ok(again.json.docs.map(link.readDoc).find(doc => doc?.origin === macSign && doc.kind === "peers").body.left.includes(lab.key));
   const back = setUp(again.json.docs);
   assert.equal(back.key, lab.key, JSON.stringify(back));
   assert.ok((machineLink()?.macs ?? []).includes(mac));

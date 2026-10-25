@@ -1566,7 +1566,9 @@ export async function* followed(read, followers, signal, { folders = [], recursi
   followers.add(told);
   const watching = watch(folders, told, { recursive });
   queue.push(JSON.stringify(read()));
-  const settled = setTimeout(told, WATCH_SETTLES);
+  // (Later still under load: looked at again a little later, then a little later again; what
+  // didn't change isn't sent twice.)
+  const settled = WATCH_SETTLES.map(ms => setTimeout(told, ms));
   // Its client gone: it stops now, not at the next look.
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   try {
@@ -1589,14 +1591,14 @@ export async function* followed(read, followers, signal, { folders = [], recursi
       queue.push(JSON.stringify(read()));
     }
   } finally {
-    clearTimeout(settled);
+    for (const timer of settled) clearTimeout(timer);
     followers.delete(told);
     watching.close();
   }
 }
 
-// How long a watch on folders may take to start telling changes.
-const WATCH_SETTLES = 250;
+// When a watch on folders may have started telling changes: looked at again then.
+const WATCH_SETTLES = [250, 1000, 5000];
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
 function freeBranch(folder, name) {
@@ -8332,41 +8334,59 @@ export function setMacPeers(link, given) {
 }
 
 // Machines this Mac removed hear its peers document once, while it still knows where they are: they
-// let this Mac go. Off the relay, they hear it once it's back (`link.untold`).
+// let this Mac go. Those it couldn't tell now (off the relay, or the connection closing) hear it
+// once it's back (`link.untold`), each kept until it went.
 function tellGone(gone) {
-  const host = macLink.host;
   if (!gone.length) return;
-  if (!host?.welcomed) {
-    updateLink(link => {
-      if (!link) return null;
-      link.untold = [...(Array.isArray(link.untold) ? link.untold : []).filter(peer => !gone.some(each => each.key === peer.key)), ...gone].slice(-64);
-      return link;
-    });
-    return;
-  }
+  const went = sendGone(gone);
+  const left = gone.filter(peer => !went.includes(peer.key));
+  updateLink(link => {
+    if (!link) return null;
+    const untold = (Array.isArray(link.untold) ? link.untold : []).filter(peer => !gone.some(each => each.key === peer.key));
+    if (!left.length && untold.length === (link.untold?.length ?? 0)) return null;
+    link.untold = [...untold, ...left].slice(-64);
+    if (!link.untold.length) delete link.untold;
+    return link;
+  });
+}
+
+// Mails `gone` this Mac's peers document; the keys of those it went to.
+function sendGone(gone) {
+  const host = macLink.host;
+  if (!host?.welcomed) return [];
   let envelope = null;
   const link = updateLink(link => {
     const made = link?.sign ? ownDoc(link, "peers", macPeersBody(link)) : null;
     envelope = made?.envelope ?? null;
     return made?.changed ? link : null;
   }) ?? readLink();
-  if (!envelope || !link?.key) return;
-  for (const peer of gone.filter(peer => peer.sign)) {
+  if (!envelope || !link?.key) return [];
+  const went = [];
+  for (const peer of gone) {
+    // (One that signs no documents takes none: nothing to tell it.)
+    if (!peer.sign) {
+      went.push(peer.key);
+      continue;
+    }
     const bytes = mailFor(peer, { docs: { give: [envelope] }, at: Date.now() }, link);
-    if (bytes) try { host.send(bytes); } catch {}
+    try { if (bytes && host.send(bytes)) went.push(peer.key); } catch {}
   }
+  return went;
 }
 
 // On the relay again: the machines removed meanwhile hear it now (one set up again since, not).
 function tellUntold() {
-  let untold = [];
-  updateLink(link => {
-    untold = (Array.isArray(link?.untold) ? link.untold : []).filter(peer => fitsPeer(peer) && !peersOf(link).some(each => each.key === peer.key));
-    if (!link?.untold) return null;
-    delete link.untold;
-    return link;
-  });
-  tellGone(untold.map(cleanPeer));
+  const link = readLink();
+  const untold = (Array.isArray(link?.untold) ? link.untold : []).filter(fitsPeer);
+  const again = untold.filter(peer => peersOf(link).some(each => each.key === peer.key));
+  if (again.length) {
+    updateLink(link => {
+      if (!link?.untold) return null;
+      link.untold = link.untold.filter(peer => !again.some(each => each.key === peer.key));
+      return link;
+    });
+  }
+  tellGone(untold.filter(peer => !again.includes(peer)).map(cleanPeer));
 }
 
 const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;

@@ -14,14 +14,14 @@ final class SettingsBox {
     static var file: URL { AppModel.engineFolders.configFile }
 
     /// `process`, `host` and `defaultsAdded` as `TestBox` has them. `settings`: the file's text before it
-    /// starts (none: no file).
-    init(port: Int, process: BoxProcess = BoxProcess(), host: HostInterface = HostInterface(), defaultsAdded: Bool = true, settings: String? = nil) async throws {
+    /// starts (none: no file). `alongside`: beside a test's other stand-ins, as `StubEngine` has it.
+    init(port: Int, process: BoxProcess = BoxProcess(), host: HostInterface = HostInterface(), defaultsAdded: Bool = true, settings: String? = nil, alongside: Bool = false) async throws {
         try? FileManager.default.removeItem(at: Self.file)
         if let settings {
             try FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(settings.utf8).write(to: Self.file)
         }
-        engine = StubEngine(port: port)
+        engine = StubEngine(port: port, alongside: alongside)
         box = try await TestBox(engine: engine.url, process: process, host: host, defaultsAdded: defaultsAdded)
     }
 

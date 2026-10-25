@@ -77,9 +77,9 @@ struct MachinesSettings: View {
                     }
                     MachineStatus(engine: engine)
                     // Set up for your phones and other computers: one that couldn't finish says so.
-                    if let problem = app.phoneLink.setupProblems[engine.machine.id] {
+                    if app.phoneLink.setupFailed.contains(engine.machine.id) {
                         Label {
-                            Text("Your phones and other computers can’t reach it yet. \(problem) Kuvo Code tries again when it next connects.")
+                            Text("Your phones and other computers can’t reach it yet: Kuvo Code couldn’t set it up for them. It tries again when it next connects.")
                                 .fixedSize(horizontal: false, vertical: true)
                         } icon: {
                             Image(systemName: "exclamationmark.triangle")

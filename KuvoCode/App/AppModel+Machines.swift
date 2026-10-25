@@ -498,7 +498,7 @@ extension AppModel {
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
         machines.remove(id, uninstall: uninstall)
-        if uninstall { phoneLink.forget(machine: id) }
+        if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
         AgentMail.shared.machineRemoved(id)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
