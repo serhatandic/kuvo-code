@@ -709,8 +709,19 @@ final class PhoneLink {
     /// them, for Settings › Machines: nil when they can, or it's not set up yet, or it couldn't be
     /// (`setupFailed` says so).
     func peerProblem(of machine: String) -> String? {
-        guard relayWanted, let host = machineHosts[machine], !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
-        if host.anotherMac == true {
+        var anotherMac = machineHosts[machine]?.anotherMac == true
+        #if DEBUG
+        // KUVO_DEMO_MACHINE_NOT_PEER=<machine>[|another]: Settings › Machines as when that machine's
+        // agents can't be reached (its bridge out of date, or another Mac runs its engine).
+        if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MACHINE_NOT_PEER"]?.split(separator: "|").map(String.init), demo.first == machine {
+            anotherMac = demo.last == "another"
+        } else {
+            guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
+        }
+        #else
+        guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
+        #endif
+        if anotherMac {
             return "Agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them: another Mac runs its engine."
         }
         return "Agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them, until its bridge is up to date. Kuvo Code updates it when it next connects."
