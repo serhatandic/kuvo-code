@@ -119,6 +119,27 @@ test("a bridge there but not answering now is asked again, not taken as having n
   assert.equal((await ask(handle, "DELETE", "kuvo/groups/grp_box0000001")).status, 503);
 });
 
+// (Its time limit is under the two seconds a message waits for the list: one that waited, though it
+// names no one new, runs out.)
+test("a message to a group chat waits for the list only when it names someone it doesn't have", { timeout: 1500 }, async t => {
+  // The engine: no answer for now, as one busy starting.
+  const engine = http.createServer(() => {});
+  await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { engine.closeAllConnections(); engine.close(); await link.ownRefreshed(); });
+  const bridge = await fakeBridge((request, response) => send(response, 200, { message: { id: "gm_1" } }));
+  t.after(bridge.close);
+  const named = bridgeProcess(t);
+  link.writeLink({ key: link.newKey().toString("base64url"), secret: "c2VjcmV0", relay: "ws://127.0.0.1:9", id: "box", phones: [] });
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "agents.json"), JSON.stringify({ machine: "box", agents: [{ session: "ses_mira", name: "Mira", kind: "bot", machine: "box" }] }));
+  const handle = link.engineHandler(() => ({ port: engine.address().port, password: "engine" }), { name: "box" }, () => ({ pid: named.pid, port: bridge.port, password: "agents" }));
+  // "&" that isn't a name, a name listed, and one inside a word: passed on at once.
+  for (const text of ["Tom & Jerry", "Ask &Mira", "salt&pepper", "cafe\u0301&Mira"]) {
+    assert.equal((await ask(handle, "POST", "kuvo/groups/grp_box0000001", { body: JSON.stringify({ text }) })).status, 200, text);
+  }
+  assert.equal(bridge.asked.filter(each => each.method === "POST").length, 4);
+});
+
 test("without the coding agents' bridge, a machine's group chats say why", async () => {
   const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => null);
   const answer = await ask(handle, "GET", "kuvo/groups");

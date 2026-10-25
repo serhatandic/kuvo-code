@@ -1135,7 +1135,8 @@ host serves:
   project's name, `"Chats"` for a chat); `machine` is null for the computer asked, else where it
   lives: a machine's id, or, asked of a machine, a Mac's name for that Mac's own. A machine's
   bridge answers it too, with the Mac closed: its own, then those its other computers told it of
-  (`Peers`). Insert
+  (`Peers`). While its engine can't list them (starting), its own are as it last listed them
+  (from 0.9.66). Insert
   `&` and the name, and send the message as it is: every box adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, from everyone it
   lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when

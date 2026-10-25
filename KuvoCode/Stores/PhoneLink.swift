@@ -236,7 +236,7 @@ final class PhoneLink {
     func showRemovalForDemo() {
         let environment = ProcessInfo.processInfo.environment
         if environment["KUVO_DEMO_PHONE_REMOVING"] != nil { removalProblem = Self.removalWaiting }
-        if let failed = environment["KUVO_DEMO_MACHINE_SETUP_FAILED"] { setupFailed.insert(failed) }
+        if let failed = environment["KUVO_DEMO_MACHINE_SETUP_FAILED"] { setupFailed[failed] = Self.setupWhy("Its SSH connection closed.", asked: false) }
     }
 
     private func pairForDemo() {
@@ -541,15 +541,16 @@ final class PhoneLink {
     /// The machine keeps its own keys and tells this Mac only its address and public key. With
     /// no phones, the bridge stops there. One at a time for each machine (a connecting machine's,
     /// and the one after this Mac's box is told its settings, would run into each other there).
-    func sync(_ engine: MachineEngine) async {
+    /// `asked`: you asked (Set Up Again), so what keeps it from being set up now is said too.
+    func sync(_ engine: MachineEngine, asked: Bool = false) async {
         guard relayWanted, engine.isReady, hasIdentity else {
-            setupFailed.remove(engine.machine.id)
+            setupFailed[engine.machine.id] = nil
             return
         }
         let id = engine.machine.id, previous = settingUp[id]
         let mine = Task { [weak self] in
             await previous?.value
-            await self?.setUp(engine)
+            await self?.setUp(engine, asked: asked)
         }
         settingUp[id] = mine
         settingUpNow.insert(id)
@@ -564,7 +565,7 @@ final class PhoneLink {
     /// The machines being set up for your phones and other computers now (Settings › Machines).
     private(set) var settingUpNow: Set<String> = []
 
-    private func setUp(_ engine: MachineEngine) async {
+    private func setUp(_ engine: MachineEngine, asked: Bool) async {
         let machine = engine.machine
         let folder = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "phone-link-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -601,14 +602,19 @@ final class PhoneLink {
             // its settings yet, a moment later).
             struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope] }
             // (Not up, or not told its settings yet, as it starts: it sets your machines up once it
-            // is, `follow`.)
-            guard let client = box() else { return }
+            // is, `follow`. Said, when you asked.)
+            let starting = "This Mac’s background service isn’t running yet, so it couldn’t be set up. Try again in a moment."
+            guard let client = box() else {
+                if asked { setupFailed[machine.id] = starting }
+                return
+            }
             // One set up before (removed since, say): no longer one this Mac removed.
             let again = machineHosts[machine.id].map { "?key=" + $0.key } ?? ""
             let given: Given
             do {
                 given = try await client.value(Given.self, "GET", "kuvo/link/setup" + again)
             } catch let refusal as BoxRefusal where refusal.status == 503 {
+                if asked { setupFailed[machine.id] = starting }
                 return
             }
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
@@ -635,20 +641,29 @@ final class PhoneLink {
                let body = try? JSONSerialization.data(withJSONObject: ["from": key, "docs": ["give": docs.map(\.json)]]) {
                 toBox("kuvo/link/docs", body, using: client)
             }
-            setupFailed.remove(machine.id)
+            setupFailed[machine.id] = nil
         } catch {
             log.error("Couldn't set up the phone link on a machine: \(error.localizedDescription, privacy: .public)")
-            setupFailed.insert(machine.id)
+            setupFailed[machine.id] = Self.setupWhy(error.localizedDescription, asked: asked)
         }
     }
 
-    /// The machines that couldn't be set up for your phones and other computers just now, for
-    /// Settings › Machines (what went wrong is in the log); tried again when each next connects.
-    private(set) var setupFailed: Set<String> = []
+    /// The machines that couldn't be set up for your phones and other computers just now, and why,
+    /// for Settings › Machines; tried again when each next connects.
+    private(set) var setupFailed: [String: String] = [:]
+
+    /// Why a machine couldn't be set up, from what went wrong (its first line).
+    static func setupWhy(_ error: String, asked: Bool) -> String {
+        var what = error.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+        if what.count > 160 { what = String(what.prefix(159)) + "…" }
+        if what.isEmpty { what = "Kuvo Code couldn’t reach it." }
+        if !".!?…".contains(what.last!) { what += "." }
+        return asked ? "Set Up Again didn’t work. \(what)" : "Kuvo Code couldn’t set it up for them. \(what) It tries again when it next connects."
+    }
 
     /// A machine removed: nothing more to say of setting it up.
     func machineRemoved(_ id: String) {
-        setupFailed.remove(id)
+        setupFailed[id] = nil
     }
 
     /// A conversation being moved, and the key of the computer it lives on now (PROTOCOL.md,
@@ -731,14 +746,14 @@ final class PhoneLink {
         if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MACHINE_NOT_PEER"]?.split(separator: "|").map(String.init), demo.first == machine {
             anotherMac = demo.last == "another"
         } else {
-            guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
+            guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), setupFailed[machine] == nil else { return nil }
         }
         #else
-        guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
+        guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), setupFailed[machine] == nil else { return nil }
         #endif
         if anotherMac {
             return ("Another Mac runs it: its agents are reached from there.",
-                    "Agents on that Mac and its machines can write to them, and that Mac’s group chats can name them. Agents on this Mac’s computers can’t.")
+                    "Agents on that Mac and its machines can write to them. Agents on this Mac’s computers can’t, and this Mac’s group chats can’t name them.")
         }
         return ("Its agents can’t be reached from your other computers.",
                 "Its bridge is out of date, so this Mac’s group chats can’t name them either. Setting it up again updates it.")
@@ -753,7 +768,7 @@ final class PhoneLink {
     /// A machine you removed: phones stop being told about it, and this Mac's box tells it to let
     /// this Mac go (`peersChanged`).
     func forget(machine id: String) {
-        setupFailed.remove(id)
+        setupFailed[id] = nil
         guard let host = machineHosts.removeValue(forKey: id) else { return }
         save()
         // Removed, said so (not just missing): unless it's still one of this Mac's, under another name.

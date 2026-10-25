@@ -9,10 +9,13 @@ struct MachinesSettings: View {
     /// Two machines you said were one computer, which said they're two.
     @State private var notSame: (String, String)?
 
-    /// What keeps a machine from being reached, in a line, and why below it.
-    /// `again`: it can be set up again now (it's connected), with Set Up Again.
+    /// What keeps a machine from being reached, in a line, and why below it, read as one by
+    /// VoiceOver. `again`: it can be set up again now (it's connected), with Set Up Again, its own
+    /// control below them.
     private func problem(_ line: String, why: String, again engine: MachineEngine? = nil) -> some View {
-        Label {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(line)
@@ -26,14 +29,12 @@ struct MachinesSettings: View {
                         Spinner(size: 12)
                             .accessibilityLabel("Setting it up")
                     } else {
-                        Button("Set Up Again") { Task { await app.phoneLink.sync(engine) } }
+                        Button("Set Up Again") { Task { await app.phoneLink.sync(engine, asked: true) } }
                             .buttonStyle(TextButtonStyle(outset: true))
+                            .fixedSize()
                     }
                 }
             }
-        } icon: {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.secondary)
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
@@ -109,9 +110,8 @@ struct MachinesSettings: View {
                     // Set up for your phones and other computers: one that couldn't finish says so.
                     // A line, the reason behind it below, and Set Up Again while it’s connected
                     // (connecting sets it up too).
-                    if app.phoneLink.setupFailed.contains(engine.machine.id) {
-                        problem("Your phones and other computers can’t reach it yet.",
-                                why: "Kuvo Code couldn’t set it up for them. It tries again when it next connects.", again: engine)
+                    if let why = app.phoneLink.setupFailed[engine.machine.id] {
+                        problem("Your phones and other computers can’t reach it yet.", why: why, again: engine)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
                         problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)
                     }

@@ -210,21 +210,31 @@ import Testing
         // Its box up, trying the relay nobody answers.
         try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
         await app.connect(engine).value
-        #expect(link.setupFailed.contains(id), "its SSH answered nothing")
+        let why = try #require(link.setupFailed[id], "its SSH answered nothing")
+        #expect(why.hasPrefix("Kuvo Code couldn’t set it up for them.") && why.hasSuffix("It tries again when it next connects."), "\(why)")
+        // Set Up Again, failing the same way: said so, with what went wrong.
+        await link.sync(engine, asked: true)
+        let again = try #require(link.setupFailed[id])
+        #expect(again.hasPrefix("Set Up Again didn’t work. ") && again.count > "Set Up Again didn’t work. ".count + 3, "\(again)")
         // It answers now: set up.
         SSHConnection.standIn = { [ssh] address, script in
             ssh.note(script, to: address)
             guard script.contains(" setup") else { return "" }
             return #"{"address":"\#(Data(repeating: 7, count: 16).base64URL)","key":"\#(LinkKey().publicBytes.base64URL)","peers":true,"sign":"\#(Documents.origin(of: Documents.SigningKey()))","docs":[]}"#
         }
+        // Set Up Again while this Mac's background service isn't up: said so, not nothing.
+        link.box = { nil }
+        await link.sync(engine, asked: true)
+        #expect(link.setupFailed[id]?.contains("background service isn’t running") == true, "\(link.setupFailed[id] ?? "")")
+        link.box = { client }
         await link.sync(engine)
-        #expect(!link.setupFailed.contains(id))
+        #expect(link.setupFailed[id] == nil)
         // Its SSH fails again, so it says so again, until the machine is removed.
         SSHConnection.standIn = { _, _ in nil }
         await link.sync(engine)
-        #expect(link.setupFailed.contains(id))
+        #expect(link.setupFailed[id] != nil)
         app.removeMachine(id)
-        #expect(!link.setupFailed.contains(id))
+        #expect(link.setupFailed[id] == nil)
     }
 
     /// `id` added, its engine `stub` once it connects.

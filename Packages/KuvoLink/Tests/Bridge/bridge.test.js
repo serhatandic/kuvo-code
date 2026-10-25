@@ -1147,6 +1147,14 @@ test("a phone asks a machine who & can name: its own bots and sessions, then its
     engine.closeAllConnections();
     engine.close();
   }
+  // Its engine starting again (it can't list them now): its own as it last listed them, not none.
+  {
+    const handle = link.engineHandler(() => { throw new Error("no record"); }, {}, () => null);
+    const parts = [];
+    for await (const part of handle({ method: "GET", path: "kuvo/named", headers: {}, body: Buffer.alloc(0) }, { key: crypto.randomBytes(32) }, undefined)) parts.push(part);
+    assert.equal(parts[0].head.status, 200);
+    assert.deepEqual(JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()).agents.map(agent => agent.session), ["ses_fix"]);
+  }
   // Its other computers': a machine's by its id, a Mac's own by the Mac's name, a machine the Mac speaks for by its.
   const mac = { key: "m".repeat(43), kind: "mac", name: "Studio" }, box = { key: "b".repeat(43), kind: "machine", id: "pi", name: "pi" };
   // Only sessions with a title, as a Mac's & offers them: a list names one without "New session".

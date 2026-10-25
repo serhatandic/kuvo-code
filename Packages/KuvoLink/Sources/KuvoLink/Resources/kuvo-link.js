@@ -637,21 +637,22 @@ let refreshingOwn = null;
 const refreshOwnShared = readEngine => (refreshingOwn ??= refreshOwn(readEngine).catch(() => {}).finally(() => { refreshingOwn = null; }));
 // That working out, done (what a test waits for before it removes its folders).
 export const ownRefreshed = () => refreshingOwn ?? Promise.resolve();
+// Everyone, as this box lists them now (`run/agents.json`), and its name there.
+function listedAgents() {
+  try {
+    const read = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
+    return { machine: read?.machine ?? null, agents: Array.isArray(read?.agents) ? read.agents : [] };
+  } catch {
+    return { machine: null, agents: [] };
+  }
+}
 function namingHere(readEngine) {
-  const listed = () => {
-    try {
-      const read = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
-      return { machine: read?.machine ?? null, agents: Array.isArray(read?.agents) ? read.agents : [] };
-    } catch {
-      return { machine: null, agents: [] };
-    }
-  };
   return async (text, session) => {
-    let everyone = listed();
+    let everyone = listedAgents();
     const working = refreshOwnShared(readEngine);
     if (nameMissing(text, everyone.agents)) {
       await Promise.race([working, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
-      everyone = listed();
+      everyone = listedAgents();
     }
     return nameAgents(text, { excluding: session, here: everyone.machine, agents: everyone.agents });
   };
@@ -659,13 +660,18 @@ function namingHere(readEngine) {
 
 // Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, with none of
 // their names after it, whole ("&Miranda" isn't "&Mira").
+// (Its characters as `namesIn` reads them: what's before an "&" is a whole character.)
 function nameMissing(text, agents) {
+  if (!text.includes("&")) return false;
   const references = agents.map(agent => ({ name: String(agent.name ?? ""), session: agent.session }));
   const named = new Set(namesIn(text, references).map(each => each.lower));
-  for (const { index } of text.matchAll(/&/g)) {
-    if (index > 0 && wordCharacter.test(text[index - 1])) continue;
-    if (index + 1 >= text.length || /^\s/u.test(text.slice(index + 1)) || named.has(index)) continue;
-    return true;
+  const characters = graphemes(text);
+  for (let i = 0; i < characters.length; i++) {
+    const { segment, index } = characters[i];
+    if (segment !== "&" || named.has(index)) continue;
+    if (wordCharacter.test(characters[i - 1]?.segment ?? "")) continue;
+    const next = characters[i + 1]?.segment;
+    if (next && !/^\s/u.test(next)) return true;
   }
   return false;
 }
@@ -2460,7 +2466,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/named") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       const link = readLink();
-      const own = (await ownAgents(readEngine, link?.id).catch(() => null)) ?? [];
+      // Its own as last worked out while its engine can't say (starting), rather than none.
+      const fresh = await ownAgents(readEngine, link?.id).catch(() => null);
+      if (fresh) {
+        ownList = fresh;
+        ownMachine = link?.id ?? null;
+      }
+      const own = fresh ?? ownAsLast(link?.id ?? null);
       return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link)) });
     }
     // What agents ask for while they browse here: listed, followed (a line each time it changes,
@@ -2664,9 +2676,15 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const target = bridge();
       if (!target) return yield* groupJSON(503, { message: IS_MAC ? "Group chats on this Mac are starting. Try again in a moment." : "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       // Who a message names with "&" is worked out there, from the list as it is now: worked out
-      // again first (two seconds at most) for one that names someone.
+      // again meanwhile, and waited for (two seconds at most) only when a name after "&" isn't
+      // there yet, as a message from a phone (`namingHere`).
       if (request.method.toUpperCase() === "POST" && route.split("/").length === 3 && Buffer.from(request.body ?? []).includes("&")) {
-        await Promise.race([refreshOwnShared(readEngine), new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
+        let text = "";
+        try { text = JSON.parse(Buffer.from(request.body).toString())?.text; } catch {}
+        const working = refreshOwnShared(readEngine);
+        if (typeof text === "string" && nameMissing(text, listedAgents().agents)) {
+          await Promise.race([working, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
+        }
       }
       return yield* forwardGroups(target, route, request, signal);
     }
@@ -7262,14 +7280,18 @@ export function peerMail(sender, payload, host, targets = () => []) {
 let ownList = null;
 let ownMachine = null;
 
+// This box's own agents as last worked out: since it started, else as `run/agents.json` last had
+// them (`ownID`: this box's name there).
+function ownAsLast(ownID) {
+  if (ownList) return ownList;
+  try { return (JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"))?.agents ?? []).filter(agent => fitsAgent(agent) && (agent.machine ?? null) === ownID); } catch { return []; }
+}
+
 // Writes `run/agents.json`: this box's agents and its peers'. Its own as last written while it
 // can't say yet (its engine starting), rather than none.
 export function writeAgents(link = readLink()) {
   const ownID = ownMachine ?? link?.id ?? null;
-  let own = ownList;
-  if (!own) {
-    try { own = (JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"))?.agents ?? []).filter(agent => fitsAgent(agent) && (agent.machine ?? null) === ownID); } catch { own = []; }
-  }
+  const own = ownAsLast(ownID);
   const composed = composeAgents(own, ownID, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link));
   try {
     const text = JSON.stringify(composed);

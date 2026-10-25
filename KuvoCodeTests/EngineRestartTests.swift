@@ -173,11 +173,14 @@ import Testing
     @Test func thisMacsBoxStartsAbleToSendWakeUpsAndReachYourKeychain() async throws {
         let binary = try fakeEngine(box: try #require(TestBox.node, "Node runs this Mac's box in the tests"))
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        // What only the tests' own box may run with, in the environment it's started from.
+        setenv("KUVO_TEST_NO_PEERS", "1", 1)
         let app = AppModel()
         defer {
             app.stop()
             app.host.stop()
             unsetenv("KUVO_OPENCODE_BINARY")
+            unsetenv("KUVO_TEST_NO_PEERS")
             try? FileManager.default.removeItem(at: folder)
             engine.stop()
         }
@@ -186,6 +189,7 @@ import Testing
         await app.start()
         #expect(app.box.endpoint != nil, "it's running")
         let started = try #require(app.box.environment, "the box was started")
+        #expect(started["KUVO_TEST_NO_PEERS"] == nil, "it meets your other computers")
         #expect(started["KUVO_WAKE_COMMAND"] == WakeUps.command.path)
         #expect(started["KUVO_KEYS_ON_HOST"] == "1")
         // Where the app answers for your Keychain, in its folder, which it reads for each call.
