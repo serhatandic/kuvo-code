@@ -849,15 +849,18 @@ function integrationHealth(entry, server, off, signedIn) {
 }
 
 /** Each as `kuvo/integrations` lists it, from the catalog, with how it's doing on this machine. */
+/** Each as `kuvo/integrations` lists it, and whether its engine couldn't say how they're doing
+ * (`engineDown`: not running, or not answering), when an added one's `health` is left out. */
 async function integrationEntries(catalog, engine, signal) {
   const { settings } = readSettings();
-  let servers = [];
+  let servers = null;
   let signedIn = new Set();
   if (engine) {
-    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
     const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
     signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
   }
+  const engineDown = !Array.isArray(servers);
   // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
   let names = null;
   try {
@@ -866,18 +869,21 @@ async function integrationEntries(catalog, engine, signal) {
     if (!(error instanceof KeysUnavailable)) throw error;
   }
   const sites = catalog.some(entry => entry.way === "browser") ? await siteSignIns() : null;
-  return catalog.map(({ settings: _, variables, signInFile, ...entry }) => {
+  const entries = catalog.map(({ settings: _, variables, signInFile, ...entry }) => {
     const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
     const shown = { ...entry, added };
     if (variables && names) shown.keysSaved = Object.values(variables).every(name => names.includes(name));
     if (entry.way === "browser" && typeof sites?.[entry.id] === "boolean") shown.siteSignedIn = sites[entry.id];
     if (added) {
-      const server = (Array.isArray(servers) ? servers : []).find(each => each?.name === entry.id);
-      shown.health = integrationHealth({ ...entry, signInFile }, server, valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true, signedIn);
+      const off = valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true;
+      const server = (servers ?? []).find(each => each?.name === entry.id);
+      // Without its engine, only one turned off can be told: it won't start whatever the engine says.
+      if (!engineDown || off) shown.health = integrationHealth({ ...entry, signInFile }, server, off, signedIn);
       if (server?.integrationID) shown.signIn = server.integrationID;
     }
     return shown;
   });
+  return { entries, engineDown };
 }
 
 /** Its bots' own keys for it (`KUVO_KEY_<ID>_<NAME>__<BOT>`) and their folders' settings naming its server, gone. */
@@ -920,6 +926,30 @@ async function keepsAll(variables) {
 /** Runs `run` in `ms`, without keeping the bridge up for it. */
 const soon = (run, ms) => setTimeout(run, ms).unref?.();
 
+// Set by `box route`, a command that answers once and ends: what waits a moment goes in a process
+// of its own, which outlives it.
+let answersOnce = false;
+
+/** Its server connected again a moment after its keys changed, once the engine has read them. */
+function reconnectLater(engine, id, later) {
+  if (!engine) return;
+  if (answersOnce && later === soon) {
+    spawn(process.execPath, [fileURLToPath(import.meta.url), "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    return;
+  }
+  later(() => reconnectEverywhere(engine, id), 2_000);
+}
+
+/** An MCP server connected again everywhere its engine runs a copy: its own, and each folder it
+ * has open (`api/debug/location`), as sessions and bots there each have theirs. */
+export async function reconnectEverywhere(engine, id) {
+  const connect = `/api/experimental/mcp/${encodeURIComponent(id)}/connect`;
+  await call(engine, "POST", connect).catch(() => {});
+  const open = await call(engine, "GET", "/api/debug/location").catch(() => []);
+  const folders = new Set((Array.isArray(open) ? open : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
+  for (const folder of folders) await call(engine, "POST", connect, undefined, undefined, folder).catch(() => {});
+}
+
 /** `kuvo/integrations…`, for this box's own, its keys where it keeps them (a machine's files, this
  * Mac's Keychain through its app). `later` runs what waits a moment (a test's own). */
 export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE, later = soon) {
@@ -937,7 +967,8 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
   if (parts.length === 2) {
     if (method !== "GET") return { status: 405, value: {} };
     const { problem } = readSettings();
-    return { status: 200, value: { integrations: await integrationEntries(catalog, engine, signal), ...(problem ? { problem } : {}) } };
+    const { entries, engineDown } = await integrationEntries(catalog, engine, signal);
+    return { status: 200, value: { integrations: entries, ...(engineDown ? { engineDown } : {}), ...(problem ? { problem } : {}) } };
   }
   const entry = parts.length === 3 ? catalog.find(each => each.id === parts[2]) : null;
   if (!entry) return { status: 404, value: {} };
@@ -970,15 +1001,22 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a
-    // moment later, with the new ones, as Settings does it.
-    if (newKeys && engine) {
-      later(() => call(engine, "POST", `/api/experimental/mcp/${encodeURIComponent(entry.id)}/connect`).catch(() => {}), 2_000);
-    }
-    const [listed] = await integrationEntries([entry], engine, signal);
+    // moment later, with the new ones, in every folder the engine has open.
+    if (newKeys) reconnectLater(engine, entry.id, later);
+    const { entries: [listed] } = await integrationEntries([entry], engine, signal);
     return { status: 200, value: { integration: listed } };
   }
   if (method === "DELETE") {
-    if (!added) return { status: 404, value: {} };
+    if (!added) {
+      // Its keys, left by a Remove that couldn't take them away: they go now. Nothing left, 404.
+      const own = Object.values(entry.variables ?? {}).filter(variable => STORED_KEY.test(variable));
+      const kept = own.length ? (await keyNames()).filter(name => own.includes(name)) : [];
+      if (!kept.length) return { status: 404, value: {} };
+      await keyWork(async () => {
+        for (const name of kept) await deleteKey(name);
+      });
+      return { status: 200, value: {} };
+    }
     // Bots here with keys of their own for it stop using it first: where their keys can't be taken
     // away, nothing goes, rather than leave a bot using an integration you removed.
     try {
@@ -7210,6 +7248,7 @@ async function box(command) {
     case "route": {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
+      answersOnce = true;
       let given = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
@@ -7221,6 +7260,16 @@ async function box(command) {
         if (part.body) chunks.push(Buffer.from(part.body));
       }
       return say({ status, body: Buffer.concat(chunks).toString("utf8") });
+    }
+    case "reconnect": {
+      // An integration's server connected again everywhere, a moment after `route` changed its
+      // keys, once the engine has read them.
+      const id = process.argv[4];
+      await new Promise(done => setTimeout(done, 2_000));
+      let engine;
+      try { engine = readEngineFile(); } catch { return; }
+      if (id) await reconnectEverywhere(engine, id);
+      return;
     }
     case "bot-keys-refresh":
       // Its bots' folders' settings as their keys and this machine's integrations are now.
@@ -7237,7 +7286,7 @@ async function box(command) {
       return say({ status: 200, ...met });
     }
     default:
-      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-now");
+      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | reconnect <server> | bot-keys-refresh | personalities | update-status | update-now");
       process.exit(2);
   }
 }

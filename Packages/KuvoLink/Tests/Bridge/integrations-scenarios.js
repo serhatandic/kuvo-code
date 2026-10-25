@@ -22,12 +22,16 @@ const catalog = { integrations: [
   { id: "linkedin", title: "LinkedIn", summary: "Posts", kind: "Social", symbol: "person", site: "https://linkedin.com", how: "In the browser", way: "browser" },
 ] };
 
-/** An engine that lists its MCP servers as `servers()` says, and notes what it's asked. */
-async function standInEngine(servers) {
+/** An engine that lists its MCP servers as `servers()` says, with `folders` open, and notes what
+ * it's asked (and for which folder). */
+export async function standInEngine(servers, folders = []) {
   const asked = [];
   const server = http.createServer((request, response) => {
-    asked.push(`${request.method} ${request.url}`);
+    const folder = request.headers["x-opencode-directory"];
+    asked.push(`${request.method} ${request.url}${folder ? ` in ${decodeURIComponent(folder)}` : ""}`);
+    asked.onAsked?.();
     response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/api/debug/location") return response.end(JSON.stringify(folders.map(directory => ({ directory }))));
     response.end(JSON.stringify({ data: request.url === "/api/mcp" ? servers() : [] }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -109,7 +113,13 @@ export function integrationScenarios({ link, home, mac, store }) {
     states.todoist = "failed";
     assert.equal(await health(), "failed");
     delete states.todoist;
-    assert.equal((await listed(null)).find(each => each.id === "todoist").health, "starting", "no engine to say more");
+    const down = (await ask("GET", "kuvo/integrations")).value;
+    assert.equal(down.engineDown, true, "no engine to say how they're doing");
+    assert.equal(down.integrations.find(each => each.id === "todoist").health, undefined, "not called starting");
+    turn(true);
+    assert.equal((await listed(null)).find(each => each.id === "todoist").health, "disabled", "one turned off is still off");
+    turn(false);
+    assert.equal((await ask("GET", "kuvo/integrations", undefined, engine)).value.engineDown, undefined);
   });
 
   test("one that signs in with a code the first time it's used waits for it until its sign-in is there", async t => {
@@ -141,8 +151,8 @@ export function integrationScenarios({ link, home, mac, store }) {
     assert.equal((await route(link, "PUT", `kuvo/keys/${shared}`, { value: "tok_123" })).status, 200);
   });
 
-  test("new keys: its server connects again a moment later, as Settings has it", async () => {
-    const { engine, asked } = await standInEngine(() => []);
+  test("new keys: its server connects again a moment later, in every folder its engine has open", async () => {
+    const { engine, asked } = await standInEngine(() => [], ["/work/app", "/work/site"]);
     // What waits a moment, run when the test says.
     const waiting = [];
     const later = (run, ms) => waiting.push({ run, ms });
@@ -151,7 +161,7 @@ export function integrationScenarios({ link, home, mac, store }) {
     assert.ok(!asked.some(each => each.includes("/connect")), "not before the engine has read them");
     assert.deepEqual(waiting.map(each => each.ms), [2_000]);
     await waiting[0].run();
-    assert.ok(asked.includes("POST /api/experimental/mcp/todoist/connect"));
+    for (const where of ["", " in /work/app", " in /work/site"]) assert.ok(asked.includes(`POST /api/experimental/mcp/todoist/connect${where}`), `${where}: ${asked}`);
     // Without new keys, nothing to connect again for.
     waiting.length = 0;
     await ask("POST", "kuvo/integrations/todoist", {}, engine, later);
@@ -178,7 +188,7 @@ export function integrationScenarios({ link, home, mac, store }) {
     assert.equal(store.kept("KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "stays");
     assert.equal(fs.existsSync(own), false, "a bot's settings naming only it go, with their folder");
     assert.equal(JSON.parse(fs.readFileSync(path.join(handWritten, "opencode.json"), "utf8")).mcp.servers.todoist.type, "remote");
-    assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 404);
+    assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 404, "nothing of it left");
     const after = (await listed()).find(each => each.id === "todoist");
     assert.deepEqual([after.added, after.keysSaved, after.health], [false, false, undefined]);
   });

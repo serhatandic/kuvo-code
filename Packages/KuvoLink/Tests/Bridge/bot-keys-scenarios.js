@@ -69,7 +69,7 @@ export async function standInHost(password) {
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const { value: _, ...asked } = given;
     host.asked.push({ call: request.url, ...asked });
-    if (host.down) return answer(500, { message: "The Keychain is locked." });
+    if (host.down || host.failing?.has(request.url)) return answer(500, { message: "The Keychain is locked." });
     switch (request.url) {
       case "/keys/names": {
         const names = [...host.keys.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? ""));

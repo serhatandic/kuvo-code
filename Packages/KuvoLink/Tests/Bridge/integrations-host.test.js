@@ -71,6 +71,26 @@ test("its app not answering: said plainly, nothing added, and nothing removed", 
   assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 200);
 });
 
+test("its app turned down once it's out of the settings: its key stays, and Remove again takes it", async () => {
+  const settingsFile = path.join(engineConfig, "opencode", "opencode.json");
+  assert.equal((await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_left" } }, null, undefined, undefined, () => {})).status, 200);
+  host.failing = new Set(["/keys/delete"]);
+  try {
+    const removing = await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined);
+    assert.equal(removing.status, 503);
+    assert.match(removing.value.message, /^Todoist is removed, but its key is still kept/);
+  } finally {
+    host.failing = null;
+  }
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, "utf8")).mcp?.servers?.todoist, undefined, "out of its settings");
+  assert.equal(host.keys.get("KUVO_KEY_TODOIST_API_KEY"), "tok_left", "its key, left");
+  assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 200, "Remove again: its key goes");
+  assert.equal(host.keys.has("KUVO_KEY_TODOIST_API_KEY"), false);
+  assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 404, "nothing of it left");
+  const listed = (await link.answerIntegrations("GET", "kuvo/integrations", undefined, null, undefined)).value.integrations;
+  assert.equal(listed.find(each => each.id === "todoist").keysSaved, false, "so Connect asks for a key again");
+});
+
 test("this Mac's box without its app refuses keys rather than keep them in files", async () => {
   const { served } = await import("./bot-keys-scenarios.js");
   const box = await served({ ...process.env, KUVO_HOST_PASSWORD: PASSWORD, KUVO_HOST_URL: "" });
