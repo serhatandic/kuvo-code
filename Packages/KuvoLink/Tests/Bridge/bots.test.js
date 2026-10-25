@@ -694,9 +694,17 @@ test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that
   }
 });
 
-// What Ask First asks about, before Settings' own rules (the Mac's ToolApproval.askFirst).
-const askFirst = ["edit", "write", "patch", "shell", "webfetch", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"]
-  .map(action => ({ action, resource: "*", effect: "ask" }));
+// How the Mac makes a conversation's rules again from its approval and Settings › Permissions
+// (ToolApproval.refreshed, written by RouteContractTests: scripts/route-vectors.sh), which a box does
+// the same way for a bot that moves to it.
+const approval = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/approval.json", import.meta.url), "utf8"));
+// What Ask First asks about, before Settings' own rules, as the Mac has it.
+const askFirst = approval.find(each => each.name === "asks first; no settings").current.filter(rule => rule.action !== "external_directory");
+
+test("a bot's rules are made again from its approval and a computer's Settings › Permissions as the Mac makes them", () => {
+  assert.ok(approval.length >= 12);
+  for (const each of approval) assert.deepEqual(link.refreshedRules(each.current, each.settings), each.refreshed, each.name);
+});
 const macFolder = "/Users/me/Library/Application Support/run.kuvo.code/bots/bot_moved00001";
 
 test("a bot brought here from your Mac is made this machine's: its folder there, your time zone and its rules, its rules from this machine's Settings › Permissions, and told it runs on the machine", async () => {
@@ -732,6 +740,29 @@ test("a bot brought here from your Mac is made this machine's: its folder there,
   } finally {
     engine.close();
     fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });
+  }
+});
+
+test("a bot brought here before this machine's settings are its own keeps the rules it runs with, its folder made this machine's", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  const engine = await makingEngine(["opencode"], { ses_bot_moved00001: [
+    ...askFirst,
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
+    { action: "external_directory", resource: `${macFolder}/*`, effect: "allow" },
+  ] });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived")).status, 200);
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
+      ...askFirst,
+      { action: "shell", resource: "rm -rf *", effect: "deny" },
+      { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+    ]);
+  } finally {
+    engine.close();
   }
 });
 

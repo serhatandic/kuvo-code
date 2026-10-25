@@ -111,7 +111,39 @@ nonisolated enum RouteScenarios {
             "integrations.json": pretty(MachineBox.integrationsJSON()),
             "mcp-catalog.json": pretty(MachineBox.catalogJSON()),
             "mac-bot-kit.json": pretty((try? encoder.encode(macKit)) ?? Data()),
+            "approval.json": pretty((try? encoder.encode(approvalCases())) ?? Data()),
         ]
+    }
+
+    /// A conversation's rules made again from its approval and a computer's Settings ›
+    /// Permissions, as this Mac makes them (`ToolApproval.refreshed`), which a box does the same
+    /// way for a bot that moved there (the bridge's `refreshedRules`, bots.test.js): each case's
+    /// rules and Settings, and the rules made from them.
+    struct ApprovalCase: Encodable {
+        var name: String
+        var current: [PermissionRule]
+        var settings: [PermissionRule]
+        var refreshed: [PermissionRule]
+    }
+
+    @MainActor static func approvalCases() -> [ApprovalCase] {
+        let folder = PermissionRule(action: "external_directory", resource: "/Users/me/notes/*", effect: .allow)
+        let settings: [(String, [PermissionRule])] = [
+            ("no settings", []),
+            ("asks before a push, never touches secrets", [PermissionRule(action: "shell", resource: "git push *", effect: .ask), PermissionRule(action: "edit", resource: "secrets/*", effect: .deny)]),
+            ("allows every folder and npm test", [PermissionRule(action: "external_directory", effect: .allow), PermissionRule(action: "shell", resource: "npm test *", effect: .allow)]),
+            ("a folder of its own, asks before fetching", [PermissionRule(action: "external_directory", resource: "/srv/data/*", effect: .allow), PermissionRule(action: "webfetch", effect: .ask)]),
+        ]
+        let currents: [(String, [PermissionRule])] = [
+            ("asks first", ToolApproval.askFirst.rules(settings: []) + [folder]),
+            ("approves all", [folder]),
+            ("approves all, with an earlier version's rules", [PermissionRule(action: "shell", resource: "kuvo-wake bot_scout00001 list", effect: .allow), PermissionRule(action: "shell", resource: "git push *", effect: .allow), folder]),
+        ]
+        return currents.flatMap { current in
+            settings.map { setting in
+                ApprovalCase(name: "\(current.0); \(setting.0)", current: current.1, settings: setting.1, refreshed: ToolApproval.refreshed(current.1, settings: setting.1))
+            }
+        }
     }
 }
 

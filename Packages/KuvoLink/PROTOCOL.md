@@ -1039,7 +1039,8 @@ host serves:
   and carries its conversation over, under the same id) is made this box's: what its folder says
   of where it works, the time zone its wake-ups go by and its rules (yours, from the machine's kit;
   this Mac's own clock on a Mac), its rules here (its approval with this box's Settings ›
-  Permissions, and its folder here), and what it's told here, one at a time with its other
+  Permissions, as the Mac makes them, held to `Vectors/routes/box/approval.json`; a machine whose
+  settings aren't its own yet keeps the rules it runs with; and its folder here), and what it's told here, one at a time with its other
   tellings. `200 {"bot"}`; 404 for no such bot here; 409 without the box's words, and 503 when its
   conversation here didn't take it, both of which the box puts right as the bot's next run starts
   (its folder and clock are set either way). Its keys of its own go with it through

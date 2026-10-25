@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.56";
+export const BRIDGE_VERSION = "0.9.57";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2473,7 +2473,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       let id;
       try { id = decodeURIComponent(arrived[1]); } catch { return yield* json(404, { message: "That bot isn’t there any more." }); }
-      const { status, value } = await settleBot(id, parsed(request.body), readEngine, bridge, info.name);
+      const { status, value } = await settleBot(id, readEngine, bridge, info.name);
       return yield* json(status, value);
     }
     // Its bots told what they are now where that changed, as its app asks after a change to its kit
@@ -3605,7 +3605,7 @@ function settleFolder(here, kit) {
 // rules here (for its folder here, and from this box's Settings › Permissions), and what it's told
 // here (where it runs, now). Done while its move still holds it, before its wake-ups go on, and
 // one at a time with its other tellings. `{status, value}`: 200 `{bot}`.
-export async function settleBot(id, given, readEngine, readBridge, machine) {
+export async function settleBot(id, readEngine, readBridge, machine) {
   const no = (status, message) => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
@@ -3620,6 +3620,9 @@ export async function settleBot(id, given, readEngine, readBridge, machine) {
     if (!target) return no(503, here.agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
     const text = toldNow(kit, here);
     const there = await toldThere(target, here.session);
+    // Told already (by its box before, or here): noted as told here, so what was noted where it came
+    // from doesn't have it told again.
+    if (there === text) noteTold(here.folder, { session: here.session, instructions: toldDigest(text) });
     const told = there === text || await tellBot(target, here, here.session, text);
     const ruled = await repairRules(target, here, here.session);
     if (ruled) noteTold(here.folder, { rules: here.folder });
@@ -3661,8 +3664,10 @@ const isRule = rule => isObject(rule) && typeof rule.action === "string" && type
 // A folder a conversation may work in, of its own (the Mac's ToolApproval.isParticular).
 const isParticular = rule => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
 
-// This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read.
+// This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
+// or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
 function permissionsHere() {
+  if (!ownsSettings()) return null;
   const { settings } = readSettings();
   if (!settings) return null;
   const rules = Array.isArray(settings.permissions) ? settings.permissions : [];

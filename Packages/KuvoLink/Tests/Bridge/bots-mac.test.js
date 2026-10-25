@@ -20,10 +20,13 @@ Object.assign(process.env, {
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),
   KUVO_WAKE_COMMAND: path.join(support, "bin", "kuvo-wake"),
+  // The engine's settings folder, where this Mac's settings are (Settings › Permissions among them).
+  KUVO_ENGINE_CONFIG: path.join(support, "engine"),
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
+const settingsFile = path.join(process.env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
 
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -76,7 +79,7 @@ function bot(id, { name = "Scout", session = `ses_${id}`, personality } = {}) {
 }
 
 beforeEach(() => {
-  for (const folder of [bots, home]) fs.rmSync(folder, { recursive: true, force: true });
+  for (const folder of [bots, home, process.env.KUVO_ENGINE_CONFIG]) fs.rmSync(folder, { recursive: true, force: true });
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   write(wordsFile, JSON.stringify(words));
 });
@@ -204,8 +207,21 @@ test("a bot made this box's as it arrives while its run starts (one that was pau
   // Its run's telling has read what its conversation has, and is about to tell it.
   const freshening = link.freshenBot(fake.read(), "ses_bot_scout00001");
   await fake.request(each => each.method === "GET" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries");
-  await Promise.all([freshening, link.settleBot("bot_scout00001", {}, fake.read, () => null)]);
+  await Promise.all([freshening, link.settleBot("bot_scout00001", fake.read, () => null)]);
   assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
+});
+
+test("a bot that came here already told what it is here is noted as told, so it isn't told again where its conversation can't be read", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  const folder = bot("bot_scout00001");
+  assert.equal((await link.settleBot("bot_scout00001", fake.read, () => null)).status, 200);
+  const toldHere = JSON.parse(fs.readFileSync(path.join(folder, "told.json"), "utf8"));
+  // As it came back from another computer that had told it the same (a move there and back).
+  write(path.join(folder, "told.json"), JSON.stringify({ ...toldHere, instructions: "elsewhere" }));
+  assert.equal((await link.settleBot("bot_scout00001", fake.read, () => null)).status, 200);
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1, "told already");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "told.json"), "utf8")).instructions, toldHere.instructions);
 });
 
 test("a bot is told what it is now as the box finds its engine and as its runs start, once each time it changed", async t => {
@@ -274,7 +290,7 @@ test("a bot's own rules are put right at its next run: its folder its own, an ol
   const folder = bot("bot_scout00001");
   const wake = process.env.KUVO_WAKE_COMMAND;
   // Settings › Permissions here: never rm -rf.
-  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }] }));
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }] }));
   const fake = await engine({ rules: { ses_bot_scout00001: [
     { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "shell", resource: `"${wake}" bot_scout00001 add *`, effect: "allow" },
@@ -390,7 +406,7 @@ test("a bot brought here from another computer is made this Mac's: its folder sa
   write(path.join(folder, "told.json"), JSON.stringify({ session: "ses_bot_moved00001", instructions: "elsewhere", rules: "/home/me/.kuvo-code/bots/bot_moved00001" }));
   // It ran without asking there, where nothing asked first; here, Settings › Permissions asks
   // before a push, which Approve All lets through.
-  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "git push *", effect: "ask" }] }));
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "git push *", effect: "ask" }] }));
   const fake = await engine({ rules: { ses_bot_moved00001: [
     { action: "external_directory", resource: "/home/me/.kuvo-code/bots/bot_moved00001/*", effect: "allow" },
   ] } });
