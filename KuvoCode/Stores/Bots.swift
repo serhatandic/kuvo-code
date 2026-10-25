@@ -1,4 +1,5 @@
 import AppKit
+import KuvoLink
 import OpenCodeKit
 import os
 
@@ -392,15 +393,6 @@ final class Bots {
         return bot(made.bot.id) ?? made.bot
     }
 
-    static let greeting = """
-        <system-reminder>
-        You were just made, and the person who made you hasn't written yet. Write them your first message, as yourself: short, warm, a few sentences at most.
-        - If your name says what you're for (like "Social Media Manager" or "Inbox Helper"), say in a sentence what you take your job to be, then ask the one or two things you need to know to start, like which accounts or sites, how often, or in what tone.
-        - If it doesn't, say hello and ask what they'd like you to do.
-        Don't use any tools, and don't keep a job until they've answered.
-        </system-reminder>
-        """
-
     /// What Edit Bot changes (its name, look, model and personality, and its job with `job`), sent to
     /// its box, which tells its conversation and its group chats. One for a computer that's away
     /// waits for it (`BotEdits`), shown as made meanwhile, and goes as soon as it's back. Throws
@@ -602,96 +594,14 @@ final class Bots {
         return String(words.prefix(limit)).trimmingCharacters(in: .whitespaces)
     }
 
-    static func blankMemory(_ name: String) -> String {
-        "# \(name)'s memory\n\nWhat \(name) keeps for next time: preferences, how things are set up, where ongoing work stands. Nothing yet.\n"
-    }
-
     /// Whether a path is a bot's memory file.
     static func isMemory(_ path: String) -> Bool {
         path.hasSuffix("/MEMORY.md") && path.contains("/bots/bot_")
     }
 
-    /// For a bot that works in one of the user's projects: the same folder, and checkout, as
-    /// their own sessions there.
-    private static let projectNote = """
-        You work in one of the user's projects, in the same folder their own sessions use, so leave it the way you found \
-        it. When you work on a branch of your own, go back to the branch the project was on once you're done, so the \
-        user's checkout doesn't move. Never commit or throw away changes you didn't make; leave them and say so.
-        """
-
-    /// What the bot's session knows about being a bot: who it is, its job, its memory and how to
-    /// wake itself up.
-    /// `personality`: what its personality tells it, when not its own (a kit, see `MachineKit`, has
-    /// a stand-in there). The words a box fills in for each of its bots, from its kit.
-    static func instructions(for bot: Bot, personality: String? = nil, timeZone: String = TimeZone.current.identifier) -> String {
-        let place = bot.machine.map { "the Linux machine \"\($0)\"" } ?? "this Mac"
-        let job = bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-        let told = personality ?? Personalities.shared.personality(bot.personality)?.instruction
-        let keeping = """
-            Your job is what the user gives you in this conversation, and it changes as they tell you more. Keep it with \
-            set_job: what you do in a few words, like "Keeps the build green" (Kuvo Code shows it under your name), and the \
-            details: what to watch, what to make, what never to do without asking. When the user gives you a job or changes it, \
-            call set_job before anything else, with the whole job as it is now.
-            """
-        return """
-        You are \(bot.name), one of the user's bots in Kuvo Code\(bot.job.isEmpty ? "" : ": \(bot.job)"). A bot is a teammate with one job, \
-        who keeps working on it over time in this one conversation. You run on \(place).
-        \(told.map { "\n\($0)\n" } ?? "")
-        \(keeping)
-
-        \(job.isEmpty ? "You don't have a job yet: ask the user what they'd like you to do, if they haven't said." : "Your job:\n\(job)")
-
-        You can work on a schedule. Kuvo Code wakes you up at the times you choose, even while the user is away, so you can do \
-        things later ("in 2 hours", "tomorrow at 9") or again and again ("every 5 minutes", "every morning"). Never say you can't \
-        run in the background, on a timer or on a schedule: schedule a wake-up instead.
-
-        To schedule a wake-up, use schedule_wake_up: <when> is +5m, +2h, +1d, or a time like 2026-10-16T09:00 \
-        \(bot.machine == nil ? "on this Mac's clock" : "in the user's time zone, \(timeZone)"), at least a minute from now. At \
-        that time this conversation gets your note as a new message starting with \
-        "\(Wakes.marker.trimmingCharacters(in: .whitespaces))", and you carry on. For something that repeats, schedule it once \
-        with every (30m, 2h, 1d, 1w, at least 5m, or weekdays; days, weeks and weekdays keep the same time of day), and it \
-        keeps coming back until it's canceled: don't schedule the next run yourself each time. list_wake_ups shows what's \
-        scheduled, cancel_wake_up cancels one. To change a schedule, cancel it and add the new one; check the list first so \
-        you never keep two for the same thing. When it's due now too, also do the first round now.
-
-        To watch for a change (a status page, a build, a price, a file), don't wake up every time just to look: \
-        watch_for_change runs a check you give it, a shell command that prints what matters, every 5m or more, 2h or 1d, and \
-        wakes you only when what it prints changes, with the new output. Make the check print just what you watch, like \
-        `curl -s <url> | grep -o '<the part that matters>'` or `gh run list --limit 1 --json conclusion -q '.[0].conclusion'`, \
-        so a clock or an ad on the page doesn't count as a change. It runs in your folder, for at most a minute. Only what it \
-        prints counts, not its errors, and printing nothing counts too (grep finding nothing), so you hear when something \
-        appears or goes away. A run is skipped when a curl, wget or gh in it fails (the network down, say; an error page \
-        still counts), or when it prints nothing and exits 2 or more: make a script of yours do that when it can't tell. To \
-        watch whether a site is up, print its status code: `curl -s -o /dev/null -w '%{http_code}' <url>` prints 000 when it \
-        can't connect, which counts (though your own network being down looks the same). A page that needs a real browser \
-        to show its content can't be watched this way; check it in the browser on a wake-up instead. Keep reports short; \
-        the user reads them later.
-
-        Memory: the file "\(bot.memoryFile)" is yours. Read it when you start a piece of work. Keep in it what you'll need next \
-        time: lasting preferences, how things are set up, where ongoing work stands, and any schedule you're keeping. Keep it short \
-        and current; check facts at their source rather than trusting it.
-
-        You have a web browser, through the browser tools: \(bot.machine == nil ? "tabs of your own in the user's browser on this Mac, signed in where they are" : "one on this machine, which keeps its sign-ins and keeps working while the user's Mac is off"). \
-        When a page asks to sign in, for a one-time code, or for something only the user can do (a CAPTCHA, approving on \
-        their phone), use browser_sign_in, browser_ask_code or browser_ask_user: they ask the user in Kuvo Code and wait for \
-        the answer, which goes straight into the page. If no one answers, carry on with what you can and schedule a wake-up \
-        to try again later. But for a service the user connected in Settings › Integrations (their mail or calendar, Notion, \
-        GitHub…), use its tools, named after it, never its website.
-
-        The user is usually away while you work. When you need a decision from them, say so plainly in a short message and \
-        stop.\(bot.project == nil ? "" : "\n\n" + projectNote)
-
-        \(identityNote)
-        """
-    }
-
-    /// Who sets what about a bot, so it doesn't claim to have changed them.
-    static let identityNote = """
-        Your name, look, personality and model are set by the user in Kuvo Code, under Edit Bot. You can't change them, \
-        and writing a new name into your memory doesn't change it either. If you're asked to, say so plainly and suggest \
-        Edit Bot, which lists the models they can use; don't list models yourself, since you'd see ones they have no \
-        account for. Your job is yours to keep, as the user gives it to you.
-        """
+    /// Who sets what about a bot, so it doesn't claim to have changed them (a group chat's seat is
+    /// told it too), as its box words it.
+    static var identityNote: String { BotWords.shipped.identityNote }
 
     // MARK: From earlier versions
 
@@ -781,38 +691,21 @@ final class Bots {
 
 // MARK: - What a box makes bots with
 
-/// What a box makes its bots with and tells them (its kit): this Mac's box from this app, a machine's
-/// as this Mac connects to it, or from its own release.
+/// What's a computer's own that a box makes its bots with (its kit): this Mac's box's from this app,
+/// a machine's as this Mac connects to it. The words are the box's own (`BotWords`).
 extension Bots {
-    /// What a machine needs to make bots itself, kept in `~/.kuvo-code/bots/kit.json` there: New
-    /// Bot's templates, personalities and looks; what a bot is told (with ⟦name⟧, ⟦folder⟧ and
-    /// ⟦personality⟧ for its own), its first memory (⟦name⟧) and its greeting; the projects there
-    /// and the model a bot starts on; the rules a new conversation gets; and your time zone.
+    /// What's a computer's own for its bots, kept in its bots' folder (`kit.json`): the name this
+    /// Mac calls a machine (⟦machine⟧ in what its bots are told), the personalities you made, the
+    /// projects there and the model a bot starts on, the rules a new conversation gets, and your
+    /// time zone.
     struct MachineKit: Encodable {
-        struct Template: Encodable {
-            var id: String, name: String, job: String, instructions: String, look: BotLook, personality: String?, wantsProject: Bool
-        }
-        struct Personality: Encodable { var id: String, name: String, description: String, custom: Bool, instruction: String }
-        struct Looks: Encodable { var colors: [String], shapes: [String], faces: [String] }
+        struct Personality: Encodable { var id: String, name: String, description: String, custom = true, instruction: String }
         struct Project: Encodable { var directory: String, name: String }
         var kuvo = 1
-        /// The Kuvo Code it's from: a box takes the newer of a Mac's and its own release's words.
-        var version = AppInfo.version
-        var templates: [Template]
+        var machine: String?
         var personalities: [Personality]
-        /// What a bot is told of a personality made there, by its name and description.
-        var personalityWords = KuvoCode.Personality.words
-        var looks: Looks
         var startingModel: ModelRef?
         var projects: [Project]
-        var instructions: String
-        /// What a bot with a job is told, for one changed there: as `instructions`, with ⟦job⟧ for
-        /// its job in a few words and ⟦jobDetails⟧ for all of it, as its memory has them.
-        var jobInstructions: String
-        var projectNote: String
-        var identityNote: String
-        var memory: String
-        var greeting: String
         /// A new conversation's rules, before a bot's own (its folder).
         var rules: [PermissionRule]
         var timeZone: String
@@ -822,51 +715,18 @@ extension Bots {
 
     /// The kit for `machine`'s box, or this Mac's (nil).
     func kit(for machine: String?) -> MachineKit {
-        var kit = Self.kitWords(machine: machine, timeZone: TimeZone.current.identifier)
         let approval = UserDefaults.standard.string(forKey: ToolApproval.key).flatMap(ToolApproval.init) ?? .approveAll
-        kit.personalities = Personalities.shared.all.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: $0.isCustom, instruction: $0.instruction) }
         let catalog = machine.flatMap { app?.machines.engine($0)?.catalog } ?? (machine == nil ? app?.catalog : nil)
-        kit.startingModel = catalog?.startingModel(LastModel.current, scope: .on(machine: machine))
-        kit.projects = (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
-            .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) }
-        kit.rules = approval.rules(settings: EngineConfig.rules(on: machine))
-        // (This Mac's bots go by its own clock.)
-        if machine != nil { kit.zoneinfo = WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString() }
-        return kit
-    }
-
-    /// The kit as a release for boxes has it (`BoxRelease`): its words, with ⟦machine⟧ and
-    /// ⟦timeZone⟧ for the box to fill in, and none of what's a machine's own (its starting model,
-    /// projects and rules): a box that updated itself makes bots with this version's words, and
-    /// one no Mac gave a kit to can make them at all.
-    static func releaseKit() -> MachineKit {
-        kitWords(machine: "⟦machine⟧", timeZone: "⟦timeZone⟧")
-    }
-
-    /// The kit as this Mac's box makes its own bots with it: the words for a bot on this Mac, and
-    /// none of what's this Mac's own (its starting model, projects, rules and time zone).
-    static func macKitWords() -> MachineKit {
-        kitWords(machine: nil, timeZone: "UTC")
-    }
-
-    /// What every machine's kit has alike, for `machine` (nil: this Mac), in `timeZone`; the preset
-    /// personalities.
-    private static func kitWords(machine: String?, timeZone: String) -> MachineKit {
-        let sample = Bot(id: "bot_sample", name: "⟦name⟧", job: "", instructions: "", look: .random(), machine: machine, project: nil,
-                         folder: "⟦folder⟧", sessionID: "", created: .now)
-        var working = sample
-        working.job = "⟦job⟧"
-        working.instructions = "⟦jobDetails⟧"
         return MachineKit(
-            templates: BotTemplate.all.map { .init(id: $0.id, name: $0.name, job: $0.job, instructions: $0.instructions, look: $0.look, personality: $0.personality,
-                                                   wantsProject: $0.wantsProject) },
-            personalities: Personalities.presets.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: false, instruction: $0.instruction) },
-            looks: .init(colors: BotLook.Tint.allCases.map(\.rawValue), shapes: BotLook.Form.allCases.map(\.rawValue), faces: BotLook.Face.allCases.map(\.rawValue)),
-            startingModel: nil, projects: [],
-            instructions: instructions(for: sample, personality: "⟦personality⟧", timeZone: timeZone),
-            jobInstructions: instructions(for: working, personality: "⟦personality⟧", timeZone: timeZone),
-            projectNote: projectNote, identityNote: identityNote, memory: blankMemory("⟦name⟧"), greeting: greeting,
-            rules: [], timeZone: timeZone, zoneinfo: nil)
+            machine: machine,
+            personalities: Personalities.shared.all.filter(\.isCustom).map { .init(id: $0.id, name: $0.name, description: $0.description, instruction: $0.instruction) },
+            startingModel: catalog?.startingModel(LastModel.current, scope: .on(machine: machine)),
+            projects: (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
+                .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) },
+            rules: approval.rules(settings: EngineConfig.rules(on: machine)),
+            timeZone: TimeZone.current.identifier,
+            // (This Mac's bots go by its own clock.)
+            zoneinfo: machine == nil ? nil : WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString())
     }
 
     /// Gives this Mac's box its kit, in its bots' folder (`KUVO_BOTS/kit.json`), as it starts and as

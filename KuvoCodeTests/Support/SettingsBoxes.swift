@@ -71,6 +71,8 @@ final class MachineTestBox {
         try manager.createDirectory(at: folder.appending(path: "bin"), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: settings).write(to: folder.appending(path: "box/opencode.json"))
         try MachineBox.catalogJSON().write(to: folder.appending(path: "bin/mcp-catalog.json"))
+        // What it makes its bots with, as this Mac puts it there (`MachineBox.install`).
+        try BotWords.data.write(to: folder.appending(path: "bin/\(BotWords.fileName)"))
         let script = try Bridge.scriptURL.orThrow("The box's script isn't in the app.")
         server = try await ServerProcess.start(executable: node, arguments: [script.path, "serve"],
                                                environment: ["KUVO_HOME": folder.path, "PATH": "/usr/bin:/bin"], directory: folder)

@@ -8,8 +8,9 @@ let package = Package(
         .library(name: "KuvoLink", targets: ["KuvoLink"]),
     ],
     targets: [
-        // The machines' side of the link, in JavaScript, which the Mac app puts on each machine.
-        .target(name: "KuvoLink", resources: [.copy("Resources/kuvo-link.js")]),
+        // The machines' side of the link, in JavaScript, which the Mac app puts on each machine, and
+        // the words a box makes its bots with, which go beside it.
+        .target(name: "KuvoLink", resources: [.copy("Resources/kuvo-link.js"), .copy("Resources/bot-words.json")]),
         .testTarget(name: "KuvoLinkTests", dependencies: ["KuvoLink"]),
     ]
 )

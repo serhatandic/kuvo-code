@@ -148,7 +148,10 @@ stand-in, the same small one on each. To add one:
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
 - Run the runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
   machine, and the kit this Mac's app gives its own box, which the bridge's runners use) after a
-  change to the integrations, the MCP catalog, bot templates or what a bot is told.
+  change to the integrations, the MCP catalog or a bot's kit. Bot templates, Kuvo Code's own
+  personalities and what a bot is told are written once, in
+  `Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json`, which every box reads and the
+  runners use as it is; kuvo-web's `src/lib/bots.ts` copies its templates.
 
 `Tests/E2E` tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with

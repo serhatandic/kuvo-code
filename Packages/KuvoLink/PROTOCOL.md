@@ -1042,14 +1042,20 @@ host serves:
   {"bot"}`; 404 for no such bot here; 409 without a kit; 503 when its conversation here didn't
   take it, which the box does again as the bot's next run starts. Its keys of its own go with it
   through `kuvo/bots/<id>/keys…` on both computers.
-- What a box makes and tells its bots with (its kit, `bots/kit.json` in its bots' folder): a
-  machine's from a Mac, which gives it each time it connects, or from the box's own release
-  (`bin/bot-kit.json`) where that's newer or no Mac gave it one, with what's the machine's own
-  filled in (its name, and the time zone a Mac gave it, or else its own); this Mac's from its app,
-  as its box starts and as your personalities change. Until one has a kit, New Bot and changes to
-  a bot there answer `409 {"message"}`. What's a computer's own in a kit, the approval new
-  conversations start with and the model a new bot starts on, comes from a Mac for now; they're
-  to become each box's own settings.
+- What a box makes and tells its bots with: its words, the same file on every box of a version
+  (`bin/bot-words.json`, KuvoLink's `Resources/bot-words.json`), which a client puts beside the
+  bridge as it connects and a release brings: New Bot's templates, Kuvo Code's own personalities,
+  the looks a bot can have, and what a bot is told, filled in by the box for where it runs (this
+  Mac, or a machine by the name a Mac calls it, in your time zone), its job, name, folder and
+  personality. A box tells its bots its own words, whichever Mac connects (a box is never older
+  than one that does). And its kit (`bots/kit.json` in its bots' folder), what's that computer's
+  own: a machine's from a Mac, which gives it each time it connects (the name it calls the machine,
+  your time zone, its projects, the model a new bot starts on, the rules new conversations start
+  with, and the personalities you made, until the box's library has them), or else the machine's
+  own; this Mac's from its app, as its box starts and as your personalities change. Without its
+  words, or on a Mac without its kit, New Bot and changes to a bot there answer `409 {"message"}`.
+  The approval new conversations start with and the model a new bot starts on come from a Mac for
+  now; they're to become each box's own settings.
 - A client keeps what you change of a bot whose computer is away (its machine not connected) and
   sends it as `PATCH kuvo/bots/<id>` once it's back, a later change on top of what waited; what
   the box then answers is what shows.
@@ -1319,8 +1325,8 @@ own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), w
 of in `box/trash` (`KUVO_TRASH`; the bridge says `kuvo.group.trashed {id, path}` and the app moves
 it to the Finder's Trash), and who can be named with `&` in `box/run/agents.json`
 (`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the app writes). `KUVO_BOX=mac` says
-it's a Mac's: its bots are the Mac's own (`machine` left out), made with the kit the app gives it in
-their folder (`bots/kit.json`, this Mac's words; a release's are a machine's), with no time zone of
+it's a Mac's: its bots are the Mac's own (`machine` left out), made with the words the app puts in its
+`bin` and the kit it gives it in their folder (`bots/kit.json`, what's this Mac's own), with no time zone of
 their own (they go by the Mac's clock). Its bots remember its
 chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client's `kuvo/groups…`
 on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the

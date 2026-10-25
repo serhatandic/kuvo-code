@@ -93,6 +93,10 @@ final class BoxProcess {
         let bin = Self.home.appending(path: "bin")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         try? MachineBox.catalogJSON().write(to: bin.appending(path: "mcp-catalog.json"), options: .atomic)
+        // What it makes this Mac's bots with and tells them, as a machine's box has it.
+        if let words = try? BotWords.data, (try? Data(contentsOf: bin.appending(path: BotWords.fileName))) != words {
+            try? words.write(to: bin.appending(path: BotWords.fileName), options: .atomic)
+        }
         // Its temporary files, in the app's own temporary folder.
         let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
         env["TMPDIR"] = temporary.path + "/"
