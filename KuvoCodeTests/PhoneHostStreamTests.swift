@@ -115,8 +115,9 @@ import Testing
         #expect(lines.withLock { $0 } == ["data: 1", "data: 2", "data: 3"])
     }
 
-    /// The main thread taken until `done` (bounded, so a stream that needs it fails rather than
-    /// hangs).
+    /// The main thread taken until `done`, on purpose: that's what the test measures. The wait is
+    /// bounded because it can't be on an event (main is the thing held), and unbounded, a stream
+    /// that needs main would hang the whole run past the suite's time limit instead of failing.
     private func busyWindow(until done: DispatchSemaphore) -> DispatchTimeoutResult {
         done.wait(timeout: .now() + 20)
     }
