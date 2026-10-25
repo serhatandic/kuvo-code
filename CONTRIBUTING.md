@@ -84,6 +84,9 @@ cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
 cd Agents && bun install && bun test && bunx tsc --noEmit
 ```
 
+`./scripts/test-app.sh` runs one at a time: a run started while another is going
+waits for it, since they share the test copy's settings and temporary folders.
+
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
 after. The app hosting them starts nothing (no window, engine or menu bar item),

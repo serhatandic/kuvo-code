@@ -10,6 +10,21 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# One run at a time, whoever starts it: every run shares the test copy's settings and caches in
+# ~/Library and its folders in the temporary folder, and cleans them before and after. So each
+# run waits for the one before it, on a lock in this user's own temporary folder (getconf's, not
+# $TMPDIR, which a caller may point elsewhere while ~/Library stays the same).
+LOCK="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)kuvo-code-tests-$(id -u).lock"
+if [ "${KUVO_TESTS_LOCK:-}" != "$LOCK" ]; then
+    lockf -ks -t 0 "$LOCK" true || echo "Waiting for another run of the app's tests to finish…" >&2
+    KUVO_TESTS_LOCK="$LOCK" exec lockf -ks "$LOCK" /bin/sh "$PWD/scripts/test-app.sh"
+fi
+# And it is held: one that only says so in the environment can't get in.
+if lockf -ks -t 0 "$LOCK" true; then
+    echo "scripts/test-app.sh runs only while it holds $LOCK." >&2
+    exit 1
+fi
+
 # The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
 # this copy, signed anew with each build, may use what an earlier build kept.
@@ -58,7 +73,7 @@ clean
 mkdir -p "$BUILD"
 status=0
 xcodebuild test "$@" > "$BUILD/test.log" 2>&1 || status=$?
-grep -E '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
+grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 # What the tests left: their data, Trash and repositories, and the test copy's own.
 clean
