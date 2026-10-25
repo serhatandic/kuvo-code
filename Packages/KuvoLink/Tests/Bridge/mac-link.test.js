@@ -472,3 +472,17 @@ test("a phone removes itself through this Mac's box: it's off the Mac's phones, 
   assert.ok(listed.json.removed.some(each => each.key === it.public), "kept removed");
   await config({ machines: false });
 });
+
+test("closing Settings › Phone's pairing link by its token ends that one alone: a newer one stays", async () => {
+  await ready();
+  const token = made => new URL(made.json.link).searchParams.get("token");
+  const first = await ask("POST", "kuvo/phones/pair");
+  const second = await ask("POST", "kuvo/phones/pair");
+  assert.notEqual(token(first), token(second));
+  // The first, closed late: the second stays.
+  assert.equal((await ask("DELETE", `kuvo/phones/pair?token=${token(first)}`)).status, 200);
+  assert.equal((await ask("GET", "kuvo/link/phones")).json.pairing, true);
+  assert.equal((await ask("DELETE", `kuvo/phones/pair?token=${token(second)}`)).status, 200);
+  assert.equal((await ask("GET", "kuvo/link/phones")).json.pairing, false);
+  await config({ machines: false });
+});

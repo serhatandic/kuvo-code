@@ -44,9 +44,9 @@ import Testing
     /// This Mac's link, as the app starts it: reaching its box, which reaches it back. `refusing`:
     /// a route the box doesn't take the first time (it's starting again just then).
     /// `starting`: started now (else the test starts it, after what comes before).
-    private func link(on box: SettingsBox, refusing: String? = nil, starting: Bool = true) -> PhoneLink {
+    private func link(on box: SettingsBox, refusing: String? = nil, times: Int = 1, starting: Bool = true) -> PhoneLink {
         let link = PhoneLink(file: file, identity: (mac, secret))
-        let client = refusing.map { Self.flaky(box, refusing: $0) } ?? box.client
+        let client = refusing.map { Self.flaky(box, refusing: $0, times: times) } ?? box.client
         link.box = { client }
         box.box.host.phoneLink = link
         if starting { start(link, on: box) }
@@ -67,13 +67,13 @@ import Testing
         try await box.client.value(Kept.self, "GET", "kuvo/link/phones")
     }
 
-    /// `box`, as the app reaches it, but `route`'s first request fails, as when the box restarts
-    /// as it's asked.
-    private static func flaky(_ box: SettingsBox, refusing route: String) -> BoxClient {
-        let refused = OSAllocatedUnfairLock(initialState: false)
+    /// `box`, as the app reaches it, but `route`'s first `times` requests fail, as while the box
+    /// restarts.
+    private static func flaky(_ box: SettingsBox, refusing route: String, times: Int) -> BoxClient {
+        let refused = OSAllocatedUnfairLock(initialState: 0)
         let base = URL(string: box.engine.url + "/")!
         return BoxClient(box: BoxClient.mac, transport: LocalBox { request in
-            guard request.path == route, !refused.withLock({ let was = $0; $0 = true; return was }) else {
+            guard request.path == route, refused.withLock({ $0 += 1; return $0 <= times }) else {
                 return PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil)
             }
             return AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) }
@@ -105,18 +105,22 @@ import Testing
         }
     }
 
-    /// `box`, as the app reaches it, but a POST to `route` waits at `gate` first.
+    /// `box`, as the app reaches it, but the first POST to `route` has its answer held at `gate`
+    /// once the box has made it (a slow answer).
     private static func gated(_ box: SettingsBox, route: String, gate: Gate) -> BoxClient {
         let base = URL(string: box.engine.url + "/")!
+        let held = OSAllocatedUnfairLock(initialState: false)
         return BoxClient(box: BoxClient.mac, transport: LocalBox { request in
-            guard request.path == route, request.method == "POST" else {
+            guard request.path == route, request.method == "POST", !held.withLock({ let was = $0; $0 = true; return was }) else {
                 return PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil)
             }
             return AsyncThrowingStream { continuation in
                 let task = Task {
-                    await gate.pass()
                     do {
-                        for try await part in PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil) { continuation.yield(part) }
+                        var parts: [LinkResponsePart] = []
+                        for try await part in PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil) { parts.append(part) }
+                        await gate.pass()
+                        for part in parts { continuation.yield(part) }
                         continuation.finish()
                     } catch {
                         continuation.finish(throwing: error)
@@ -189,7 +193,8 @@ import Testing
     /// it isn't let in again.
     @Test func aPhoneRemovedWhileTheBoxIsAwayIsRemovedOnceItsBack() async throws {
         let box = try await SettingsBox(port: 47_949)
-        let link = link(on: box, refusing: "kuvo/phones/remove")
+        // Away long enough for Settings › Phone to say so (it waits a moment first).
+        let link = link(on: box, refusing: "kuvo/phones/remove", times: PhoneLink.graceTries)
         defer { done(box, link) }
         try await linked(link)
         link.remove(try #require(link.phones.first { $0.name == "Lost" }))
@@ -256,6 +261,30 @@ import Testing
 
     /// With neither the phone link nor machines, nothing is made for the link in your Keychain:
     /// told it's off, the box asks for no keys, and the app gives none.
+    /// Pair (slow), close, Pair again: the first one's answer, come late, ends that one alone, and
+    /// the new code stays, here and on the box.
+    @Test func aLatePairingNeverEndsTheNextOne() async throws {
+        let box = try await SettingsBox(port: 47_960)
+        let gate = Gate()
+        let link = PhoneLink(file: file, identity: (mac, secret))
+        let client = Self.gated(box, route: "kuvo/phones/pair", gate: gate)
+        link.box = { client }
+        box.box.host.phoneLink = link
+        start(link, on: box)
+        defer { done(box, link) }
+        try await linked(link)
+        let first = Task { await link.beginPairing() }
+        try await until { gate.reached }
+        link.endPairing()
+        await link.beginPairing()
+        let shown = try #require(link.pairing)
+        gate.open()
+        await first.value
+        await link.pairingEnded()
+        #expect(link.pairing == shown)
+        #expect(try await onTheBox(box).pairing == true)
+    }
+
     @Test func withTheLinkOffNoKeysAreMade() async throws {
         UserDefaults.standard.set(false, forKey: "phoneLink")
         let box = try await SettingsBox(port: 47_959)

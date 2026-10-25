@@ -1602,7 +1602,8 @@ On both, for a paired phone:
   (as a QR code): `{"link": "kuvo-link://pair?…", "ends"}`, good once, until `ends` (seconds
   since 1970). On a Mac it's the phones' own, apart from the one Settings › Phone shows, so
   neither ends the other; a new one takes the place of one a phone asked for before. `DELETE
-  kuvo/phones/pair` ends it, as Done does (`200 {}`, with or without one). `409 {"message"}`
+  kuvo/phones/pair` ends it, as Done does (`200 {}`, with or without one); `?token=<its token>`
+  ends that one alone, so one closed late never ends a newer one (bridge 0.9.61). `409 {"message"}`
   while the phone link is off. A machine's bridge answers it too, with the Mac closed: the phone
   it pairs is the machine's own (as `kuvo-link.js pair` pairs one), and `409` when the machine has
   no relay.

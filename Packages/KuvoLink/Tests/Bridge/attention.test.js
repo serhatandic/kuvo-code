@@ -244,13 +244,18 @@ test("what a bridge before kept is tried for as long as it's been since it was m
 
 test("what a bridge before held only because the relay wasn't there goes at once; what it held for a client in use waits a moment for it", () => {
   const today = 1_800_000_000_000;
-  const waitingForTheRelay = box({ wall: () => today, held: [{ notice: finished, at: today - 5_000, seen: false }] });
+  const waitingForTheRelay = box({ wall: () => today, held: [{ notice: finished, at: today - 5_000, seen: false, attended: false }] });
   assert.deepEqual(waitingForTheRelay.phones, [finished]);
   assert.equal(waitingForTheRelay.hold.inUse, false);
   const heldForAClient = box({ wall: () => today, held: [{ notice: finished, at: today - 5_000, seen: false, attended: true }] });
   assert.deepEqual(heldForAClient.phones, []);
   heldForAClient.time.pass(link.RESTORED_WAIT);
   assert.deepEqual(heldForAClient.phones, [finished]);
+  // Kept by a bridge before it said which (0.9.60): taken as held for a client, that once.
+  const fromBefore = box({ wall: () => today, held: [{ notice: finished, at: today - 5_000, seen: false }] });
+  assert.deepEqual(fromBefore.phones, []);
+  fromBefore.time.pass(link.RESTORED_WAIT);
+  assert.deepEqual(fromBefore.phones, [finished]);
 });
 
 test("a Mac's older word, come late by mail, is let go", () => {

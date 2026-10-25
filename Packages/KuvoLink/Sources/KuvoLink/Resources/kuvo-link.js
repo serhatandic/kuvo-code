@@ -2334,8 +2334,10 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       // This Mac's Settings › Phone has one of its own, apart from a phone's.
       const slot = IS_MAC && request.fromApp ? "appPairing" : "pairing";
       if (method === "DELETE") {
+        // `?token=`: that link alone, so one closed late never ends a newer one.
+        const token = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("token");
         updateLink(link => {
-          if (!link?.[slot]) return null;
+          if (!link?.[slot] || (token && link[slot].token !== token)) return null;
           delete link[slot];
           return link;
         });
@@ -4610,10 +4612,11 @@ export class NoticeHold {
     this.held = restored.map(entry => {
       const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR);
       // One held for a client keeps the rest of its hold; one only waiting for the relay goes now.
-      const due = entry.attended === true ? start - age + holdFor(entry.notice.category) : start - age;
+      // (One kept before bridge 0.9.61 doesn't say: taken as held for a client, that once.)
+      const due = entry.attended !== false ? start - age + holdFor(entry.notice.category) : start - age;
       return { notice: entry.notice, wall: entry.at, at: start - age, due: Math.max(due, start - age), seen: entry.seen === true };
     });
-    if (restored.some(entry => entry.attended === true)) this.leases.set("restored", start + RESTORED_WAIT);
+    if (restored.some(entry => entry.attended !== false)) this.leases.set("restored", start + RESTORED_WAIT);
     this.saved = NoticeHold.kept(this.held);
     this.settle();
   }
@@ -5913,7 +5916,8 @@ export function writeLink(link) {
     for (const tell of macLink.phoneFollowers) tell();
     // Phones no longer paired lose what they have open, whoever removed them, and a link no longer
     // wanted (the last phone gone) leaves the relay: a moment after, so a phone that removed itself
-    // gets its answer first (as a machine's bridge does).
+    // gets its answer first (as a machine's bridge does). Known: closing once that answer has gone
+    // would be surer than a moment's wait.
     setTimeout(() => {
       macLink.host?.keepOnly(new Set((readLink()?.phones ?? []).map(phone => phone.key)));
       macLinkCheck();
@@ -8130,7 +8134,8 @@ function mailToApp(from, frame) {
         taken = Boolean(await linkHost("link/mailed", given));
         if (!taken) await new Promise(done => setTimeout(done, Math.min(8_000, 500 * 2 ** tries)));
       }
-      if (!taken) console.error("Mail from one of your machines couldn't be handed to Kuvo Code, and was let go.");
+      // (One the app took without answering in time may have reached it all the same.)
+      if (!taken) console.error("Mail from one of your machines wasn't taken by Kuvo Code as far as this box could tell, and isn't tried again.");
       // Let go meanwhile (too much waiting): it's already gone from the front.
       if (mailWaiting[0] === given) mailWaiting.shift();
     }

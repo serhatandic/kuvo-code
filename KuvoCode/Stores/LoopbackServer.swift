@@ -329,6 +329,7 @@ nonisolated final class Gone: Sendable {
 
 /// What's been handed to a connection and not sent yet: up to `most` bytes go without waiting (the
 /// connection says each one's sent on its own queue, the main one), then the next waits for room.
+/// Known: what comes before this (the engine's answer, `EngineRoutes.forward`) isn't bounded yet.
 nonisolated final class InFlight: Sendable {
     private let most = 1 << 20
     private let state = OSAllocatedUnfairLock<(bytes: Int, waiting: [CheckedContinuation<Void, Never>])>(initialState: (0, []))

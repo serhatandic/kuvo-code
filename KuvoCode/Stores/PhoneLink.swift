@@ -304,7 +304,7 @@ final class PhoneLink {
     }
 
     /// Tries of the box (two seconds apart) before Settings › Phone says it isn't answering.
-    private static let graceTries = 4
+    static let graceTries = 4
 
     private func followed(status line: Data) {
         struct Said: Decodable { var state: String; var reason: String? }
@@ -407,7 +407,7 @@ final class PhoneLink {
             let made = try await client.value(Made.self, "POST", "kuvo/phones/pair")
             // Closed (or another begun) meanwhile: not shown, and ended on the box too.
             guard round == pairingRound else {
-                if pairing == nil { endOnBox(client) }
+                if let made = URL(string: made.link).flatMap(PairingLink.init) { endOnBox(client, made) }
                 return
             }
             pairing = URL(string: made.link).flatMap(PairingLink.init)
@@ -422,17 +422,20 @@ final class PhoneLink {
         pairingProblem = nil
         pairingRound += 1
         guard pairing != nil else { return }
+        let ended = pairing
         pairing = nil
-        guard let client = box() else { return }
-        endOnBox(client)
+        guard let client = box(), let ended else { return }
+        endOnBox(client, ended)
     }
 
-    /// Ends Settings › Phone's pairing link on this Mac's box, after any ended before.
-    private func endOnBox(_ client: BoxClient) {
+    /// Ends Settings › Phone's pairing link `link` on this Mac's box, that one alone (a newer one
+    /// stays), after any ended before.
+    private func endOnBox(_ client: BoxClient, _ link: PairingLink) {
         let previous = endingPairing
+        let path = "kuvo/phones/pair?token=" + link.token.base64URL
         endingPairing = Task {
             await previous?.value
-            _ = try? await client.send("DELETE", "kuvo/phones/pair")
+            _ = try? await client.send("DELETE", path)
         }
     }
 
@@ -455,16 +458,20 @@ final class PhoneLink {
     /// until it does.
     private func removePhones(_ entries: [PairedPhones.Entry]) {
         // Only what names a phone (a document can name anything): the box refuses the rest.
-        let new = entries.filter { PairedPhones.fits($0, macs: [key.publicBytes.base64URL]) && !toRemove.contains($0) }
+        // (This Mac's own key the box turns away itself: reading it here could make the link's keys.)
+        let new = entries.filter { PairedPhones.fits($0, macs: []) && !toRemove.contains($0) }
         guard !new.isEmpty else { return }
         toRemove = Array((toRemove + new).suffix(PairedPhones.mostKept))
         paired = Self.without(toRemove, paired)
         save()
         guard removing == nil else { return }
         removing = Task { [weak self] in
+            var missed = 0
             while let self, !Task.isCancelled, !toRemove.isEmpty {
                 if let client = box(), await sendRemovals(client) { break }
-                removalProblem = Self.removalWaiting
+                // Said only once the box has had a moment (it may just be starting), as the status.
+                missed += 1
+                if missed >= Self.graceTries { removalProblem = Self.removalWaiting }
                 try? await Task.sleep(for: .seconds(2))
             }
             self?.removing = nil
