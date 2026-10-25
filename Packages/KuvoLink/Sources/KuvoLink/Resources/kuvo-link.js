@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.54";
+export const BRIDGE_VERSION = "0.9.57";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2862,9 +2862,9 @@ export function nextWake() {
  * least each minute (for watches), and again as they change, here or by an agent's kuvo-wake. One
  * still due after a run that was due before it (it couldn't go, or its conversation is archived)
  * waits for the next minute; one that came due during it goes right after. The returned function
- * stops it. */
+ * stops it: nothing runs after, and its promise settles once a run already going is over. */
 export function sendWakes() {
-  let timer = null, settling = null, running = false, again = false, stopped = false, started = 0, said = false;
+  let timer = null, settling = null, running = false, again = false, stopped = false, started = 0, said = false, over = null, ending = null;
   const schedule = (afterFire = false) => {
     if (stopped) return;
     clearTimeout(timer);
@@ -2874,6 +2874,7 @@ export function sendWakes() {
     timer = setTimeout(fire, wait);
   };
   const fire = () => {
+    if (stopped) return;
     if (running) return void (again = true);
     running = true;
     started = Date.now() / 1000;
@@ -2883,7 +2884,9 @@ export function sendWakes() {
         said = true;
         console.error(`Wake-ups can't be sent: there's no kuvo-wake at ${WAKE_COMMAND}.`);
       }
-      if (again) {
+      if (stopped) {
+        over?.();
+      } else if (again) {
         again = false;
         fire();
       } else {
@@ -2905,6 +2908,8 @@ export function sendWakes() {
     clearTimeout(settling);
     wakeFollowers.delete(changed);
     watching.close();
+    if (!running) return Promise.resolve();
+    return ending ??= new Promise(resolve => { over = resolve; });
   };
 }
 

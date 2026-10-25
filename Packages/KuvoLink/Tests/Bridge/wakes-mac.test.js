@@ -144,10 +144,12 @@ test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as
   const stop = link.sendWakes();
   try {
     await sent;
-    assert.deepEqual(prompted.filter(each => each.session === "ses_due").map(each => each.text), ["[Wake-up] Send the weekly summary"]);
   } finally {
-    stop();
+    // Stopped once its run is over: none is left sending into the next test.
+    await stop();
   }
+  assert.deepEqual(prompted.filter(each => each.session === "ses_due").map(each => each.text), ["[Wake-up] Send the weekly summary"]);
+  assert.deepEqual(fs.readdirSync(path.join(folder, "wakes")), [], "sent, so it's gone and never goes twice");
 });
 
 test("a client that archived a conversation holds its wake-ups through the box, and a pause of your own outlasts it", async () => {
