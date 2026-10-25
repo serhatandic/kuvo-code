@@ -127,15 +127,31 @@ enum AlsoApply {
         let look = try await ask(target, Request(changes: sent, dry: true))
         // The keys first, so the settings that name them find them there; one the other computer
         // has of its own (another account's token, say) stays.
-        for name in look.keys {
-            if let there = try await key(name, on: target), !there.isEmpty { continue }
-            guard let value = try await key(name, on: source), !value.isEmpty else { continue }
-            let (status, data) = try await target.send("PUT", "kuvo/keys/\(name)", body: try JSONEncoder().encode(["value": value]))
-            guard (200..<300).contains(status) else { throw Failure.refused(BoxRefusal(status: status, data: data).message) }
+        var brought: [String] = []
+        do {
+            for name in look.keys {
+                if let there = try await key(name, on: target), !there.isEmpty { continue }
+                guard let value = try await key(name, on: source), !value.isEmpty else { continue }
+                let (status, data) = try await target.send("PUT", "kuvo/keys/\(name)", body: try JSONEncoder().encode(["value": value]))
+                guard (200..<300).contains(status) else { throw Failure.refused(BoxRefusal(status: status, data: data).message) }
+                brought.append(name)
+            }
+            let done = look.made.isEmpty ? look : try await ask(target, Request(changes: sent, dry: false))
+            // A key brought for a change that wasn't made after all (its settings changed there
+            // meanwhile) doesn't stay there.
+            await forget(brought.filter { !done.keys.contains($0) }, on: target)
+            let outcome = Outcome(leftOut: done.leftOut.map(describe), kept: done.kept.map(describeKept), macOnly: done.macOnly.map(describeServer), applied: done.applied)
+            return (outcome, done.settings)
+        } catch {
+            // Nothing applied: nor the keys brought for it.
+            await forget(brought, on: target)
+            throw error
         }
-        let done = look.made.isEmpty ? look : try await ask(target, Request(changes: sent, dry: false))
-        let outcome = Outcome(leftOut: done.leftOut.map(describe), kept: done.kept.map(describeKept), macOnly: done.macOnly.map(describeServer), applied: done.applied)
-        return (outcome, done.settings)
+    }
+
+    /// Keys brought to `box` for changes that weren't made there, taken away again.
+    private static func forget(_ names: [String], on box: BoxClient) async {
+        for name in names { _ = try? await box.send("DELETE", "kuvo/keys/\(name)") }
     }
 
     private struct Request: Encodable {

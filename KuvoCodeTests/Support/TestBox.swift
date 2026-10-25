@@ -9,7 +9,7 @@ import OpenCodeKit
 /// the tests' folder. `stop()` stops it and leaves nothing behind.
 @MainActor
 final class TestBox {
-    let process = BoxProcess()
+    let process: BoxProcess
     private let enginePort: UInt16
 
     /// Node, where it usually is (CI's, Homebrew's, nvm's).
@@ -21,12 +21,16 @@ final class TestBox {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(filePath: $0) }
     }
 
-    /// Started, finding the engine at `engine` (StubWeb's, started already).
-    init(engine: String, password: String = "test") async throws {
+    /// Started, finding the engine at `engine` (StubWeb's, started already). `process`: an app's
+    /// own (`AppModel.box`), else one of its own. `defaultsAdded`: it starts as one that added its
+    /// defaults to this Mac's settings before (a test's settings stay as it gives them).
+    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true) async throws {
         guard let node = Self.node else { throw TestFailure("Node runs this Mac's box in the tests, and there's none.") }
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
+        self.process = process
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
+        if defaultsAdded { BoxProcess.noteDefaultsAdded(["bot-memory", "websearch", "search-exa"]) }
         try await StubWeb.listen(port: enginePort)
         await process.start(node: node)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }

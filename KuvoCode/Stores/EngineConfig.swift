@@ -139,47 +139,16 @@ final class EngineConfig {
         onRulesChanged()
     }
 
-    /// Adds what Kuvo Code starts this Mac's engine with, unless its settings set it: web search
-    /// through Exa, which needs no key. The engine has none chosen, and every search the agent
-    /// tried failed ("Web search provider is required"). Not "random": that keeps one service a
-    /// session, and one that needs a key (Firecrawl) answers every search with nothing.
-    ///
-    /// It goes in the settings, so a choice made anywhere (here, in Settings, in a project's own
-    /// settings) wins over it, and only once: what you change or remove later stays as you left
-    /// it. Settings that can't be read are left alone; empty ones (none yet, or deleted to start
-    /// over) get it again.
-    func addDefaults() async {
-        guard await loaded(), problem == nil else { return }
-        let defaults = UserDefaults.standard
-        var noted: [String] = []
-        if settings.isEmpty || !defaults.bool(forKey: Self.defaultsAddedKey) {
-            if settings["websearch"] == nil { set(Self.search, at: ["websearch"], noted: false) }
-            noted += [Self.defaultsAddedKey, Self.searchMovedKey]
-        } else if !defaults.bool(forKey: Self.searchMovedKey) {
-            // "random", as Kuvo Code chose it before: Exa instead, once.
-            if value(at: ["websearch"]) == .object(["provider": .string("random")]) { set(Self.search, at: ["websearch"], noted: false) }
-            noted.append(Self.searchMovedKey)
-        }
-        // Bots' memory, theirs to write in any mode (Plan changes no files): a rule in Settings ›
-        // Permissions you see, and can take out. Once: one you took out stays out.
-        if !defaults.bool(forKey: Self.botMemoryAddedKey) {
-            if !permissionRules.contains(Self.botMemory) {
-                set(.array((value(at: ["permissions"])?.array ?? []) + [Self.botMemoryJSON]), at: ["permissions"], noted: false)
-            }
-            noted.append(Self.botMemoryAddedKey)
-        }
-        guard !noted.isEmpty, await settled() == nil else { return }
-        for key in noted { defaults.set(true, forKey: key) }
-    }
-
-    /// Bots may change their memory (`Bot.memoryFile`) whatever their conversation's mode.
+    /// Bots may change their memory (`Bot.memoryFile`) whatever their conversation's mode: a rule
+    /// each box adds to its settings once (`kuvo-link.js`'s defaults).
     static let botMemory = PermissionRule(action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: .allow)
-    private static let botMemoryJSON: JSONValue = .object(["action": .string(botMemory.action), "resource": .string(botMemory.resource), "effect": .string(botMemory.effect.rawValue)])
-    private static let botMemoryAddedKey = "engine.botMemoryRuleAdded"
 
-    private static let search: JSONValue = .object(["provider": .string("exa")])
-    private static let defaultsAddedKey = "engine.defaultsAdded"
-    private static let searchMovedKey = "engine.searchMovedToExa"
+    /// What this Mac kept of the defaults it added before its box added them (its preferences),
+    /// as the box notes them (`defaults-added` in its folder), so one you took out stays out.
+    static func defaultsAdded(_ defaults: UserDefaults = .standard) -> [String] {
+        [("engine.botMemoryRuleAdded", "bot-memory"), ("engine.defaultsAdded", "websearch"), ("engine.searchMovedToExa", "search-exa")]
+            .filter { defaults.bool(forKey: $0.0) }.map(\.1)
+    }
 
     /// Settings › Permissions' rules, in their order: what every session and mode is held to.
     var permissionRules: [PermissionRule] {

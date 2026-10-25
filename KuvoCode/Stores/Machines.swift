@@ -257,7 +257,7 @@ final class MachineEngine {
         /// The agents bridge that starts beside it (`kuvo-agents.js`), for the coding agents there.
         var agents: (text: String, hash: String)?
         /// What a machine with no settings yet gets (this Mac's), asked for only then.
-        var seed: () async -> MachineBox.Seed = { .init(settings: [:], keys: [:]) }
+        var seed: () async throws -> MachineBox.Seed = { .init(settings: [:], keys: [:]) }
         /// What it starts with from its own settings: its integrations' sites, for the browser
         /// tools. Filled in as it starts (`boxEnvironment`).
         var fromBox: ([String: JSONValue]) -> [String: String] = { _ in [:] }

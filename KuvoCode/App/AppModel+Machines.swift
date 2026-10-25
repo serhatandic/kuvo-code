@@ -560,7 +560,7 @@ extension AppModel {
         if !compatibility.isEmpty { environment["OPENCODE_CONFIG_CONTENT"] = AppModel.merged(compatibility, into: nil) }
         let base = environment["OPENCODE_CONFIG_CONTENT"]
         var launch = MachineEngine.Launch(environment: environment, helper: MachineBrowserInstaller.helper, agents: MachineEngine.agentsBridge)
-        launch.seed = { [weak self] in await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
+        launch.seed = { [weak self] in try await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
         launch.fromBox = { settings in
             let sites = Integrations.sites(Integrations.added(inSettings: settings).filter { !Integrations.macOnly.contains($0) })
             return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: base)]
@@ -641,9 +641,13 @@ extension AppModel {
     /// What a machine with no settings yet starts with, once (`MachineBox.adopt`): this Mac's
     /// engine settings, minus what only makes sense here, and its integrations' keys. From then
     /// on they're the machine's own, changed in its own tab in Settings.
-    func machineSeed() async -> MachineBox.Seed {
-        // Web search that works, as on this Mac, unless its settings chose otherwise.
-        await engineConfig.addDefaults()
+    /// Refused while this Mac's settings can't be read (its box isn't up): a copy of nothing would
+    /// stay the machine's for good.
+    func machineSeed() async throws -> MachineBox.Seed {
+        await prepareSettings()
+        guard engineConfig.isLoaded else {
+            throw MachineBox.Failure.refused("This Mac’s settings can’t be read now, and a new machine starts with a copy of them. Try again in a moment.")
+        }
         var seed: [String: JSONValue] = [:]
         if engineConfig.isLoaded, engineConfig.problem == nil, let data = try? JSONEncoder().encode(engineConfig.settings),
            var settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {

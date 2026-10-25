@@ -117,10 +117,10 @@ enum MachineBox {
     /// Makes the machine's settings its own, once (the tool's `adoptBox`), from what it runs with
     /// now or, with none, `seed`; then, and every time after, its settings as they are, and
     /// whether it was given `seed` just now.
-    static func adopt(on connection: SSHConnection, seed: () async -> Seed) async throws -> (settings: [String: JSONValue], seeded: Bool) {
+    static func adopt(on connection: SSHConnection, seed: () async throws -> Seed) async throws -> (settings: [String: JSONValue], seeded: Bool) {
         // The seed only when there's nothing there: it reads this Mac's keys.
         let fresh = try await connection.run("[ -f \"$HOME/\(RemoteEngineInstaller.root)/box/opencode.json\" ] && echo own || true")
-        let given = fresh.trimmingCharacters(in: .whitespacesAndNewlines) == "own" ? nil : await seed()
+        let given = fresh.trimmingCharacters(in: .whitespacesAndNewlines) == "own" ? nil : try await seed()
         let answer = try await run("adopt", input: given.flatMap { try? JSONEncoder().encode($0) }, on: connection)
         return (answer.settings ?? [:], answer.seeded == true)
     }

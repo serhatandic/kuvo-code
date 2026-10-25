@@ -29,6 +29,10 @@ final class BoxProcess {
     @ObservationIgnored private var runtime: (executable: URL, environment: [String: String], arguments: (URL) -> [String])?
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var isStarting = false
+    /// Up, the first time or again (late, after Try Again, or after it stopped by itself).
+    @ObservationIgnored var onStarted: () -> Void = {}
+    /// It was given what it starts with (the engine's start got that far): Try Again can start it.
+    var canStartAgain: Bool { runtime != nil }
 
     /// The box's script: KUVO_BOX_SCRIPT's (a checkout's `kuvo-link.js`) in a debug build, else
     /// the app's own.
@@ -71,6 +75,9 @@ final class BoxProcess {
         // where the engine reads the keys you keep in the Keychain, which its settings name.
         env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
         env["KUVO_KEYS"] = IntegrationKeys.folder.path
+        // The defaults it adds to them once, as it starts: those an earlier version added here
+        // noted as done, so one you took out stays out.
+        Self.noteDefaultsAdded(EngineConfig.defaultsAdded())
         // Settings › MCP Servers' popular servers, as a machine's box has them from its Mac.
         let bin = Self.home.appending(path: "bin")
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -100,6 +107,7 @@ final class BoxProcess {
             endpoint = server.endpoint
             PhoneLink.box.withLock { $0 = server.endpoint }
             failure = nil
+            onStarted()
         } catch {
             log.error("This Mac's box didn't start: \(error.localizedDescription, privacy: .public)")
             failure = error.localizedDescription
@@ -141,6 +149,17 @@ final class BoxProcess {
         }
         restarts.append(.now)
         Task { await launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments) }
+    }
+
+    /// Notes defaults as added already (`box/defaults-added`, a name a line), beside those noted.
+    static func noteDefaultsAdded(_ names: [String]) {
+        guard !names.isEmpty else { return }
+        let file = home.appending(path: "box/defaults-added")
+        let noted = ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        let all = noted + names.filter { !noted.contains($0) }
+        guard all.count > noted.count else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? Data((all.joined(separator: "\n") + "\n").utf8).write(to: file, options: .atomic)
     }
 
     // MARK: What the box finds beside it

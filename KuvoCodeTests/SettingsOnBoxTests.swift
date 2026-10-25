@@ -94,30 +94,64 @@ import Testing
         #expect(config.problem == nil && config.value(at: ["model"]) == .string("anthropic/sonnet"))
     }
 
-    /// Web search and bots' memory rule go in once, and stay out once you take them out.
-    @Test func theDefaultsGoInOnceAndStayOut() async throws {
+    /// Web search and bots' memory rule go in as this Mac's box starts, once: taken out, they stay
+    /// out, the next start too. Those an earlier version added (noted in the app's preferences)
+    /// count as added.
+    @Test func theBoxAddsItsDefaultsOnceAsItStarts() async throws {
         let keys = ["engine.defaultsAdded", "engine.searchMovedToExa", "engine.botMemoryRuleAdded"]
         for key in keys { UserDefaults.standard.removeObject(forKey: key) }
         defer { for key in keys { UserDefaults.standard.removeObject(forKey: key) } }
-        let box = try await SettingsBox(port: 47_922)
+        let box = try await SettingsBox(port: 47_922, defaultsAdded: false,
+                                        settings: #"{"model": "anthropic/sonnet", "permissions": [{"action": "shell", "resource": "npm test *", "effect": "allow"}]}"#)
         defer { box.stop() }
-        try FileManager.default.createDirectory(at: SettingsBox.file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"model": "anthropic/sonnet", "permissions": [{"action": "shell", "resource": "npm test *", "effect": "allow"}]}"#.utf8).write(to: SettingsBox.file)
-        let config = AppModel().engineConfig
-        await config.addDefaults()
         let disk = try SettingsBox.onDisk()
         #expect(disk["websearch"] as? [String: String] == ["provider": "exa"])
+        let config = AppModel().engineConfig
+        await config.refresh()
         #expect(config.permissionRules == [PermissionRule(action: "shell", resource: "npm test *", effect: .allow), EngineConfig.botMemory], "joins your rules, at their end")
         #expect(config.changes.isEmpty, "Kuvo Code's own, not yours to apply elsewhere")
 
-        // Taken out: they stay out.
+        // Taken out: they stay out as it starts again.
         config.set(nil, at: ["websearch"])
         config.setItems([], at: ["permissions"])
-        _ = await config.settled()
-        await config.addDefaults()
-        _ = await config.settled()
+        #expect(await config.settled() == nil)
+        box.box.process.stop()
+        await box.box.startAgain()
         #expect(try SettingsBox.onDisk()["websearch"] == nil)
-        #expect(config.permissionRules.isEmpty)
+        #expect(try SettingsBox.onDisk()["permissions"] == nil)
+
+        // Added by an earlier version: noted as added, so the rule you took out then stays out.
+        box.box.process.stop()
+        try? FileManager.default.removeItem(at: BoxProcess.home.appending(path: "box/defaults-added"))
+        UserDefaults.standard.set(true, forKey: "engine.botMemoryRuleAdded")
+        await box.box.startAgain()
+        #expect(try SettingsBox.onDisk()["permissions"] == nil, "taken out before boxes kept them")
+        #expect(try SettingsBox.onDisk()["websearch"] as? [String: String] == ["provider": "exa"], "never noted, so added")
+    }
+
+    /// This Mac's box up late (after the engine, or after Try Again): its settings are read then,
+    /// so new sessions get their rules; and a new machine isn't given a copy of nothing meanwhile.
+    @Test func aBoxUpLateIsReadThenAndNoMachineStartsFromNothing() async throws {
+        let app = AppModel()
+        let config = app.engineConfig
+        await config.refresh()
+        #expect(!config.isLoaded)
+        await #expect(throws: MachineBox.Failure.self) { _ = try await app.machineSeed() }
+
+        let box = try await SettingsBox(port: 47_919, process: app.box,
+                                        settings: #"{"permissions": [{"action": "shell", "resource": "git push *", "effect": "deny"}], "model": "openai/luna"}"#)
+        defer { box.stop() }
+        try await until { config.isLoaded }
+        #expect(EngineConfig.rules(on: nil).map(\.resource) == ["git push *"])
+        #expect(try await app.machineSeed().settings["model"] == .string("openai/luna"))
+    }
+
+    /// While this Mac's settings can't be read, only the pages that are nothing but them wait:
+    /// the rest of Settings is the app's (General, Machines, Storage…), and Engine says so in a group.
+    @Test func onlyTheEngineSettingsPagesWaitForThem() {
+        let waiting = SettingsPage.allCases.filter(\.isEngineSettings)
+        #expect(waiting == [.agents, .permissions, .commands, .skills, .integrations, .mcp])
+        #expect(!SettingsPage.engine.isEngineSettings && !SettingsPage.general.isEngineSettings && !SettingsPage.machines.isEngineSettings)
     }
 
     /// The box stopped: Settings can't read this Mac's settings and says why, changes nothing,
@@ -242,6 +276,34 @@ import Testing
         let token = ((((here["mcp"] as? [String: Any])?["servers"] as? [String: Any])?["todoist"] as? [String: Any])?["environment"] as? [String: String])?["TOKEN"]
         #expect(token == IntegrationKeys.reference(key), "named where this Mac's engine reads its keys")
         #expect(IntegrationKeys.value(key) == "tok_lab", "in this Mac's Keychain")
+    }
+
+    /// The machine goes away between the look and the change: nothing's made there, and the key
+    /// brought for it doesn't stay there either.
+    @Test func aKeyBroughtForAChangeThatWasntMadeDoesntStay() async throws {
+        let mac = try await SettingsBox(port: 47_918)
+        defer { mac.stop() }
+        let machine = try await MachineTestBox()
+        defer { machine.stop() }
+        let key = IntegrationKeys.variable("todoist", "TODOIST_API_KEY")
+        IntegrationKeys.set("tok_mac", for: key)
+        defer { IntegrationKeys.set(nil, for: key) }
+        let config = AppModel().engineConfig
+        await config.refresh()
+        config.set(Integrations.settings(for: try #require(Integrations.service("todoist"))), at: MCPSettings.path + ["todoist"])
+        #expect(await config.settled() == nil)
+
+        // The network to it, gone once the changes themselves are sent.
+        let endpoint = machine.endpoint
+        let base = URL(string: endpoint.url.absoluteString + "/")!
+        let away = BoxClient(box: "lab", transport: LocalBox { request in
+            let changes = request.path == "kuvo/config/apply" && !String(decoding: request.body, as: UTF8.self).contains(#""dry":true"#)
+            guard changes else { return EngineRoutes.forward(request, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) }
+            return AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) }
+        })
+        await #expect(throws: AlsoApply.Failure.self) { _ = try await AlsoApply.apply(config.changes, from: mac.client, to: away) }
+        #expect(machine.key(key) == nil)
+        #expect((try machine.onDisk())["mcp"] == nil)
     }
 
     @Test func aChangeUndoneIsNothingToApply() async throws {

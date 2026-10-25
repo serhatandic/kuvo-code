@@ -80,11 +80,11 @@ import Testing
         defer { box.stop() }
         let app = AppModel()
         let config = app.engineConfig
-        #expect((await app.machineSeed()).settings["agents"]?["security-audit"] == nil)
+        #expect((try await app.machineSeed()).settings["agents"]?["security-audit"] == nil)
 
         config.set(.object(["description": .string("Audits the code for security problems"), "mode": .string("primary"),
                             "prompt": .string("Look for security problems.")]), at: ["agents", "security-audit"])
-        let seed = await app.machineSeed()
+        let seed = try await app.machineSeed()
         #expect(seed.settings["agents"]?["security-audit"]?["description"]?.string == "Audits the code for security problems", "a new machine starts with it")
 
         // What a machine's engine starts with carries none of it.

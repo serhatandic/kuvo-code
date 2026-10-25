@@ -57,124 +57,129 @@ struct EngineSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            ConfigProblem()
-            Section("Behavior") {
-                Toggle(isOn: config.bool(["compaction", "auto"], default: true)) {
-                    Text("Summarize long conversations automatically")
-                    Text("Before the context window fills up, older messages are replaced by a summary.")
-                }
-                // Formatters set up by hand (an object) aren't this toggle's to replace.
-                let customFormatters = config.value(at: ["formatter"])?.object != nil
-                Toggle(isOn: customFormatters ? .constant(true) : config.bool(["formatter"], default: false)) {
-                    Text("Format files after the agent changes them")
-                    Text(customFormatters
-                        ? "With the formatters set up in the settings file."
-                        : "With the formatters the engine knows, such as Prettier, gofmt or rustfmt, when the project has them.")
-                }
-                .disabled(customFormatters)
-                // Warming set up by hand (an object) isn't this switch's to replace.
-                let customWarming = config.value(at: ["warming"])?.object != nil
-                Toggle(isOn: customWarming ? .constant(true) : config.bool(["warming"], default: false)) {
-                    Text("Keep recent sessions warm")
-                    Text(customWarming
-                        ? "As set up in the settings file."
-                        : "Sends a small request every few minutes so the model's cache stays ready. Uses a little of your quota.")
-                }
-                .disabled(customWarming)
-                Toggle(isOn: config.bool(["snapshots"], default: true)) {
-                    Text("Keep snapshots of files")
-                    Text("Undo From Here needs them to put files back.")
-                }
-                Picker("Shell", selection: config.string(["shell"])) {
-                    Text("Your login shell").tag(String?.none)
-                    ForEach(shells.filter(\.acceptable)) { shell in
-                        Text("\(shell.name) (\(shell.path))").tag(Optional(shell.path))
+            // Its settings, once read (this Mac's box keeps them): until then, why not.
+            if config.isLoaded {
+                ConfigProblem()
+                Section("Behavior") {
+                    Toggle(isOn: config.bool(["compaction", "auto"], default: true)) {
+                        Text("Summarize long conversations automatically")
+                        Text("Before the context window fills up, older messages are replaced by a summary.")
                     }
-                }
-                Picker("Subagents can start subagents", selection: Binding(
-                    get: { config.value(at: ["experimental", "subagent_depth"])?.int ?? 1 },
-                    set: { config.set($0 == 1 ? nil : .number(Double($0)), at: ["experimental", "subagent_depth"]) }
-                )) {
-                    Text("No").tag(1)
-                    ForEach(2...5, id: \.self) { Text("Up to \($0) levels").tag($0) }
-                }
-            }
-
-            Section {
-                Picker("Search service", selection: Binding<String>(
-                    get: {
-                        guard let value = config.value(at: ["websearch"]) else { return "" }
-                        if value.bool == false { return "off" }
-                        return value["provider"]?.string ?? ""
-                    },
-                    set: { choice in
-                        switch choice {
-                        case "": config.set(nil, at: ["websearch"])
-                        case "off": config.set(.bool(false), at: ["websearch"])
-                        default: config.set(.object(["provider": .string(choice)]), at: ["websearch"])
+                    // Formatters set up by hand (an object) aren't this toggle's to replace.
+                    let customFormatters = config.value(at: ["formatter"])?.object != nil
+                    Toggle(isOn: customFormatters ? .constant(true) : config.bool(["formatter"], default: false)) {
+                        Text("Format files after the agent changes them")
+                        Text(customFormatters
+                            ? "With the formatters set up in the settings file."
+                            : "With the formatters the engine knows, such as Prettier, gofmt or rustfmt, when the project has them.")
+                    }
+                    .disabled(customFormatters)
+                    // Warming set up by hand (an object) isn't this switch's to replace.
+                    let customWarming = config.value(at: ["warming"])?.object != nil
+                    Toggle(isOn: customWarming ? .constant(true) : config.bool(["warming"], default: false)) {
+                        Text("Keep recent sessions warm")
+                        Text(customWarming
+                            ? "As set up in the settings file."
+                            : "Sends a small request every few minutes so the model's cache stays ready. Uses a little of your quota.")
+                    }
+                    .disabled(customWarming)
+                    Toggle(isOn: config.bool(["snapshots"], default: true)) {
+                        Text("Keep snapshots of files")
+                        Text("Undo From Here needs them to put files back.")
+                    }
+                    Picker("Shell", selection: config.string(["shell"])) {
+                        Text("Your login shell").tag(String?.none)
+                        ForEach(shells.filter(\.acceptable)) { shell in
+                            Text("\(shell.name) (\(shell.path))").tag(Optional(shell.path))
                         }
                     }
-                )) {
-                    Text("None").tag("")
-                    Text("Any service").tag("random")
-                    ForEach(searchProviders) { Text($0.name).tag($0.id) }
-                    Divider()
-                    Text("Off").tag("off")
+                    Picker("Subagents can start subagents", selection: Binding(
+                        get: { config.value(at: ["experimental", "subagent_depth"])?.int ?? 1 },
+                        set: { config.set($0 == 1 ? nil : .number(Double($0)), at: ["experimental", "subagent_depth"]) }
+                    )) {
+                        Text("No").tag(1)
+                        ForEach(2...5, id: \.self) { Text("Up to \($0) levels").tag($0) }
+                    }
                 }
-                // The chosen service's key, or every service's when any one will do.
-                ForEach(keyedServices) { integration in
-                    LabeledContent("\(integration.name) API key") {
-                        let credentials = integration.connections.filter { $0.type == "credential" }.compactMap(\.credentialID)
-                        if !credentials.isEmpty {
-                            HStack(spacing: 12) {
-                                Text("Added").foregroundStyle(.secondary)
-                                Button("Remove") { removeKeys(credentials, of: integration.id) }
+
+                Section {
+                    Picker("Search service", selection: Binding<String>(
+                        get: {
+                            guard let value = config.value(at: ["websearch"]) else { return "" }
+                            if value.bool == false { return "off" }
+                            return value["provider"]?.string ?? ""
+                        },
+                        set: { choice in
+                            switch choice {
+                            case "": config.set(nil, at: ["websearch"])
+                            case "off": config.set(.bool(false), at: ["websearch"])
+                            default: config.set(.object(["provider": .string(choice)]), at: ["websearch"])
                             }
-                        } else if let variable = integration.connections.first(where: { $0.type == "env" }) {
-                            // From the environment: nothing here to change.
-                            Text("From \(variable.name ?? "the environment")").foregroundStyle(.secondary)
-                        } else {
-                            Button("Add API Key…") { addingKey = IntegrationRef(id: integration.id) }
+                        }
+                    )) {
+                        Text("None").tag("")
+                        Text("Any service").tag("random")
+                        ForEach(searchProviders) { Text($0.name).tag($0.id) }
+                        Divider()
+                        Text("Off").tag("off")
+                    }
+                    // The chosen service's key, or every service's when any one will do.
+                    ForEach(keyedServices) { integration in
+                        LabeledContent("\(integration.name) API key") {
+                            let credentials = integration.connections.filter { $0.type == "credential" }.compactMap(\.credentialID)
+                            if !credentials.isEmpty {
+                                HStack(spacing: 12) {
+                                    Text("Added").foregroundStyle(.secondary)
+                                    Button("Remove") { removeKeys(credentials, of: integration.id) }
+                                }
+                            } else if let variable = integration.connections.first(where: { $0.type == "env" }) {
+                                // From the environment: nothing here to change.
+                                Text("From \(variable.name ?? "the environment")").foregroundStyle(.secondary)
+                            } else {
+                                Button("Add API Key…") { addingKey = IntegrationRef(id: integration.id) }
+                            }
                         }
                     }
+                } header: {
+                    Text("Web Search")
+                } footer: {
+                    Text("Some services need an API key; others search without one. With none chosen, the agent can't search the web.")
+                        .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Web Search")
-            } footer: {
-                Text("Some services need an API key; others search without one. With none chosen, the agent can't search the web.")
-                    .foregroundStyle(.secondary)
-            }
 
-            Section("Limits") {
-                ConfigNumberField(title: "Lines of tool output the agent keeps", path: ["tool_output", "max_lines"])
-                ConfigNumberField(title: "Bytes of tool output the agent keeps", path: ["tool_output", "max_bytes"])
-                Toggle("Shrink large images the agent reads", isOn: config.bool(["media", "image", "auto_resize"], default: true))
-                ConfigNumberField(title: "Largest image width, in pixels", path: ["media", "image", "max_width"])
-                ConfigNumberField(title: "Largest image height, in pixels", path: ["media", "image", "max_height"])
-            }
-
-            Section {
-                ConfigStringList(path: ["watcher", "ignore"], prompt: "A pattern, like dist/** or *.log")
-            } header: {
-                Text("Files the Engine Doesn't Watch")
-            } footer: {
-                Text("Changes to these don't reach the agent while it works.")
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                ConfigStringList(path: ["plugins"], prompt: "An npm package, like opencode-wakatime")
-                ForEach(plugins.filter { $0.source.type != "builtin" && $0.state.status == "failed" }) { plugin in
-                    Label("\(plugin.id): \(plugin.state.error ?? "didn't load")", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                Section("Limits") {
+                    ConfigNumberField(title: "Lines of tool output the agent keeps", path: ["tool_output", "max_lines"])
+                    ConfigNumberField(title: "Bytes of tool output the agent keeps", path: ["tool_output", "max_bytes"])
+                    Toggle("Shrink large images the agent reads", isOn: config.bool(["media", "image", "auto_resize"], default: true))
+                    ConfigNumberField(title: "Largest image width, in pixels", path: ["media", "image", "max_width"])
+                    ConfigNumberField(title: "Largest image height, in pixels", path: ["media", "image", "max_height"])
                 }
-            } header: {
-                Text("Plugins")
-            } footer: {
-                Text(box.machine == nil
-                    ? "Plugins add tools and change how the engine works. They run code on your Mac, so add only ones you trust."
-                    : "Plugins add tools and change how the engine works. They run code on \(app.name(of: box)), so add only ones you trust.")
-                    .foregroundStyle(.secondary)
+
+                Section {
+                    ConfigStringList(path: ["watcher", "ignore"], prompt: "A pattern, like dist/** or *.log")
+                } header: {
+                    Text("Files the Engine Doesn't Watch")
+                } footer: {
+                    Text("Changes to these don't reach the agent while it works.")
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    ConfigStringList(path: ["plugins"], prompt: "An npm package, like opencode-wakatime")
+                    ForEach(plugins.filter { $0.source.type != "builtin" && $0.state.status == "failed" }) { plugin in
+                        Label("\(plugin.id): \(plugin.state.error ?? "didn't load")", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Plugins")
+                } footer: {
+                    Text(box.machine == nil
+                        ? "Plugins add tools and change how the engine works. They run code on your Mac, so add only ones you trust."
+                        : "Plugins add tools and change how the engine works. They run code on \(app.name(of: box)), so add only ones you trust.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                SettingsUnread(engine: machine, asGroup: true)
             }
 
             Section {

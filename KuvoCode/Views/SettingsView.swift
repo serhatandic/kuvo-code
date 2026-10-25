@@ -167,6 +167,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     /// accounts and its models. The rest are the app's, on this Mac.
     static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .mcp, .engine, .worktrees]
 
+    /// The pages that are a computer's engine settings, and nothing else: they wait for them to be
+    /// read. (Engine shows its status too, and says so in a group.)
+    var isEngineSettings: Bool {
+        [.agents, .permissions, .commands, .skills, .integrations, .mcp].contains(self)
+    }
+
     /// The pages Settings lists for `box`.
     static func shown(on box: SidebarBox) -> [SettingsPage] {
         box.machine == nil ? shown : shown.filter(boxPages.contains)
@@ -578,15 +584,16 @@ private struct BoxPage: View {
                     if engine.config.isLoaded {
                         content
                     } else {
-                        Unread(engine: engine)
+                        SettingsUnread(engine: engine)
                     }
                 } else {
                     ContentUnavailableView("This Machine Was Removed", systemImage: "server.rack")
                 }
-            } else if app.engineConfig.isLoaded {
+            } else if app.engineConfig.isLoaded || !page.isEngineSettings {
+                // This Mac's own pages show whatever its box is doing; Engine says so in a group.
                 content
             } else {
-                Unread(engine: nil)
+                SettingsUnread(engine: nil)
             }
         }
     }
@@ -602,57 +609,111 @@ private struct BoxPage: View {
                 if app.boxes.count > 1 { AlsoApplyBar(box: box) }
             }
     }
+}
 
-    /// A computer's settings, not read yet: read now, or why they can't be. `engine`: a
-    /// machine's; nil for this Mac's, whose box keeps them.
-    private struct Unread: View {
-        let engine: MachineEngine?
-        @Environment(AppModel.self) private var app
+/// A computer's engine settings, not read yet: being read, or why they can't be, with Try Again
+/// (and, for a machine, Connect or Start). A whole page (`Agents`, `MCP Servers`…), or a group on
+/// a page that shows more (`Engine`). `engine`: a machine's; nil for this Mac's, whose box keeps
+/// them and starts with its engine.
+struct SettingsUnread: View {
+    let engine: MachineEngine?
+    var asGroup = false
+    @Environment(AppModel.self) private var app
 
-        private var config: EngineConfig { engine?.config ?? app.engineConfig }
-        private var name: String { engine?.machine.name ?? PhoneLink.computerName }
+    private var config: EngineConfig { engine?.config ?? app.engineConfig }
+    private var name: String { engine?.machine.name ?? PhoneLink.computerName }
 
-        var body: some View {
-            VStack(spacing: 14) {
-                if let problem = config.problem {
-                    Image(systemName: engine == nil ? "laptopcomputer" : "server.rack")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
-                    Text("\(name)’s settings can’t be read")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(problem)
-                        .settingsText()
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
-                    HStack(spacing: 10) {
-                        Button("Try Again") {
-                            Task {
-                                // This Mac's box, started again if it stopped.
-                                if engine == nil, app.box.endpoint == nil { await app.box.startAgain() }
-                                await config.refresh()
+    /// This Mac's box never started: the engine's start, which starts it, didn't get that far.
+    private var boxNeverStarted: Bool { engine == nil && app.box.endpoint == nil && !app.box.canStartAgain }
+
+    /// Why they can't be read, or nil while they're being read.
+    private var problem: String? {
+        if boxNeverStarted {
+            if case .failed(let reason) = app.engine { return "Kuvo Code’s background service on this Mac starts with the agent engine, which couldn’t start: \(reason)" }
+            return nil
+        }
+        return config.problem
+    }
+
+    private var waiting: String {
+        boxNeverStarted ? "Getting the agent engine ready…" : "Reading \(name)’s settings…"
+    }
+
+    private var ready: Bool { engine?.isReady ?? (app.box.endpoint != nil) }
+
+    var body: some View {
+        Group {
+            if asGroup {
+                Section {
+                    if let problem {
+                        Label {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(name)’s settings can’t be read")
+                                Text(problem).foregroundStyle(.secondary)
                             }
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                         }
-                        if let engine, !engine.isReady, !engine.connection.isUnderWay {
-                            Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
+                        buttons
+                    } else {
+                        HStack(spacing: 10) {
+                            Spinner(size: 13)
+                            Text(waiting).foregroundStyle(.secondary)
                         }
                     }
-                } else {
-                    Spinner()
-                    Text("Reading \(name)’s settings…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 60)
-            // Read as the page opens, and again once it's reached (this Mac's box, once it runs).
-            .task(id: engine?.isReady ?? (app.box.endpoint != nil)) {
-                let ready = engine?.isReady ?? (app.box.endpoint != nil)
-                if !config.isLoaded, config.problem == nil || ready { config.reload() }
+            } else {
+                VStack(spacing: 14) {
+                    if let problem {
+                        Image(systemName: engine == nil ? "laptopcomputer" : "server.rack")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("\(name)’s settings can’t be read")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(problem)
+                            .settingsText()
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                        buttons
+                    } else {
+                        Spinner()
+                        Text(waiting)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 60)
             }
         }
+        // Read as it shows, and again once it can be (a machine reached, this Mac's box up).
+        .task(id: ready) {
+            if !config.isLoaded, config.problem == nil || ready { config.reload() }
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 10) {
+            Button("Try Again") { Task { await tryAgain() } }
+            if let engine, !engine.isReady, !engine.connection.isUnderWay {
+                Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
+            }
+        }
+    }
+
+    /// This Mac's: its engine started again when that's what never got as far as its box (it
+    /// starts the box), or its box when it stopped; then read again.
+    private func tryAgain() async {
+        if engine == nil {
+            if boxNeverStarted {
+                await app.start()
+                return
+            }
+            if app.box.endpoint == nil { await app.box.startAgain() }
+        }
+        await config.refresh()
     }
 }
 
