@@ -915,7 +915,12 @@ host serves:
   Mac is connected or not. `?memory=1` adds `memoryJob`, the job as its memory has it now:
   `{line, section}` (both `""` for a memory without one; left out when its memory can't be read),
   which a Mac takes for its copy of the machine's bots. For a machine's bot, its machine's list is
-  the newer while it answers.
+  the newer while it answers. `GET kuvo/bots/events` follows the list (`application/x-ndjson`): the
+  list now, then again each time it changes (`bots.events` in `features`). A box keeps each of its
+  bots told what it is (its instructions): at once when it's made or changed, and otherwise as its
+  next run starts, when what it would be told has changed (new words in an update, a personality's),
+  rather than every bot at once as the box starts; its own rules for its folder are put right then
+  too.
 - On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
   `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],
   "personalities": [{id, name, description, custom}], "looks": {colors, shapes, faces},
@@ -929,7 +934,9 @@ host serves:
   place's starting model; a `project` on a machine makes it there (`machine` is then ignored).
   It answers `201 {"bot": <as kuvo/bots lists one>, "firstMessage"}`: from a template, the bot
   waits, and `firstMessage` is its job for your composer, to edit and send; otherwise it's null
-  and the bot writes first. Errors are `{"message"}`: 400 for a missing name or an unknown
+  and the bot writes first. `job: {line, details}` (a shared bot's, from File › Import Bot…) makes
+  it wait the same way, with that job as `firstMessage`. This Mac's box makes only bots that live on
+  it: a `machine` there answers 400 `{"message"}`; one for a machine is made on that machine's box. Errors are `{"message"}`: 400 for a missing name or an unknown
   template, personality, machine or project; 409 while its machine isn't connected; 422 for a
   model that can't run there (its account isn't signed in there); 503 when it couldn't be made.
 - `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model}` changes a bot as Edit Bot
@@ -1121,6 +1128,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |
 | `bots` | `kuvo/bots` |
+| `bots.events` | `kuvo/bots/events` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
@@ -1214,7 +1222,10 @@ Its group chats run in its coding agents' bridge, as a machine's do, with folder
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
 of in `box/trash` (`KUVO_TRASH`; the bridge says `kuvo.group.trashed {id, path}` and the app moves
 it to the Finder's Trash), and who can be named with `&` in `box/run/agents.json`
-(`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the app writes). Its bots remember its
+(`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the app writes). `KUVO_BOX=mac` says
+it's a Mac's: its bots are the Mac's own (`machine` left out), made with the kit the app gives it in
+their folder (`bots/kit.json`, this Mac's words; a release's are a machine's), with no time zone of
+their own (they go by the Mac's clock). Its bots remember its
 chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client's `kuvo/groups…`
 on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the
 phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the

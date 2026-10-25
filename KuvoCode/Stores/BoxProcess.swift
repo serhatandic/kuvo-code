@@ -66,6 +66,8 @@ final class BoxProcess {
         }
         var env = environment
         env["KUVO_HOME"] = Self.home.path
+        // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
+        env["KUVO_BOX"] = "mac"
         // Its temporary files, in the app's own temporary folder.
         let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
         env["TMPDIR"] = temporary.path + "/"

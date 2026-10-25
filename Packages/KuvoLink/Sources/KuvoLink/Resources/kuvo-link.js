@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.44";
+export const BRIDGE_VERSION = "0.9.47";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -1221,8 +1221,9 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
       }
       if (signal?.aborted) break;
       await new Promise(done => {
-        wake = done;
-        setTimeout(done, watching.whole ? 30_000 : 1000);
+        // Its look-again timer goes once it's woken, so a client gone leaves nothing waiting.
+        const timer = setTimeout(done, watching.whole ? 30_000 : 1000);
+        wake = () => { clearTimeout(timer); done(); };
       });
       wake = null;
       queue.push(JSON.stringify(read()));
@@ -2031,6 +2032,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       return yield* forwardGroups(target, route, request, signal);
     }
+    // Its bots followed: a line now, and again as they change (made, changed, deleted, a wake-up
+    // added or sent), as a client shows them.
+    if (route === "kuvo/bots/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => ({ bots: listBots(info.name) }), botFollowers, signal, { folders: [BOTS] });
+    }
     // This machine's bots and wake-ups, from their folders.
     if (route === "kuvo/bots") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
@@ -2257,6 +2265,10 @@ export function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
 // A Mac's box finds them where its app keeps them, as the engine does (KUVO_BOTS, KUVO_WAKES, and the
 // app's own kuvo-wake); a machine's, in its folder.
 const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
+// This Mac's box (BoxProcess says so as it starts it): its bots are the Mac's own, made with the
+// kit its app gives it and told they run on this Mac; it names no machine, keeps no notes for a
+// Mac to take in, and goes by the Mac's own clock.
+const ON_MAC = process.env.KUVO_BOX === "mac";
 const SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
 const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
@@ -2585,7 +2597,7 @@ export function listBots(machine, { memory = false } = {}) {
         session,
         name: described.name,
         look: described.look,
-        machine: machine || undefined,
+        machine: ON_MAC ? undefined : machine || undefined,
         job: typeof described.job === "string" ? described.job : "",
         paused,
         wakes: wakes.length ? Math.min(...wakes.map(wake => wake.due)) : undefined,
@@ -2593,7 +2605,7 @@ export function listBots(machine, { memory = false } = {}) {
         agents,
         personality: typeof described.personality === "string" ? described.personality : undefined,
         model: isModel(described.model) ? described.model : undefined,
-        memoryJob: memory ? memoryJob(folder) : undefined,
+        memoryJob: memory && !ON_MAC ? memoryJob(folder) : undefined,
       },
     });
   }
@@ -2635,7 +2647,7 @@ export function readKit() {
       return null;
     }
   };
-  const mac = read(KIT_FILE), release = read(RELEASE_KIT_FILE);
+  const mac = read(KIT_FILE), release = ON_MAC ? null : read(RELEASE_KIT_FILE);
   if (!release || (mac && !newerVersion(release.version, mac.version))) return mac;
   const machine = readLink()?.id || os.hostname();
   let timeZone = mac?.timeZone;
@@ -2673,8 +2685,8 @@ export function botTemplates(kit, machine) {
     templates: kit.templates.map(({ firstMessage: _, ...template }) => template),
     personalities: botPersonalities(kit).map(({ instruction: _, ...personality }) => personality),
     looks: kit.looks,
-    startingModel: { [machine || "machine"]: kit.startingModel ?? null },
-    projects: boxProjects(kit).map(project => ({ ...project, machine: machine || undefined })),
+    startingModel: { [ON_MAC ? "mac" : machine || "machine"]: kit.startingModel ?? null },
+    projects: boxProjects(kit).map(project => ({ ...project, machine: ON_MAC ? undefined : machine || undefined })),
   };
 }
 
@@ -2772,6 +2784,33 @@ export function jobInMemory(text) {
   return { line, section };
 }
 
+// A bot's job as the first message to it, for your composer (BotTemplate.firstMessage): what it does
+// in a few words, then how, then to start. Details that begin with the job's line say it once. ""
+// for no job at all.
+export function firstMessageOf(line, details) {
+  const job = trimmed(String(line ?? ""));
+  let rest = trimmed(String(details ?? ""));
+  const lines = rest.split("\n");
+  const lineOf = text => jobInMemory(`## Job\n${text}`)?.line;
+  if (job && lines.length && lineOf(lines[0]) === job) {
+    // Only the job's sentence: a line that goes on after it (its details) keeps the rest.
+    const first = lines[0];
+    const end = first.indexOf(". ");
+    if (end >= 0 && spaces(first.slice(end + 2)) && lineOf(first.slice(0, end)) === job) lines[0] = spaces(first.slice(end + 2));
+    else lines.shift();
+    rest = trimmed(lines.join("\n"));
+  }
+  if (!job && !rest) return "";
+  return [job ? `Your job, in a few words: ${job}.` : "", rest,
+    "Start now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up."]
+    .filter(part => part.length > 0).join("\n\n");
+}
+
+// Those following this box's bots (`kuvo/bots/events`), told of a change made here at once (one
+// made beside it, by kuvo-wake or a move, they see as their folders change).
+const botFollowers = new Set();
+const noteBotsChanged = () => { for (const tell of botFollowers) tell(); };
+
 const fitsLook = (looks, look) => Boolean(look) && looks.colors.includes(look.color) && looks.shapes.includes(look.shape) && looks.faces.includes(look.face);
 
 // Why a model of the engine's can't run here: its account isn't signed in here, and the engine
@@ -2791,11 +2830,19 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   if (!given || typeof given !== "object") return no(400, "That isn’t a bot to make.");
   const name = plainName(given.name);
   if (!name) return no(400, "A bot needs a name.");
+  // This Mac's box makes this Mac's bots: one for a machine is made on that machine's box.
+  if (ON_MAC && given.machine !== undefined && given.machine !== null && given.machine !== "mac") {
+    return no(400, `This Mac makes only bots that live on it: make one for “${plainName(given.machine)}” there.`);
+  }
   let template;
   if (given.template !== undefined && given.template !== null) {
     template = kit.templates.find(each => each.id === given.template);
     if (!template) return no(400, `There’s no template “${given.template}”.`);
   }
+  // A shared bot's job (File › Import Bot…): typed in its conversation for you, as a template's is.
+  const shared = isObject(given.job) && (typeof given.job.line === "string" || typeof given.job.details === "string")
+    ? firstMessageOf(given.job.line, given.job.details) || null
+    : null;
   const personalityID = given.personality ?? template?.personality;
   const personality = personalityID ? botPersonalities(kit).find(each => each.id === personalityID) : undefined;
   if (personalityID && !personality) return no(400, `There’s no personality “${personalityID}”.`);
@@ -2832,11 +2879,12 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
-    toldBots.set(session.id, told);
     fs.writeFileSync(path.join(folder, "session"), session.id);
+    noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
     fs.writeFileSync(path.join(folder, "directory"), directory);
-    if (kit.timeZone) fs.writeFileSync(path.join(folder, "timezone"), kit.timeZone);
-    if (kit.zoneinfo) fs.writeFileSync(path.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
+    // A machine's wake-ups go by your time zone; this Mac's, by its own clock as you change it.
+    if (kit.timeZone && !ON_MAC) fs.writeFileSync(path.join(folder, "timezone"), kit.timeZone);
+    if (kit.zoneinfo && !ON_MAC) fs.writeFileSync(path.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
     if (agents) fs.writeFileSync(path.join(folder, "via"), "bridge");
     const now = stamp();
     const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project } : {}), updated: now };
@@ -2846,18 +2894,89 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     discard();
     return no(503, `The bot couldn’t be made: ${error?.message ?? error}`);
   }
-  // Without a template's job for you to send, it writes first.
-  if (!template) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
+  // Without a template's or a shared bot's job for you to send, it writes first.
+  const firstMessage = template?.firstMessage ?? shared;
+  if (!firstMessage) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
+  noteBotsChanged();
   const bot = listBots(machine).find(each => each.id === id);
-  return { status: 201, value: { bot, firstMessage: template?.firstMessage ?? null } };
+  return { status: 201, value: { bot, firstMessage: firstMessage ?? null } };
 }
 
 // `PATCH kuvo/bots/<id>`, as the Mac's: a bot that lives here changed as Edit Bot changes it (its
 // name, look, personality or model), in its description and in its conversation, which is told as
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
 // change in as it next connects (Bots.takeIn).
-// What each bot here was last told, by its conversation: told again only when it changes.
-const toldBots = new Map();
+// What a bot's conversation was last told, kept in its folder (`told.json`, so a restart doesn't
+// tell every bot again): its conversation, what it was told (a digest), and the folder its own
+// rules were last put right for. It's told again only when what it would be told changes.
+const TOLD_FILE = "told.json";
+const toldDigest = text => crypto.createHash("sha256").update(text).digest("hex");
+function toldOf(folder) {
+  try {
+    const told = JSON.parse(textOf(path.join(folder, TOLD_FILE)) ?? "");
+    return isObject(told) ? told : {};
+  } catch {
+    return {};
+  }
+}
+function noteTold(folder, changes) {
+  try {
+    const file = path.join(folder, TOLD_FILE);
+    fs.writeFileSync(`${file}.new`, JSON.stringify({ ...toldOf(folder), ...changes }));
+    fs.renameSync(`${file}.new`, file);
+  } catch {}
+}
+
+// What a bot here is told now: the kit's words, with its name, folder, personality and project,
+// and its job as its memory has it.
+function toldNow(kit, here, described = here.described) {
+  const personality = botPersonalities(kit).find(each => each.id === described.personality)?.instruction;
+  return botInstructions(kit, described.name, here.folder, personality, described.project, jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? ""));
+}
+
+// Tells a bot's conversation (on `target`) `text`, and notes it. Whether it got there.
+async function tellBot(target, here, session, text, signal) {
+  const told = await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries/kuvo.bot`, { value: text }, signal).then(() => true, () => false);
+  if (told) noteTold(here.folder, { session, instructions: toldDigest(text) });
+  return told;
+}
+
+// A bot's run started (`target` runs its conversation): what it's told brought up to date (new
+// words in an update, a personality changed), once, at its run rather than every bot at once as the
+// box starts, since telling one opens its folder on the engine; its own rules put right for the
+// folder it's in; and its memory file made, for one made before it was made with it.
+export async function freshenBot(target, sessionID) {
+  const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
+  const kit = readKit();
+  if (!here || !kit || isMoving(here.folder)) return;
+  const memory = path.join(here.folder, "MEMORY.md");
+  if (!fs.existsSync(memory)) try { fs.writeFileSync(memory, kit.memory.replaceAll("⟦name⟧", () => here.described.name)); } catch {}
+  const told = toldOf(here.folder);
+  const text = toldNow(kit, here);
+  if (told.session !== sessionID || told.instructions !== toldDigest(text)) await tellBot(target, here, sessionID, text);
+  if (told.rules !== here.folder && await repairRules(target, here, sessionID)) noteTold(here.folder, { rules: here.folder });
+}
+
+// A bot's own rules as they're made now (`external_directory` for its folder), after the rest of
+// its conversation's: an earlier version allowed its kuvo-wake commands (which let one that also
+// wrote a file through), and a move left the folder it had. Whether they're right now.
+async function repairRules(target, here, sessionID) {
+  const id = here.described.id;
+  let rules;
+  try {
+    rules = (await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`))?.permissions;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(rules)) return false;
+  const own = { action: "external_directory", resource: path.join(here.folder, "*"), effect: "allow" };
+  const commands = [`kuvo-wake ${id} `, `"${WAKE_COMMAND}" ${id} `, `"$HOME/.kuvo-code/bin/kuvo-wake" ${id} `];
+  const old = rule => (rule?.action === "shell" && commands.some(command => String(rule.resource ?? "").startsWith(command)))
+    || (rule?.action === "external_directory" && String(rule.resource ?? "").endsWith(`/bots/${id}/*`));
+  const repaired = [...rules.filter(rule => !old(rule)), own];
+  if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
+  return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
+}
 
 // A bot's run ended: its job as its memory has it now, in its description and what it's told, as
 // a Mac does when one of its own bots' runs ends (Bots.syncJob). `target` runs its conversation
@@ -2873,11 +2992,10 @@ export async function refreshBotJob(target, sessionID) {
     fs.writeFileSync(`${file}.new`, JSON.stringify({ ...here.described, job: job?.line ?? "" }, null, 2));
     fs.renameSync(`${file}.new`, file);
   }
-  const personality = botPersonalities(kit).find(each => each.id === here.described.personality)?.instruction;
-  const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, job);
-  if (toldBots.get(sessionID) === told) return;
-  await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries/kuvo.bot`, { value: told });
-  toldBots.set(sessionID, told);
+  const told = toldNow(kit, here);
+  const kept = toldOf(here.folder);
+  if (kept.session === sessionID && kept.instructions === toldDigest(told)) return;
+  await tellBot(target, here, sessionID, told);
 }
 
 // Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
@@ -2965,9 +3083,7 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
       // The bot's conversation is the new one, marked as its, told what it is.
       await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: { kuvo: session.metadata?.kuvo ?? { bot: bot.described.id } } }).catch(() => {});
       const kit = readKit();
-      const personality = kit ? botPersonalities(kit).find(each => each.id === bot.described.personality)?.instruction : undefined;
-      const told = kit ? botInstructions(kit, bot.described.name, bot.folder, personality, bot.described.project, jobInMemory(textOf(path.join(bot.folder, "MEMORY.md")) ?? "")) : null;
-      if (told !== null && await call(agents, "PUT", `${entries}/kuvo.bot`, { value: told }).then(() => true, () => false)) toldBots.set(moved.id, told);
+      if (kit) await tellBot(agents, bot, moved.id, toldNow(kit, bot));
       fs.writeFileSync(path.join(bot.folder, "session"), moved.id);
       fs.writeFileSync(path.join(bot.folder, "via"), "bridge");
       await call(engine, "DELETE", `/${route}`).catch(() => {});
@@ -3066,12 +3182,8 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
     const session = encodeURIComponent(here.session);
     if (renamed) await call(target, "PATCH", `/api/session/${session}`, { title: changed.name }, signal).catch(() => {});
     if (switched && changed.model) await call(target, "POST", `/api/session/${session}/model`, { model: changed.model }, signal).catch(() => {});
-    if (retold) {
-      const job = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
-      const personality = personalities.find(each => each.id === changed.personality)?.instruction;
-      const told = botInstructions(kit, changed.name, here.folder, personality, described.project, job);
-      if (await call(target, "PUT", `/api/experimental/session/${session}/instructions/entries/kuvo.bot`, { value: told }, signal).then(() => true, () => false)) toldBots.set(here.session, told);
-    }
+    if (retold) await tellBot(target, here, here.session, toldNow(kit, here, changed), signal);
+    noteBotsChanged();
   }
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
 }
@@ -3101,7 +3213,8 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);
   try {
-    noteDeleted(id);
+    // For a Mac to let go of it as it next connects (this Mac's own box needs no note).
+    if (!ON_MAC) noteDeleted(id);
     // To the trash as the Mac sends one there: a folder by when, and this process.
     const now = new Date();
     const two = number => String(number).padStart(2, "0");
@@ -3135,6 +3248,7 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
     target = here.agents ? agents : readEngine();
   } catch {}
   if (target) await call(target, "DELETE", `/api/session/${encodeURIComponent(here.session)}`, undefined, signal).catch(() => {});
+  noteBotsChanged();
   return { status: 200, value: {} };
 }
 
@@ -3730,7 +3844,9 @@ const pause = (ms, signal) => new Promise(resolve => {
 // and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
 // each one's notification to `tell` and each request answered to `answered`, and doing what the
 // box does as they come.
-export async function watchEvents(read, tell, signal, answered = () => {}) {
+// With `bots` (this Mac's box, whose app does the rest of that work itself still), only what it does
+// for its bots.
+export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -3745,9 +3861,12 @@ export async function watchEvents(read, tell, signal, answered = () => {}) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session; a bot's job read from its memory as
         // its run ends.
+        // A bot's run starting: what it's told brought up to date first.
+        if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
+        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
+        if (bots) continue;
         if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-        if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") refreshBotJob(source, event.data?.sessionID).catch(() => {});
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
         if (GROUP_NEWS.has(event.type)) {
@@ -3996,16 +4115,12 @@ export async function takePersonalities(given, readEngine = readEngineFile, read
 export async function retellBots(ids, readEngine = readEngineFile, readBridge = readBridgeFile) {
   const kit = readKit();
   if (!kit) return;
-  const personalities = botPersonalities(kit);
   for (const here of listOf(BOTS).map(botHere)) {
     if (!here || !ids.includes(here.described.personality) || isMoving(here.folder)) continue;
     let target = null;
     try { target = here.agents ? readBridge() : readEngine(); } catch {}
     if (!target?.port) continue;
-    const personality = personalities.find(each => each.id === here.described.personality)?.instruction;
-    const told = botInstructions(kit, here.described.name, here.folder, personality, here.described.project, jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? ""));
-    await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(here.session)}/instructions/entries/kuvo.bot`, { value: told })
-      .then(() => toldBots.set(here.session, told), () => {});
+    await tellBot(target, here, here.session, toldNow(kit, here));
   }
 }
 
@@ -6856,6 +6971,9 @@ async function serve() {
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
+  // Its bots kept told what they are as their runs start, on the engine and with the coding agents.
+  watchEvents(readEngineFile, () => true, undefined, () => {}, { bots: true });
+  watchEvents(readBridgeFile, () => true, undefined, () => {}, { bots: true });
   // Its app gone (its stdin closed): so is it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.on("close", () => process.exit(0));

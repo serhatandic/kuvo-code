@@ -124,7 +124,10 @@ Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a m
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
-bridge's real handler. Only the engine is a stand-in, the same small one on both. To add one:
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
+have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
+stand-in, the same small one on each. To add one:
 
 - Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
   each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `settings`, `key`, `credential`,
@@ -143,9 +146,9 @@ bridge's real handler. Only the engine is a stand-in, the same small one on both
   `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
-- Run both runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
-  machine, which the bridge's runner uses) after a change to the integrations, the MCP catalog or
-  bot templates.
+- Run the runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
+  machine, and the kit this Mac's app gives its own box, which the bridge's runners use) after a
+  change to the integrations, the MCP catalog, bot templates or what a bot is told.
 
 `Tests/E2E` tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with
