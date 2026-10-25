@@ -45,7 +45,7 @@ Each session runs at most 2 subagents at once: workers, reviewers, and any that 
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
 - **Running them:**
-  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md`;
+  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going);
   - each package's own suite (`swift test`);
   - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
   - the coding agents bridge's, with `bun test` in `Agents`.

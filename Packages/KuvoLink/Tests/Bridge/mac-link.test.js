@@ -23,12 +23,17 @@ const appHost = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
   request.on("end", () => {
-    if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
     if (app.away) {
       app.turnedAway += 1;
       return request.socket.destroy();
     }
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    // That it's this Mac's app: the box's nonce and where it reached it, signed with the password.
+    if (request.url === "/hello") {
+      const proof = crypto.createHmac("sha256", "host-password").update(`kuvo-host-hello\u0000${given.nonce}\u0000127.0.0.1:${appHost.address().port}`).digest("hex");
+      return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ proof }));
+    }
+    if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
     if (request.url === "/link/identity") {
       if (!app.keys) return response.writeHead(503).end("{}");
       return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.keys));
@@ -209,6 +214,27 @@ test("the link waits for its app, and without your Keychain's keys stays off and
   assert.match(failed.reason, /Keychain/);
   assert.equal((await ask("POST", "kuvo/phones/pair")).status, 409, "no pairing link without the link's keys");
   assert.equal(fs.existsSync(link.LINK_FILE), false, "no keys of its own written");
+
+  // Whatever answers where the app said it was (its host.json, left by an app that crashed) gets
+  // nothing but the proof it can't give: never asked for this Mac's keys.
+  const impostorCalls = [];
+  const impostor = http.createServer((request, response) => {
+    impostorCalls.push(request.url);
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ proof: "0".repeat(64), key: "x" }));
+  });
+  await new Promise(resolve => impostor.listen(0, "127.0.0.1", resolve));
+  const hostFile = path.join(process.env.KUVO_HOME, "run", "host.json");
+  fs.writeFileSync(hostFile, JSON.stringify({ url: `http://127.0.0.1:${impostor.address().port}`, password: "host-password" }));
+  try {
+    // Its keys are asked for before the config's answered.
+    assert.equal((await config()).status, 200);
+    assert.equal(link.macLink.overlay, null, "no keys taken");
+    assert.ok(impostorCalls.length > 0 && impostorCalls.every(url => url === "/hello"), JSON.stringify(impostorCalls));
+  } finally {
+    fs.rmSync(hostFile, { force: true });
+    impostor.close();
+  }
 });
 
 test("a phone pairs with Settings › Phone's link, and the Mac's box answers it: its own areas itself, the Mac's own routes through the app", async () => {

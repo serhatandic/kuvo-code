@@ -250,7 +250,7 @@ nonisolated enum MachineBrowserInstaller {
 
         // Chromium: its folder's files at the top of the bundle.
         let zip = try await download("Chromium", from: [chromium.url], sha256: chromium.sha256, into: staging, report: report)
-        try run("/usr/bin/unzip", ["-q", zip.path, "-d", staging.appending(path: "chromium").path])
+        try await run("/usr/bin/unzip", ["-q", zip.path, "-d", staging.appending(path: "chromium").path])
         try? fm.removeItem(at: zip)
         guard let unpacked = try fm.contentsOfDirectory(at: staging.appending(path: "chromium"), includingPropertiesForKeys: nil).first(where: { $0.lastPathComponent.hasPrefix("chrome-") }) else {
             throw MachineBrowserError.unpack("The Chromium download has no browser in it.")
@@ -270,7 +270,7 @@ nonisolated enum MachineBrowserInstaller {
             }
             for _ in 0..<6 { next() }
             while let rpm = try await group.next() {
-                try run("/usr/bin/tar", ["-xf", rpm.path, "-C", root.path])
+                try await run("/usr/bin/tar", ["-xf", rpm.path, "-C", root.path])
                 try? fm.removeItem(at: rpm)
                 next()
             }
@@ -292,7 +292,7 @@ nonisolated enum MachineBrowserInstaller {
         try Data((runtime.chromium.version + "\n").utf8).write(to: bundle.appending(path: "chromium-version"))
 
         let packed = staging.appending(path: "bundle.tar.gz")
-        try run("/usr/bin/tar", ["--no-xattrs", "--no-mac-metadata", "-czf", packed.path, "-C", bundle.path, "."], environment: ["COPYFILE_DISABLE": "1"])
+        try await run("/usr/bin/tar", ["--no-xattrs", "--no-mac-metadata", "-czf", packed.path, "-C", bundle.path, "."], environment: ["COPYFILE_DISABLE": "1"])
         try? fm.removeItem(at: file)
         try fm.moveItem(at: packed, to: file)
         try Data(try sha256(of: file).utf8).write(to: checksum)
@@ -358,18 +358,14 @@ nonisolated enum MachineBrowserInstaller {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func run(_ tool: String, _ arguments: [String], environment: [String: String] = [:]) throws {
-        let process = Process()
-        process.executableURL = URL(filePath: tool)
-        process.arguments = arguments
-        process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
-        let errors = Pipe()
-        process.standardError = errors
-        process.standardOutput = FileHandle.nullDevice
-        try process.run()
-        let output = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw MachineBrowserError.unpack(String(decoding: output, as: UTF8.self)) }
+    /// This Mac's unzip or tar, unpacking or packing the browser's downloads. Each takes seconds:
+    /// one still going after ten minutes is stuck, and stopped.
+    private static func run(_ tool: String, _ arguments: [String], environment: [String: String] = [:]) async throws {
+        let result = try await ChildProcess.run(tool, arguments, environment: ProcessInfo.processInfo.environment.merging(environment) { $1 },
+                                                output: .discard, limit: .seconds(600))
+        guard result.succeeded else {
+            throw MachineBrowserError.unpack(result.timedOut ? "\((tool as NSString).lastPathComponent) didn’t finish in ten minutes." : result.errorText)
+        }
     }
 
     /// Bytes downloaded so far, from downloads running at once.

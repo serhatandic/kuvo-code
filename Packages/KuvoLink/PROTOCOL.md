@@ -683,7 +683,7 @@ host serves:
     on one was refused, and it couldn't be renewed; the Mac says "Sign-in ended"), until a run on
     it works again or you sign in again; `POST kuvo/accounts/<provider>/forget` is Disconnect, as
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
-    isn't a plan there, an integration's server among them). Every box from bridge 0.9.59
+    isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
   What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
 - On a Mac, `kuvo/hosts`: the machines this phone may reach directly, with their addresses
@@ -1276,7 +1276,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `groups.joinable` | `kuvo/groups/joinable` |
 | `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
 | `update` | a machine only: `kuvo/update` |
-| `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.59) |
+| `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
 | `hosts` | a Mac only: `kuvo/hosts…` |
 | `mac` | a Mac only: `kuvo/mac` |
@@ -1350,7 +1350,7 @@ chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client'
 on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the
 phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the
 bridge who your machines and their bots are, carries what it sends by the same rules, and the
-Mac's agents mail carries its bots' `id` and `look` and its `features`. (Since bridge 0.9.59 that
+Mac's agents mail carries its bots' `id` and `look` and its `features`. (Since bridge 0.9.61 that
 connection is the box's: the app's mail goes out on it, `kuvo/link/send`, "The relay, on this
 Mac's box".)
 
@@ -1369,10 +1369,24 @@ there.
 #### Host interface
 
 What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
-which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and passes the box
-`KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
-starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
-<KUVO_HOST_PASSWORD>` and `content-type: application/json`:
+which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and, each time it
+starts listening, writes where and with what password to the box's `run/host.json` (`{"url",
+"password"}`, made `0600` and moved into place; bridge 0.9.60). It takes it away before each start,
+when it stops, when it can't start, and as it quits; one a crash left behind stays until the next
+start. The box reads it again for each call, so a host interface the app started again (it does,
+whenever it fails, and with Try Again in Settings) is reached at its new address without the box
+starting again, and every client's streams stay open. Before it sends anything else there, the box
+makes sure it's the app, not whatever took a left-behind file's port: `hello {"nonce"}` (a random
+nonce, asked without the password) → `{"proof"}`, the HMAC-SHA256 with the password, in hex, of
+`kuvo-host-hello\0<nonce>\0<host>:<port>`: where the box reached it, which the app answers with its
+own (`127.0.0.1:<port>`), so a proof relayed from the app at another port (by another user's
+process on this Mac, which can't read the file) is wrong there. Without that proof, its keys can't be reached (`503 {"message"}`); with it, nothing is asked
+again until the file changes or the app stops answering there. The box is started with `KUVO_KEYS_ON_HOST=1`: without the file, its
+keys can't be reached (`503 {"message"}`), never kept in files of its own. Before 0.9.60 the app
+passed `KUVO_HOST_URL` and `KUVO_HOST_PASSWORD` in the box's environment, which the box still uses
+while there's no file, taking the password out of its environment as it starts so nothing it runs
+has it. Each other call is a `POST` with `Authorization: Bearer <password>` and `content-type:
+application/json`:
 
 - `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
 - `keys/get {"name"}` → `{"value"}`, or `404` for none;
@@ -1384,7 +1398,7 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
   seconds);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
-- for its link (bridge 0.9.59, "The relay, on this Mac's box"):
+- for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
     key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
     Keychain won't give them;
@@ -1404,7 +1418,7 @@ with. Without these, as on a machine, the box keeps its keys in files only you c
 
 #### The relay, on this Mac's box
 
-Since bridge 0.9.59 this Mac's box holds its relay connection, as a machine's bridge does (`run`),
+Since bridge 0.9.61 this Mac's box holds its relay connection, as a machine's bridge does (`run`),
 in `serve`'s process: your phones pair with it and open their sessions there. Its keys (link key,
 relay secret, signing key) stay in the Mac's Keychain: the box asks the app for them
 (`link/identity`) once its link is on, keeps them in memory only, and never makes keys of its own;
@@ -1416,6 +1430,12 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`kuvo/phones…`); the rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it hands the app (`link/mailed`) until what that mail carries moves onto the box.
+All three go through the app's `hello` proof first (the host interface, above), and the link's
+keys (`link/identity`) are never asked of a host that hasn't given it. When the app's host
+interface starts again (it failed, or Try Again), what the link has open through it ends: a phone's
+followed `link/route` streams end (the phone follows again), a request in the gap is a `503`, and
+mail for the app waits in the box's queue and is tried again, in order, a few times over about
+fifteen seconds before it's let go with a line in the box's log.
 
 For the app only (anyone else gets `403`):
 

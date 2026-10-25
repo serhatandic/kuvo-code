@@ -10,8 +10,9 @@ import OpenCodeKit
 @MainActor
 final class TestBox {
     let process: BoxProcess
-    /// What it asks the app for (the test copy's own Keychain, in memory).
-    let host = HostInterface()
+    /// What it asks the app for (the test copy's own Keychain, in memory): an app's own
+    /// (`AppModel.host`), else one of its own.
+    let host: HostInterface
     private let enginePort: UInt16
 
     /// Node, where it usually is (CI's, Homebrew's, nvm's).
@@ -27,10 +28,11 @@ final class TestBox {
     /// own (`AppModel.box`), else one of its own. `defaultsAdded`: it starts as one that added its
     /// defaults to this Mac's settings before (a test's settings stay as it gives them).
     /// `environment`: what else it runs with (GitHub's stand-in, `KUVO_TEST_GITHUB`).
-    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true, environment: [String: String] = [:]) async throws {
+    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), host: HostInterface = HostInterface(), defaultsAdded: Bool = true, environment: [String: String] = [:]) async throws {
         guard let node = Self.node else { throw TestFailure("Node runs this Mac's box in the tests, and there's none.") }
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
         self.process = process
+        self.host = host
         enginePort = UInt16(url.port ?? 0)
         try? FileManager.default.removeItem(at: BoxProcess.home)
         if defaultsAdded { BoxProcess.noteDefaultsAdded(["bot-memory", "websearch", "search-exa"]) }
@@ -43,7 +45,8 @@ final class TestBox {
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
-        environment.merge(try await host.start()) { _, new in new }
+        // Where its host interface answers, in its folder (`run/host.json`), as the app tells it.
+        try await host.start()
         MachineBox.writeMacCatalog()
         await process.start(node: node, environment: environment)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }

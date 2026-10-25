@@ -143,7 +143,9 @@ import Testing
         let started = try #require(app.box.environment, "the box was started")
         #expect(started["KUVO_WAKE_COMMAND"] == WakeUps.command.path)
         #expect(started["KUVO_KEYS_ON_HOST"] == "1")
-        #expect(started["KUVO_HOST_URL"]?.hasPrefix("http://127.0.0.1:") == true)
-        #expect(started["KUVO_HOST_PASSWORD"] != nil)
+        // Where the app answers for your Keychain, in its folder, which it reads for each call.
+        #expect(started["KUVO_HOST_URL"] == nil && started["KUVO_HOST_PASSWORD"] == nil)
+        let said = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: HostInterface.file)) as? [String: String])
+        #expect(said["url"]?.hasPrefix("http://127.0.0.1:") == true && said["password"] != nil)
     }
 }

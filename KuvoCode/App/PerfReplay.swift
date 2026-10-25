@@ -610,11 +610,9 @@ enum PerfRead {
                 // KUVO_PERF_CAPTURE=<folder>: the window as it was then, the first few times.
                 if let folder = environment["KUVO_PERF_CAPTURE"], captures < 12, let number = scroll.window?.windowNumber {
                     captures += 1
-                    let capture = Process()
-                    capture.executableURL = URL(filePath: "/usr/sbin/screencapture")
-                    capture.arguments = ["-x", "-o", "-l", String(number), folder + "/step\(steps).png"]
-                    try? capture.run()
-                    capture.waitUntilExit()
+                    // Waited for without holding the main thread; a capture takes a moment.
+                    _ = try? await ChildProcess.run("/usr/sbin/screencapture", ["-x", "-o", "-l", String(number), folder + "/step\(steps).png"],
+                                                    output: .discard, errors: .discard, limit: .seconds(30))
                 }
             }
             send(0, phase: .ended)

@@ -89,7 +89,10 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     nonisolated(unsafe) public static var standIn: (@Sendable (_ address: String, _ script: String) -> String?)?
     #endif
 
-    /// Runs `script` on the machine and returns what it printed. `input` is sent to it.
+    /// Runs `script` on the machine and returns what it printed. `input` is sent to it. It runs as
+    /// long as it takes (an install, a copy), with no limit of its own: SSH notices a machine that
+    /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
+    /// is never left half done.
     @discardableResult
     public func run(_ script: String, input: URL? = nil) async throws -> String {
         #if DEBUG
@@ -98,49 +101,19 @@ public struct SSHConnection: Sendable, Hashable, Codable {
             return output
         }
         #endif
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = arguments(running: script)
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        if let input { process.standardInput = try FileHandle(forReadingFrom: input) }
-        // Read while it runs: a full pipe would stall it.
-        let output = Task.detached { stdout.fileHandleForReading.readDataToEndOfFile() }
-        let errors = Task.detached { stderr.fileHandleForReading.readDataToEndOfFile() }
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-            do { try process.run() } catch { continuation.resume(throwing: error) }
-        }
-        let text = String(decoding: await output.value, as: UTF8.self)
-        guard status == 0 else {
-            throw RemoteEngineError.ssh(status: status, message: String(decoding: await errors.value, as: UTF8.self))
-        }
-        return text
+        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
+                                                cancellable: false)
+        guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
+        return result.outputText
     }
 
     /// Runs `script` on the machine with what it prints going to `output` as it is (an archive of
-    /// a folder there, say), not read as text. `input` is sent to it.
+    /// a folder there, say), not read as text. `input` is sent to it. As long as it takes, as `run`.
     public func run(_ script: String, input: URL? = nil, output: URL) async throws {
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = arguments(running: script)
         guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
-        let file = try FileHandle(forWritingTo: output)
-        defer { try? file.close() }
-        let stderr = Pipe()
-        process.standardOutput = file
-        process.standardError = stderr
-        if let input { process.standardInput = try FileHandle(forReadingFrom: input) }
-        let errors = Task.detached { stderr.fileHandleForReading.readDataToEndOfFile() }
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-            do { try process.run() } catch { continuation.resume(throwing: error) }
-        }
-        guard status == 0 else {
-            throw RemoteEngineError.ssh(status: status, message: String(decoding: await errors.value, as: UTF8.self))
-        }
+        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
+                                                output: .file(output), cancellable: false)
+        guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
     }
 
     /// `text` as one word for `sh`.
@@ -1078,7 +1051,10 @@ public final class RemoteServer: @unchecked Sendable {
             if data.isEmpty { handle.readabilityHandler = nil } else { log.append(data) }
         }
         let exits = ExitSignal()
+        // How it ended, from its handler: never `waitUntilExit`, which can miss it.
+        let ended = Arrival<Int32>()
         process.terminationHandler = { process in
+            ended.deliver(process.terminationStatus)
             if exits.fire() { onExit(process.terminationStatus) }
         }
         try process.run()
@@ -1090,8 +1066,8 @@ public final class RemoteServer: @unchecked Sendable {
         do {
             while true {
                 if !process.isRunning {
-                    process.waitUntilExit()
-                    throw RemoteEngineError.exited(status: process.terminationStatus, output: log.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    guard let status = await ended.wait() else { throw CancellationError() }
+                    throw RemoteEngineError.exited(status: status, output: log.text.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
                 if (try? await client.send(client.request("GET", "api/info"), as: Info.self)) != nil { break }
                 if ContinuousClock.now > deadline { throw RemoteEngineError.timedOut }

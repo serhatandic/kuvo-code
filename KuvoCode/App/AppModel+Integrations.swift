@@ -14,6 +14,13 @@ extension AppModel {
         try await self.box(boxID(box)).value(Integrations.Listed.self, "GET", "kuvo/integrations")
     }
 
+    /// The same, read again as Try Again does: this Mac's host interface started first when it
+    /// isn't answering (it stopped, or never started), so keys its box couldn't reach are read again.
+    func integrationsAgain(on box: SidebarBox) async throws -> Integrations.Listed {
+        if box.machine == nil { await host.keepUp() }
+        return try await integrations(on: box)
+    }
+
     /// Added on `box`, as Connect (or Save, after its keys) does, with `keys` by their names
     /// (`CLIENT_ID`, `API_KEY`…) or those it has: one there already is written again as it is,
     /// so the engine reads its keys again, and with new keys its box connects its server again

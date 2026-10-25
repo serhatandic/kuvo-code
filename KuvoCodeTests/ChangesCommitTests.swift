@@ -83,6 +83,26 @@ import Testing
         #expect(changes.files.map(\.path) == ["app/main.swift"])
     }
 
+    /// A commit whose hook leaves something running (a watcher, a background push) finishes, and
+    /// the panel goes on: reading git's output to its end used to wait for that to stop, and Commit
+    /// spun for as long as it ran.
+    @Test func aHookThatLeavesSomethingRunningDoesntHoldUpTheCommit() async throws {
+        let pidFile = repo.url.appending(path: ".git/background.pid")
+        defer {
+            if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap({ pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) {
+                kill(pid, SIGKILL)
+            }
+        }
+        let hook = repo.url.appending(path: ".git/hooks/post-commit")
+        try FileManager.default.createDirectory(at: hook.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n/bin/sleep 600 & echo $! > '\(pidFile.path(percentEncoded: false))'\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path(percentEncoded: false))
+        try repo.write("app/main.swift", "print(6)\n")
+        #expect(await commit() == nil)
+        #expect(try lastCommitFiles() == ["app/main.swift"])
+        #expect(FileManager.default.fileExists(atPath: pidFile.path(percentEncoded: false)), "the hook ran, and left its job running")
+    }
+
     /// A push that fails still leaves the commit, and says so.
     @Test func aFailedPushSaysTheCommitIsMade() async throws {
         try repo.git("remote", "add", "origin", repo.url.appending(path: "nowhere").path(percentEncoded: false))

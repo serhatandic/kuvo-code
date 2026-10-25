@@ -4,6 +4,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -62,6 +63,13 @@ export async function standInHost(password) {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
+    // That it's the app, as the app proves it: the box's nonce signed with the password, asked
+    // without it (and answered while its Keychain is locked too).
+    if (request.method === "POST" && request.url === "/hello") {
+      host.hellos = (host.hellos ?? 0) + 1;
+      const { nonce } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      return answer(200, { proof: crypto.createHmac("sha256", password).update(`kuvo-host-hello\0${nonce}\0${host.url.replace("http://", "")}`).digest("hex") });
+    }
     if (request.method !== "POST" || request.headers.authorization !== `Bearer ${password}` || request.headers["content-type"] !== "application/json") {
       host.turnedAway++;
       return answer(401, {});

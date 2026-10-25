@@ -828,24 +828,16 @@ nonisolated struct SSHMoveTransport: MoveTransport {
         try await SSHConnection(destination: machine).run("[ \"$(cat \(quoted) 2>/dev/null)\" != \(Moves.hold) ] || rm -f \(quoted)")
     }
 
-    /// This Mac's tar, as it is.
+    /// This Mac's tar, as it is, packing or unpacking a folder on this Mac's disk: what it says is
+    /// read as it comes (a lot of it never stalls tar), and one still going after ten minutes is
+    /// stuck, and stopped. Never stopped half way by the caller going away.
     private static func tar(_ arguments: [String]) async throws {
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/tar")
-        process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["COPYFILE_DISABLE"] = "1"
-        process.environment = environment
-        let errors = Pipe()
-        process.standardError = errors
-        process.standardOutput = FileHandle.nullDevice
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-            do { try process.run() } catch { continuation.resume(throwing: error) }
-        }
-        guard status == 0 else {
-            let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            throw NSError(domain: "tar", code: Int(status), userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "tar failed (\(status))" : message])
-        }
+        let result = try await ChildProcess.run("/usr/bin/tar", arguments, environment: environment, output: .discard,
+                                                limit: .seconds(600), cancellable: false)
+        guard !result.succeeded else { return }
+        let message = result.timedOut ? "tar didn’t finish in ten minutes." : result.errorText
+        throw NSError(domain: "tar", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "tar failed (\(result.status))" : message])
     }
 }

@@ -84,6 +84,9 @@ cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
 cd Agents && bun install && bun test && bunx tsc --noEmit
 ```
 
+`./scripts/test-app.sh` runs one at a time: a run started while another is going
+waits for it, since they share the test copy's settings and temporary folders.
+
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
 after. The app hosting them starts nothing (no window, engine or menu bar item),
@@ -270,6 +273,7 @@ when you're there to answer.
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
 | `KUVO_DEMO_BOX_FAILED` | This Mac's box as if it had stopped for good, with this reason: how the sidebar shows it |
+| `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |
 | `KUVO_DEMO_REMOVE_PROJECT` | Remove Project…'s dialog for the project of this name, open (nothing's removed unless you click) |
 | `KUVO_DEMO_PALETTE` | Open the command palette with this typed in it (empty for none) |
 | `KUVO_DEMO_MENU` | Open the `mode` menu, the `model` picker (`list` on the model list, `models` with every model shown), or `location` in the New Project sheet |
