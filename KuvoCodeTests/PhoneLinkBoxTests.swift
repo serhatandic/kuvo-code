@@ -135,7 +135,7 @@ import Testing
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         #expect((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["keepsAwake"] is Bool)
         // Followed: its first line as it comes, without waiting for an end.
-        let (lines, followed) = try await URLSession.shared.bytes(for: try asked("kuvo/machines/events"))
+        let (lines, followed) = try await URLSession.shared.bytes(for: try asked("kuvo/asks/events"))
         #expect((followed as? HTTPURLResponse)?.statusCode == 200)
         var first: String?
         for try await line in lines.lines {

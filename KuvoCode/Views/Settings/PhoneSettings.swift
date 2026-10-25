@@ -28,6 +28,12 @@ struct PhoneSettings: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                 } else {
+                    // This Mac's box holds the link: stopped for good, it says why, and starts again.
+                    if let failure = app.box.failure {
+                        FailureLabel(title: "Your phones can’t reach this Mac", detail: failure, retrying: "this Mac’s link") {
+                            Task { await app.box.startAgain() }
+                        }
+                    }
                     HStack(spacing: 8) {
                         Button("Pair a Phone…") {
                             isPairing = true
@@ -36,7 +42,7 @@ struct PhoneSettings: View {
                                 isPairing = false
                             }
                         }
-                        .disabled(isPairing)
+                        .disabled(isPairing || app.box.failure != nil)
                         if isPairing { Spinner(size: 16) }
                     }
                     if let problem = link.pairingProblem {
@@ -51,7 +57,7 @@ struct PhoneSettings: View {
                 Text("Pair")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(statusText)
+                    if app.box.failure == nil { Text(statusText) }
                     Text("Your phones reach this Mac through Kuvo Code’s relay. Everything between them is encrypted end to end, so the relay only passes along what it can’t read.")
                 }
                 .foregroundStyle(.secondary)

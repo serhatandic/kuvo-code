@@ -338,8 +338,8 @@ private struct Browsing: Identifiable {
     var id: String { collection.id }
 }
 
-/// Why something couldn't be read, with a way to try again.
-private struct FailureLabel: View {
+/// Why something couldn't be read, with a way to try again (Skills, Phone).
+struct FailureLabel: View {
     let title: String
     let detail: String
     /// What Try Again reads again, for VoiceOver ("the collections").
