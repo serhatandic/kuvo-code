@@ -162,11 +162,13 @@ function phone() {
       transport = opened.transport;
       return JSON.parse(opened.payload);
     },
-    send(method, p, id = crypto.randomInt(1, 2 ** 20)) {
-      for (const piece of link.pieces({ t: "req", id, m: method, p, h: {} }, Buffer.alloc(0), true)) device.send(macAddress, link.frame(link.Frame.transport, session, transport.seal(piece)));
+    send(method, p, id = crypto.randomInt(1, 2 ** 20), body) {
+      const h = body === undefined ? {} : { "content-type": "application/json" };
+      const bytes = body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body));
+      for (const piece of link.pieces({ t: "req", id, m: method, p, h }, bytes, true)) device.send(macAddress, link.frame(link.Frame.transport, session, transport.seal(piece)));
     },
-    async request(method, p) {
-      this.send(method, p);
+    async request(method, p, body) {
+      this.send(method, p, undefined, body);
       const pieces = [];
       while (true) {
         const next = await frames();
@@ -458,5 +460,15 @@ test("whatever the relay sends, and a relay that goes, the box's own routes go o
   const failed = await untilStatus("failed");
   assert.match(failed.reason, /127\.0\.0\.1:9/);
   assert.equal((await ask("GET", "kuvo/personalities")).status, 200);
+  await config({ machines: false });
+});
+
+test("a phone removes itself through this Mac's box: it's off the Mac's phones, and the app hears so", async () => {
+  const { it } = await paired();
+  const removed = await it.request("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] });
+  assert.equal(removed.status, 200);
+  const listed = await ask("GET", "kuvo/link/phones");
+  assert.ok(!listed.json.phones.some(each => each.key === it.public), "off the Mac's phones");
+  assert.ok(listed.json.removed.some(each => each.key === it.public), "kept removed");
   await config({ machines: false });
 });

@@ -43,13 +43,28 @@ import Testing
 
     /// This Mac's link, as the app starts it: reaching its box, which reaches it back. `refusing`:
     /// a route the box doesn't take the first time (it's starting again just then).
-    private func link(on box: SettingsBox, refusing: String? = nil) -> PhoneLink {
+    /// `starting`: started now (else the test starts it, after what comes before).
+    private func link(on box: SettingsBox, refusing: String? = nil, starting: Bool = true) -> PhoneLink {
         let link = PhoneLink(file: file, identity: (mac, secret))
         let client = refusing.map { Self.flaky(box, refusing: $0) } ?? box.client
         link.box = { client }
         box.box.host.phoneLink = link
-        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        if starting { start(link, on: box) }
         return link
+    }
+
+    private func start(_ link: PhoneLink, on box: SettingsBox) {
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+    }
+
+    struct Kept: Decodable {
+        struct Phone: Decodable { var name: String }
+        var phones: [Phone]
+        var pairing: Bool?
+    }
+
+    private func onTheBox(_ box: SettingsBox) async throws -> Kept {
+        try await box.client.value(Kept.self, "GET", "kuvo/link/phones")
     }
 
     /// `box`, as the app reaches it, but `route`'s first request fails, as when the box restarts
@@ -65,10 +80,58 @@ import Testing
         })
     }
 
+    /// Where a request waits until the test lets it go on.
+    nonisolated final class Gate: Sendable {
+        private let state = OSAllocatedUnfairLock<(reached: Bool, waiting: [CheckedContinuation<Void, Never>], open: Bool)>(initialState: (false, [], false))
+        var reached: Bool { state.withLock { $0.reached } }
+        func pass() async {
+            await withCheckedContinuation { continuation in
+                let now = state.withLock { state -> Bool in
+                    state.reached = true
+                    if state.open { return true }
+                    state.waiting.append(continuation)
+                    return false
+                }
+                TestPulse.beat()
+                if now { continuation.resume() }
+            }
+        }
+        func open() {
+            for waiting in state.withLock({ state -> [CheckedContinuation<Void, Never>] in
+                state.open = true
+                defer { state.waiting = [] }
+                return state.waiting
+            }) { waiting.resume() }
+        }
+    }
+
+    /// `box`, as the app reaches it, but a POST to `route` waits at `gate` first.
+    private static func gated(_ box: SettingsBox, route: String, gate: Gate) -> BoxClient {
+        let base = URL(string: box.engine.url + "/")!
+        return BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            guard request.path == route, request.method == "POST" else {
+                return PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil)
+            }
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    await gate.pass()
+                    do {
+                        for try await part in PhoneLink.respond(to: request, link: nil, engine: base, password: "test", agents: nil) { continuation.yield(part) }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        })
+    }
+
     /// Once this Mac's box has been told, given its keys and taken your phones: its link tries
     /// the relay, which nobody answers here.
     private func linked(_ link: PhoneLink) async throws {
-        try await until { if case .failed = link.status { true } else { false } }
+        // The box's own word on the relay, which the app hears only once it follows the box.
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
     }
 
     /// The phones as an older Kuvo Code reads them from phone-link.json.
@@ -138,6 +201,94 @@ import Testing
         #expect(try await box.client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.name) == ["Mine"])
         #expect(link.phones.map(\.name) == ["Mine"])
         #expect(try olderKeeps() == ["Mine"])
+    }
+
+    /// A phone removed as Kuvo Code starts, before this Mac's box has the phones an older version
+    /// kept (a machine's document, say): that one stays out, and the others are all still there.
+    @Test func aPhoneRemovedBeforeTheBoxHasYourPhonesLeavesTheOthers() async throws {
+        let box = try await SettingsBox(port: 47_954)
+        let link = link(on: box, starting: false)
+        defer { done(box, link) }
+        link.remove(try #require(link.phones.first { $0.name == "Lost" }))
+        await link.removalsTaken()
+        start(link, on: box)
+        try await linked(link)
+        #expect(try await onTheBox(box).phones.map(\.name) == ["Mine"])
+        try await until { link.phones.map(\.name) == ["Mine"] }
+        #expect(try olderKeeps() == ["Mine"])
+    }
+
+    /// A removal an earlier build kept that names no phone (the box refuses it) never holds the
+    /// link up: your phones still come to the box.
+    @Test func aRemovalThatNamesNoPhoneDoesntHoldTheLinkUp() async throws {
+        var kept = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        kept["toRemove"] = [["key": "not-a-key"]]
+        try JSONSerialization.data(withJSONObject: kept).write(to: file)
+        let box = try await SettingsBox(port: 47_957)
+        let link = link(on: box)
+        defer { done(box, link) }
+        try await linked(link)
+        #expect(try await onTheBox(box).phones.map(\.name).sorted() == ["Lost", "Mine"])
+        #expect(link.removalProblem == nil)
+    }
+
+    /// A pairing code closed while the box was still making it is never shown, and ends on the box.
+    @Test func aPairingClosedWhileItWasMadeIsntShownAndEnds() async throws {
+        let box = try await SettingsBox(port: 47_958)
+        let gate = Gate()
+        let link = PhoneLink(file: file, identity: (mac, secret))
+        let client = Self.gated(box, route: "kuvo/phones/pair", gate: gate)
+        link.box = { client }
+        box.box.host.phoneLink = link
+        start(link, on: box)
+        defer { done(box, link) }
+        try await linked(link)
+        let begun = Task { await link.beginPairing() }
+        try await until { gate.reached }
+        // Closed as the box makes it.
+        link.endPairing()
+        gate.open()
+        await begun.value
+        #expect(link.pairing == nil)
+        await link.pairingEnded()
+        #expect(try await onTheBox(box).pairing == false)
+    }
+
+    /// With neither the phone link nor machines, nothing is made for the link in your Keychain:
+    /// told it's off, the box asks for no keys, and the app gives none.
+    @Test func withTheLinkOffNoKeysAreMade() async throws {
+        UserDefaults.standard.set(false, forKey: "phoneLink")
+        let box = try await SettingsBox(port: 47_959)
+        let link = PhoneLink(file: file)
+        let client = box.client
+        link.box = { client }
+        box.box.host.phoneLink = link
+        defer { done(box, link) }
+        start(link, on: box)
+        link.machinesChanged()
+        link.attend(["ses_a"])
+        #expect(link.boxIdentity() == nil)
+        await link.saidToBox()
+        var found: CFTypeRef?
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService,
+                                    kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
+        #expect(Keychain.copyMatching(query, &found) == errSecItemNotFound)
+    }
+
+    /// Before this Mac's engine is up, a phone asking it hears it's starting, not a connection
+    /// error.
+    @Test func beforeTheEngineIsUpAPhoneHearsItsStarting() async throws {
+        let link = PhoneLink(file: file, identity: (mac, secret))
+        var status = 0
+        var body = Data()
+        for try await part in link.answerForBox(LinkRequest(method: "GET", path: "api/session", headers: [:], body: Data()), phone: mine.publicBytes) {
+            switch part {
+            case .head(let code, _): status = code
+            case .body(let data): body += data
+            }
+        }
+        #expect(status == 503)
+        #expect(String(decoding: body, as: UTF8.self).contains("starting"))
     }
 
     @Test func settingsPhonesPairingLinkIsTheBoxsAsYourPhonesKnowThisMac() async throws {

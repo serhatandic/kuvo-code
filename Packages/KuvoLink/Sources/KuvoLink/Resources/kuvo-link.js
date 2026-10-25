@@ -2315,7 +2315,12 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       // This Mac's app removes as the Mac does (Settings › Phone, or a removal a machine's
       // document brought).
       const asMac = IS_MAC && request.fromApp;
-      const changed = updateLink(link => link && (asMac ? removeAsMac(link, given?.phones) : removePhones(link, phone?.key?.toString("base64url"), given?.phones)) ? link : null);
+      // On this Mac, one before any phone's paired here (no link file yet) is kept all the same,
+      // so the phone stays out once it's taken.
+      const changed = updateLink(kept => {
+        const link = kept ?? (asMac ? { phones: [], removed: [] } : null);
+        return link && (asMac ? removeAsMac(link, given?.phones) : removePhones(link, phone?.key?.toString("base64url"), given?.phones)) ? link : null;
+      });
       if (!changed) return yield* json(400, { message: "Only phones paired here can be removed, and never your Mac." });
       noteDocsChanged();
       // Once this answer is on its way: a phone that removed itself gets it too.
@@ -5905,10 +5910,14 @@ export function writeLink(link) {
   fs.writeFileSync(temporary, JSON.stringify(kept, null, 2), { mode: 0o600 });
   fs.renameSync(temporary, LINK_FILE);
   if (IS_MAC) {
-    // Phones no longer paired lose what they have open, whoever removed them.
-    macLink.host?.keepOnly(new Set((link.phones ?? []).map(phone => phone.key)));
     for (const tell of macLink.phoneFollowers) tell();
-    macLinkCheck();
+    // Phones no longer paired lose what they have open, whoever removed them, and a link no longer
+    // wanted (the last phone gone) leaves the relay: a moment after, so a phone that removed itself
+    // gets its answer first (as a machine's bridge does).
+    setTimeout(() => {
+      macLink.host?.keepOnly(new Set((readLink()?.phones ?? []).map(phone => phone.key)));
+      macLinkCheck();
+    }, 200);
     return;
   }
   // For the box's keeper, which keeps this bridge running while it's needed.

@@ -2,7 +2,6 @@ import AppKit
 import CryptoKit
 import Foundation
 import KuvoLink
-import os
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
@@ -153,42 +152,19 @@ final class HostInterface {
             && name.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
     }
 
-    /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), read
-    /// off the main actor. It stops when the box goes, before its head too (the phone left, and
-    /// what it asked stops with it), and one that fails partway ends cut off, not whole.
+    /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), each
+    /// piece read only as it's sent on (off the main actor), so a slow box never has it pile up
+    /// here. It stops when the box goes, before its head too (the phone left, and what it asked
+    /// stops with it), and one that fails partway ends cut off, not whole.
     private static func answer(_ parts: AsyncThrowingStream<LinkResponsePart, Error>) async -> HTTPResponse {
-        let (body, sending) = AsyncThrowingStream<Data, Error>.makeStream()
-        let reader = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
-        let head: (status: Int, headers: [String: String]) = await withTaskCancellationHandler {
-            await withCheckedContinuation { said in
-                let reading = Task.detached {
-                    var told = false
-                    do {
-                        for try await part in parts {
-                            switch part {
-                            case .head(let status, let headers):
-                                if !told { said.resume(returning: (status, Self.passed(headers))) }
-                                told = true
-                            case .body(let data):
-                                if !told { said.resume(returning: (200, Self.passed([:]))) }
-                                told = true
-                                sending.yield(data)
-                            }
-                        }
-                        sending.finish()
-                    } catch {
-                        sending.finish(throwing: error)
-                    }
-                    if !told { said.resume(returning: (502, Self.passed([:]))) }
-                }
-                reader.withLock { $0 = reading }
-                sending.onTermination = { _ in reading.cancel() }
-                if Task.isCancelled { reading.cancel() }
-            }
-        } onCancel: {
-            reader.withLock { $0 }?.cancel()
-        }
-        return HTTPResponse(status: head.status, headers: head.headers, stream: body)
+        let reader = AnswerReader(parts)
+        let head = await reader.head()
+        return HTTPResponse(status: head.status, headers: Self.passed(head.headers), stream: Self.body(reader))
+    }
+
+    /// Its body, pulled by whoever sends it on, never through the main actor.
+    private nonisolated static func body(_ reader: AnswerReader) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { try await reader.nextBody() }
     }
 
     /// What goes back with an answer: its type and how it may be kept, and that it's the app's own
@@ -268,5 +244,43 @@ final class HostInterface {
         default:
             return .init(status: 404)
         }
+    }
+}
+
+/// An answer's parts, read one at a time as they're asked for: first its head, then its body.
+nonisolated final class AnswerReader: @unchecked Sendable {
+    private var parts: AsyncThrowingStream<LinkResponsePart, Error>.AsyncIterator
+    /// A body that came before any head, for the first piece.
+    private var first: Data?
+
+    init(_ parts: AsyncThrowingStream<LinkResponsePart, Error>) {
+        self.parts = parts.makeAsyncIterator()
+    }
+
+    /// Its status and headers: a body first means 200; none at all (gone), 502.
+    func head() async -> (status: Int, headers: [String: String]) {
+        do {
+            switch try await parts.next() {
+            case .head(let status, let headers): return (status, headers)
+            case .body(let data):
+                first = data
+                return (200, [:])
+            case nil: return (502, [:])
+            }
+        } catch {
+            return (502, [:])
+        }
+    }
+
+    /// The next piece of its body; nil at its end.
+    func nextBody() async throws -> Data? {
+        if let data = first {
+            first = nil
+            return data
+        }
+        while let part = try await parts.next() {
+            if case .body(let data) = part { return data }
+        }
+        return nil
     }
 }

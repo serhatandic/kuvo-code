@@ -102,9 +102,9 @@ public struct PairedPhones: Equatable, Sendable {
         return self != before
     }
 
-    /// A phone's key (32 bytes, base64url), and its pairing if given, as a removal names it:
-    /// never a Mac's.
-    private static func fits(_ entry: Entry, macs: Set<String>) -> Bool {
+    /// Whether `entry` names a phone as a removal names it (its key, 32 bytes base64url, and its
+    /// pairing if given): never one of `macs`.
+    public static func fits(_ entry: Entry, macs: Set<String>) -> Bool {
         let key = /[A-Za-z0-9_-]{43}/, pairing = /[A-Za-z0-9_-]{0,32}/
         return entry.key.wholeMatch(of: key) != nil && !macs.contains(entry.key) && (entry.pairing.map { $0.wholeMatch(of: pairing) != nil } ?? true)
     }

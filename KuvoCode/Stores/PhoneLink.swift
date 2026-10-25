@@ -152,8 +152,9 @@ final class PhoneLink {
     init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil) {
         savedFile = file ?? AppInfo.supportDirectory.appending(path: "phone-link.json")
         let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
-        toRemove = saved.toRemove
-        paired = Self.without(saved.toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
+        // Only what names a phone (an earlier build kept anything a document named).
+        toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
+        paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
         machineHosts = saved.machines
         documents = saved.documents
         if let identity {
@@ -225,6 +226,9 @@ final class PhoneLink {
         self.endpoint = endpoint
         guard running == nil else { return }
         running = Task { [weak self] in await self?.follow() }
+        #if DEBUG
+        showRemovalForDemo()
+        #endif
     }
 
     #if DEBUG
@@ -232,6 +236,12 @@ final class PhoneLink {
     /// pairing code, its link written to that file, for pairing a simulator (or a test) without a
     /// camera or the window. The phone gets in once the box is on the relay.
     @ObservationIgnored private var pairedForDemo = false
+
+    /// KUVO_DEMO_PHONE_REMOVING: Settings › Phone as when a phone's removal waits for the box.
+    func showRemovalForDemo() {
+        guard ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_REMOVING"] != nil else { return }
+        removalProblem = Self.removalWaiting
+    }
 
     private func pairForDemo() {
         guard !pairedForDemo, let file = ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_PAIR"] else { return }
@@ -339,7 +349,10 @@ final class PhoneLink {
     private func takePhonesFromFile(_ client: BoxClient) async -> Bool {
         let written = UserDefaults.standard.double(forKey: Self.writtenKey)
         guard let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date,
-              changed.timeIntervalSince1970 > written + 0.5 else { return true }
+              changed.timeIntervalSince1970 > written + 0.5 else {
+            phonesTaken = true
+            return true
+        }
         let older = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
         let given: [String: Any] = [
             "phones": older.phones.map { phone -> [String: Any] in
@@ -352,8 +365,14 @@ final class PhoneLink {
         guard let body = try? JSONSerialization.data(withJSONObject: given),
               (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return false }
         UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey)
+        phonesTaken = true
         return true
     }
+
+    /// This Mac's box has what phone-link.json kept of your phones, this launch. Until then, what's
+    /// saved leaves the file's phones as they are and its date unrecorded (a machine set up, a
+    /// document taken, a phone removed: each saves), so they're still taken, and never lost.
+    @ObservationIgnored private var phonesTaken = false
 
     /// When this Kuvo Code last wrote phone-link.json (its file's date then): one newer was an
     /// older Kuvo Code's.
@@ -386,8 +405,11 @@ final class PhoneLink {
         await endingPairing?.value
         do {
             let made = try await client.value(Made.self, "POST", "kuvo/phones/pair")
-            // Closed (or another begun) meanwhile: not shown.
-            guard round == pairingRound else { return }
+            // Closed (or another begun) meanwhile: not shown, and ended on the box too.
+            guard round == pairingRound else {
+                if pairing == nil { endOnBox(client) }
+                return
+            }
             pairing = URL(string: made.link).flatMap(PairingLink.init)
             if pairing == nil { pairingProblem = "This Mac’s link made a pairing code this version can’t show." }
         } catch {
@@ -402,6 +424,11 @@ final class PhoneLink {
         guard pairing != nil else { return }
         pairing = nil
         guard let client = box() else { return }
+        endOnBox(client)
+    }
+
+    /// Ends Settings › Phone's pairing link on this Mac's box, after any ended before.
+    private func endOnBox(_ client: BoxClient) {
         let previous = endingPairing
         endingPairing = Task {
             await previous?.value
@@ -412,6 +439,9 @@ final class PhoneLink {
     /// Each pairing link asked for or closed: one that comes after it was closed isn't shown.
     @ObservationIgnored private var pairingRound = 0
     @ObservationIgnored private var endingPairing: Task<Void, Never>?
+
+    /// Once the pairing links ended so far have ended on the box.
+    func pairingEnded() async { await endingPairing?.value }
 
     /// Removes a phone you've paired (Settings › Phone): here and on your machines, for good, until
     /// it's paired again. This Mac's box takes it off, and ends what it has open.
@@ -424,7 +454,8 @@ final class PhoneLink {
     /// until this Mac's box has taken them off too (which ends what they have open), tried again
     /// until it does.
     private func removePhones(_ entries: [PairedPhones.Entry]) {
-        let new = entries.filter { !toRemove.contains($0) }
+        // Only what names a phone (a document can name anything): the box refuses the rest.
+        let new = entries.filter { PairedPhones.fits($0, macs: [key.publicBytes.base64URL]) && !toRemove.contains($0) }
         guard !new.isEmpty else { return }
         toRemove = Array((toRemove + new).suffix(PairedPhones.mostKept))
         paired = Self.without(toRemove, paired)
@@ -433,7 +464,7 @@ final class PhoneLink {
         removing = Task { [weak self] in
             while let self, !Task.isCancelled, !toRemove.isEmpty {
                 if let client = box(), await sendRemovals(client) { break }
-                removalProblem = "Kuvo Code’s background service on this Mac isn’t answering, so the phone can still reach this Mac. It’s removed as soon as the service is back."
+                removalProblem = Self.removalWaiting
                 try? await Task.sleep(for: .seconds(2))
             }
             self?.removing = nil
@@ -441,6 +472,8 @@ final class PhoneLink {
     }
 
     @ObservationIgnored private var removing: Task<Void, Never>?
+
+    private static let removalWaiting = "Kuvo Code’s background service on this Mac isn’t answering, so the phone you removed can still reach this Mac. It’s removed as soon as the service is back."
 
     /// Once this Mac's box has taken the removals handed to it so far.
     func removalsTaken() async { await removing?.value }
@@ -450,7 +483,11 @@ final class PhoneLink {
         let sending = toRemove
         guard !sending.isEmpty else { return true }
         guard let body = try? JSONSerialization.data(withJSONObject: ["phones": sending.map { ["key": $0.key, "pairing": $0.pairing as Any] }]),
-              (try? await client.send("POST", "kuvo/phones/remove", body: body))?.status == 200 else { return false }
+              let status = (try? await client.send("POST", "kuvo/phones/remove", body: body))?.status else { return false }
+        // Refused (one that names no phone, kept by an older version): let go, or it would hold
+        // up the link for good.
+        if status == 400 { log.error("This Mac's box refused \(sending.count, privacy: .public) phone removals, which were let go.") }
+        guard status == 200 || status == 400 else { return false }
         toRemove.removeAll { sending.contains($0) }
         if toRemove.isEmpty { removalProblem = nil }
         save()
@@ -1668,15 +1705,21 @@ final class PhoneLink {
     /// Kept in phone-link.json, as an older Kuvo Code reads it too (going back to one finds your
     /// phones), with when this one wrote it.
     private func save() {
-        guard (try? JSONEncoder().encode(Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents, toRemove: toRemove))
-            .write(to: savedFile, options: .atomic)) != nil,
+        var saved = Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents, toRemove: toRemove)
+        if !phonesTaken {
+            let kept = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
+            saved.phones = kept.phones
+            saved.removed = kept.removed
+        }
+        guard (try? JSONEncoder().encode(saved).write(to: savedFile, options: .atomic)) != nil, phonesTaken,
               let written = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date else { return }
         UserDefaults.standard.set(written.timeIntervalSince1970, forKey: Self.writtenKey)
     }
 
     // MARK: Keychain
 
-    private static var service: String { (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".phone-link" }
+    static var keychainService: String { (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".phone-link" }
+    private static var service: String { keychainService }
 
     /// The item, or nil when there's none; throws when the Keychain can't be read.
     private static func keychain(_ account: String) throws -> Data? {

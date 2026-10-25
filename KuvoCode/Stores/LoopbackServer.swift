@@ -256,9 +256,14 @@ final class HTTPConnection {
         answering = Task.detached {
             var whole = false
             do {
+                let sending = InFlight()
                 for try await piece in stream where !piece.isEmpty {
                     guard !gone.value else { return }
-                    connection.send(content: Self.chunk(piece), completion: .contentProcessed { _ in })
+                    // A client that reads slowly holds the next back, once enough waits to go.
+                    await sending.room()
+                    let chunk = Self.chunk(piece)
+                    sending.add(chunk.count)
+                    connection.send(content: chunk, completion: .contentProcessed { _ in sending.done(chunk.count) })
                 }
                 whole = true
             } catch {}
@@ -320,4 +325,34 @@ nonisolated final class Gone: Sendable {
     private let flag = OSAllocatedUnfairLock(initialState: false)
     var value: Bool { flag.withLock { $0 } }
     func set() { flag.withLock { $0 = true } }
+}
+
+/// What's been handed to a connection and not sent yet: up to `most` bytes go without waiting (the
+/// connection says each one's sent on its own queue, the main one), then the next waits for room.
+nonisolated final class InFlight: Sendable {
+    private let most = 1 << 20
+    private let state = OSAllocatedUnfairLock<(bytes: Int, waiting: [CheckedContinuation<Void, Never>])>(initialState: (0, []))
+
+    func add(_ bytes: Int) { state.withLock { $0.bytes += bytes } }
+
+    func done(_ bytes: Int) {
+        let ready = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.bytes -= bytes
+            guard state.bytes < most else { return [] }
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for waiting in ready { waiting.resume() }
+    }
+
+    func room() async {
+        await withCheckedContinuation { continuation in
+            let now = state.withLock { state -> Bool in
+                if state.bytes < most { return true }
+                state.waiting.append(continuation)
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
 }

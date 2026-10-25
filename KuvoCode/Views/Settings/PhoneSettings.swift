@@ -16,7 +16,8 @@ struct PhoneSettings: View {
     var body: some View {
         ScrollingSettingsForm {
             Section {
-                if let pairing = link.pairing {
+                // A code can't work once the background service has given up: it says so instead.
+                if let pairing = link.pairing, app.box.failure == nil {
                     VStack(spacing: 12) {
                         QRCode(text: pairing.url.absoluteString)
                             .frame(width: 200, height: 200)
@@ -83,6 +84,17 @@ struct PhoneSettings: View {
             }
 
             Section {
+                // A phone removed here that can still reach this Mac, for now.
+                if let problem = link.removalProblem {
+                    Label {
+                        Text(problem)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle")
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
                 if link.phones.isEmpty {
                     Text("None yet.").foregroundStyle(.secondary)
                 }
@@ -110,6 +122,9 @@ struct PhoneSettings: View {
             }
         }
         .onDisappear { link.endPairing() }
+        .onChange(of: app.box.failure) { _, failure in
+            if failure != nil { link.endPairing() }
+        }
         .confirmationDialog("Remove \(removing?.name ?? "this phone")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { phone in
             Button("Remove", role: .destructive) { link.remove(phone) }
         } message: { _ in
