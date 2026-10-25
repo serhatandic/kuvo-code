@@ -316,3 +316,30 @@ test("a template's or a shared bot's job as the first message says its job once,
     assert.ok(message.endsWith("set that up."), template.name);
   }
 });
+
+test("a bot brought here from another computer is made this Mac's: its folder says where it is, its rules are for its folder here, and it's told it runs here", async t => {
+  const folder = bot("bot_moved00001", { name: "Mover" });
+  // As it came from a machine: its folder there, your time zone there, and what it was told there.
+  write(path.join(folder, "directory"), "/home/me/.kuvo-code/bots/bot_moved00001/workspace");
+  write(path.join(folder, "timezone"), "Europe/Istanbul");
+  write(path.join(folder, "paused"), "moving");
+  write(path.join(folder, "told.json"), JSON.stringify({ session: "ses_bot_moved00001", instructions: "elsewhere", rules: "/home/me/.kuvo-code/bots/bot_moved00001" }));
+  const fake = await engine({ rules: { ses_bot_moved00001: [
+    { action: "shell", resource: "*", effect: "allow" },
+    { action: "external_directory", resource: "/home/me/.kuvo-code/bots/bot_moved00001/*", effect: "allow" },
+  ] } });
+  t.after(fake.close);
+  const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
+  const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "Europe/Istanbul" });
+  assert.equal(arrived.status, 200, arrived.text);
+  assert.equal(arrived.json.bot.id, "bot_moved00001");
+  assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
+  assert.equal(fs.existsSync(path.join(folder, "timezone")), false, "this Mac's bots go by its own clock");
+  assert.deepEqual(fake.rules.ses_bot_moved00001, [
+    { action: "shell", resource: "*", effect: "allow" },
+    { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+  ]);
+  assert.match(told(fake.asked, "ses_bot_moved00001").at(-1).body.value, /You run on this Mac\./);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "moving", "still held: its move lets it go");
+  assert.equal((await ask(handle, "POST", "kuvo/bots/bot_nobody01/arrived")).status, 404);
+});

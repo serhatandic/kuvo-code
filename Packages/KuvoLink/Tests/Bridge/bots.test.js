@@ -325,6 +325,8 @@ async function makingEngine(ready = ["opencode"]) {
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
+      const one = request.url.match(/^\/api\/session\/([^/]+)$/);
+      if (one && request.method === "GET") return reply({ data: { id: one[1], permissions: [] } });
       if (request.method === "GET" && request.url === "/api/kuvo/groups") return reply({ data: [...chats.values()].map(chat => ({ group: chat.group, status: chat.status, state: {} })) });
       if (request.method === "PATCH" && request.url.startsWith("/api/kuvo/groups/")) {
         const chat = chats.get(request.url.split("/").pop());
@@ -649,5 +651,24 @@ test("a machine makes bots with its release's words where they're newer than a M
     assert.equal(link.readKit().instructions, "Newer words.");
   } finally {
     fs.rmSync(releaseKit, { force: true });
+  }
+});
+
+test("a bot brought here from your Mac is made this machine's: its folder there, your time zone, and told it runs on the machine", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), "/Users/me/Library/Application Support/run.kuvo.code/bots/bot_moved00001/workspace");
+  const engine = await makingEngine();
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "America/New_York" });
+    assert.equal(arrived.status, 200, arrived.text);
+    assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
+    assert.equal(fs.readFileSync(path.join(folder, "timezone"), "utf8"), "America/New_York", "your time zone, which its wake-ups go by");
+    const rules = engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions;
+    assert.deepEqual(rules, [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
+    assert.ok(engine.asked.some(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_moved00001/instructions/entries/kuvo.bot"));
+  } finally {
+    engine.close();
   }
 });

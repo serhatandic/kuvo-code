@@ -1034,6 +1034,14 @@ host serves:
   there too. `200 {}`, 404, or 409 `{"message"}` while it moves. Keys of its own that can't be
   reached as it's deleted (this Mac's app not answering) go the next time they can be. A machine's box notes a deleted
   bot in `~/.kuvo-code/bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier.
+- `POST kuvo/bots/<id>/arrived` with `{timeZone?}`: a bot whose folder and conversation a client
+  just brought to this box from another computer (Move to Computer: the client holds it where it
+  was, copies its folder and carries its conversation over, under the same id) is made this box's:
+  what its folder says of where it works, the time zone its wake-ups go by (yours, on a machine;
+  this Mac's own clock on a Mac), its rules for its folder here, and what it's told here. `200
+  {"bot"}`; 404 for no such bot here; 409 without a kit; 503 when its conversation here didn't
+  take it, which the box does again as the bot's next run starts. Its keys of its own go with it
+  through `kuvo/bots/<id>/keys…` on both computers.
 - What a box makes and tells its bots with (its kit, `bots/kit.json` in its bots' folder): a
   machine's from a Mac, which gives it each time it connects, or from the box's own release
   (`bin/bot-kit.json`) where that's newer or no Mac gave it one, with what's the machine's own

@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.52";
+export const BRIDGE_VERSION = "0.9.53";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2449,6 +2449,15 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       return yield* forwardGroups(target, route, request, signal);
     }
+    // A bot brought here from another computer, made this box's (Move to Computer).
+    const arrived = route.match(/^kuvo\/bots\/([^/]+)\/arrived$/);
+    if (arrived) {
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      let id;
+      try { id = decodeURIComponent(arrived[1]); } catch { return yield* json(404, { message: "That bot isn’t there any more." }); }
+      const { status, value } = await settleBot(id, parsed(request.body), readEngine, bridge, info.name);
+      return yield* json(status, value);
+    }
     // Its bots told what they are now where that changed, as its app asks after a change to its kit
     // (your personalities, on a Mac).
     if (route === "kuvo/bots/retell") {
@@ -3470,8 +3479,7 @@ export async function freshenBot(target, sessionID) {
   const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
   const kit = readKit();
   if (!here || !kit || isMoving(here.folder)) return;
-  const memory = path.join(here.folder, "MEMORY.md");
-  if (!fs.existsSync(memory)) try { fs.writeFileSync(memory, kit.memory.replaceAll("⟦name⟧", () => here.described.name)); } catch {}
+  settleFolder(here, kit);
   const told = toldOf(here.folder);
   const text = toldNow(kit, here);
   // What its conversation has now, where that can be read: one that told it something else (a Mac
@@ -3480,6 +3488,46 @@ export async function freshenBot(target, sessionID) {
   const stale = there === undefined ? told.session !== sessionID || told.instructions !== toldDigest(text) : there !== text;
   if (stale) await tellBot(target, here, sessionID, text);
   if (told.rules !== here.folder && await repairRules(target, here, sessionID)) noteTold(here.folder, { rules: here.folder });
+}
+
+// What a bot's folder says of where it is, as this box has it: its memory file (for one made before
+// it was made with it), the folder it works in, and the time zone its wake-ups go by (a machine's:
+// yours, as its kit has it; this Mac's go by its own clock). For one that came from another
+// computer (Move to Computer), those are this one's from now on.
+function settleFolder(here, kit, timeZone) {
+  const write = (name, text) => {
+    const file = path.join(here.folder, name);
+    if (textOf(file) !== text) fs.writeFileSync(file, text);
+  };
+  try {
+    if (!fs.existsSync(path.join(here.folder, "MEMORY.md"))) write("MEMORY.md", kit.memory.replaceAll("⟦name⟧", () => here.described.name));
+    write("directory", typeof here.described.project === "string" ? here.described.project : path.join(here.folder, "workspace"));
+    for (const name of ["timezone", "zoneinfo"]) if (ON_MAC) fs.rmSync(path.join(here.folder, name), { force: true });
+    if (!ON_MAC && (timeZone || kit.timeZone)) write("timezone", timeZone || kit.timeZone);
+    if (!ON_MAC && kit.zoneinfo && !timeZone) fs.writeFileSync(path.join(here.folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
+  } catch {}
+}
+
+// `POST kuvo/bots/<id>/arrived` (`{timeZone?}`): a bot whose folder and conversation were just
+// brought here from another computer (Move to Computer), made this box's: what its folder says of
+// where it is, its rules for its folder here, and what it's told here (where it runs, now). Done
+// while its move still holds it, before its wake-ups go on. `{status, value}`: 200 `{bot}`.
+export async function settleBot(id, given, readEngine, readBridge, machine) {
+  const no = (status, message) => ({ status, value: { message } });
+  const here = botHere(id);
+  if (!here) return no(404, "That bot isn’t there any more.");
+  const kit = readKit();
+  if (!kit) return no(409, NO_KIT);
+  settleFolder(here, kit, typeof given?.timeZone === "string" ? given.timeZone : undefined);
+  let target;
+  try { target = here.agents ? readBridge() : readEngine(); } catch {}
+  if (!target) return no(503, here.agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
+  const told = await tellBot(target, here, here.session, toldNow(kit, here));
+  const ruled = await repairRules(target, here, here.session);
+  if (ruled) noteTold(here.folder, { rules: here.folder });
+  if (!told || !ruled) return no(503, "Its conversation here didn’t take what it is now. It’s tried again as its next run starts.");
+  noteBotsChanged();
+  return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
 }
 
 // What a conversation on `target` is told as a bot (its `kuvo.bot` entry): its words, null for
