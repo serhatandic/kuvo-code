@@ -50,7 +50,7 @@ struct SiteSignInPage: View {
         // Whether it's signed in, as you sign in.
         .task {
             while !Task.isCancelled {
-                await SiteSignIns.shared.refresh(app)
+                if let machine { await SiteSignIns.shared.refresh(machine, app: app) } else { _ = await SiteSignIns.shared.mac() }
                 try? await Task.sleep(for: .seconds(2))
             }
         }

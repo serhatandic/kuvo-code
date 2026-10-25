@@ -16,7 +16,8 @@ extension AppModel {
 
     /// Added on `box`, as Connect (or Save, after its keys) does, with `keys` by their names
     /// (`CLIENT_ID`, `API_KEY`…) or those it has: one there already is written again as it is,
-    /// so the engine reads its keys again. It, as the box lists it now; what the box said, when it
+    /// so the engine reads its keys again, and with new keys its box connects its server again
+    /// everywhere a moment later. It, as the box lists it now; what the box said, when it
     /// said no.
     @discardableResult
     func addIntegration(_ entry: Integrations.Entry, keys: [String: String]? = nil, on box: SidebarBox) async throws -> Integrations.Entry {
@@ -54,13 +55,5 @@ extension AppModel {
             if let kept = try? await self.box(boxID(box)).value(Kept.self, "GET", "kuvo/keys/\(variable)") { values[key.name] = kept.value }
         }
         return values
-    }
-
-    /// Its server connected again a moment after its keys changed, in every folder its engine has
-    /// open: the engine reads them as it reads its settings again, which adding it (again) has it do.
-    func reconnectAfterKeys(_ id: String, on box: SidebarBox) async {
-        guard let api = api(for: box) else { return }
-        try? await Task.sleep(for: .seconds(2))
-        await reconnect(id, api: api, machine: box.machine)
     }
 }

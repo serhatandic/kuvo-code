@@ -2,6 +2,7 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 import Testing
+import WebKit
 @testable import KuvoCode
 
 /// Settings › Integrations on this Mac, as the page does it, through this Mac's box (the real
@@ -25,8 +26,11 @@ import Testing
             box.stop()
             IntegrationKeys.set(nil, for: key)
         }
+        // Its engine, answering how its servers are doing.
+        box.engine.on("GET", "/api/mcp", json: ["data": []])
         await app.engineConfig.refresh()
         let listed = try await app.integrations(on: .mac)
+        #expect(listed.engineDown == nil)
         let todoist = try #require(listed.integrations.first { $0.id == "todoist" })
         #expect(!todoist.added && todoist.takesKeys && todoist.keysSaved == false, "Add Key…")
         #expect(listed.integrations.contains { $0.id == "apple-calendar" }, "this Mac's own apps' too")
@@ -50,6 +54,40 @@ import Testing
         #expect(try await app.integrations(on: .mac).integrations.first { $0.id == "todoist" }?.added == false)
         try await until { app.engineConfig.value(at: MCPSettings.path + ["todoist"]) == nil }
         #expect(await app.removeIntegration("todoist", on: .mac) == nil, "one gone already: nothing to take away")
+    }
+
+    /// With its engine not running, what's added isn't called starting: the box says the engine is
+    /// down, and only one turned off says so still.
+    @Test func withItsEngineDownNothingIsCalledStarting() async throws {
+        let box = try await SettingsBox(port: 47_934)
+        defer {
+            box.stop()
+            IntegrationKeys.set(nil, for: key)
+        }
+        await app.engineConfig.refresh()
+        let todoist = try #require(try await app.integrations(on: .mac).integrations.first { $0.id == "todoist" })
+        try await app.addIntegration(todoist, keys: ["TODOIST_API_KEY": "tok_down"], on: .mac)
+        let listed = try await app.integrations(on: .mac)
+        #expect(listed.engineDown == true)
+        #expect(listed.integrations.first { $0.id == "todoist" }?.health == nil)
+        #expect(await app.removeIntegration("todoist", on: .mac) == nil)
+    }
+
+    /// Whether this Mac's browser is signed in to a site the agent uses there, as this Mac's box
+    /// says it for every client: a sign-in there shows at once, without reading every cookie each
+    /// time it's asked.
+    @Test func aSiteSignedInToInThisMacsBrowserShows() async throws {
+        let box = try await SettingsBox(port: 47_935)
+        defer { box.stop() }
+        func linkedIn() async throws -> Bool? { try await app.integrations(on: .mac).integrations.first { $0.id == "linkedin" }?.siteSignedIn }
+        #expect(try await linkedIn() == false)
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        let cookie = try #require(HTTPCookie(properties: [.domain: ".linkedin.com", .path: "/", .name: "li_at", .value: "test", .expires: Date.now.addingTimeInterval(3600)]))
+        let before = SiteSignIns.shared.macChanges
+        await store.setCookie(cookie)
+        try await until { SiteSignIns.shared.macChanges > before }
+        #expect(try await linkedIn() == true)
+        await store.deleteCookie(cookie)
     }
 
     @Test func withThisMacsBoxStoppedThePageSaysSoAndWorksOnceItsBack() async throws {

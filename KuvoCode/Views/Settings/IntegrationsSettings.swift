@@ -45,6 +45,8 @@ struct IntegrationsSettings: View {
         var live: [MCPServer]
         var settings: [String: JSONValue]
         var boxUp: Bool
+        /// This Mac's browser's cookies changed (a site signed in to or out of).
+        var cookies: Int
     }
 
     var body: some View {
@@ -58,11 +60,13 @@ struct IntegrationsSettings: View {
             }
         }
         .modifier(LiveMCPServers(servers: $live, api: { app.api(for: box) }, change: config.settings))
-        .task(id: Changes(live: live, settings: config.settings, boxUp: boxUp)) { await read() }
-        .task {
-            // Where sites are signed in, as their browsers' cookies say.
+        .task(id: Changes(live: live, settings: config.settings, boxUp: boxUp, cookies: box.machine == nil ? SiteSignIns.shared.macChanges : 0)) { await read() }
+        .task(id: box) {
+            // Where a machine's browser is signed in, as its cookies say, read from here: its box
+            // can't tell yet. (This Mac's box says where this Mac's is.)
+            guard let machine = box.machine else { return }
             while !Task.isCancelled {
-                await SiteSignIns.shared.refresh(app)
+                await SiteSignIns.shared.refresh(machine, app: app)
                 try? await Task.sleep(for: .seconds(4))
             }
         }
@@ -101,13 +105,8 @@ struct IntegrationsSettings: View {
             KeyEntry(entry: entry) { saved in
                 addingKey = nil
                 guard let saved else { return }
+                // Its box connects its server again everywhere once the engine has read the key.
                 take(saved)
-                // The engine reads the key from its file as it reads its settings again, which
-                // adding it has it do: its server connects again once it has.
-                Task {
-                    await app.reconnectAfterKeys(entry.id, on: box)
-                    await read()
-                }
             }
         }
     }
@@ -121,7 +120,7 @@ struct IntegrationsSettings: View {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(name)’s integrations can’t be read now")
-                            Text(failure).foregroundStyle(.secondary)
+                            Text("\(failure) Below is how they were when last read.").foregroundStyle(.secondary)
                         }
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -132,7 +131,10 @@ struct IntegrationsSettings: View {
             ForEach(Self.kinds(of: entries)) { kind in
                 Section(kind.id) {
                     ForEach(kind.entries) { entry in
+                        // As last read while its box can't be reached: dimmed, and nothing to do.
                         row(entry)
+                            .opacity(failure == nil ? 1 : 0.5)
+                            .disabled(failure != nil)
                     }
                 }
             }
@@ -220,7 +222,7 @@ struct IntegrationsSettings: View {
                         .accessibilityLabel("Working on \(entry.title)")
                 } else if entry.isBrowser {
                     let service = Integrations.service(entry.id)
-                    Button(SiteSignIns.shared.isSignedIn(entry.id, on: box.machine) == true ? "Open…" : "Sign In…") {
+                    Button(siteSignedIn(entry) == true ? "Open…" : "Sign In…") {
                         if let service { withAnimation(.ui) { app.settingsTabs.open(service, on: box) } }
                     }
                     .disabled(service == nil)
@@ -275,21 +277,26 @@ struct IntegrationsSettings: View {
         }
     }
 
-    /// How it's doing, as its box says; one just turned on is starting until the box has it.
-    private func health(of entry: Integrations.Entry) -> Integrations.Entry.Health {
-        let said = entry.health ?? .starting
+    /// How it's doing, as its box says; one just turned on is starting until the box has it. Nil
+    /// while its engine can't say.
+    private func health(of entry: Integrations.Entry) -> Integrations.Entry.Health? {
+        guard let said = entry.health else { return shown?.engineDown == true ? nil : .starting }
         return turningOn.contains(entry.id) && said == .disabled ? .starting : said
     }
 
     /// How it's doing on this computer.
     private func places(_ entry: Integrations.Entry) -> [Place] {
-        [Place(name: name, machine: box.machine, state: Place.state(health(of: entry)))]
+        [Place(name: name, machine: box.machine, state: health(of: entry).map(Place.state) ?? .engineDown)]
     }
 
-    /// Whether a service the agent uses on its site is signed in on this computer, as far as its
-    /// browser's cookies tell.
+    /// Whether a service the agent uses on its site is signed in on this computer: as this Mac's
+    /// box says, or as a machine's browser's cookies, read from here, last said.
+    private func siteSignedIn(_ entry: Integrations.Entry) -> Bool? {
+        box.machine == nil ? entry.siteSignedIn : SiteSignIns.shared.isSignedIn(entry.id, on: box.machine)
+    }
+
     private func siteSignIns(_ entry: Integrations.Entry) -> [Place] {
-        guard entry.isBrowser, let signedIn = SiteSignIns.shared.isSignedIn(entry.id, on: box.machine) else { return [] }
+        guard entry.isBrowser, let signedIn = siteSignedIn(entry) else { return [] }
         return [Place(name: name, machine: box.machine, state: signedIn ? .signedIn : .signedOut)]
     }
 
@@ -404,7 +411,7 @@ private struct Place: Identifiable {
 
     /// Worst last.
     enum State: Int, Comparable {
-        case connected, signedIn, off, starting, signedOut, waitsForCode, needsSignIn, failed
+        case connected, signedIn, off, starting, engineDown, signedOut, waitsForCode, needsSignIn, failed
 
         static func < (a: State, b: State) -> Bool { a.rawValue < b.rawValue }
 
@@ -415,6 +422,7 @@ private struct Place: Identifiable {
             case .signedOut: "Not signed in"
             case .off: "Off"
             case .starting: "Starting"
+            case .engineDown: "Engine not running"
             case .waitsForCode: "Not signed in yet"
             case .needsSignIn: "Needs sign-in"
             case .failed: "Couldn’t connect"
@@ -424,7 +432,7 @@ private struct Place: Identifiable {
         var color: Color {
             switch self {
             case .connected, .signedIn: .green
-            case .off, .starting, .signedOut: .secondary
+            case .off, .starting, .engineDown, .signedOut: .secondary
             case .waitsForCode, .needsSignIn: .orange
             case .failed: .red
             }

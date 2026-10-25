@@ -58,13 +58,8 @@ final class HostInterface {
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
         case "/sites/signed-in":
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
-            // cookies say now: only those it can tell.
-            await SiteSignIns.shared.refreshMac()
-            var sites: [String: Bool] = [:]
-            for service in Integrations.signInCookies.keys {
-                if let signedIn = SiteSignIns.shared.isSignedIn(service, on: nil) { sites[service] = signedIn }
-            }
-            return .json(["sites": sites])
+            // cookies say (read again once they've changed): only those it can tell.
+            return .json(["sites": await SiteSignIns.shared.mac()])
         default:
             return .init(status: 404)
         }

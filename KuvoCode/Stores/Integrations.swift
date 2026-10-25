@@ -251,6 +251,9 @@ nonisolated enum Integrations {
         var health: Health?
         /// The engine's integration its sign-in goes through.
         var signIn: String?
+        /// One used on its site: whether that computer's browser is signed in there, when its box
+        /// can tell (this Mac's).
+        var siteSignedIn: Bool?
 
         var isBrowser: Bool { way == "browser" }
         var isApp: Bool { way == "app" }
@@ -260,6 +263,8 @@ nonisolated enum Integrations {
     /// Those a computer's box lists, and why its settings can't be changed, when they can't.
     struct Listed: Decodable, Equatable, Sendable {
         var integrations: [Entry]
+        /// Its engine isn't running or answering, so an added one's health isn't known.
+        var engineDown: Bool?
         var problem: String?
     }
 
