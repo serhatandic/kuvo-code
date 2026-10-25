@@ -3,8 +3,9 @@
 # chats, then this checkout, run as Kuvo Code itself, moves them into its box. Released builds can
 # only run as `run.kuvo.code`, so this uses your Kuvo Code's own folder and settings: it saves them
 # first and puts them back at the end. Run it with someone at the Mac (macOS asks things the first
-# time each build opens), and quit Kuvo Code before each step. CONTRIBUTING.md, "Rehearsing the
-# group chats' upgrade", has the steps.
+# time each build opens), and quit Kuvo Code before each step. Each step but check asks you to
+# type yes first, and won't start without a terminal. CONTRIBUTING.md, "Rehearsing the group
+# chats' upgrade", has the steps.
 #
 #   prepare                 downloads 0.5.22, 0.6.6, 0.7.2 and 0.8.0-beta.1 from the releases, and
 #                           builds this checkout as run.kuvo.code (signed with your team)
@@ -21,6 +22,12 @@ ROOT="build/Rehearsal"
 SUPPORT="$HOME/Library/Application Support/run.kuvo.code"
 SAVED="$ROOT/saved"
 VERSIONS="0.5.22 0.6.6 0.7.2 0.8.0-beta.1"
+
+# It works on the real Kuvo Code, so it goes on only for someone at the terminal who says so.
+. scripts/real-app-guard.sh
+case "${1:-}" in
+prepare | save | fresh | open | restore) real_app_confirm "scripts/groups-rehearsal.sh ${1}" ;;
+esac
 
 quit() {
   osascript -e 'tell application id "run.kuvo.code" to quit' >/dev/null 2>&1 || true

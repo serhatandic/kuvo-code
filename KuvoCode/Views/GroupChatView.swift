@@ -25,7 +25,7 @@ struct GroupChatView: View {
 
     var body: some View {
         let messages = groups.messages(in: group.id)
-        let speaker = groups.speaking[group.id].flatMap { bots.bot($0) }
+        let speaker = groups.speaker(in: group.id).flatMap { bots.bot($0) }
         // Where it lives can't be reached now: what needs it (undo, the work, Keep Going) waits.
         let reachable = groups.reach(group.id) == .ready
         // What you select, to reply to (over the composer) or copy.
@@ -43,7 +43,7 @@ struct GroupChatView: View {
                     .environment(\.findHighlight, find.highlight(for: message.id))
             }
             if let speaker {
-                TypingRow(bot: speaker, activity: groups.activity[group.id] ?? [])
+                TypingRow(bot: speaker, activity: groups.activity(in: group.id))
                     .id("typing")
                     .transition(.opacity)
             }
@@ -78,7 +78,7 @@ struct GroupChatView: View {
                     EmptyView()
                 }
                 // Once the wrap-up after the limit is done: Keep Going does nothing before.
-                if reachable && groups.paused.contains(group.id) && !groups.discussing.contains(group.id) {
+                if reachable && groups.isPaused(group.id) && !groups.isDiscussing(group.id) {
                     PausedBar { groups.keepGoing(group.id) }
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 }
@@ -88,13 +88,13 @@ struct GroupChatView: View {
                     quoteFocus: quoteFocus,
                     placeholder: "Message \(group.name)…",
                     members: members,
-                    isTalking: groups.discussing.contains(group.id),
+                    isTalking: groups.isDiscussing(group.id),
                     focusRequest: composerFocus,
                     send: send,
                     stop: { groups.stop(group.id) }
                 )
             }
-            .animation(.ui, value: groups.paused.contains(group.id))
+            .animation(.ui, value: groups.isPaused(group.id))
             .animation(.ui, value: groups.reach(group.id))
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)

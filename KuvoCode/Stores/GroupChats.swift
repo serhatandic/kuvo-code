@@ -13,12 +13,21 @@ final class GroupChats {
     }
 
     var list: [BotGroup] { boxes.groups }
+    /// Every chat's (whoever reads these hears of every chat's talk): a view of one chat reads
+    /// that chat's own below, so the others' talk doesn't redraw it.
     var speaking: [String: String] { boxes.speaking }
-    /// What the bot talking is doing, by chat (see `GroupActivity`).
-    var activity: [String: [GroupActivity]] { boxes.activity }
     var discussing: Set<String> { boxes.discussing }
     var paused: Set<String> { boxes.paused }
     var seatIDs: Set<String> { boxes.seatIDs }
+
+    /// The bot talking in a chat.
+    func speaker(in id: String) -> String? { boxes.speaker(in: id) }
+    /// Its talk under way.
+    func isDiscussing(_ id: String) -> Bool { boxes.isDiscussing(id) }
+    /// Keep Going waiting, after the wrap-up at the limit.
+    func isPaused(_ id: String) -> Bool { boxes.isPaused(id) }
+    /// What the bot talking is doing (see `GroupActivity`).
+    func activity(in id: String) -> [GroupActivity] { boxes.activity(in: id) }
 
     func group(_ id: String?) -> BotGroup? { boxes.group(id) }
     func group(seat: String) -> BotGroup? { boxes.group(seat: seat) }

@@ -243,7 +243,7 @@ final class AppModel {
     /// Puts the usage panel in the menu bar. It reads the engine's database for spend, so it
     /// starts with the app, not with the engine.
     func startUsage() {
-        AppInfo.neverInTests("the usage panel (it reads other apps' sign-ins from your Keychain)")
+        guard AppInfo.mayPrompt("the usage panel (it reads other apps' sign-ins from your Keychain)") else { return }
         usage.start(engineData: engineFolders.dataDirectory) { [weak self] in
             self?.openMainWindow?()
         }
@@ -313,6 +313,9 @@ final class AppModel {
             stage = "launch"
             var shell = await environment
             guard launch == self.launch else { return }
+            // A copy that never prompts leaves out the skills in ~/.claude/skills: one can be a link
+            // into your Desktop, and macOS would ask whether the copy may read it.
+            if AppInfo.neverPrompts { shell["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] = "1" }
             shellEnvironment = shell
             // The coding agents' bridge as soon as there's a Bun to run it: this Mac's group chats
             // run there, and show (and meet) from now, while the engine starts.

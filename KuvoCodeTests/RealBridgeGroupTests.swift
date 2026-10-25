@@ -164,6 +164,48 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "groups/\(made.id)/group.json").path))
     }
 
+    /// One chat's talk redraws only what shows that chat: another chat's conversation, sidebar row
+    /// and tab (its messages, who's talking in it, whether it's unread), and the list of chats,
+    /// hear nothing of it, though its computer says something of the talking chat with nearly
+    /// every step (who's talking, each bot's seat, what each heard).
+    @Test func oneChatsTalkRedrawsOnlyThatChat() async throws {
+        defer { clean() }
+        try bots(in: folder)
+        let seats = Seats(lines: ["Ada": ["Ship it Friday. &Ben, the build?"], "Ben": ["Green since this morning."]])
+        serve(seats)
+        let bridge = try await start(root: folder)
+        defer { bridge.stop() }
+        let api = try #require(bridge.api)
+        let groups = BoxGroups()
+        groups.bridge = { $0 == nil ? api : nil }
+        bridge.agents.onEvent = { event in groups.handle(event, machine: nil) }
+        let talking = try await groups.create(name: "Crew", purpose: nil, members: ["bot_ada", "bot_ben"], meeting: nil)
+        let quiet = try await groups.create(name: "Quiet", purpose: nil, members: ["bot_ada", "bot_ben"], meeting: nil)
+
+        /// What heard of a change, from wherever it's told.
+        nonisolated final class Heard: @unchecked Sendable {
+            private let lock = NSLock()
+            private var names: Set<String> = []
+            func note(_ name: String) { lock.withLock { _ = names.insert(name) } }
+            func has(_ name: String) -> Bool { lock.withLock { names.contains(name) } }
+        }
+        let heard = Heard()
+        withObservationTracking {
+            _ = (groups.messages(in: quiet.id), groups.speaker(in: quiet.id), groups.isDiscussing(quiet.id), groups.isPaused(quiet.id),
+                 groups.activity(in: quiet.id), groups.group(quiet.id).map(groups.isUnread))
+        } onChange: { heard.note("other") }
+        withObservationTracking { _ = groups.groups } onChange: { heard.note("list") }
+        withObservationTracking { _ = (groups.messages(in: talking.id), groups.speaker(in: talking.id)) } onChange: { heard.note("talking") }
+
+        try await groups.send("Ready to ship?", to: talking.id)
+        try await until { groups.messages(in: talking.id).contains { $0.author == "bot_ben" } && !groups.isDiscussing(talking.id) }
+        #expect(heard.has("talking"), "the talking chat's views hear of it")
+        #expect(!heard.has("other"), "another chat's views don't")
+        #expect(!heard.has("list"), "nor does the list of chats: nothing it shows changed")
+        #expect(groups.messages(in: quiet.id).isEmpty && groups.speaker(in: quiet.id) == nil)
+        #expect(groups.group(talking.id)?.seats.keys.sorted() == ["bot_ada", "bot_ben"], "its bookkeeping is kept all the same")
+    }
+
     /// A meeting set up in Edit Group Chat is worked out on the chat's computer, on its clock: a
     /// daily one whose time went by while you edited comes at its next round, rather than at once.
     @Test func aMeetingIsPlannedWhereTheChatLives() async throws {

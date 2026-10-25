@@ -1,6 +1,7 @@
 import SwiftUI
 import OpenCodeKit
 import UsageKit
+import os
 
 /// Starts the app, or, when it only hosts the app's tests, an app that does nothing: no window,
 /// engine, menu bar item or stores reading the real data. The tests build what they need.
@@ -35,6 +36,18 @@ enum Launch {
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.run()
         } else {
+            #if DEBUG
+            // A demo, test or measurement never runs as the real app, or with its engine. Said and
+            // left at once: an alert would wait on someone who isn't there.
+            if let refusal = AppInfo.realAppRefusal(bundleID: AppInfo.bundleID, environment: ProcessInfo.processInfo.environment) {
+                FileHandle.standardError.write(Data((refusal + "\n").utf8))
+                Logger(subsystem: AppInfo.realBundleID, category: "launch").fault("\(refusal, privacy: .public)")
+                exit(78)
+            }
+            // A demo copy left to run on its own asks nothing: what would wait on the Keychain's
+            // prompt fails at once instead (see `AppInfo.neverPrompts`).
+            if AppInfo.neverPrompts { Keychain.neverAsk() }
+            #endif
             KuvoCodeApp.main()
         }
     }
