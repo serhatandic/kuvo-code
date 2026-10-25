@@ -243,13 +243,6 @@ final class AppModel {
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink
-        phoneLink.endedSignIns = { [weak self] in self?.catalog.endedProviders ?? [] }
-        phoneLink.forgetSignIn = { [weak self] provider in
-            // One of your plans, as Settings › Accounts lists them; never an integration's server.
-            guard let self, catalog.integrations.contains(where: { $0.id == provider && !$0.isMCP }) else { return false }
-            forgetSignIn(provider)
-            return true
-        }
         phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
         phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }

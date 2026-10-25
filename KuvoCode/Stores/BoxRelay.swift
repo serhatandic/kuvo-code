@@ -3,9 +3,8 @@ import KuvoLink
 
 /// This Mac's relay connection, which its box holds (KuvoLink's PROTOCOL.md, "This Mac's box: the
 /// relay"), as the app still uses it for what hasn't moved to the box yet: mail to your machines,
-/// sealed here with this Mac's key (its documents, its agents' letters, its group chats'), and
-/// notices for your phones, which the box seals for each. Both go out on the box's connection
-/// (`kuvo/link/send`, `kuvo/link/push`).
+/// sealed here with this Mac's key (its documents, its agents' letters, its group chats'), sent on
+/// the box's connection (`kuvo/link/send`).
 struct BoxRelay: Sendable {
     let key: LinkKey
     let box: BoxClient
@@ -22,14 +21,5 @@ struct BoxRelay: Sendable {
         case 413: return .tooBig
         default: return .offline
         }
-    }
-
-    /// `notice` (a `Notice`'s JSON) to your paired phones' notifications: false when it can't go
-    /// now, to be tried again.
-    func push(_ notice: Data) async -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: notice),
-              let body = try? JSONSerialization.data(withJSONObject: ["notice": object]),
-              let (status, _) = try? await box.send("POST", "kuvo/link/push", body: body) else { return false }
-        return status == 200
     }
 }

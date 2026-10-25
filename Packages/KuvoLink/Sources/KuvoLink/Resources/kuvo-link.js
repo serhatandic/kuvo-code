@@ -31,7 +31,7 @@ export const BRIDGE_VERSION = "0.9.59";
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
-  "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
+  "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
@@ -2275,6 +2275,21 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!IS_MAC || !request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
       return yield* macLinkRoute(route, request, signal);
     }
+    // On this Mac, what only its app knows for your phones (an ask from its panel's browser), held
+    // with the box's own; and one answered there, which then never goes. Its app's alone.
+    if (route === "kuvo/attention/notice" || route === "kuvo/attention/answered") {
+      if (!IS_MAC || !request.fromApp || !hold) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (route === "kuvo/attention/answered") {
+        if (typeof given?.id !== "string") return yield* json(400, { message: "Send {id}." });
+        hold.resolve(given.id);
+        return yield* json(200, {});
+      }
+      if (!isObject(given?.notice) || typeof given.notice.title !== "string") return yield* json(400, { message: "Send {notice}." });
+      if (macLink.config?.phones) hold.tell(given.notice);
+      return yield* json(200, {});
+    }
     // A client in use here (PROTOCOL.md, "kuvo/attention"): notices for your phones wait a little
     // while one is. GET says whether one is, and how many wait.
     if (route === "kuvo/attention") {
@@ -2284,7 +2299,8 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (method !== "POST") return yield* json(405, {});
       const given = attentionGiven(parsed(request.body));
       if (!given) return yield* json(400, { message: "Say for how many seconds you're in use (for: 0 for not), and which conversations are on your screen (sessions)." });
-      hold.attend(`phone:${phone?.key?.toString("base64url") ?? ""}`, given);
+      // This Mac's app is "mac", as a Mac's word by mail is to a machine.
+      hold.attend(IS_MAC && request.fromApp ? "mac" : `phone:${phone?.key?.toString("base64url") ?? ""}`, given);
       return yield* json(200, { for: given.seconds });
     }
     // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
@@ -2351,6 +2367,22 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
         return;
       }
       return yield* forward(target, path, request, signal, agentsAllowed);
+    }
+    // The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
+    // signing out of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts").
+    if (route === "kuvo/accounts/ended" || /^kuvo\/accounts\/[^/]+\/forget$/.test(route)) {
+      let engine = null;
+      try { engine = readEngine(); } catch {}
+      if (!engine?.port) return yield* json(503, { message: "The engine isn't running." });
+      if (route === "kuvo/accounts/ended") {
+        if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* json(405, {});
+        return yield* json(200, { providers: await endedProviders(engine).catch(() => []) });
+      }
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      let id = null;
+      try { id = decodeURIComponent(route.slice("kuvo/accounts/".length, -"/forget".length)); } catch {}
+      if (!id || id.includes("/")) return yield* json(404, {});
+      return yield* ((await forgetPlan(engine, id).catch(() => false)) ? json(200, {}) : json(404, {}));
     }
     // This machine's sign-ins, listed (`api/credential` has what each is signed in with too).
     if (route === "kuvo/accounts/credentials") {
@@ -4643,7 +4675,10 @@ const pause = (ms, signal) => new Promise(resolve => {
 // box does as they come.
 // With `bots` (this Mac's box, whose app does the rest of that work itself still), only what it does
 // for its bots.
-export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false } = {}) {
+// `bots`: only its bots' part (this Mac's box, whose app does the rest of a machine's work);
+// `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
+// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`).
+export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -4662,9 +4697,12 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
         // its run ends.
         // A bot's run starting: what it's told brought up to date first.
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
-        if (bots) continue;
-        if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
-        if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+        if (signIns) noteSignIn(event, source).catch(() => {});
+        if (!bots) {
+          if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
+          if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
+        }
+        if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
         if (GROUP_NEWS.has(event.type)) {
@@ -4678,6 +4716,61 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
     attempt += 1;
     await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }
+}
+
+// ---- Sign-ins that ended (PROTOCOL.md, "kuvo/accounts") ----
+// A run on this box's engine refused its model's sign-in (it ran out and couldn't be renewed: the
+// engine says only "Request failed" then), by provider: the credential in use then. A step on that
+// provider's model that ends well says it works after all; signed in again, the one in use is
+// another, and it isn't ended.
+
+const endedSignIns = new Map();
+
+async function noteSignIn(event, source) {
+  const ended = event.type === "session.execution.failed";
+  if (!ended && (event.type !== "session.step.ended" || !endedSignIns.size)) return;
+  if (ended && (event.data?.error?.type !== "provider.auth" || !String(event.data?.error?.message ?? "").startsWith("Request failed"))) return;
+  const id = event.data?.sessionID;
+  if (typeof id !== "string") return;
+  const provider = (await engineGet(source, `api/session/${encodeURIComponent(id)}`))?.data?.model?.providerID;
+  if (typeof provider !== "string") return;
+  if (!ended) return void endedSignIns.delete(provider);
+  const active = await activeCredential(source, provider);
+  if (active?.method === "oauth" && active.credentialID) endedSignIns.set(provider, active.credentialID);
+}
+
+// `provider`'s sign-in in use, as its engine lists it.
+async function activeCredential(engine, provider) {
+  const integrations = (await engineGet(engine, "api/integration"))?.data;
+  return (Array.isArray(integrations) ? integrations : []).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
+}
+
+// The plans whose sign-in in use ended.
+export async function endedProviders(engine) {
+  const providers = [];
+  for (const [provider, credential] of endedSignIns) {
+    if ((await activeCredential(engine, provider).catch(() => null))?.credentialID === credential) providers.push(provider);
+  }
+  return providers.sort();
+}
+
+// Signs this box out of one of your plans (Settings › Accounts' Disconnect): its sign-ins and keys,
+// never an integration's server. False for what isn't a plan here.
+export async function forgetPlan(engine, id) {
+  const integrations = (await engineGet(engine, "api/integration"))?.data;
+  const plan = (Array.isArray(integrations) ? integrations : []).find(each => each?.id === id);
+  if (!plan || plan.metadata?.source === "mcp") return false;
+  const entries = (await engineGet(engine, "api/credential"))?.data;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry?.integrationID !== id || typeof entry.id !== "string") continue;
+    await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
+      method: "DELETE",
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
+      signal: AbortSignal.timeout(10_000),
+    }).then(response => response.body?.cancel()).catch(() => {});
+  }
+  endedSignIns.delete(id);
+  return true;
 }
 
 // ---- What agents ask you for while they browse here (PROTOCOL.md, "kuvo/asks") ----
@@ -7637,8 +7730,10 @@ export function startUpdate(options = {}) {
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
-  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones"];
-export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
+  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended"];
+// (A plan signed out from a phone: `kuvo/accounts/<id>/forget`, the box's too.)
+const macAnswersForget = route => /^kuvo\/accounts\/[^/]+\/forget$/.test(route);
+export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersForget(route);
 
 const NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 
@@ -7850,24 +7945,39 @@ async function* macLinkRoute(route, request, signal) {
       host.send(relaySend(Buffer.from(given.to, "base64url"), frame));
       return yield* json(200, {});
     }
-    case "kuvo/link/push": {
-      // A notice for your phones (`Notice`'s JSON), sealed here for each.
-      if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body);
-      if (!isObject(given?.notice)) return yield* json(400, { message: "Send {notice}." });
-      const host = macLink.host;
-      const link = readLink();
-      if (!host?.welcomed || !link?.key) return yield* json(503, { message: "Not connected to the relay now." });
-      const phones = (link.phones ?? []).filter(each => each.address);
-      const notice = Buffer.from(JSON.stringify(given.notice));
-      for (const each of phones) {
-        try { host.send(pushTo(each, notice, Buffer.from(link.key, "base64url"))); } catch {}
-      }
-      return yield* json(200, { phones: phones.length });
-    }
     default:
       return yield* json(404, {});
   }
+}
+
+// This Mac's notices for your phones (PROTOCOL.md, "kuvo/attention"): held a little while you're at
+// a computer (the app says when, as "mac"), then sealed here for each paired phone that's said where
+// it is and pushed on the link's connection; kept for a box that starts again, as a machine's are.
+function macNoticeHold() {
+  let held = [];
+  try { held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8")); } catch {}
+  return new NoticeHold({
+    send: notice => {
+      const link = readLink();
+      const phones = (link?.phones ?? []).filter(phone => phone.address);
+      if (!phones.length || !macLink.config?.phones) return true;
+      const host = macLink.host;
+      if (!host?.welcomed || !link?.key) return false;
+      const json = noticeJSON(notice);
+      const key = Buffer.from(link.key, "base64url");
+      for (const phone of phones) {
+        try { host.send(pushTo(phone, json, key)); } catch {}
+      }
+      return true;
+    },
+    held,
+    save: entries => {
+      try {
+        if (entries.length) writePrivate(HELD_FILE, JSON.stringify(entries));
+        else fs.rmSync(HELD_FILE, { force: true });
+      } catch {}
+    },
+  });
 }
 
 // This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,
@@ -7902,7 +8012,7 @@ export async function runMacLink() {
         confirmed: confirmPhone,
         // Mail from your machines, for the app until what it carries moves here.
         mail: (from, _body, frame) => { linkHost("link/mailed", { from: from.toString("base64url"), frame: frame.toString("base64") }).catch(() => {}); },
-        handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))))),
+        handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {},
       });
@@ -8372,7 +8482,9 @@ async function serve() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   // This Mac's settings with what its engine starts with, before a client reads them.
   if (IS_MAC) addMacDefaults();
-  const server = serveBox(password);
+  // This Mac's notices for your phones, held while you're at a computer, as a machine's are.
+  if (IS_MAC) macLink.hold = macNoticeHold();
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile, () => {}, macLink.hold));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -8392,9 +8504,12 @@ async function serve() {
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
   // makes them this box's (it gives the box its kit then).
   if (readKit()) try { keepJobs(); } catch {}
-  // Its bots kept told what they are as their runs start, on the engine and with the coding agents.
-  watchEvents(readEngineFile, () => true, undefined, () => {}, { bots: true });
-  watchEvents(readBridgeFile, () => true, undefined, () => {}, { bots: true });
+  // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
+  // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
+  const tell = notice => (macLink.config?.phones && macLink.hold ? macLink.hold.tell(notice) : true);
+  const answered = id => macLink.hold?.resolve(id);
+  watchEvents(readEngineFile, tell, undefined, answered, { bots: true, notices: IS_MAC, signIns: true });
+  watchEvents(readBridgeFile, tell, undefined, answered, { bots: true, notices: IS_MAC });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async () => {

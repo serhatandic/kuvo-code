@@ -59,11 +59,6 @@ final class PhoneLink {
     @ObservationIgnored var machineName: (String) -> String? = { _ in nil }
     /// The agents bridge (Claude Code, Codex…), for `kuvo/agents/api/…`; set by AppModel.
     @ObservationIgnored var agents: OutsideAgents?
-    /// Plans whose sign-in ended (the service refused it), for `kuvo/accounts/ended`, and
-    /// Disconnect as Settings › Accounts does it (here and on your machines); set by AppModel.
-    @ObservationIgnored var endedSignIns: () -> [String] = { [] }
-    /// (Whether it was one of your plans: nothing else is signed out.)
-    @ObservationIgnored var forgetSignIn: (String) -> Bool = { _ in false }
     /// Whether a group chat or a bot is on its way to another computer; set by AppModel.
     @ObservationIgnored var isMoving: (String) -> Bool = { Moves.isFrozen($0) }
     /// Starts this Mac's engine over, as Settings › Engine's Restart does; set by AppModel.
@@ -132,9 +127,6 @@ final class PhoneLink {
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
     private let log = Logger(subsystem: "run.kuvo.code", category: "phone")
-    /// Notices for your phones, held while you're at a computer (PROTOCOL.md, "kuvo/attention"); a
-    /// test gives it its own clock, and takes what it sends.
-    @ObservationIgnored lazy var hold = NoticeHold { [weak self] notice in self?.deliver(notice) ?? true }
     /// Pushes not yet handed to the relay, which quitting waits for (see `flushBeforeQuit`).
     @ObservationIgnored let delivering = OSAllocatedUnfairLock(initialState: 0)
 
@@ -821,17 +813,6 @@ final class PhoneLink {
         var routed = request
         routed.path = route
         if route == "kuvo/file" { return Self.file(request.path) }
-        // A client in use here: notices for your phones wait a little while one is.
-        if route == "kuvo/attention" {
-            return AsyncThrowingStream { [routed] continuation in
-                Task { @MainActor in
-                    let (status, body) = link?.answerAttention(routed, asking: asking) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // A conversation carried on with the coding agents, as picking one of their models in it does.
         if let id = Self.sessionID(in: route, then: "agents") {
             return AsyncThrowingStream { continuation in
@@ -937,43 +918,66 @@ final class PhoneLink {
 
     // MARK: Notifications
 
-    /// Sends `notice`, about this Mac's own sessions, chats or browser (a machine tells your phones
-    /// its own), to your phones' notifications: at once, or, while you're at a computer, once it's
-    /// waited a little and wasn't answered or seen meanwhile (`hold`, PROTOCOL.md "kuvo/attention").
+    /// Sends `notice`, about what only the app knows (an ask from its panel's browser: this Mac's
+    /// box makes the notices about your sessions and chats itself, as a machine's does), to this
+    /// Mac's box, which holds it with its own while you're at a computer (PROTOCOL.md
+    /// "kuvo/attention") and sends it to your phones.
     func push(_ notice: Notice) {
-        guard Self.isEnabled else { return }
-        hold.tell(notice)
+        guard Self.isEnabled, let data = try? notice.encoded(), let object = try? JSONSerialization.jsonObject(with: data),
+              let body = try? JSONSerialization.data(withJSONObject: ["notice": object]) else { return }
+        toBox("kuvo/attention/notice", body)
     }
 
     /// Hears from `notifier` what goes to your phones, and what's been answered (which, held, then
     /// never goes).
     func listen(to notifier: Notifier) {
         notifier.toPhones = { [weak self] in self?.push($0) }
-        notifier.answeredForPhones = { [weak self] in self?.hold.resolve($0) }
+        notifier.answeredForPhones = { [weak self] id in
+            guard Self.isEnabled, let body = try? JSONSerialization.data(withJSONObject: ["id": id]) else { return }
+            self?.toBox("kuvo/attention/answered", body)
+        }
+    }
+
+    /// What's said to this Mac's box of your phones' notices, one after another, in the order it was
+    /// said (a newer word never comes before an older one), counted until it's there.
+    @ObservationIgnored private var toldBox: Task<Void, Never>?
+
+    private func toBox(_ path: String, _ body: Data) {
+        guard let client = box() else { return }
+        let previous = toldBox, delivering = delivering
+        delivering.withLock { $0 += 1 }
+        toldBox = Task.detached {
+            await previous?.value
+            _ = try? await client.send("POST", path, body: body)
+            delivering.withLock { $0 -= 1 }
+        }
     }
 
     /// You're using Kuvo Code on this Mac, with `sessions` on its screen and `shown` in its own
-    /// notifications just now, or not any more (nil) (`Attention`): this Mac's box hears it, and
-    /// each of your machines by mail, so notices for your phones wait a little there too, and one
-    /// you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each notification shown goes to the
-    /// box whose news it was alone.
+    /// notifications just now, or not any more (nil) (`Attention`): this Mac's box hears it (as
+    /// "mac"), and each of your machines by mail, so notices for your phones wait a little there too,
+    /// and one you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each notification shown goes
+    /// to the box whose news it was alone.
     func attend(_ sessions: [String]?, shown: [NoticeHold.Shown] = []) {
         guard Self.isEnabled else { return }
         let seconds = sessions == nil ? 0 : Attention.lease
-        hold.attend("mac", for: seconds, sessions: sessions ?? [], shown: shown.filter { $0.machine == nil })
+        let words = { (shown: [NoticeHold.Shown]) in
+            shown.map { each -> [String: Any] in
+                var entry: [String: Any] = ["session": each.session, "ask": each.ask]
+                if let request = each.request { entry["request"] = request }
+                return entry
+            }
+        }
+        if let body = try? JSONSerialization.data(withJSONObject: ["for": seconds, "sessions": sessions ?? [], "shown": words(shown.filter { $0.machine == nil })]) {
+            toBox("kuvo/attention", body)
+        }
         guard let server, status == .connected else { return }
         let at = Int64(Date.now.timeIntervalSince1970 * 1000)
         let delivering = delivering
         for (machine, host) in machineHosts where host.peers == true && host.anotherMac != true {
             var word: [String: Any] = ["for": seconds, "sessions": sessions ?? []]
             let theirs = shown.filter { $0.machine == machine }
-            if !theirs.isEmpty {
-                word["shown"] = theirs.map { each -> [String: Any] in
-                    var entry: [String: Any] = ["session": each.session, "ask": each.ask]
-                    if let request = each.request { entry["request"] = request }
-                    return entry
-                }
-            }
+            if !theirs.isEmpty { word["shown"] = words(theirs) }
             guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
                   let data = try? JSONSerialization.data(withJSONObject: ["attention": word, "at": at]) else { continue }
             delivering.withLock { $0 += 1 }
@@ -998,60 +1002,6 @@ final class PhoneLink {
             done.signal()
         }
         _ = done.wait(timeout: .now() + 2)
-    }
-
-    /// `kuvo/attention`: GET says whether a client is in use here, and how many notices wait; POST
-    /// `{for, sessions?, shown?}`, a phone in use for `for` seconds (0: not any more) with those on
-    /// its screen and those shown in its own notifications, answers the lease it got.
-    func answerAttention(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
-        switch request.method.uppercased() {
-        case "GET", "HEAD":
-            return (200, Self.json(["inUse": hold.inUse, "held": hold.count]))
-        case "POST":
-            let given = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
-            let sessions = given?["sessions"]
-            guard let seconds = (given?["for"] as? NSNumber).flatMap({ Self.isBool($0) ? nil : $0.doubleValue }), seconds.isFinite, seconds >= 0,
-                  sessions == nil || sessions is [String], let shown = Self.shown(given?["shown"]) else {
-                return (400, Self.message("Say for how many seconds you're in use (for: 0 for not), which conversations are on your screen (sessions), and which your notifications showed (shown)."))
-            }
-            let granted = min(seconds, NoticeHold.longestLease)
-            hold.attend("phone:\(asking?.base64URL ?? "")", for: granted, sessions: Array(((sessions as? [String]) ?? []).prefix(50)), shown: shown)
-            return (200, Self.json(["for": granted]))
-        default:
-            return (405, Data("{}".utf8))
-        }
-    }
-
-    private static func isBool(_ number: NSNumber) -> Bool { CFGetTypeID(number) == CFBooleanGetTypeID() }
-
-    /// A client's `shown` (`[{session, ask?, request?}]`): none when it's left out, nil when it isn't that.
-    private static func shown(_ value: Any?) -> [NoticeHold.Shown]? {
-        guard let value else { return [] }
-        guard let list = value as? [Any] else { return nil }
-        var shown: [NoticeHold.Shown] = []
-        for item in list {
-            guard let entry = item as? [String: Any], let session = entry["session"] as? String else { return nil }
-            let ask = entry["ask"], request = entry["request"]
-            guard ask == nil || (ask as? NSNumber).map(isBool) == true, request == nil || request is String else { return nil }
-            shown.append(NoticeHold.Shown(session: session, ask: (ask as? Bool) ?? false, request: request as? String))
-        }
-        return Array(shown.prefix(50))
-    }
-
-    /// `notice` to each paired phone, through the relay: false when it can't go now (no relay
-    /// connection), for `hold` to try again.
-    func deliver(_ notice: Notice) -> Bool {
-        guard Self.isEnabled, let data = try? notice.encoded() else { return true }
-        guard phones.contains(where: { $0.address != nil }) else { return true }
-        guard let server, status == .connected else { return false }
-        let delivering = delivering
-        delivering.withLock { $0 += 1 }
-        Task.detached {
-            // This Mac's box seals it for each phone, and sends it on its connection.
-            _ = await server.push(data)
-            delivering.withLock { $0 -= 1 }
-        }
-        return true
     }
 
     /// Where the outside agents' bridge is reached over the link.
@@ -1089,7 +1039,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1244,15 +1194,6 @@ final class PhoneLink {
             return (200, Data("{}".utf8))
         case "kuvo/asks":
             return (200, asksJSON())
-        case "kuvo/accounts/ended":
-            return (200, (try? JSONEncoder().encode(["providers": endedSignIns()])) ?? Data())
-        case let path where path.hasPrefix("kuvo/accounts/") && path.hasSuffix("/forget") && request.method.uppercased() == "POST":
-            // Disconnect, as Settings › Accounts does it: its sign-ins and keys here, and the copies on your machines.
-            // Any name a plan has (one you added before their names became plain letters keeps the
-            // name it was given): `forgetSignIn` signs out only your plans.
-            let provider = String(path.dropFirst("kuvo/accounts/".count).dropLast("/forget".count)).removingPercentEncoding ?? ""
-            guard !provider.isEmpty, !provider.contains("/") else { return (404, Data()) }
-            return forgetSignIn(provider) ? (200, Data("{}".utf8)) : (404, Data())
         case "kuvo/usage":
             guard let usage = usageJSON() else { return (404, Data()) }
             return (200, usage)
@@ -1548,6 +1489,8 @@ final class PhoneLink {
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
+            // A plan signed out (`kuvo/accounts/<id>/forget`), the box's too.
+            || (route.hasPrefix("kuvo/accounts/") && route.hasSuffix("/forget") && route.dropFirst("kuvo/accounts/".count).dropLast("/forget".count).contains("/") == false)
     }
 
     /// `kuvo/shell/<id>/stop` → the engine's id of the command.
