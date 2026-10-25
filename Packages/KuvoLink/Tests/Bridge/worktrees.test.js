@@ -111,6 +111,8 @@ test("made for a session on a branch of its own, named after it, listed with wha
   assert.equal(fs.existsSync(root), false);
   assert.notEqual(git(project, "branch", "--list", "kuvo/fix-the-total"), "", "not merged: its branch stays");
   assert.deepEqual((await ask("GET", "kuvo/worktrees")).value.worktrees, []);
+  // A conversation that ran in it is still named after its project (a notice's subtitle).
+  assert.equal(link.projectNameOf(root), path.basename(project));
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: root })).status, 404);
   // Recorded again by a Mac that still had it: it's gone, so it stays gone.
   assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root, branch: "kuvo/fix-the-total" })).status, 404);

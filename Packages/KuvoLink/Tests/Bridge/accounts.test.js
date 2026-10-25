@@ -32,9 +32,21 @@ async function engineWith() {
     // The sign-in each plan uses now.
     inUse: { openai: { credentialID: "crd_1", method: "oauth" }, anthropic: { credentialID: "crd_3", method: "key" } },
     removed: [],
+    followers: [],
   };
+  let followed;
+  engine.following = new Promise(resolve => { followed = resolve; });
+  // Its events, to whoever follows them.
+  engine.send = event => { for (const follower of engine.followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://x");
+    if (url.pathname === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      engine.followers.push(response);
+      followed();
+      return;
+    }
     const send = (status, body) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
     if (request.method === "DELETE" && url.pathname.startsWith("/api/credential/")) {
       const id = decodeURIComponent(url.pathname.split("/").pop());
@@ -67,6 +79,15 @@ async function ask(method, route) {
   return { status: parts[0].head.status, json };
 }
 const ended = async () => (await ask("GET", "kuvo/accounts/ended")).json.providers;
+// What comes to be, looked for as it comes (another part of the box notes it), for five seconds at most.
+async function until(found, why) {
+  for (const end = Date.now() + 5000; Date.now() < end;) {
+    if (await found()) return;
+    await new Promise(done => setTimeout(done, 10));
+  }
+  throw new Error(why);
+}
+
 // A run on the engine, as its events say it ended.
 const refused = session => link.noteSignIn({ type: "session.execution.failed", data: { sessionID: session, error: { type: "provider.auth", message: "Request failed with status 401" } } }, engine.source);
 
@@ -115,4 +136,25 @@ test("a provider named in any language can be disconnected from a phone: by its 
   assert.equal((await ask("POST", "kuvo/accounts/sirket-proxy/forget")).status, 200);
   assert.equal((await ask("POST", `kuvo/accounts/${encodeURIComponent("şirket-proxy")}/forget`)).status, 200);
   assert.deepEqual(engine.removed, ["crd_4", "crd_5"]);
+});
+
+test("a plan whose sign-in ran out is noted as the box watches its engine, whichever part of it watches: a machine's link, or this Mac's box", async () => {
+  // Where the box finds its engine.
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
+  engine.inUse.openai = { credentialID: "crd_1", method: "oauth" };
+  engine.credentials.push({ id: "crd_1", integrationID: "openai", label: "me" });
+  // A machine's link (`run`), then this Mac's box (`serve`), as each starts watching.
+  for (const watching of [{}, { bots: true, notices: false }]) {
+    await ask("POST", "kuvo/accounts/openai/forget");
+    engine.credentials.push({ id: "crd_1", integrationID: "openai", label: "me" });
+    assert.deepEqual(await ended(), []);
+    const stop = new AbortController();
+    const followers = engine.followers.length;
+    link.watchBox({ ...watching, signal: stop.signal });
+    await until(() => engine.followers.length > followers, "the box never followed its engine's events");
+    engine.send({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "provider.auth", message: "Request failed with status 401" } } });
+    await until(async () => (await ended()).includes("openai"), `not noted: ${JSON.stringify(watching)}`);
+    stop.abort();
+  }
 });

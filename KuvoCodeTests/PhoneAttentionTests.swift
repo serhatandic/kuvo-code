@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import os
 import Testing
 @testable import KuvoCode
 
@@ -117,6 +118,36 @@ import Testing
         #expect(sent.map(\.category) == [.ask])
         #expect(sent.first?.data == ["ask": "ask_1"])
         #expect(sent.first?.thread == "ask_1")
+    }
+
+    /// A machine's news the Mac showed is the machine's to count: this Mac's box hears only what
+    /// it showed of this Mac's own.
+    @Test func aMachinesNotificationIsntThisMacsToCount() async throws {
+        let said = OSAllocatedUnfairLock<[Data]>(initialState: [])
+        let link = PhoneLink(file: folder.appending(path: "phone-link.json"), identity: (LinkKey(), RelaySecret()))
+        // This Mac's box, as far as what it's told of you goes.
+        link.box = {
+            BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+                if request.path == "kuvo/attention" { said.withLock { $0.append(request.body) } }
+                return AsyncThrowingStream {
+                    $0.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    $0.yield(.body(Data("{}".utf8)))
+                    $0.finish()
+                }
+            })
+        }
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let (attention, _) = atTheMac(link)
+        defer { attention.stop() }
+        attention.shown(Attention.Shown(session: "ses_m", ask: false, machine: "box.invalid"))
+        attention.shown(Attention.Shown(session: "ses_a", ask: false))
+        await link.saidToBox()
+        struct Told: Decodable { struct Shown: Decodable, Equatable { var session: String; var ask: Bool }; var shown: [Shown] }
+        let told = try said.withLock { $0 }.map { try JSONDecoder().decode(Told.self, from: $0).shown }
+        #expect(told.flatMap(\.self) == [.init(session: "ses_a", ask: false)])
     }
 
     /// A notification this Mac showed, as the boxes match it with their notices (this Mac's, made

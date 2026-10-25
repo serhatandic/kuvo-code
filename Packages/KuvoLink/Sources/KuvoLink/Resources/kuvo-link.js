@@ -1503,10 +1503,24 @@ export function readWorktrees() {
   }
 }
 
+/** Worktrees removed here: the project each was of, by the folder its sessions ran in, so a
+ * conversation that ran in one is still named after its project, as the Mac names it. */
+export function readRemovedWorktrees() {
+  try {
+    const removed = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).removed;
+    return isObject(removed) ? Object.fromEntries(Object.entries(removed).filter(([, project]) => typeof project === "string")) : {};
+  } catch {
+    return {};
+  }
+}
+
 /** The list as `change` makes it, read again just before: a phone's request and a Mac's run
- * beside each other, each in a process of its own. */
-function updateWorktrees(change) {
-  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()) }, null, 2));
+ * beside each other, each in a process of its own. `gone`: a worktree removed, kept in `removed`
+ * (the latest 200). */
+function updateWorktrees(change, gone) {
+  let removed = readRemovedWorktrees();
+  if (gone) removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
+  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed }, null, 2));
   for (const tell of worktreeFollowers) tell();
 }
 
@@ -1795,7 +1809,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     }
     // Its branch goes only if it's merged (made for nothing, it goes whatever: `forget`).
     gitIn(tree.project, ["branch", body?.forget === true ? "-D" : "-d", tree.branch]);
-    updateWorktrees(list => list.filter(each => each.root !== tree.root));
+    updateWorktrees(list => list.filter(each => each.root !== tree.root), tree);
     return { status: 200, value: {} };
   }
   return { status: 404, value: {} };
@@ -4531,6 +4545,9 @@ export const LONGEST_LEASE = 60_000;
 export const SHOWN_WITHIN = 10_000;
 // Where a running bridge keeps what's held.
 const HELD_FILE = path.join(RUN, "held-notices.json");
+// What a bridge before held waits this long for its clients to say they're still in use (a Mac
+// renews every 15 seconds), as they were when it stopped: then it goes, unless they're back.
+export const RESTORED_WAIT = 20_000;
 // A notice that couldn't go (no relay just now) is tried again this often, for this long.
 const RETRY_EVERY = 5_000;
 const TRY_FOR = 10 * 60_000;
@@ -4570,8 +4587,9 @@ const monotonic = () => performance.now();
 export class NoticeHold {
   // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
   // the clock (a test's own), `now` for time gone by; `wall`, the date, for what's kept. `save(entries)`:
-  // what's held, kept for a bridge that starts again, which gives them back as `held` (no client is
-  // in use with it yet, so they go).
+  // what's held, kept for a bridge that starts again, which gives them back as `held`: each with the
+  // rest of its hold, and what was seen kept seen, while its clients have a moment to say they're
+  // still there (`RESTORED_WAIT`).
   constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
     Object.assign(this, { send, now, wall, setTimer, clearTimer, save });
     this.leases = new Map();
@@ -4582,8 +4600,11 @@ export class NoticeHold {
     this.answered = [];
     this.timer = null;
     const start = this.now(), today = this.wall();
-    this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number")
-      .map(entry => ({ notice: entry.notice, wall: entry.at, at: start - Math.min(Math.max(today - entry.at, 0), TRY_FOR), due: 0, seen: entry.seen === true }));
+    this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number").map(entry => {
+      const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR);
+      return { notice: entry.notice, wall: entry.at, at: start - age, due: start + Math.max(0, holdFor(entry.notice.category) - age), seen: entry.seen === true };
+    });
+    if (this.held.length) this.leases.set("restored", start + RESTORED_WAIT);
     this.saved = NoticeHold.kept(this.held);
     this.settle();
   }
@@ -4747,7 +4768,8 @@ const chatsFolder = () => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.j
 export function projectNameOf(directory) {
   if (!directory) return undefined;
   if (directory === chatsFolder()) return "Chats";
-  const project = readWorktrees().find(each => each.root === directory)?.project ?? directory;
+  const project = readWorktrees().find(each => (each.folder ?? each.root) === directory || each.root === directory)?.project
+    ?? readRemovedWorktrees()[directory] ?? directory;
   return readProjects().find(each => each.directory === project)?.name || path.basename(project) || undefined;
 }
 
@@ -4842,7 +4864,9 @@ export async function settleHeld(engine, hold) {
   for (const entry of [...hold.held]) {
     const { request, requestSession, session } = entry.notice?.data ?? {};
     const kind = { permission: "permission", question: "form" }[entry.notice?.category];
-    if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string") continue;
+    // A form an MCP server asks for is filed under no session ("global"), where the engine lists
+    // none without its folder: one it can't tell about.
+    if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string" || (requestSession ?? session) === "global") continue;
     const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session)}/${kind}`).catch(() => null))?.data;
     if (Array.isArray(asked) && !asked.some(each => each?.id === request)) hold.resolve(request);
   }
@@ -4911,6 +4935,16 @@ const pause = (ms, signal) => new Promise(resolve => {
 // `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
 // on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`); `hold`:
 // where those notices wait, settled each time the events are heard again (`settleHeld`).
+// What a box watches its engine and its coding agents' bridge for, as a machine's link (`run`)
+// and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
+// ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
+// its bots' part of the box's work (this Mac's box, whose app does the rest).
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal } = {}) {
+  const answered = id => hold?.resolve(id);
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
+}
+
 export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
@@ -4957,21 +4991,40 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
 // A run on this box's engine refused its model's sign-in (it ran out and couldn't be renewed: the
 // engine says only "Request failed" then), by provider: the credential in use then. A step on that
 // provider's model that ends well says it works after all; signed in again, the one in use is
-// another, and it isn't ended.
+// another, and it isn't ended. Kept in `run/ended-sign-ins.json`, so whichever of the box's
+// processes answers (its link, `box route`) says the same, and a box started again still knows.
 
-const endedSignIns = new Map();
+const ENDED_SIGN_INS_FILE = path.join(RUN, "ended-sign-ins.json");
+
+function readEndedSignIns() {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_SIGN_INS_FILE, "utf8"));
+    return new Map(Object.entries(isObject(kept) ? kept : {}).filter(([, credential]) => typeof credential === "string"));
+  } catch {
+    return new Map();
+  }
+}
+
+function changeEndedSignIns(change) {
+  const ended = readEndedSignIns();
+  change(ended);
+  try {
+    if (ended.size) writePrivate(ENDED_SIGN_INS_FILE, JSON.stringify(Object.fromEntries(ended)));
+    else fs.rmSync(ENDED_SIGN_INS_FILE, { force: true });
+  } catch {}
+}
 
 export async function noteSignIn(event, source) {
   const ended = event.type === "session.execution.failed";
-  if (!ended && (event.type !== "session.step.ended" || !endedSignIns.size)) return;
+  if (!ended && (event.type !== "session.step.ended" || !readEndedSignIns().size)) return;
   if (ended && (event.data?.error?.type !== "provider.auth" || !String(event.data?.error?.message ?? "").startsWith("Request failed"))) return;
   const id = event.data?.sessionID;
   if (typeof id !== "string") return;
   const provider = (await engineGet(source, `api/session/${encodeURIComponent(id)}`))?.data?.model?.providerID;
   if (typeof provider !== "string") return;
-  if (!ended) return void endedSignIns.delete(provider);
+  if (!ended) return void changeEndedSignIns(each => each.delete(provider));
   const active = await activeCredential(source, provider);
-  if (active?.method === "oauth" && active.credentialID) endedSignIns.set(provider, active.credentialID);
+  if (active?.method === "oauth" && active.credentialID) changeEndedSignIns(each => each.set(provider, active.credentialID));
 }
 
 // `provider`'s sign-in in use, as its engine lists it.
@@ -4983,7 +5036,7 @@ async function activeCredential(engine, provider) {
 // The plans whose sign-in in use ended.
 export async function endedProviders(engine) {
   const providers = [];
-  for (const [provider, credential] of endedSignIns) {
+  for (const [provider, credential] of readEndedSignIns()) {
     if ((await activeCredential(engine, provider).catch(() => null))?.credentialID === credential) providers.push(provider);
   }
   return providers.sort();
@@ -5004,7 +5057,7 @@ export async function forgetPlan(engine, id) {
       signal: AbortSignal.timeout(10_000),
     }).then(response => response.body?.cancel()).catch(() => {});
   }
-  endedSignIns.delete(id);
+  changeEndedSignIns(each => each.delete(id));
   return true;
 }
 
@@ -8250,8 +8303,7 @@ export function macNoticeHold(clock = {}) {
 // A notice of this Mac's for your phones (its news, its app's own asks): held and sent while the
 // phone link's on, or until its app says whether it is (as it starts); none while it's off.
 export function macTell(notice) {
-  if (!macLink.hold || (macLink.config && !macLink.config.phones)) return true;
-  return macLink.hold.tell(notice);
+  return macLink.hold ? macLink.hold.tell(notice) : true;
 }
 
 // This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,
@@ -8541,9 +8593,9 @@ async function run() {
   });
   const tell = notice => hold.tell(notice);
   const answered = id => hold.resolve(id);
-  watchEvents(readEngineFile, tell, undefined, answered, { hold });
-  // The coding agents here (their sessions, and group chats that live here), through their bridge.
-  watchEvents(readBridgeFile, tell, undefined, answered);
+  // Its engine and the coding agents here (their sessions, and group chats that live here),
+  // through their bridge.
+  watchBox({ tell, hold });
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
   watchAsks(tell, { answered });
@@ -8799,9 +8851,7 @@ async function serve() {
   if (readKit()) try { keepJobs(); } catch {}
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
-  const answered = id => macLink.hold?.resolve(id);
-  watchEvents(readEngineFile, macTell, undefined, answered, { bots: true, notices: IS_MAC, signIns: true, hold: macLink.hold });
-  watchEvents(readBridgeFile, macTell, undefined, answered, { bots: true, notices: IS_MAC });
+  watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async () => {

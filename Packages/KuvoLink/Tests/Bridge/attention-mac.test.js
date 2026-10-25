@@ -26,6 +26,9 @@ Object.assign(process.env, {
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
+// The date as far as the tests go.
+const TODAY = 1_800_000_000_000;
+
 // A clock that moves only when the test moves it, and the timers it runs.
 function clock() {
   let now = 1_800_000_000_000;
@@ -33,6 +36,8 @@ function clock() {
   let next = 1;
   return {
     now: () => now,
+    // The date, for what a box before kept: fixed.
+    wall: () => TODAY,
     setTimer: (fire, ms) => {
       const id = next++;
       timers.push({ id, at: now + ms, fire });
@@ -69,10 +74,12 @@ async function engineWith(sessions, asking = {}) {
       followed();
       return;
     }
-    const permissions = url.pathname.match(/^\/api\/session\/([^/]+)\/permission$/);
-    if (permissions) {
+    // What each session asks now: none named, none asked (as the engine answers for "global",
+    // asked without the folder of an MCP server's form).
+    const asked = url.pathname.match(/^\/api\/session\/([^/]+)\/(permission|form)$/);
+    if (asked) {
       response.writeHead(200, { "content-type": "application/json" });
-      return response.end(JSON.stringify({ data: (asking[decodeURIComponent(permissions[1])] ?? []).map(id => ({ id })) }));
+      return response.end(JSON.stringify({ data: (asking[decodeURIComponent(asked[1])] ?? []).map(id => ({ id })) }));
     }
     const session = sessions[decodeURIComponent(url.pathname.split("/").pop())];
     response.writeHead(session ? 200 : 404, { "content-type": "application/json" });
@@ -327,4 +334,57 @@ test("what was answered while the box couldn't hear its engine never reaches you
   assert.deepEqual(mac.hold.held.map(entry => entry.notice.data.request), ["per_2"]);
   await mac.app({ for: 0 });
   assert.deepEqual(mac.phone.map(notice => notice.data.request), ["per_2"]);
+});
+
+test("an MCP server's form held while the box couldn't hear its engine stays held: the engine can't say without its folder", async () => {
+  const form = { title: "Fix the tests", subtitle: "shop", body: "Linear wants: Your workspace", category: "question", thread: "ses_a", data: { session: "ses_a", request: "frm_1", requestSession: "global" } };
+  let looked;
+  const settled = new Promise(resolve => { looked = resolve; });
+  const mac = await macBox({
+    asking: { ses_a: [] },
+    before: hold => {
+      hold.attend("mac", { seconds: 45, sessions: [], shown: [] });
+      hold.tell(form);
+      // A permission it can tell about, looked up after: settled once that's done.
+      hold.tell({ ...form, category: "permission", data: { session: "ses_a", request: "per_9" } });
+      const resolve = hold.resolve.bind(hold);
+      hold.resolve = id => { resolve(id); if (id === "per_9") looked(); };
+    },
+  });
+  await settled;
+  assert.deepEqual(mac.hold.held.map(entry => entry.notice.data.request), ["frm_1"]);
+  await mac.app({ for: 0 });
+  assert.deepEqual(mac.phone.map(notice => notice.data.request), ["frm_1"]);
+});
+
+test("held as this Mac's box stopped while you were at the Mac: each keeps the rest of its hold, one you saw waits while the app says you're still here, and all go once you leave", async () => {
+  const today = TODAY;
+  const permission = { title: "Fix the tests", subtitle: "shop", body: "Wants to run a command: npm test", category: "permission", thread: "ses_a", data: { session: "ses_a", request: "per_1" } };
+  const finished = { title: "Fix the tests", subtitle: "shop", body: "All green.", category: "finished", thread: "ses_a", data: { session: "ses_a" } };
+  const kept = () => fs.writeFileSync(path.join(support, "box", "run", "held-notices.json"),
+    JSON.stringify([{ notice: permission, at: today - 5_000, seen: true }, { notice: finished, at: today - 5_000, seen: false }]));
+  kept();
+  const mac = await macBox();
+  // Started again: nothing goes before the app's had a moment to say you're still here.
+  mac.time.pass(15_000);
+  assert.deepEqual(mac.phone, []);
+  await mac.app(here());
+  // The news's hold ends 60 seconds after it was made; the one you saw waits on you.
+  mac.time.pass(link.NEWS_HOLD - 5_000 - 15_000 - 1);
+  assert.deepEqual(mac.phone, []);
+  mac.time.pass(1);
+  assert.deepEqual(mac.phone.map(notice => notice.category), ["finished"]);
+  await mac.app({ for: 0 });
+  assert.deepEqual(mac.phone.map(notice => notice.category), ["finished", "permission"]);
+});
+
+test("held as this Mac's box stopped, and the app doesn't say you're here again: all of it goes a moment later", async () => {
+  const today = TODAY;
+  const permission = { title: "Fix the tests", subtitle: "shop", body: "Wants to run a command: npm test", category: "permission", thread: "ses_a", data: { session: "ses_a", request: "per_1" } };
+  fs.writeFileSync(path.join(support, "box", "run", "held-notices.json"), JSON.stringify([{ notice: permission, at: today - 5_000, seen: true }]));
+  const mac = await macBox();
+  mac.time.pass(link.RESTORED_WAIT - 1);
+  assert.deepEqual(mac.phone, []);
+  mac.time.pass(1);
+  assert.deepEqual(mac.phone.map(notice => notice.category), ["permission"]);
 });
