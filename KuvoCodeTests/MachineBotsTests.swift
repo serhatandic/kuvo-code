@@ -3,10 +3,9 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Bots a machine makes itself, with this Mac closed (New Bot there, from a phone): the Mac gives
-/// the machine what New Bot needs as it connects, and takes in what the machine made the next time
-/// it does: each bot once, as its folder there describes it, the rest left as they are. What the
-/// machine tells a new bot, from the kit's words, is what this Mac tells one.
+/// What a box makes its bots with and tells them (its kit): a machine's as the Mac gives it, or its
+/// own release's; this Mac's from its app. Filled in there, its words are what this Mac's words say
+/// to a bot there.
 @MainActor
 @Suite(.serialized) struct MachineBotsTests {
     let app = AppModel()
@@ -23,40 +22,6 @@ import Testing
         try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "machine-bots.json"))
         // What waited for a machine that never connected.
         UserDefaults.standard.removeObject(forKey: "botEditsWaiting")
-    }
-
-    private func descriptor(_ id: String, name: String = "Herald", model: ModelRef? = ModelRef(id: "gpt-6.1-sol", providerID: "codex-cli"),
-                            personality: String? = "preset.straight", project: String? = nil, look: BotLook = BotLook(color: .sky, shape: .round, face: .happy),
-                            updated: Date = Date(timeIntervalSince1970: 1_792_000_000)) throws -> Data {
-        let descriptor = Bot.Descriptor(id: id, name: name, job: "", look: look, personality: personality,
-                                        model: model, project: project, created: Date(timeIntervalSince1970: 1_792_000_000), updated: updated)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(descriptor)
-    }
-
-    @Test func whatAMachineMadeIsTakenInOnce() throws {
-        defer { done() }
-        let folder = "/home/me/.kuvo-code/bots/bot_herald0001"
-        let found = [
-            Bots.Found(folder: folder, descriptor: try descriptor("bot_herald0001", project: "/home/me/app"), session: "ses_herald", via: "bridge"),
-            // Not a bot's description, one in another's folder, one with no conversation: left out.
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_broken0001", descriptor: Data("{}".utf8), session: "ses_x", via: ""),
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_other00001", descriptor: try descriptor("bot_moved00001"), session: "ses_y", via: ""),
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_nosession1", descriptor: try descriptor("bot_nosession1"), session: "", via: ""),
-        ]
-        let adopted = app.bots.adopt(found, on: "box")
-        #expect(adopted.map(\.id) == ["bot_herald0001"])
-        let bot = try #require(app.bots.bot("bot_herald0001"))
-        #expect(bot.name == "Herald" && bot.machine == "box" && bot.folder == folder && bot.sessionID == "ses_herald")
-        #expect(bot.model == ModelRef(id: "gpt-6.1-sol", providerID: "codex-cli") && bot.personality == "preset.straight")
-        #expect(bot.agents == true, "it runs with the coding agents there")
-        #expect(bot.project == RemoteFolder.folder("/home/me/app", on: "box"))
-        #expect(app.workspace.botSessions.contains("ses_herald"))
-        // Kept, and taken in only once.
-        #expect(Bots().list.map(\.id) == ["bot_herald0001"])
-        #expect(app.bots.adopt(found, on: "box").isEmpty)
-        #expect(app.bots.list.count == 1)
     }
 
     /// The kit's words for a bot, filled in as the machine's bridge fills them in
@@ -107,90 +72,5 @@ import Testing
         #expect(release.version == AppInfo.version)
         #expect(release.startingModel == nil && release.projects.isEmpty && release.rules.isEmpty && release.zoneinfo == nil)
         #expect(release.personalities.allSatisfy { !$0.custom })
-    }
-
-    /// What a machine's bridge changed or deleted while this Mac was away, taken in as it
-    /// connects: a description there newer than this Mac's gives the bot its name, look,
-    /// personality and model; an older one, or one on its way to another computer, is left; a bot
-    /// deleted there goes here too, unless its folder is there after all.
-    @Test func whatAMachineChangedOrDeletedIsTakenIn() async throws {
-        defer { done() }
-        let made = Date(timeIntervalSince1970: 1_792_000_000)
-        func found(_ id: String, _ descriptor: Data) -> Bots.Found {
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/\(id)", descriptor: descriptor, session: "ses_\(id)", via: "")
-        }
-        app.bots.adopt([found("bot_herald0001", try descriptor("bot_herald0001")), found("bot_scout00001", try descriptor("bot_scout00001", name: "Scout")),
-                        found("bot_gone000001", try descriptor("bot_gone000001", name: "Gone")), found("bot_stays00001", try descriptor("bot_stays00001", name: "Stays"))], on: "box")
-        #expect(app.bots.list.count == 4)
-
-        let later = made.addingTimeInterval(3600)
-        let sol = ModelRef(id: "sol", providerID: "anthropic")
-        let changed = try descriptor("bot_herald0001", name: "Herald Prime", model: sol, personality: nil, look: BotLook(color: .mint, shape: .gem, face: .wink), updated: later)
-        // Scout: renamed here since; its description there is as this Mac last saw it.
-        var scout = try #require(app.bots.bot("bot_scout00001"))
-        scout.name = "Scout Here"
-        await app.bots.update(scout)
-        await app.bots.takeIn([found("bot_herald0001", changed), found("bot_scout00001", try descriptor("bot_scout00001", name: "Scout")),
-                               found("bot_stays00001", try descriptor("bot_stays00001", name: "Stays"))],
-                              deleted: ["bot_gone000001", "bot_stays00001", "bot_never00001"], on: "box")
-
-        let herald = try #require(app.bots.bot("bot_herald0001"))
-        #expect(herald.name == "Herald Prime" && herald.look == BotLook(color: .mint, shape: .gem, face: .wink))
-        #expect(herald.personality == nil && herald.model == sol)
-        #expect(app.bots.bot("bot_scout00001")?.name == "Scout Here", "nothing changed there: this Mac's edit stays")
-        #expect(app.bots.bot("bot_gone000001") == nil, "deleted there")
-        #expect(app.bots.bot("bot_stays00001") != nil, "its folder is there")
-        #expect(Bots().list.map(\.id).sorted() == ["bot_herald0001", "bot_scout00001", "bot_stays00001"])
-        #expect(!app.workspace.botSessions.contains("ses_bot_gone000001"))
-
-        // Taken in once: the same again changes nothing.
-        await app.bots.takeIn([found("bot_herald0001", changed)], deleted: [], on: "box")
-        #expect(app.bots.bot("bot_herald0001") == herald)
-        // Another machine's word about it counts for nothing.
-        await app.bots.takeIn([], deleted: ["bot_herald0001"], on: "other")
-        #expect(app.bots.bot("bot_herald0001") != nil)
-    }
-
-    /// A machine's bot whose conversation went on with the coding agents there (from a phone, with
-    /// this Mac closed): the new conversation is its, as it is there.
-    @Test func aBotsConversationCarriedOnThereIsTakenIn() async throws {
-        defer { done() }
-        let folder = "/home/me/.kuvo-code/bots/bot_herald0001"
-        let described = try descriptor("bot_herald0001", model: ModelRef(id: "big-pickle", providerID: "opencode"))
-        app.bots.adopt([Bots.Found(folder: folder, descriptor: described, session: "ses_engine", via: "")], on: "box")
-        #expect(app.bots.bot("bot_herald0001")?.agents != true)
-        await app.bots.takeIn([Bots.Found(folder: folder, descriptor: described, session: "ses_theirs", via: "bridge")], deleted: [], on: "box")
-        let herald = try #require(app.bots.bot("bot_herald0001"))
-        #expect(herald.sessionID == "ses_theirs" && herald.agents == true)
-        #expect(app.workspace.botSessions.contains("ses_theirs"))
-        #expect(Bots().bot("bot_herald0001")?.sessionID == "ses_theirs", "kept")
-    }
-
-    /// A machine whose clock is behind this Mac's (by an hour here): a rename made there from a
-    /// phone, after this Mac last saw the bot, is still taken in, though its time reads earlier
-    /// than this Mac's last edit; what was changed here and not there (its look) stays.
-    @Test func aChangeOnAMachineWhoseClockIsBehindIsStillTakenIn() async throws {
-        defer { done() }
-        let made = Date(timeIntervalSince1970: 1_792_000_000)
-        func found(_ data: Data) -> Bots.Found {
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_herald0001", descriptor: data, session: "ses_bot_herald0001", via: "")
-        }
-        app.bots.adopt([found(try descriptor("bot_herald0001", updated: made))], on: "box")
-        // Here, by this Mac's clock: a new look.
-        var herald = try #require(app.bots.bot("bot_herald0001"))
-        herald.look = BotLook(color: .coral, shape: .gem, face: .happy)
-        await app.bots.update(herald, at: made.addingTimeInterval(600))
-        // There, from a phone, ten minutes later by this Mac's clock, but an hour behind it.
-        let renamed = try descriptor("bot_herald0001", name: "Herald Prime", updated: made.addingTimeInterval(1200 - 3600))
-        await app.bots.takeIn([found(renamed)], deleted: [], on: "box")
-        let now = try #require(app.bots.bot("bot_herald0001"))
-        #expect(now.name == "Herald Prime", "the rename there, whatever its clock says")
-        #expect(now.look == BotLook(color: .coral, shape: .gem, face: .happy), "the look changed here stays")
-        // Seen now: the same again changes nothing, even after another edit here.
-        var again = now
-        again.name = "Herald Here"
-        await app.bots.update(again)
-        await app.bots.takeIn([found(renamed)], deleted: [], on: "box")
-        #expect(app.bots.bot("bot_herald0001")?.name == "Herald Here")
     }
 }

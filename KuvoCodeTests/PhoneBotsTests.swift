@@ -4,11 +4,11 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Making bots from a phone, as New Bot makes them: what New Bot offers (templates,
-/// personalities, looks, the model it starts with in each place, your projects); a bot from
-/// scratch writes first, one from a template waits with its job for the phone's composer; and
-/// what's missing or unknown said in words. The engine is stubbed. (A phone's group chats on this
-/// Mac are its bridge's: RealBridgeGroupTests.)
+/// A phone's bots on this Mac, which this Mac's box makes and keeps for every client: what New Bot
+/// offers, a bot made from a phone (from scratch it writes first; from a template it waits with its
+/// job for the phone's composer), changed and deleted there, each showing in the app as it does,
+/// and a key of its own given there. What every box answers alike is in the route scenarios
+/// (RouteContractTests). The engine is stubbed; this Mac's box is real.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneBotsTests {
     let engine = StubEngine(port: 47996)
@@ -23,9 +23,10 @@ import Testing
         link.bots = app.bots
         link.workspace = app.workspace
         engine.list([])
-        engine.on("PATCH", "/api/session/*", json: [:])
+        engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         engine.on("PUT", "/api/experimental/session/*", json: [:])
         engine.on("POST", "/api/session/*", json: [:])
+        engine.on("DELETE", "/api/session/*", json: [:])
         var made = 0
         engine.on("POST", "/api/session") { request in
             made += 1
@@ -34,9 +35,18 @@ import Testing
         }
     }
 
-    private func done() {
+    /// This Mac's box, which the app and the phone both reach, and New Bot's kit there.
+    private func start() async throws -> TestBox {
+        let box = try await TestBox(engine: engine.url)
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
+        app.bots.writeMacKit()
+        return box
+    }
+
+    private func done(_ box: TestBox) {
+        box.stop()
         engine.stop()
-        for bot in app.bots.list { try? FileManager.default.removeItem(atPath: bot.folder) }
+        try? FileManager.default.removeItem(at: Bots.root)
         try? FileManager.default.removeItem(at: botsFile)
     }
 
@@ -56,14 +66,14 @@ import Testing
 
     private func message(_ answer: (status: Int, json: [String: Any]?)) -> String? { answer.json?["message"] as? String }
 
+    private let model = ModelRef(id: "big-pickle", providerID: "opencode")
+
     /// A bot on this Mac given a key of its own from a phone, as Edit Bot gives one: in your
     /// Keychain, its folder's settings naming its server with it; read back, and taken away.
     @Test func aPhoneGivesABotHereAKeyOfItsOwn() async throws {
-        defer { done() }
-        // This Mac's box keeps them, in the test copy's Keychain through the app.
-        let box = try await TestBox(engine: engine.url)
-        defer { box.stop() }
-        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let box = try await start()
+        defer { done(box) }
+        let ada = try await app.bots.make(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: model, machine: nil, project: nil).bot
         let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
         let name = try #require(Integrations.keys(of: service.way).first?.name)
         let variable = IntegrationKeys.variable(service.id, name, bot: ada.id)
@@ -72,194 +82,96 @@ import Testing
 
         let listed = try #require(try await ask(path).json?["keys"] as? [[String: Any]])
         #expect(listed.map { $0["integration"] as? String } == BotKeys.services.map(\.id))
-        let entry = listed.first { $0["integration"] as? String == service.id }
-        #expect(entry?["own"] as? Bool == false)
-        // As Edit Bot shows it: its name, symbol and the keys it takes.
-        #expect(entry?["title"] as? String == service.title && entry?["symbol"] as? String == service.symbol)
-        #expect((entry?["keys"] as? [[String: String]])?.map { $0["name"] } == Integrations.keys(of: service.way).map(\.name))
         #expect(try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [:]]).status == 400)
-
         let given = try await ask(path + "/\(service.id)", method: "PUT", body: ["keys": [name: " tok_ada "]])
         #expect(given.status == 200)
         #expect(IntegrationKeys.value(variable) == "tok_ada")
         let settings = try String(contentsOf: URL(filePath: ada.directory).appending(path: ".opencode/opencode.json"), encoding: .utf8)
         #expect(settings.contains(variable), "her folder's settings name her server with it")
-        #expect((try await ask(path + "/\(service.id)").json?["keys"] as? [String: String]) == [name: "tok_ada"])
-
         #expect(try await ask(path + "/\(service.id)", method: "DELETE").status == 200)
         #expect(IntegrationKeys.value(variable) == nil)
-        #expect(try await ask(path + "/\(service.id)", method: "DELETE").status == 404)
         #expect(try await ask("kuvo/bots/bot_nobody/keys").status == 404)
     }
 
     @Test func whatNewBotOffers() async throws {
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let offered = try #require(try await ask("kuvo/bots/templates").json)
         let templates = try #require(offered["templates"] as? [[String: Any]])
         #expect(templates.map { $0["id"] as? String } == BotTemplate.all.map(\.id))
-        let ci = try #require(templates.first { $0["id"] as? String == "ci" })
-        #expect(ci["wantsProject"] as? Bool == true)
-        #expect(ci["personality"] as? String == "preset.perfectionist")
-        #expect((ci["look"] as? [String: String])?["shape"] == "squircle")
         let personalities = try #require(offered["personalities"] as? [[String: Any]])
         #expect(personalities.first?["id"] as? String == "preset.straight" && personalities.first?["custom"] as? Bool == false)
-        let looks = try #require(offered["looks"] as? [String: [String]])
-        #expect(looks["colors"]?.contains("mint") == true && looks["shapes"]?.contains("bloom") == true && looks["faces"]?.contains("wink") == true)
-        // This Mac is always a place to make one, its model or not known yet.
-        #expect((offered["startingModel"] as? [String: Any])?.keys.contains("mac") == true)
-        #expect(offered["projects"] is [[String: Any]])
+        // This Mac's: the model a bot starts on here, known or not yet.
+        #expect((offered["startingModel"] as? [String: Any])?.keys.sorted() == ["mac"])
     }
 
+    /// Made from a phone: it shows in the app, and writes first.
     @Test func aBotFromScratchWritesFirst() async throws {
-        defer { done() }
-        await app.workspace.refresh()
-        let made = try await ask("kuvo/bots", method: "POST", body: ["name": "Inbox Helper", "look": ["color": "mint", "shape": "round", "face": "calm"]])
+        let box = try await start()
+        defer { done(box) }
+        let made = try await ask("kuvo/bots", method: "POST", body: ["name": "Inbox Helper", "look": ["color": "mint", "shape": "round", "face": "calm"],
+                                                                    "model": ["providerID": "opencode", "id": "big-pickle"]])
         #expect(made.status == 201)
-        let bot = try #require(made.json?["bot"] as? [String: Any])
-        let id = try #require(bot["id"] as? String)
-        #expect(id.hasPrefix("bot_") && bot["name"] as? String == "Inbox Helper" && bot["session"] as? String == "ses_bot1")
+        let id = try #require((made.json?["bot"] as? [String: Any])?["id"] as? String)
         #expect(made.json?["firstMessage"] is NSNull, "no job for the composer: it writes first")
-        #expect(app.bots.bot(id)?.look == BotLook(color: .mint, shape: .round, face: .calm))
-        // It writes first, as a new bot does.
-        try await until { !engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty }
         #expect(engine.requests("POST", "/api/session/ses_bot1/synthetic").count == 1)
-        // Listed by its id, as group chats name their members.
-        let listed = try #require(try await ask("kuvo/bots").json?["bots"] as? [[String: Any]])
-        #expect(listed.map { $0["id"] as? String } == [id])
+        await app.bots.refresh(BoxClient.mac)
+        #expect(app.bots.bot(id)?.look == BotLook(color: .mint, shape: .round, face: .calm))
+        #expect(app.bots.bot(id)?.name == "Inbox Helper")
     }
 
     @Test func oneFromATemplateWaitsWithItsJob() async throws {
-        defer { done() }
-        await app.workspace.refresh()
-        let made = try await ask("kuvo/bots", method: "POST", body: ["name": "Herald", "template": "news"])
+        let box = try await start()
+        defer { done(box) }
+        let made = try await ask("kuvo/bots", method: "POST", body: ["name": "Herald", "template": "news", "model": ["providerID": "opencode", "id": "big-pickle"]])
         #expect(made.status == 201)
         let news = try #require(BotTemplate.all.first { $0.id == "news" })
         #expect(made.json?["firstMessage"] as? String == BotTemplate.firstMessage(job: news.job, instructions: news.instructions))
+        #expect(engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty, "it waits for you")
+        await app.bots.refresh(BoxClient.mac)
         let bot = try #require(app.bots.list.first)
         #expect(bot.look == news.look && bot.personality == news.personality, "the template's look and personality")
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty, "it waits for you")
     }
 
-    @Test func whatsMissingOrUnknownIsSaid() async throws {
-        defer { done() }
-        await app.workspace.refresh()
-        for (body, words) in [
-            (["look": ["color": "mint", "shape": "round", "face": "calm"]], "A bot needs a name."),
-            (["name": "X", "template": "nope"], "There’s no template “nope”."),
-            (["name": "X", "personality": "custom.gone"], "There’s no personality “custom.gone”."),
-            (["name": "X", "machine": "box"], "There’s no machine “box”."),
-            (["name": "X", "project": "/nowhere"], "That project isn’t in Kuvo Code."),
-        ] as [([String: Any], String)] {
-            let answer = try await ask("kuvo/bots", method: "POST", body: body)
-            #expect(answer.status == 400 && message(answer) == words, "\(body)")
-        }
-        #expect(app.bots.list.isEmpty, "nothing made")
-    }
-
-    /// The models known, as Edit Bot offers them: Luna's account signed out of, Sol's signed in.
-    private func knowModels() async {
-        func model(_ id: String, _ provider: String, _ name: String) -> [String: Any] {
-            ["id": id, "modelID": id, "providerID": provider, "name": name, "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [],
-             "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
-        }
-        engine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
-            ["id": "openai", "name": "OpenAI", "methods": [["type": "key"]], "connections": []],
-            ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]], "connections": [["type": "credential", "id": "c1", "label": "Mine"]]]]])
-        engine.on("GET", "/api/model", json: ["location": ["directory": "/"], "data": [model("luna", "openai", "Luna"), model("sol", "anthropic", "Sol")]])
-        engine.on("GET", "/api/model/default", json: ["location": ["directory": "/"], "data": NSNull()])
-        engine.on("GET", "/api/agent", json: ["location": ["directory": "/"], "data": []])
-        engine.on("GET", "/api/command", json: ["location": ["directory": "/"], "data": []])
-        app.catalog.api = engine.api
-        await app.catalog.refresh()
-    }
-
-    /// A bot changed from a phone as Edit Bot changes it: its name, look, personality and model,
-    /// kept, with its conversation told; listed with them as `kuvo/bots` lists it.
+    /// Changed from a phone as Edit Bot changes it: kept by its box, its conversation told, and the
+    /// app shows it.
     @Test func aBotChangedFromAPhone() async throws {
-        defer { done() }
-        await knowModels()
-        await app.workspace.refresh()
-        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let box = try await start()
+        defer { done(box) }
+        let ada = try await app.bots.make(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: model, machine: nil, project: nil).bot
         let changed = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: [
             "name": " Ada\nPrime ", "look": ["color": "sky", "shape": "gem", "face": "wink"], "personality": "preset.straight",
-            "model": ["providerID": "anthropic", "id": "sol", "variant": "high"],
+            "job": ["line": "Keeps CI green", "details": "Watch main."],
         ])
         #expect(changed.status == 200)
-        let listed = try #require(changed.json?["bot"] as? [String: Any])
-        #expect(listed["id"] as? String == ada.id && listed["name"] as? String == "Ada Prime" && listed["personality"] as? String == "preset.straight")
-        #expect(listed["look"] as? [String: String] == ["color": "sky", "shape": "gem", "face": "wink"])
-        #expect(listed["model"] as? [String: String] == ["providerID": "anthropic", "id": "sol", "variant": "high"])
+        await app.bots.refresh(BoxClient.mac)
         let bot = try #require(app.bots.bot(ada.id))
         #expect(bot.name == "Ada Prime" && bot.look == BotLook(color: .sky, shape: .gem, face: .wink) && bot.personality == "preset.straight")
-        #expect(bot.model == ModelRef(id: "sol", providerID: "anthropic", variant: "high"))
+        #expect(bot.job == "Keeps CI green" && bot.instructions == "Watch main.")
         #expect(Bots().list.first?.name == "Ada Prime", "kept")
-        // Its conversation hears of it, as from Edit Bot: its title, its model, what it's told.
         #expect(engine.requests("PATCH", "/api/session/\(ada.sessionID)").contains { $0.body["title"] as? String == "Ada Prime" })
-        #expect(engine.requests("POST", "/api/session/\(ada.sessionID)/model").last?.body["model"] as? [String: String] == ["id": "sol", "providerID": "anthropic", "variant": "high"])
         let told = try #require(engine.requests("PUT", "/api/experimental/session/\(ada.sessionID)/instructions/entries/kuvo.bot").last?.body["value"] as? String)
-        #expect(told == Bots.instructions(for: bot) && told.contains("Straight Shooter"))
-
-        // Its own way again; only what's sent changes.
-        let plain = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["personality": NSNull()])
-        #expect(plain.status == 200 && plain.json?["bot"].flatMap { ($0 as? [String: Any])?["personality"] } == nil)
-        #expect(app.bots.bot(ada.id)?.personality == nil && app.bots.bot(ada.id)?.name == "Ada Prime")
-    }
-
-    @Test func aChangeThatCantBeIsSaid() async throws {
-        defer { done() }
-        await knowModels()
-        await app.workspace.refresh()
-        let luna = ModelRef(id: "luna", providerID: "openai")
-        let ada = try await app.bots.create(name: "Ada", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
-        let before = try #require(app.bots.bot(ada.id))
-        for (body, status, words) in [
-            (["name": " "], 400, "A bot needs a name."),
-            (["look": ["color": "plaid", "shape": "round", "face": "calm"]], 400, "That isn’t a look a bot can have."),
-            (["personality": "custom.gone"], 400, "There’s no personality “custom.gone”."),
-            (["model": ["id": "x"]], 400, "That isn’t a model."),
-        ] as [([String: Any], Int, String)] {
-            let answer = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: body.merging(["name": "Renamed"]) { given, _ in given })
-            #expect(answer.status == status && message(answer) == words, "\(body)")
-        }
-        // A model whose account isn't signed in where it lives: said as Edit Bot would say it.
-        let signedOut = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "Renamed", "model": ["id": "luna", "providerID": "openai"]])
-        #expect(signedOut.status == 422 && message(signedOut) == app.catalog.unavailable(luna))
-        #expect(app.bots.bot(ada.id) == before, "nothing changed")
-        // The one it has stays, signed out of or not.
-        var onLuna = before
-        onLuna.model = luna
-        await app.bots.update(onLuna)
-        #expect(try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "Renamed", "model": ["id": "luna", "providerID": "openai"]]).status == 200)
-
-        let gone = try await ask("kuvo/bots/bot_none000001", method: "PATCH", body: ["name": "X"])
-        #expect(gone.status == 404 && message(gone) == "That bot isn’t there any more.")
-        #expect(try await ask("kuvo/bots/bot_none000001", method: "DELETE").status == 404)
-        // On its way to another computer: neither, until it's there.
-        link.isMoving = { $0 == ada.id }
+        #expect(told == Bots.instructions(for: bot) && told.contains("Straight Shooter"), "what this Mac's words tell a bot")
+        // On its way to another computer: not changed or deleted until it's there.
+        try Data("moving".utf8).write(to: URL(filePath: bot.folder).appending(path: "paused"))
         let moving = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "X"])
         #expect(moving.status == 409 && message(moving) == Moves.Failure.moving.localizedDescription)
         #expect(try await ask("kuvo/bots/\(ada.id)", method: "DELETE").status == 409)
-        #expect(app.bots.bot(ada.id)?.name == "Renamed")
     }
 
-    /// Deleted from a phone as Delete Bot… deletes it: gone from the list, its conversation
-    /// deleted, its folder in the Trash.
+    /// Deleted from a phone as Delete Bot… deletes it: gone from the app, its conversation deleted,
+    /// its folder in the Trash.
     @Test func aBotDeletedFromAPhone() async throws {
-        defer { done() }
-        engine.on("DELETE", "/api/session/*", json: [:])
-        await app.workspace.refresh()
-        let ada = try await app.bots.create(name: "Ada", look: .random(), model: nil, machine: nil, project: nil)
-        let ben = try await app.bots.create(name: "Ben", look: .random(), model: nil, machine: nil, project: nil)
-        let cy = try await app.bots.create(name: "Cy", look: .random(), model: nil, machine: nil, project: nil)
-
+        let box = try await start()
+        defer { done(box) }
+        let ada = try await app.bots.make(name: "Ada", look: .random(), model: model, machine: nil, project: nil).bot
+        let ben = try await app.bots.make(name: "Ben", look: .random(), model: model, machine: nil, project: nil).bot
         let deleted = try await ask("kuvo/bots/\(ada.id)", method: "DELETE")
-        #expect(deleted.status == 200 && deleted.json?.isEmpty == true)
-        #expect(app.bots.bot(ada.id) == nil && Bots().list.map(\.id) == [ben.id, cy.id])
+        #expect(deleted.status == 200)
+        await app.bots.refresh(BoxClient.mac)
+        #expect(app.bots.bot(ada.id) == nil && Bots().list.map(\.id) == [ben.id])
         #expect(engine.requests("DELETE", "/api/session/\(ada.sessionID)").count == 1, "its conversation is deleted")
         #expect(!FileManager.default.fileExists(atPath: ada.folder), "its folder went to the Trash")
-        let listed = try #require(try await ask("kuvo/bots").json?["bots"] as? [[String: Any]])
-        #expect(listed.map { $0["id"] as? String } == [ben.id, cy.id])
         #expect(try await ask("kuvo/bots/\(ada.id)", method: "DELETE").status == 404)
     }
 }

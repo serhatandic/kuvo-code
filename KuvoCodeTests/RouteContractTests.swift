@@ -237,6 +237,8 @@ final class MacBox {
         app.wirePhoneLink()
         // (AppModel's machines start sets it, for the agents' mail and `&` names.)
         AgentMail.shared.app = app
+        // What its box makes and tells this Mac's bots with, as the app gives it as the box starts.
+        app.bots.writeMacKit()
         self.app = app
         #expect(app.skillsFolder == Self.skills && app.engineConfig.file == Self.folders.configFile, "the box's folders are the app's")
         await settle()

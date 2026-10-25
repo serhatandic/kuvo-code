@@ -56,22 +56,4 @@ import Testing
     func headingsThatDont(heading: String) {
         #expect(Bots.job(inMemory: "# Memory\n\n\(heading)\nRan the build\n") == nil)
     }
-
-    @Test func aJobWrittenInEditBotReadsBack() throws {
-        let memory = Bots.addingJob("Keeps CI green.", details: "Watch the main branch.\nFix what breaks.", to: Bots.blankMemory("Ci"))
-        let job = try #require(Bots.job(inMemory: memory))
-        #expect(job.line == "Keeps CI green")
-        #expect(job.section.contains("Fix what breaks."))
-        #expect(Bots.job(inMemory: Bots.blankMemory("Ci")) == nil)
-    }
-
-    /// Details from Edit Bot go into the job section the bot wrote, even one with nothing under its
-    /// heading yet, and before the next section.
-    @Test(arguments: ["## Job\n\n## Notes\nOld note\n", "## Job\nKeeps CI green\n\n## Notes\nOld note\n", "## Job\n"])
-    func detailsGoIntoTheJobSection(sections: String) throws {
-        let memory = Bots.addingDetails("Watch the main branch.", toJobIn: "# Ci's memory\n\n" + sections)
-        let job = try #require(Bots.job(inMemory: memory))
-        #expect(job.section.contains("Watch the main branch."))
-        if sections.contains("Old note") { #expect(memory.contains("## Notes\nOld note")) }
-    }
 }

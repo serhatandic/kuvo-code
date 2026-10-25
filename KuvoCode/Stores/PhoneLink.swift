@@ -818,28 +818,6 @@ final class PhoneLink {
                 }
             }
         }
-        // A new bot or group chat, as New Bot and New Group Chat make them.
-        if request.method.uppercased() == "POST", route == "kuvo/bots" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.makeBot(request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // A bot changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
-        if let id = Self.botID(in: route), ["PATCH", "DELETE"].contains(request.method.uppercased()) {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await (request.method.uppercased() == "PATCH" ? link?.changeBot(id, with: request.body) : link?.deleteBot(id)) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // A conversation carried on with the coding agents, as picking one of their models in it does.
         if let id = Self.sessionID(in: route, then: "agents") {
             return AsyncThrowingStream { continuation in
@@ -1140,7 +1118,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/bots"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 
@@ -1214,7 +1192,7 @@ final class PhoneLink {
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
-        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
+        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
@@ -1249,7 +1227,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/bots", "kuvo/named", "kuvo/asks"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if ["kuvo/named", "kuvo/asks"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
@@ -1259,10 +1237,6 @@ final class PhoneLink {
             info.agents = agents?.api != nil
             info.started = engineStarted()?.timeIntervalSince1970
             return (200, (try? encoder.encode(info)) ?? Data())
-        case "kuvo/bots":
-            return (200, (try? encoder.encode(["bots": (bots?.list ?? []).map(entry)])) ?? Data())
-        case "kuvo/bots/templates":
-            return (200, templatesJSON())
         case "kuvo/named":
             // Who "&" can name in a message: every bot, and the recent sessions with a name.
             struct Named: Encodable {
@@ -1366,14 +1340,10 @@ final class PhoneLink {
             if let description = (body["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) { personality.description = String(description.prefix(2000)) }
             guard !personality.name.isEmpty, !personality.description.isEmpty else { return (400, incomplete) }
             do { try store.update(personality) } catch { return (400, Self.message(error.localizedDescription)) }
-            let bots = bots
-            Task { await bots?.personalityChanged(id) }
             return (200, encoded(store.personality(id) ?? personality))
         case ("DELETE", let id?):
             guard let personality = store.custom.first(where: { $0.id == id }) else { return (404, Data()) }
             store.delete(personality)
-            let bots = bots
-            Task { await bots?.personalityChanged(id) }
             return (200, Data("{}".utf8))
         default:
             return (405, Data())
@@ -1611,20 +1581,7 @@ final class PhoneLink {
     }
     #endif
 
-    // MARK: Making bots
-
-    /// A bot as `kuvo/bots` lists it: by its session (here or on a machine), with its name, look
-    /// and job, and what the Mac knows of it that its session doesn't say: paused, when it next
-    /// wakes (in seconds since 1970), how many things it watches, and the personality and model
-    /// Edit Bot shows for it.
-    struct BotEntry: Encodable {
-        var id: String, session: String, name: String, look: BotLook, machine: String?, job: String
-        var paused: Bool, wakes: Double?, watching: Int
-        /// Its conversation is with the coding agents: read through `kuvo/agents/api/…`.
-        var agents: Bool
-        /// Left out for none: the model's own way, or a bot made before bots had a model.
-        var personality: String?, model: ModelRef?
-    }
+    // MARK: Bots
 
     /// A conversation's wake-ups as its box has them now, for what the app shows of them.
     func wakesChanged(_ session: String) async {
@@ -1636,155 +1593,12 @@ final class PhoneLink {
         }
     }
 
-    private func entry(_ bot: Bot) -> BotEntry {
-        BotEntry(id: bot.id, session: bot.sessionID, name: bot.name, look: bot.look, machine: bot.machine, job: bot.job,
-                 paused: bots?.paused.contains(bot.id) == true,
-                 wakes: bots?.wakes[bot.id]?.map(\.due).min()?.timeIntervalSince1970,
-                 watching: bots?.watches[bot.id]?.count ?? 0,
-                 agents: bot.agents == true,
-                 personality: bot.personality, model: bot.model)
-    }
-
-    /// `kuvo/bots/templates`: what New Bot offers: its templates, the personalities (yours too),
-    /// the looks, the model it starts with in each place (this Mac, `mac`, and each machine by
-    /// id), and your projects, by where they are.
-    private func templatesJSON() -> Data {
-        struct Template: Encodable {
-            var id: String, name: String, job: String, instructions: String, look: BotLook, personality: String?, wantsProject: Bool
-        }
-        struct Listed: Encodable {
-            struct Personality: Encodable { var id: String, name: String, description: String, custom: Bool }
-            struct Looks: Encodable { var colors: [String], shapes: [String], faces: [String] }
-            struct Project: Encodable { var directory: String, name: String, machine: String? }
-            var templates: [Template]
-            var personalities: [Personality]
-            var looks: Looks
-            var startingModel: [String: ModelRef?]
-            var projects: [Project]
-        }
-        let app = bots?.app
-        var starting: [String: ModelRef?] = ["mac": app?.catalog.startingModel(LastModel.current, scope: .on(machine: nil))]
-        for machine in app?.machines.list ?? [] {
-            starting[machine.id] = app?.machines.engine(machine.id)?.catalog.startingModel(LastModel.current, scope: .on(machine: machine.id)) ?? nil
-        }
-        let listed = Listed(
-            templates: BotTemplate.all.map { Template(id: $0.id, name: $0.name, job: $0.job, instructions: $0.instructions, look: $0.look, personality: $0.personality, wantsProject: $0.wantsProject) },
-            personalities: Personalities.shared.all.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: $0.isCustom) },
-            looks: .init(colors: BotLook.Tint.allCases.map(\.rawValue), shapes: BotLook.Form.allCases.map(\.rawValue), faces: BotLook.Face.allCases.map(\.rawValue)),
-            startingModel: starting,
-            projects: (workspace?.projects ?? []).map { .init(directory: $0.directory, name: $0.name, machine: RemoteFolder.machine(of: $0.directory)) })
-        return (try? JSONEncoder().encode(listed)) ?? Data()
-    }
-
-    /// `POST kuvo/bots`: a bot made as New Bot makes it, `{name, look?, personality?, model?,
-    /// machine?, project?, template?}`. A project on a machine makes it there. From a template it
-    /// waits for you, with the template's job as `firstMessage` for your composer; otherwise it
-    /// writes first. Answers 201 `{bot, firstMessage}`; 400 for what's missing or unknown, 409
-    /// while its machine isn't connected, 422 for a model that can't run there, 503 when it
-    /// couldn't be made.
-    func makeBot(_ body: Data) async -> (Int, Data) {
-        struct Given: Decodable {
-            var name: String?, look: BotLook?, personality: String?, model: ModelRef?, machine: String?, project: String?, template: String?
-        }
-        guard let bots, let app = bots.app else { return (503, Self.message("Bots aren’t ready yet. Try again in a moment.")) }
-        guard let given = try? JSONDecoder().decode(Given.self, from: body) else { return (400, Self.message("That isn’t a bot to make.")) }
-        let name = Bots.oneLine(given.name ?? "")
-        guard !name.isEmpty else { return (400, Self.message("A bot needs a name.")) }
-        var template: BotTemplate?
-        if let id = given.template {
-            guard let found = BotTemplate.all.first(where: { $0.id == id }) else { return (400, Self.message("There’s no template “\(id)”.")) }
-            template = found
-        }
-        let personality = given.personality ?? template?.personality
-        if let personality, Personalities.shared.personality(personality) == nil { return (400, Self.message("There’s no personality “\(personality)”.")) }
-        // Where it lives: its project's computer, or the one picked.
-        var machine = given.machine
-        if let project = given.project {
-            guard let found = workspace?.projects.first(where: { $0.directory == project }) else { return (400, Self.message("That project isn’t in Kuvo Code.")) }
-            machine = RemoteFolder.machine(of: found.directory)
-        }
-        let place = machine.map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        if let machine {
-            guard app.machines.list.contains(where: { $0.id == machine }) else { return (400, Self.message("There’s no machine “\(machine)”.")) }
-            guard app.machines.engine(machine)?.isReady == true else { return (409, Self.message("\(place ?? machine) isn’t connected. Connect to it, then try again.")) }
-        } else if app.workspace.api == nil {
-            return (503, Self.message("The engine isn’t running."))
-        }
-        if let model = given.model, let refusal = Self.refusal(of: model, on: machine, called: place, app: app) { return (422, Self.message(refusal)) }
-        do {
-            let bot = try await bots.create(name: name, look: given.look ?? template?.look ?? .random(), personality: personality, model: given.model, machine: machine, project: given.project)
-            let first = template.map { BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions) }
-            if first == nil { Task { await bots.greet(bot) } }
-            struct Made: Encodable {
-                var bot: BotEntry
-                var firstMessage: String?
-                func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
-                    try container.encode(bot, forKey: .bot)
-                    try container.encode(firstMessage, forKey: .firstMessage)
-                }
-                enum CodingKeys: String, CodingKey { case bot, firstMessage }
-            }
-            return (201, (try? JSONEncoder().encode(Made(bot: entry(bot), firstMessage: first))) ?? Data())
-        } catch Bots.Failure.notConnected(let machineName) {
-            return (409, Self.message("\(machineName) isn’t connected. Connect to it, then try again."))
-        } catch {
-            return (503, Self.message(error.localizedDescription))
-        }
-    }
-
     /// Why a bot living on `machine` (nil for this Mac; `place` is its name) can't use `model`, as
     /// New Bot and Edit Bot offer models there: nil when it can.
     private static func refusal(of model: ModelRef, on machine: String?, called place: String?, app: AppModel) -> String? {
         guard ModelScope.on(machine: machine).allows(model.providerID) else { return "That model can’t run on \(place ?? "this Mac"): choose another." }
         let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
         return catalog.needsSignIn(model) ? catalog.unavailable(model, on: place) : nil
-    }
-
-    /// `PATCH kuvo/bots/<id>`: its name, look, personality or model changed, as Edit Bot changes
-    /// them, wherever it lives: `{name?, look?, personality?, model?}` (`personality: null` for the
-    /// model's own way). A machine's bot is told once its machine is connected, as from Edit Bot.
-    /// Answers 200 `{bot}`, as `kuvo/bots` lists it; 400 for an empty name, or a look or
-    /// personality there isn't; 422 for a model it can't use where it lives (the one it has is
-    /// kept, whatever); 404 for no such bot, 409 while it moves.
-    func changeBot(_ id: String, with body: Data) async -> (Int, Data) {
-        guard let bots, let app = bots.app else { return (503, Self.message("Bots aren’t ready yet. Try again in a moment.")) }
-        guard var bot = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
-        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
-        guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return (400, Self.message("That isn’t a change to a bot.")) }
-        /// A field as its type, from the JSON it came in.
-        func decoded<Value: Decodable>(_ key: String, as type: Value.Type) -> Value? {
-            guard let value = fields[key], let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else { return nil }
-            return try? JSONDecoder().decode(type, from: data)
-        }
-        if fields["name"] != nil {
-            let name = Bots.oneLine(fields["name"] as? String ?? "")
-            guard !name.isEmpty else { return (400, Self.message("A bot needs a name.")) }
-            bot.name = name
-        }
-        if fields["look"] != nil {
-            guard let look = decoded("look", as: BotLook.self) else { return (400, Self.message("That isn’t a look a bot can have.")) }
-            bot.look = look
-        }
-        if let given = fields["personality"] {
-            if given is NSNull {
-                bot.personality = nil
-            } else {
-                guard let personality = given as? String, Personalities.shared.personality(personality) != nil else {
-                    return (400, Self.message("There’s no personality “\(given as? String ?? "")”."))
-                }
-                bot.personality = personality
-            }
-        }
-        if fields["model"] != nil {
-            guard let model = decoded("model", as: ModelRef.self) else { return (400, Self.message("That isn’t a model.")) }
-            let place = bot.machine.map { machine in app.machines.list.first { $0.id == machine }?.name ?? machine }
-            if model != bot.model, let refusal = Self.refusal(of: model, on: bot.machine, called: place, app: app) { return (422, Self.message(refusal)) }
-            bot.model = model
-        }
-        await bots.update(bot)
-        guard let changed = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
-        return (200, (try? JSONEncoder().encode(["bot": entry(changed)])) ?? Data())
     }
 
     /// `POST kuvo/sessions/<id>/agents` with `{model}`: a conversation on the engine (here or on a
@@ -1818,26 +1632,6 @@ final class PhoneLink {
         }
     }
 
-    /// `DELETE kuvo/bots/<id>`, as Delete Bot… deletes it: its conversation and wake-ups, and its
-    /// folder to the Trash (on a machine, to Kuvo Code's trash there). Answers 200 `{}`; 404 for
-    /// no such bot; 409 while it moves, or while the machine it lives on isn't connected.
-    func deleteBot(_ id: String) async -> (Int, Data) {
-        guard let bots else { return (503, Self.message("Bots aren’t ready yet. Try again in a moment.")) }
-        guard let bot = bots.bot(id) else { return (404, Self.message("That bot isn’t there any more.")) }
-        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
-        do {
-            try await bots.delete(bot)
-        } catch let failure as Moves.Failure {
-            return (409, Self.message(failure.localizedDescription))
-        } catch let failure as Bots.Failure {
-            return (409, Self.message(failure.localizedDescription))
-        } catch {
-            return (503, Self.message(error.localizedDescription))
-        }
-        return (200, Data("{}".utf8))
-    }
-
-    /// The bot in `kuvo/bots/<id>` (not `kuvo/bots/templates`).
     /// `kuvo/sessions/<id>/<then>`'s session.
     nonisolated private static func sessionID(in path: String, then: String) -> String? {
         let parts = path.split(separator: "/")
@@ -1845,22 +1639,9 @@ final class PhoneLink {
         return String(parts[2]).removingPercentEncoding
     }
 
-    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`), or
-    /// bots' own keys, as Edit Bot shows and changes them (ahead of the rest of `kuvo/bots`).
+    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
-        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") } || isBotKeys(route) || route == "kuvo/bots/keys/refresh"
-    }
-
-    /// `kuvo/bots/<id>/keys`, or one integration's.
-    nonisolated private static func isBotKeys(_ path: String) -> Bool {
-        let parts = (path.split(separator: "?").first ?? "").split(separator: "/", omittingEmptySubsequences: false)
-        return (parts.count == 4 || parts.count == 5) && parts[0] == "kuvo" && parts[1] == "bots" && parts[3] == "keys"
-    }
-
-    nonisolated private static func botID(in path: String) -> String? {
-        let parts = path.split(separator: "/")
-        guard parts.count == 3, parts[0] == "kuvo", parts[1] == "bots", parts[2] != "templates" else { return nil }
-        return String(parts[2]).removingPercentEncoding
+        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
     }
 
     /// `kuvo/shell/<id>/stop` → the engine's id of the command.

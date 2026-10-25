@@ -24,7 +24,10 @@ final class Calibration {
         // Each bot's description beside its memory, where what runs there reads it (a
         // machine's link, for your phone, with this Mac closed). A machine's bots get theirs as
         // it connects.
-        Step(version: 1, name: "bots' descriptions") { app in await app.bots.describeAll(on: nil) },
+        Step(version: 1, name: "bots' descriptions") { app in app.bots.describeOld() },
+        // This Mac's bots kept by its box from here on: what you changed of a machine's bots while
+        // it was away, which an earlier version still had to tell it, waits for it as an edit.
+        Step(version: 2, name: "bots' waiting edits") { app in app.bots.takeOldWaitingEdits() },
     ]
 
     /// The last step done, in the app's settings.

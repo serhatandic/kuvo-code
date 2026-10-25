@@ -80,14 +80,6 @@ enum BotKeys {
         }
     }
 
-    /// When it's deleted: those this Mac keeps go from your Keychain (a machine's bot's go with its
-    /// folder there, as `Bots.delete` takes it away).
-    static func forget(_ bot: Bot, app: AppModel?) async {
-        await Task.detached {
-            for variable in IntegrationKeys.variables(ofBot: bot.id) { IntegrationKeys.set(nil, for: variable) }
-        }.value
-    }
-
     /// Its own keys where it lives now, by integration, each by its keys' names: to give it where
     /// it's going (`Moves`). Nil when they can't be read (its machine can't be asked).
     static func carried(_ bot: Bot, app: AppModel) async -> [String: [String: String]]? {

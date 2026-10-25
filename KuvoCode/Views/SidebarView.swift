@@ -1330,6 +1330,9 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
+        } else if let place = bots.waitingFor(bot) {
+            // What you changed while its machine was away, on its way once it's back.
+            BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }
         } else if let machine = bot.machine, app.machines.engine(machine)?.isReady != true {
             Text("On \(machine), not connected")
         } else if hasNews, let reply = workspace.replyPreviews[bot.sessionID] {

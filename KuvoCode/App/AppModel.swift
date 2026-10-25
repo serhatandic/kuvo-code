@@ -105,11 +105,9 @@ final class AppModel {
         openSettings(.accounts, on: SidebarBox(machine: machine))
     }
 
-    /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): a bot's goes on
-    /// as the bot's, which keeps it (true); any other's panel goes with it, its terminals, pages
-    /// and files as they were.
+    /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
+    /// with it, its terminals, pages and files as they were. (A bot's is carried by its box.)
     func movedToAgents(from old: String, to new: Session) async -> Bool {
-        if await bots.movedToAgents(from: old, to: new) { return true }
         utilities.handOver(from: old, to: new.id)
         return false
     }
@@ -208,6 +206,9 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
+        // This Mac's bots are told what your personalities are by its box, from its kit (the
+        // machines hear of them too once they start: `startMachines`).
+        Personalities.shared.onChange = { [weak self] in self?.bots.personalitiesChanged() }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
@@ -216,6 +217,7 @@ final class AppModel {
         seatRelay.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
+        workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
         workspace.runsOnAgents(boxGroups.agentSeatIDs)
@@ -437,9 +439,11 @@ final class AppModel {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let wakes: Void = wakeUps.follow()
+                        async let bots: Void = bots.follow()
                         await workspace.followProjects()
                         await worktrees
                         await wakes
+                        await bots
                     }
                 }
             }
@@ -456,7 +460,6 @@ final class AppModel {
             await workspaceLoaded
             guard launch == self.launch else { return }
             startMachines()
-            bots.startSyncing()
             await catalogLoaded
         } catch {
             // Stopped, or started over, meanwhile.
