@@ -1,99 +1,66 @@
 import Foundation
 import OpenCodeKit
 
-/// Adding and removing integrations on a computer, its keys where it keeps them: for Settings ›
-/// Integrations and a phone alike.
+/// Settings › Integrations of a computer, through its box (PROTOCOL.md, `kuvo/integrations` and
+/// `kuvo/keys`), this Mac's as a machine's: the box adds and removes them, keeps their keys where
+/// it keeps keys (this Mac's Keychain, through the app; a machine's own folder), and says how each
+/// is doing. The app shows what it says.
 extension AppModel {
-    /// Adds it on `box`, as Connect (or Save, after its keys) does: one there already is written
-    /// again as you set it up (turned off, Code Mode, headers you added), so the engine reads its
-    /// keys again. False when its settings file can't be changed, or it's added in the browser.
-    @discardableResult
-    func addIntegration(_ service: Integrations.Service, on box: SidebarBox) -> Bool {
-        let config = config(for: box)
-        guard config.problem == nil else { return false }
-        let path = MCPSettings.path + [service.id]
-        let existing = config.value(at: path)
-        guard let settings = existing ?? Integrations.settings(for: service, on: box.machine) else { return false }
-        config.set(settings, at: path)
-        // Back again: what its removal left to do on this machine, out of reach then, isn't done.
-        if let machine = box.machine { machines.dropWaiting(marked: Machines.integrationMark(service.id), on: machine) }
-        if existing == nil { Analytics.shared.track("integration_added", ["integration": service.id, "machine": box.machine != nil]) }
-        return true
+    /// The box's id of a computer.
+    private func boxID(_ box: SidebarBox) -> String { box.machine ?? BoxClient.mac }
+
+    /// Those the box offers, in the page's order, with how each is doing there.
+    func integrations(on box: SidebarBox) async throws -> Integrations.Listed {
+        try await self.box(boxID(box)).value(Integrations.Listed.self, "GET", "kuvo/integrations")
     }
 
-    /// Its server connected again a moment after its keys changed: the engine reads them as it
-    /// reads its settings again, which adding it (again) has it do. For Settings and a phone alike.
-    func reconnectAfterKeys(_ service: Integrations.Service, on box: SidebarBox) async {
+    /// Added on `box`, as Connect (or Save, after its keys) does, with `keys` by their names
+    /// (`CLIENT_ID`, `API_KEY`…) or those it has: one there already is written again as it is,
+    /// so the engine reads its keys again. It, as the box lists it now; what the box said, when it
+    /// said no.
+    @discardableResult
+    func addIntegration(_ entry: Integrations.Entry, keys: [String: String]? = nil, on box: SidebarBox) async throws -> Integrations.Entry {
+        struct Added: Decodable { var integration: Integrations.Entry }
+        struct Given: Encodable { var keys: [String: String]? }
+        let added = try await self.box(boxID(box)).value(Added.self, "POST", "kuvo/integrations/\(entry.id)", body: Given(keys: keys))
+        // Back again: what its removal left to do on this machine, out of reach then, isn't done.
+        if let machine = box.machine { machines.dropWaiting(marked: Machines.integrationMark(entry.id), on: machine) }
+        if !entry.added { Analytics.shared.track("integration_added", ["integration": entry.id, "machine": box.machine != nil]) }
+        // The engine's settings as the box has them now, for the pages that show them.
+        config(for: box).reload()
+        return added.integration
+    }
+
+    /// Out of `box`'s settings, with its keys there, its sign-in, what its server kept and its
+    /// bots' own keys for it, as Remove… does. Why not, when it couldn't be.
+    func removeIntegration(_ id: String, on box: SidebarBox) async -> String? {
+        defer { config(for: box).reload() }
+        do {
+            let (status, body) = try await self.box(boxID(box)).send("DELETE", "kuvo/integrations/\(id)")
+            // Not there any more: nothing to take away.
+            guard status >= 400, status != 404 else { return nil }
+            return BoxRefusal(status: status, data: body).message
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Its keys as `box` keeps them, by their names, for Change Key… to show: those it has.
+    func integrationKeys(_ entry: Integrations.Entry, on box: SidebarBox) async -> [String: String] {
+        struct Kept: Decodable { var value: String }
+        var values: [String: String] = [:]
+        for key in entry.keys ?? [] {
+            let variable = IntegrationKeys.variable(entry.id, key.name)
+            if let kept = try? await self.box(boxID(box)).value(Kept.self, "GET", "kuvo/keys/\(variable)") { values[key.name] = kept.value }
+        }
+        return values
+    }
+
+    /// Its server connected again a moment after its keys changed, in every folder its engine has
+    /// open: the engine reads them as it reads its settings again, which adding it (again) has it do.
+    func reconnectAfterKeys(_ id: String, on box: SidebarBox) async {
         guard let api = api(for: box) else { return }
         try? await Task.sleep(for: .seconds(2))
-        await reconnect(service.id, api: api, machine: box.machine)
-    }
-
-    /// Its keys (by their names, `CLIENT_ID`, `API_KEY`…), where `box` keeps them: this Mac's
-    /// Keychain, or a machine's own keys' folder.
-    func saveIntegrationKeys(_ service: Integrations.Service, _ values: [String: String], on box: SidebarBox) async throws {
-        let given = Integrations.keys(of: service.way).map { (IntegrationKeys.variable(service.id, $0.name), values[$0.name]?.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        guard let machine = box.machine else {
-            guard given.allSatisfy({ IntegrationKeys.set($0.1, for: $0.0) }) else { throw IntegrationFailure.keychain }
-            return
-        }
-        // A machine no longer added: nowhere to keep it (and never this Mac's Keychain).
-        guard let engine = machines.engine(machine) else { throw IntegrationFailure.noMachine(machine) }
-        for (variable, value) in given { try await MachineBox.setKey(variable, value, on: engine.machine.connection) }
-    }
-
-    /// Out of `box`'s settings, with its keys there, its sign-in, what its server kept, and its
-    /// bots' own keys for it. A machine does it itself, as it does for a phone (its bridge's
-    /// `DELETE kuvo/integrations/<id>`). `signIn`: its sign-in as last seen here, if known (else
-    /// it's asked). Why not, when it couldn't be.
-    @discardableResult
-    func removeIntegration(_ service: Integrations.Service, on box: SidebarBox, signIn listed: String? = nil) async -> String? {
-        // Its keys and sign-in stay while it stays in a settings file that can't be changed.
-        let config = config(for: box)
-        if let problem = config.problem { return "The engine's settings file can't be changed: \(problem)" }
-        if let machine = box.machine {
-            guard let engine = machines.engine(machine), engine.isReady else { return "\(machine) isn’t connected." }
-            defer { config.reload() }
-            do {
-                let (status, body) = try await MachineBox.route("DELETE", "kuvo/integrations/\(service.id)", on: engine.machine.connection)
-                // Not there any more: nothing to take away.
-                guard status >= 400, status != 404 else { return nil }
-                return (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["message"] as? String ?? "\(machine) said no (\(status))."
-            } catch {
-                return error.localizedDescription
-            }
-        }
-        // Bots here with keys of their own for it stop using it first: their keys go, and their
-        // folders' settings stop naming its server. Where their box can't yet, nothing goes, and
-        // this says why, rather than leave a bot using an integration you removed.
-        for bot in bots.list where bot.machine == nil {
-            let theirs = Set(Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) })
-            let held = await Task.detached { IntegrationKeys.variables(ofBot: bot.id) }.value
-            if !theirs.isDisjoint(with: held), let why = await BotKeys.remove(service, bot: bot, app: self) { return "\(bot.name)’s own key couldn’t be taken away: \(why)" }
-        }
-        let api = api(for: box)
-        // Its sign-in as the engine has it now, asked before it leaves the settings.
-        var signIn = listed
-        if signIn == nil, let api { signIn = (try? await api.mcpServers())?.first { $0.name == service.id }?.integrationID }
-        config.set(nil, at: MCPSettings.path + [service.id])
-        // Taken out of the settings where this Mac's box keeps them, or its keys and sign-in stay.
-        if let failure = await config.settled() { return failure }
-        if let signIn { forgetSignIn(signIn, on: box) }
-        for variable in Integrations.keys(of: service.way).map({ IntegrationKeys.variable(service.id, $0.name) }) { IntegrationKeys.set(nil, for: variable) }
-        // What its server kept: its own folder (and the file it once kept).
-        for name in [service.id, "\(service.id).json"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "integrations/\(name)")) }
-        return nil
-    }
-
-    enum IntegrationFailure: LocalizedError {
-        case keychain
-        case noMachine(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .keychain: "Couldn’t save it in your Keychain. Try again, or check Keychain Access."
-            case .noMachine(let machine): "\(machine) isn’t one of your machines any more."
-            }
-        }
+        await reconnect(id, api: api, machine: box.machine)
     }
 }

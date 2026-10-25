@@ -44,24 +44,50 @@ enum MachineBox {
         try await writeCatalog(await integrationsJSON(), named: "integrations.json", on: connection)
     }
 
-    /// Settings › Integrations' catalog as the tool reads it (`integrations.json`), for a phone to
-    /// add and remove them there with this Mac closed: each as `kuvo/integrations` describes it,
-    /// with its settings there and its keys' variables. Those that use a Mac's own apps aren't in it.
+    /// Settings › Integrations' catalog as a box reads it (`integrations.json`), for any client to
+    /// add and remove them there, a machine's with this Mac closed: each as `kuvo/integrations`
+    /// describes it, in the page's order, with its settings there, its keys' variables, and the file
+    /// its server keeps its sign-in in when it signs in by itself (`signInFile`). A machine's leaves
+    /// out those that use a Mac's own apps.
     @MainActor static func integrationsJSON(forMac: Bool = false) -> Data {
-        let entries: [[String: Any]] = Integrations.all.filter { !Integrations.macOnly.contains($0.id) }.map { service in
-            var entry = PhoneLink.described(service)
+        let entries: [[String: Any]] = Integrations.all.filter { forMac || !Integrations.macOnly.contains($0.id) }.map { service in
+            var entry = described(service)
             if let settings = Integrations.settings(for: service, on: forMac ? nil : "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
                 entry["settings"] = value
             }
             let keys = Integrations.keys(of: service.way)
             if !keys.isEmpty { entry["variables"] = Dictionary(uniqueKeysWithValues: keys.map { ($0.name, IntegrationKeys.variable(service.id, $0.name)) }) }
+            if let file = Integrations.signInFiles[service.id]?.first { entry["signInFile"] = file }
             return entry
         }
         return (try? JSONSerialization.data(withJSONObject: ["integrations": entries], options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
     }
 
+    /// What it is and how it's added, as `kuvo/integrations` lists it.
+    private static func described(_ service: Integrations.Service) -> [String: Any] {
+        var entry: [String: Any] = [
+            "id": service.id, "title": service.title, "summary": service.summary, "kind": service.kind.rawValue,
+            "symbol": service.symbol, "site": service.site, "how": Integrations.how(service.way),
+        ]
+        switch service.way {
+        case .official: entry["way"] = "official"
+        case .officialToken(_, _, let help): entry["way"] = "token"; entry["help"] = help
+        case .officialApp(_, let help): entry["way"] = "app"; entry["help"] = help; entry["redirect"] = Integrations.redirect
+        case .package(_, _, let help, let by, _, let macOnly):
+            entry["way"] = "package"
+            entry["by"] = by
+            if let help { entry["help"] = help }
+            if macOnly { entry["macOnly"] = true }
+        case .browser: entry["way"] = "browser"
+        }
+        let keys = Integrations.keys(of: service.way)
+        if !keys.isEmpty { entry["keys"] = keys.map { ["name": $0.name, "label": $0.label, "prompt": $0.prompt] } }
+        return entry
+    }
+
     /// The same for this Mac's box, with this Mac's own paths (its keys' files in the app's
-    /// temporary folder): what its bots' own keys are named with in their folders' settings.
+    /// temporary folder) and the integrations that use its own apps: what Settings › Integrations
+    /// lists here, and what its bots' own keys are named with in their folders' settings.
     @MainActor static func writeMacCatalog() {
         let file = BoxProcess.home.appending(path: "bin/integrations.json")
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

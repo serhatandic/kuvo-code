@@ -4,10 +4,10 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// What a phone changes on this Mac that this Mac answers itself: its integrations' keys in the
-/// Keychain, starting the engine over, and finishing a sign-in whose page sends the browser back
-/// to this Mac, which a phone can't load. (Its engine settings are its box's:
-/// SettingsOnBoxTests and the route scenarios.)
+/// What a phone changes on this Mac that this Mac answers itself: starting the engine over, and
+/// finishing a sign-in whose page sends the browser back to this Mac, which a phone can't load.
+/// (Its engine settings and keys are its box's: SettingsOnBoxTests, PhoneIntegrationsTests and the
+/// route scenarios.)
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneSettingsTests {
     let link = PhoneLink()
@@ -27,23 +27,6 @@ import Testing
             }
         }
         return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
-    }
-
-    /// This Mac's integrations' keys, from a phone: set, read, listed and removed in the Keychain,
-    /// and a bot's own or anything that isn't a key's name never touched.
-    @Test func integrationsKeysFromAPhone() async throws {
-        let name = "KUVO_KEY_PHONETEST_TOKEN"
-        defer { IntegrationKeys.set(nil, for: name) }
-        #expect(try await ask("kuvo/keys/\(name)").status == 404)
-        #expect(try await ask("kuvo/keys/\(name)", method: "PUT", body: #"{"value": "ghp_phone"}"#).status == 200)
-        #expect(IntegrationKeys.value(name) == "ghp_phone")
-        #expect(try await ask("kuvo/keys/\(name)").json?["value"] as? String == "ghp_phone")
-        #expect((try await ask("kuvo/keys").json?["keys"] as? [String])?.contains(name) == true)
-        #expect(try await ask("kuvo/keys/\(name)__BOT_A", method: "PUT", body: #"{"value": "x"}"#).status == 400)
-        #expect(try await ask("kuvo/keys/HOME", method: "PUT", body: #"{"value": "x"}"#).status == 400)
-        #expect(try await ask("kuvo/keys/\(name)", method: "PUT", body: #"{"value": ""}"#).status == 400)
-        #expect(try await ask("kuvo/keys/\(name)", method: "DELETE").status == 200)
-        #expect(IntegrationKeys.value(name) == nil)
     }
 
     @Test func theEngineStartsOverOnceTheAnswerIsOut() async throws {

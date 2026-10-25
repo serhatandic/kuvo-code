@@ -852,17 +852,6 @@ final class PhoneLink {
                 }
             }
         }
-        // Settings › Integrations: this Mac's, added and removed as the page does it.
-        if route == "kuvo/integrations" || route.hasPrefix("kuvo/integrations/") {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerIntegrations(request) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
         if ["kuvo/skills", "kuvo/skill-library"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
             return AsyncThrowingStream { continuation in
@@ -1140,7 +1129,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/integrations", "kuvo/keys"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 
@@ -1318,11 +1307,6 @@ final class PhoneLink {
             return answerPersonalities(nil, request)
         case let path where path.hasPrefix("kuvo/personalities/"):
             return answerPersonalities(String(path.dropFirst("kuvo/personalities/".count)).removingPercentEncoding ?? "", request)
-        case "kuvo/keys":
-            guard request.method.uppercased() == "GET" else { return (405, Data()) }
-            return (200, (try? JSONSerialization.data(withJSONObject: ["keys": IntegrationKeys.shared])) ?? Data("{}".utf8))
-        case let path where path.hasPrefix("kuvo/keys/"):
-            return answerKey(String(path.dropFirst("kuvo/keys/".count)).removingPercentEncoding ?? "", request)
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (`kuvo/info` answers again).
@@ -1375,31 +1359,6 @@ final class PhoneLink {
             let bots = bots
             Task { await bots?.personalityChanged(id) }
             return (200, Data("{}".utf8))
-        default:
-            return (405, Data())
-        }
-    }
-
-    // MARK: Settings
-
-    /// `kuvo/keys/<name>`: one of this Mac's integrations' keys (`KUVO_KEY_…`, not a bot's own),
-    /// in your Keychain: GET its value, PUT `{"value": …}` to set it, DELETE to remove it. The
-    /// engine reads it as it next reads its settings.
-    private func answerKey(_ name: String, _ request: LinkRequest) -> (Int, Data) {
-        guard name.range(of: #"\AKUVO_KEY_[A-Za-z0-9_]+\z"#, options: .regularExpression) != nil, !IntegrationKeys.isBots(name) else {
-            return (400, Self.message("That isn't a key's name."))
-        }
-        switch request.method.uppercased() {
-        case "GET":
-            guard let value = IntegrationKeys.value(name) else { return (404, Data()) }
-            return (200, (try? JSONSerialization.data(withJSONObject: ["value": value])) ?? Data())
-        case "PUT":
-            guard let value = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["value"] as? String, !value.isEmpty else {
-                return (400, Self.message("Send {\"value\": \"…\"}."))
-            }
-            return IntegrationKeys.set(value, for: name) ? (200, Data("{}".utf8)) : (500, Self.message("It couldn't be saved in the Keychain."))
-        case "DELETE":
-            return IntegrationKeys.set(nil, for: name) ? (200, Data("{}".utf8)) : (500, Self.message("It couldn't be removed from the Keychain."))
         default:
             return (405, Data())
         }

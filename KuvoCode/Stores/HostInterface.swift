@@ -2,10 +2,11 @@ import Foundation
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
-/// files. It answers on a loopback port, to a password the box is given as it starts
-/// (`environment`), and only for a name of Kuvo Code's own keys (`KUVO_KEY_…`), so the box can
-/// reach nothing else in your Keychain. A key saved or removed here goes to the engine's files too
-/// (`IntegrationKeys`); listing them reads no secret, so it never asks you.
+/// files, and whether the panel's browser is signed in to the sites the agent uses there. It
+/// answers on a loopback port, to a password the box is given as it starts (`environment`), and
+/// only for a name of Kuvo Code's own keys (`KUVO_KEY_…`), so the box can reach nothing else in
+/// your Keychain. A key saved or removed here goes to the engine's files too (`IntegrationKeys`);
+/// listing them reads no secret, so it never asks you.
 @MainActor
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
@@ -55,6 +56,15 @@ final class HostInterface {
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
+        case "/sites/signed-in":
+            // Whether the panel's browser is signed in to the sites the agent uses there, as their
+            // cookies say now: only those it can tell.
+            await SiteSignIns.shared.refreshMac()
+            var sites: [String: Bool] = [:]
+            for service in Integrations.signInCookies.keys {
+                if let signedIn = SiteSignIns.shared.isSignedIn(service, on: nil) { sites[service] = signedIn }
+            }
+            return .json(["sites": sites])
         default:
             return .init(status: 404)
         }
