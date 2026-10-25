@@ -44,8 +44,6 @@ final class PhoneLink {
     /// This Mac's side of the documents your computers copy between them (PROTOCOL.md, "Documents").
     @ObservationIgnored private(set) var documents = MacDocuments()
     @ObservationIgnored private var assembler = Documents.Assembler()
-    /// Personalities a machine's view changed here: their bots are told. Set by AppModel.
-    @ObservationIgnored var tookPersonalities: (Set<String>) -> Void = { _ in }
     /// The machines that are connected now, for putting the bridge on them; set by AppModel.
     @ObservationIgnored var readyMachines: () -> [MachineEngine] = { [] }
     /// Your bots, for `kuvo/bots`: the phone draws and describes each as the Mac does; set by
@@ -558,7 +556,8 @@ final class PhoneLink {
 
     /// Your personalities as this Mac has them; none once they're past what a document holds.
     private var personalitiesBody: Data? {
-        guard let body = try? Self.canonical.encode(Personalities.shared.library), body.count <= Documents.mostBody else { return nil }
+        // Not read from this Mac's box yet: none, rather than an empty one as a new version.
+        guard Personalities.shared.isLoaded, let body = try? Self.canonical.encode(Personalities.shared.library), body.count <= Documents.mostBody else { return nil }
         return body
     }
 
@@ -604,23 +603,25 @@ final class PhoneLink {
     /// document's removals taken here (a phone removed there leaves this Mac too), its view of your
     /// personalities met with this Mac's (bots with one that changed told), what's new passed on to
     /// your other machines, what changed of this Mac's own given to all of them, and for a digest,
-    /// what it lacks, and this Mac's own digest when it has something newer.
-    func takeDocuments(_ docs: [String: Any], from machine: String) {
-        guard hasIdentity, let sender = machineHosts[machine] else { return }
+    /// what it lacks, and this Mac's own digest when it has something newer. What it gives back:
+    /// your personalities being met with this Mac's box's, under way.
+    @discardableResult
+    func takeDocuments(_ docs: [String: Any], from machine: String) -> Task<Void, Never>? {
+        guard hasIdentity, let sender = machineHosts[machine] else { return nil }
         let origin = Documents.origin(of: signing)
         let machines = machineSigns
         let phonesBefore = Set(paired.phones.map(\.key))
         var given = (docs["give"] as? [Any] ?? []).prefix(64).compactMap(Documents.Envelope.init)
         if let part = docs["part"] as? [String: Any], let whole = assembler.take(part, from: sender.key) { given.append(whole) }
         var passOn: [Documents.Document] = []
-        var changedPersonalities: Set<String> = []
+        var libraries: [(origin: String, library: Personalities.Library)] = []
         for envelope in given {
             guard let (doc, mine) = documents.take(envelope, machines: machines, origin: origin) else { continue }
             if doc.kind == "phones", let removals = doc.decoded(PhonesRemovals.self)?.removed {
                 paired.takeRemovals(removals, macs: [key.publicBytes.base64URL])
             }
             if doc.kind == "personalities", let library = doc.decoded(Personalities.Library.self) {
-                changedPersonalities.formUnion(Personalities.shared.take(library))
+                libraries.append((doc.origin, library))
             }
             if !mine, doc.kind == "phones" { passOn.append(doc) }
         }
@@ -664,8 +665,16 @@ final class PhoneLink {
         let gone = phonesBefore.subtracting(paired.phones.map(\.key)).compactMap { Data(base64URL: $0) }
         if !gone.isEmpty { Task { [server] in for phone in gone { await server?.forget(phone: phone) } } }
         save()
-        if !changedPersonalities.isEmpty { tookPersonalities(changedPersonalities) }
-        guard let server, status == .connected else { return }
+        // Met with this Mac's where its box keeps them: what changed is told (`Personalities.onChange`).
+        let meeting = libraries.isEmpty ? nil : Task { [weak self] in
+            for (origin, library) in libraries where await Personalities.shared.take(library) == nil {
+                // Not taken (this Mac's box isn't up): this Mac doesn't say it has it, so the
+                // machine gives it again.
+                self?.documents.views[origin] = nil
+                self?.save()
+            }
+        }
+        guard let server, status == .connected else { return meeting }
         let have = ask ? documents.digest(origin: origin) : nil
         let targets = documentMachines
         Task {
@@ -679,6 +688,7 @@ final class PhoneLink {
                 }
             }
         }
+        return meeting
     }
 
     /// The removals a phones document carries.
@@ -774,16 +784,27 @@ final class PhoneLink {
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
             let forwarded = EngineRoutes.forward(request, to: base, password: box.password, session: Self.boxSession, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                                  allowing: { path, _ in path.hasPrefix("kuvo/") })
-            // A change to a conversation's wake-ups: what the app shows of them (and `kuvo/bots`
-            // lists) has it before the answer goes back, so what's read next agrees.
+            // A change to a conversation's wake-ups, or to your personalities: what the app shows
+            // of them (and `kuvo/bots` and its templates list) has it before the answer goes back,
+            // so what's read next agrees.
             let parts = route.split(separator: "/").map(String.init)
-            guard request.method.uppercased() == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding else { return forwarded }
+            let method = request.method.uppercased()
+            let follow: (@MainActor () async -> Void)?
+            if method == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding {
+                follow = { await link?.wakesChanged(session) }
+            } else if method != "GET", parts.count >= 2, parts[1] == "personalities" {
+                // (The app's own change reads it again after this too, and finds nothing new.)
+                follow = { await Personalities.shared.refresh() }
+            } else {
+                follow = nil
+            }
+            guard let follow else { return forwarded }
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
                         var answer: [LinkResponsePart] = []
                         for try await part in forwarded { answer.append(part) }
-                        await link?.wakesChanged(session)
+                        await follow()
                         for part in answer { continuation.yield(part) }
                         continuation.finish()
                     } catch {
@@ -1096,7 +1117,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1181,7 +1202,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+        "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1274,10 +1295,6 @@ final class PhoneLink {
             return (405, Data("{}".utf8))
         case "kuvo/mac":
             return answerMac(request)
-        case "kuvo/personalities":
-            return answerPersonalities(nil, request)
-        case let path where path.hasPrefix("kuvo/personalities/"):
-            return answerPersonalities(String(path.dropFirst("kuvo/personalities/".count)).removingPercentEncoding ?? "", request)
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (`kuvo/info` answers again).
@@ -1289,45 +1306,6 @@ final class PhoneLink {
             return (202, Data("{}".utf8))
         default:
             return (404, Data())
-        }
-    }
-
-    // MARK: Personalities
-
-    /// `kuvo/personalities`: the personalities you made, this Mac's copy of the library (each
-    /// computer keeps one, and they meet as this Mac connects to a machine). GET lists them;
-    /// POST `{name, description}` makes one; PATCH `kuvo/personalities/<id>` changes its name or
-    /// description, and DELETE removes it. As a machine's bridge answers them.
-    private func answerPersonalities(_ id: String?, _ request: LinkRequest) -> (Int, Data) {
-        struct Listed: Encodable { var personalities: [Personality] }
-        let store = Personalities.shared
-        let body = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
-        let encoded = { (value: any Encodable) in (try? JSONEncoder().encode(value)) ?? Data("{}".utf8) }
-        let plain = { (key: String) in (body[key] as? String).map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") } }
-        let incomplete = Self.message("A personality needs a name and a description.")
-        switch (request.method.uppercased(), id) {
-        case ("GET", nil):
-            return (200, encoded(Listed(personalities: store.custom)))
-        case ("POST", nil):
-            guard let name = plain("name"), !name.isEmpty, let description = (body["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty else { return (400, incomplete) }
-            do {
-                return (200, encoded(try store.add(name: String(name.prefix(80)), description: String(description.prefix(2000)))))
-            } catch {
-                return (400, Self.message(error.localizedDescription))
-            }
-        case ("PATCH", let id?):
-            guard var personality = store.custom.first(where: { $0.id == id }) else { return (404, Data()) }
-            if let name = plain("name") { personality.name = String(name.prefix(80)) }
-            if let description = (body["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) { personality.description = String(description.prefix(2000)) }
-            guard !personality.name.isEmpty, !personality.description.isEmpty else { return (400, incomplete) }
-            do { try store.update(personality) } catch { return (400, Self.message(error.localizedDescription)) }
-            return (200, encoded(store.personality(id) ?? personality))
-        case ("DELETE", let id?):
-            guard let personality = store.custom.first(where: { $0.id == id }) else { return (404, Data()) }
-            store.delete(personality)
-            return (200, Data("{}".utf8))
-        default:
-            return (405, Data())
         }
     }
 

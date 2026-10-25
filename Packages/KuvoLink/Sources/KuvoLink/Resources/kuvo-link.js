@@ -33,7 +33,7 @@ export const BRIDGE_VERSION = "0.9.56";
 export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
+  "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
@@ -1454,15 +1454,16 @@ const worktreeFollowers = new Set();
 // Those following its projects (`kuvo/projects/events`).
 const projectFollowers = new Set();
 
-/** `folders` watched, with what's in them, for `changed`: whether the system tells of every change
- * (a watch it can't keep goes, and so does that), and how to stop. */
-function watchFolders(folders, changed) {
+/** `folders` watched, with what's in them (`recursive`) or only their own files, for `changed`:
+ * whether the system tells of every change (a watch it can't keep goes, and so does that), and how
+ * to stop. */
+function watchFolders(folders, changed, { recursive = true } = {}) {
   let whole = folders.length > 0;
   const watchers = [];
   for (const folder of folders) {
     try {
       fs.mkdirSync(folder, { recursive: true });
-      const watcher = fs.watch(folder, { recursive: true }, changed);
+      const watcher = fs.watch(folder, { recursive }, changed);
       watcher.on("error", () => {
         whole = false;
         watcher.close();
@@ -1479,7 +1480,7 @@ function watchFolders(folders, changed) {
  * makes as it's made (`followers` are told), and what another made, looked for each second; or,
  * given `folders` to watch, as the system says they change, looked for again every half minute
  * only for a change it missed. */
-async function* followed(read, followers, signal, { folders = [] } = {}) {
+async function* followed(read, followers, signal, { folders = [], recursive = true } = {}) {
   const queue = [JSON.stringify(read())];
   let wake = null;
   const told = () => {
@@ -1487,7 +1488,7 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
     wake?.();
   };
   followers.add(told);
-  const watching = watchFolders(folders, told);
+  const watching = watchFolders(folders, told, { recursive });
   // Its client gone: it stops now, not at the next look.
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   try {
@@ -2365,6 +2366,23 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // New bots and group chats, made here as New Bot and New Group Chat make them on the Mac,
     // which takes them in when it next connects.
+    // The library followed: a line now, and again as it changes, from a route here, a peer's copy
+    // met, or another process (a Mac's `box personalities` over SSH, the bridge beside this box).
+    if (route === "kuvo/personalities/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path.dirname(PERSONALITIES_FILE)], recursive: false });
+    }
+    // The library whole, and another computer's copy met with it: for the app beside this box only
+    // (it signs the library for your other computers), never a phone.
+    if (route === "kuvo/personalities/document" || route === "kuvo/personalities/take") {
+      if (!request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
+      const method = request.method.toUpperCase();
+      if (route === "kuvo/personalities/document") return yield* method === "GET" ? json(200, personalitiesDocument()) : json(405, {});
+      if (method !== "POST") return yield* json(405, {});
+      const [status, value] = takePersonalitiesDocument(parsed(request.body), readEngine, readBridge);
+      return yield* json(status, value);
+    }
     // The personalities you make, this machine's copy of the library.
     const personality = route.match(/^kuvo\/personalities(?:\/([^/]+))?$/);
     if (personality) {
@@ -4788,8 +4806,11 @@ export async function watchAsks(tell, { signal, every = 2000, read = readAsks, a
 // each change moves on from the one before it (`updated`), whatever any clock says. Kuvo Code's own
 // presets aren't in it; they come with the kit.
 
-const PERSONALITIES_FILE = path.join(K, "bots", "personalities.json");
+// Beside the bots: where a Mac's app keeps them (KUVO_BOTS), a machine in its own folder.
+const PERSONALITIES_FILE = path.join(BOTS, "personalities.json");
 const PERSONALITIES_LOCK = path.join(RUN, ".personalities.lock");
+// Those following the library (`kuvo/personalities/events`), told of each change written here.
+const personalityFollowers = new Set();
 const PERSONALITY_ID = /^custom\.[A-Za-z0-9._-]{1,80}$/;
 // Removals noted, the newest kept.
 const MOST_REMOVALS = 500;
@@ -4850,24 +4871,59 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
     const library = mergePersonalities(change(readPersonalities(file)));
     // Written only when it changed (a Mac meets this copy every minute).
     const text = JSON.stringify({ kuvo: 1, ...library }, null, 2) + "\n";
-    if (textOf(file) !== text) writePrivate(file, text);
+    if (textOf(file) !== text) {
+      writePrivate(file, text);
+      for (const tell of personalityFollowers) tell();
+    }
     return library;
   });
+}
+
+// Another copy met with this one's, under its lock: the ids whose personality or removal changed
+// here. Met whole, past what a document holds too, so every copy comes to the same (one past it
+// just isn't given to the others until it's smaller, `ownDocs`).
+function meetPersonalities(given, file, lock) {
+  let changed = [];
+  changePersonalities(library => {
+    const was = new Map([...library.personalities, ...library.removed].map(entry => [entry.id, JSON.stringify(entry)]));
+    const met = mergePersonalities(library, given);
+    changed = [...met.personalities, ...met.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
+    return met;
+  }, file, lock);
+  return changed;
 }
 
 // Another copy met with this one's (a peer's view, a Mac's over SSH): the personalities that changed
 // here, whose bots here are told what they are now.
 export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
-  const before = readPersonalities(file);
-  const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
-  const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
-  const changed = [...after.personalities, ...after.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
+  const changed = meetPersonalities(given, file, lock);
   if (changed.length) await retellBots(changed, readEngine, readBridge).catch(() => {});
   return changed;
 }
 
+// The library whole, as this box keeps it and signs it (`kuvo/personalities/document`).
+export function personalitiesDocument(file = PERSONALITIES_FILE) {
+  return { kuvo: 1, ...readPersonalities(file) };
+}
+
+// Another computer's copy, given by the app beside this box (`kuvo/personalities/take`), met with
+// this one's by the same rules as a peer's: `[status, value]`, with the ids that changed here. Their
+// bots here are told (not waited for), and the other boxes, as after a change through the routes.
+export function takePersonalitiesDocument(body, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
+  const given = body?.document;
+  if (!isObject(given) || !Array.isArray(given.personalities) || (given.removed !== undefined && !Array.isArray(given.removed))) {
+    return [400, { message: "Send a library of personalities: {document: {personalities, removed}}." }];
+  }
+  const changed = meetPersonalities(given, file, lock);
+  if (changed.length) {
+    noteDocsChanged();
+    retellBots(changed, readEngine, readBridge).catch(() => {});
+  }
+  return [200, { changed }];
+}
+
 // Bots here whose personality is among `ids` (changed, or gone), told what they are now, as a
-// Mac tells its own (Bots.personalityChanged).
+// Mac asks after a change to your personalities (`kuvo/bots/retell`).
 export async function retellBots(ids, readEngine = readEngineFile, readBridge = readBridgeFile) {
   const kit = readKit();
   if (!kit) return;

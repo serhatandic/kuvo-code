@@ -47,6 +47,9 @@ struct BotEditor: View {
     /// from adding a machine), and the one added to yours for it, if it was.
     @State private var adoptedRecipe = false
     @State private var addedPersonality: String?
+    /// Closed, for what's still under way when it is (a shared bot's personality being added).
+    @State private var lifetime = Lifetime()
+    private final class Lifetime { var isClosed = false }
     @FocusState private var focus: Field?
 
     private enum Field { case name }
@@ -85,7 +88,10 @@ struct BotEditor: View {
     var body: some View {
         // The editor as a whole, for what goes when it's closed, however that is.
         ZStack { content }
-            .onDisappear(perform: dropAddedPersonality)
+            .onDisappear {
+                lifetime.isClosed = true
+                dropAddedPersonality()
+            }
     }
 
     @ViewBuilder private var content: some View {
@@ -146,14 +152,21 @@ struct BotEditor: View {
             // A shared bot's personality, found here (or added) once, not at every redraw.
             if isNew, !adoptedRecipe, let recipe {
                 adoptedRecipe = true
-                do {
-                    if personality == nil, let found = try recipe.personalityHere() {
+                let lifetime = lifetime
+                Task {
+                    do {
+                        guard personality == nil, let found = try await recipe.personalityHere() else { return }
+                        // Closed meanwhile without making it: none of it stays.
+                        if lifetime.isClosed {
+                            if found.added, let added = Personalities.shared.personality(found.id) { try? await Personalities.shared.delete(added) }
+                            return
+                        }
                         personality = found.id
                         if found.added { addedPersonality = found.id }
+                    } catch {
+                        // Yours are full (or couldn't be reached): it starts without one, and says why.
+                        failure = "Its personality, “\(recipe.personality?.name ?? "")”, couldn’t be added to yours: \(error.localizedDescription) Pick one for it here, or open its file again."
                     }
-                } catch {
-                    // Yours are full: it starts without one, and says why.
-                    failure = "Its personality, “\(recipe.personality?.name ?? "")”, didn’t fit in yours. Shorten or remove one of yours, then pick one for it."
                 }
             }
             // The model it talks on: one picked for it whose account you've signed out of (none
@@ -515,7 +528,7 @@ struct BotEditor: View {
         guard !isWorking || waitsForMachine, let addedPersonality,
               !bots.list.contains(where: { $0.personality == addedPersonality }),
               let added = Personalities.shared.personality(addedPersonality) else { return }
-        Personalities.shared.delete(added)
+        Task { try? await Personalities.shared.delete(added) }
     }
 
     // MARK: Saving
@@ -820,11 +833,14 @@ private struct PersonalityPicker: View {
     @State private var draft: Draft? {
         didSet { if draft?.id != oldValue?.id || draft == nil { refusal = nil } }
     }
-    /// Why the draft couldn't be saved (your personalities are full), above its buttons.
+    /// Why the draft couldn't be saved (your personalities are full), above its buttons, or one
+    /// couldn't be deleted, below them all.
     @State private var refusal: String?
+    /// The draft being saved, or one being deleted: its buttons wait.
+    @State private var isSaving = false
     @FocusState private var draftFocus: DraftField?
 
-    private struct Draft {
+    private struct Draft: Equatable {
         var id: String?
         var name = ""
         var description = ""
@@ -852,6 +868,7 @@ private struct PersonalityPicker: View {
                         }
                     }
                     Tile(symbol: "plus", name: "New…", isOn: false, isQuiet: true) {
+                        refusal = nil
                         draft = Draft()
                         draftFocus = .name
                     }
@@ -860,7 +877,7 @@ private struct PersonalityPicker: View {
                 .padding(8)
                 WellDivider()
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(picked?.description ?? "No personality of its own: it talks the way its model does.")
+                    Text(pickedDescription)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
@@ -869,6 +886,7 @@ private struct PersonalityPicker: View {
                             .buttonStyle(TextButtonStyle())
                         Button("Delete") { delete(picked) }
                             .buttonStyle(TextButtonStyle())
+                            .disabled(isSaving)
                     }
                 }
                 .font(.callout)
@@ -876,9 +894,29 @@ private struct PersonalityPicker: View {
                 .padding(.vertical, 10)
                 .animation(.ui, value: selection)
             }
-            if draft != nil { form }
+            if draft != nil {
+                form
+            } else if let refusal {
+                refusalText(refusal)
+            }
         }
         .animation(.ui, value: draft == nil)
+    }
+
+    private var pickedDescription: String {
+        if let picked { return picked.description }
+        // One of yours, before they've been read (as Kuvo Code starts): still its own.
+        if selection != nil, !store.isLoaded { return "Its own personality shows once Kuvo Code’s background service on this Mac has started." }
+        return "No personality of its own: it talks the way its model does."
+    }
+
+    private func refusalText(_ refusal: String) -> some View {
+        Text(refusal)
+            .font(.callout)
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Making or changing one of yours: its name, and how it talks.
@@ -900,21 +938,16 @@ private struct PersonalityPicker: View {
                     .focused($draftFocus, equals: .description)
                     .padding(12)
             }
-            if let refusal {
-                Text(refusal)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            if let refusal { refusalText(refusal) }
             HStack {
                 Spacer()
+                if isSaving { Spinner(size: 16) }
                 Button("Cancel") { draft = nil }
                     .buttonStyle(.glass)
+                    .disabled(isSaving)
                 Button(draft?.id == nil ? "Add Personality" : "Save Personality", action: saveDraft)
                     .buttonStyle(.glassProminent)
-                    .disabled(!canSave)
+                    .disabled(!canSave || isSaving)
             }
         }
         .transition(.opacity.combined(with: .offset(y: -6)))
@@ -931,28 +964,46 @@ private struct PersonalityPicker: View {
     }
 
     private func delete(_ personality: Personality) {
-        store.delete(personality)
-        if selection == personality.id { selection = nil }
+        guard !isSaving else { return }
+        isSaving = true
+        refusal = nil
+        // Bots with it hear it's gone as its box takes it away (`Personalities.onChange`).
+        Task {
+            defer { isSaving = false }
+            do {
+                try await store.delete(personality)
+                if selection == personality.id { selection = nil }
+            } catch {
+                refusal = "“\(personality.name)” couldn’t be deleted: \(error.localizedDescription)"
+                AccessibilityNotification.Announcement(refusal ?? "").post()
+            }
+        }
     }
 
     private func saveDraft() {
-        guard canSave, let draft else { return }
+        guard canSave, !isSaving, let draft else { return }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            if let id = draft.id, var personality = store.personality(id) {
-                personality.name = name
-                personality.description = description
-                try store.update(personality)
-            } else {
-                selection = try store.add(name: name, description: description).id
+        isSaving = true
+        // Bots with it hear its new words as its box takes them (`Personalities.onChange`).
+        Task {
+            defer { isSaving = false }
+            do {
+                if let id = draft.id, var personality = store.personality(id) {
+                    personality.name = name
+                    personality.description = description
+                    try await store.update(personality)
+                } else {
+                    selection = try await store.add(name: name, description: description).id
+                }
+            } catch {
+                refusal = error.localizedDescription
+                AccessibilityNotification.Announcement(error.localizedDescription).post()
+                return
             }
-        } catch {
-            refusal = error.localizedDescription
-            AccessibilityNotification.Announcement(error.localizedDescription).post()
-            return
+            // Closed only if it's still the one saved (not changed, or another begun, meanwhile).
+            if self.draft == draft { self.draft = nil }
         }
-        self.draft = nil
     }
 
     /// A personality to pick: on accent glass when it's the one, a soft fill under the pointer.

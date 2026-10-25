@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Restarting the engine while it's still starting, or the engine stopping while it finishes starting, starts it again rather than leaving it stopped with nothing said.
+- Your personalities are kept by your Mac's background service, as a machine keeps them, so a change from your phone or another computer shows in Edit Bot at once and reaches your bots with the window closed. Those you wrote before are brought over as Kuvo Code starts, and a copy stays where they were.
 - A bot keeps its job with a tool of its own now, rather than under a heading in its memory, and Edit Bot shows it in two fields you can change, in a few words and the details; the bot hears a change you make there. Your bots' jobs come along as they were, and their memory is theirs to write as they like.
 - Your Mac's bots are kept the same way as a machine's, in what Kuvo Code keeps running in the background: a bot made, changed or deleted from your phone shows in the window at once, and a bot you delete on your Mac goes to the Trash.
 - Kuvo Code no longer stays on Starting for ever now and then: reading your shell's settings as it starts can no longer wait for ever, and when the engine, the agents bridge or the background service on your Mac doesn't answer as it starts, the one held up no longer holds up the others and is given up on, with a message, when its time is up.

@@ -26,6 +26,8 @@ extension AppModel {
     /// can't reach them, and says so, rather than keep them elsewhere); and Settings › Integrations'
     /// catalog with this Mac's own paths.
     func boxEnvironment(_ shell: [String: String]) async -> [String: String] {
+        // Your personalities, where it keeps them, from where Kuvo Code kept them before (once).
+        Personalities.moveToBox()
         try? WakeUps.installCommand()
         var environment = shell
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path

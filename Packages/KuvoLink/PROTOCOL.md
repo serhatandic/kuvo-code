@@ -1246,6 +1246,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `integrations` | `kuvo/integrations…` |
 | `named` | `kuvo/named` |
 | `personalities` | `kuvo/personalities…` |
+| `personalities.events` | `kuvo/personalities/events` |
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
 | `phones.pair` | `kuvo/phones/pair` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
@@ -1443,6 +1444,31 @@ aren't in it. A change that would take the library past what a document holds is
   with it; 400 without both.
 - `PATCH kuvo/personalities/<id>` with `{name?, description?}` changes one and answers with it;
   `DELETE` removes it. 404 for one that isn't there, or a preset.
+- `GET kuvo/personalities/events` (bridge 0.9.54, feature `personalities.events`): ndjson
+  `{"personalities": [...]}`, the same list as `GET`, a line now and one each time the library
+  changes: through these routes, a copy met (another box's document, a `take`), or another
+  process writing the file (`box personalities` over SSH). Only the ones you made: presets come
+  with the kit. 405 for any method but `GET`.
+
+A box keeps the library in its bots' folder: `personalities.json` in `KUVO_BOTS` when it's set
+(this Mac's box, the app's bots folder), else `~/.kuvo-code/bots`, as `{"kuvo": 1, "personalities",
+"removed"}`. Two routes are the app's own, for the app beside this Mac's box, which signs the
+library for your other computers until the box holds the relay connection. They answer only a
+request with the header `x-kuvo-from: app` (the app's own over `serve`; the phone link never
+sends it for a phone, and the relay and `box route` never carry it), and anything else, a phone's included, gets
+`403 {"message": "Only Kuvo Code on this computer can do that."}`:
+
+- `GET kuvo/personalities/document`: the library whole, `{"kuvo": 1, "personalities": [...],
+  "removed": [{id, removed}]}`, what the box keeps and signs. 405 for any other method.
+- `POST kuvo/personalities/take` with `{"document": {personalities, removed?}}` meets another
+  computer's copy with this box's, by the rules above (each entry cleaned as the routes clean it,
+  one that isn't a personality left out), and answers `200 {"changed": ["custom.…"]}`: the ids
+  whose personality or removal changed here (none when it had nothing new). Their bots here are
+  told what they are now, and the box's own document goes to the others, as after a change
+  through the routes. `400 {"message"}` when `document` isn't an object with a `personalities`
+  list (and `removed`, if there, a list). It's met whole, as a peer's copy is, even when the two
+  together are past what a document holds (that library isn't given to the others until it's
+  smaller again). 405 for any other method.
 
 A change on one computer reaches the others it reaches by mail at once, and the rest as they
 connect. A bot made on a machine can have one there at once: its

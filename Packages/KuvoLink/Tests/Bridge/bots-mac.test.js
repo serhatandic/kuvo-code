@@ -60,7 +60,7 @@ const kit = {
 };
 
 // A bot's folder as the app keeps it on this Mac.
-function bot(id, { name = "Scout", session = `ses_${id}` } = {}) {
+function bot(id, { name = "Scout", session = `ses_${id}`, personality } = {}) {
   const folder = path.join(bots, id);
   fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
   fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
@@ -70,6 +70,7 @@ function bot(id, { name = "Scout", session = `ses_${id}` } = {}) {
   write(path.join(folder, "bot.json"), JSON.stringify({
     kuvo: 1, id, name, job: "", look: { color: "sky", shape: "round", face: "calm" },
     model: { id: "big-pickle", providerID: "opencode" }, created: "2026-10-01T09:00:00Z", updated: "2026-10-01T09:00:00Z",
+    ...(personality ? { personality } : {}),
   }));
   return folder;
 }
@@ -240,6 +241,21 @@ test("a bot is told what it is now as the box finds its engine and as its runs s
   assert.equal((await ask(handle, "POST", "kuvo/bots/retell")).status, 200);
   assert.ok(told(fake.asked, "ses_bot_quiet00001").at(-1).body.value.includes("now."), "the other bot, at once");
   assert.equal(told(fake.asked, "ses_bot_scout00001").length, 2, "not again: it has them");
+});
+
+test("a bot with one of your personalities is told it from this Mac's library, and told without it once it's deleted", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  t.after(() => fs.rmSync(path.join(bots, "personalities.json"), { force: true }));
+  const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
+  const owl = (await ask(handle, "POST", "kuvo/personalities", { name: "Night Owl", description: "Works late." })).json;
+  bot("bot_scout00001", { personality: owl.id });
+  await link.freshenBot(fake.read(), "ses_bot_scout00001");
+  assert.match(told(fake.asked, "ses_bot_scout00001").at(-1).body.value, /Your personality: Night Owl\. Works late\./);
+  // Deleted (in Edit Bot, from a phone): the bot is told what it is without it, at once.
+  assert.equal((await ask(handle, "DELETE", `kuvo/personalities/${owl.id}`)).status, 200);
+  const now = await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions") && !each.body.value.includes("Night Owl"));
+  assert.match(now.body.value, /You are Scout, one of the user's bots\./);
 });
 
 test("a bot told other words behind the box's back (by a Mac of an earlier version) is put right at its next run", async t => {

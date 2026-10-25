@@ -7,9 +7,9 @@ import Testing
 /// This Mac's side of the documents your computers copy between them (PROTOCOL.md, "Documents"),
 /// as its real PhoneLink keeps them: a phone removed on a machine leaves this Mac too; a machine's
 /// view of your personalities comes in, an older or forged one changes nothing; a machine you
-/// remove is named in what this Mac gives the others, so it lets this Mac go; a Mac that lost count
-/// of its own moves past what a machine has; and your personalities refuse a change past what a
-/// document holds. Only the machine is a stand-in: documents signed with a key of its own.
+/// remove is named in what this Mac gives the others, so it lets this Mac go; and a Mac that lost
+/// count of its own moves past what a machine has. Only the machine is a stand-in: documents
+/// signed with a key of its own.
 @MainActor
 @Suite(.serialized) struct PhoneDocumentsTests {
     init() { TestEnvironment.prepare() }
@@ -56,28 +56,58 @@ import Testing
         #expect(PhoneLink(file: file).phones.map(\.key) == [kept])
     }
 
-    @Test func aMachinesViewOfYourPersonalitiesComesInAndAnOlderOneDoesnt() throws {
+    @Test func aMachinesViewOfYourPersonalitiesComesInAndAnOlderOneDoesnt() async throws {
         let lab = Machine(id: "lab.invalid")
         let (link, file) = try link(machines: [lab])
         defer { try? FileManager.default.removeItem(at: file) }
+        // Where this Mac keeps them: its box, which the app's store reaches.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        let box = try await SettingsBox(port: 47_935)
+        let shared = Personalities.shared
+        shared.box = { box.client }
         var told: Set<String> = []
-        link.tookPersonalities = { told.formUnion($0) }
+        let onChange = shared.onChange
+        shared.onChange = { told.formUnion($0) }
+        defer {
+            shared.box = { nil }
+            shared.onChange = onChange
+            box.stop()
+            try? FileManager.default.removeItem(at: Personalities.boxFile)
+        }
+        await shared.refresh()
         let id = "custom.lab-\(UUID().uuidString.lowercased())"
-        defer { if let kept = Personalities.shared.personality(id) { Personalities.shared.delete(kept) } }
         let made = ["id": id, "name": "Calm", "description": "Made on the machine.", "symbol": "person.crop.circle", "updated": 1_760_000_000_000] as [String: Any]
-        link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)
-        #expect(Personalities.shared.personality(id)?.description == "Made on the machine.")
-        #expect(told == [id])
+        await link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)?.value
+        #expect(shared.personality(id)?.description == "Made on the machine.")
+        #expect(told == [id], "its bots are told")
         // An older view of the machine's, though it counts the change higher: nothing.
         var older = made
         older["description"] = "Older."
         older["updated"] = 1_760_000_000_900
-        link.takeDocuments(["give": [try lab.sign("personalities", 4, ["personalities": [older], "removed": []])]], from: lab.id)
-        #expect(Personalities.shared.personality(id)?.description == "Made on the machine.")
+        await link.takeDocuments(["give": [try lab.sign("personalities", 4, ["personalities": [older], "removed": []])]], from: lab.id)?.value
+        #expect(shared.personality(id)?.description == "Made on the machine.")
         // Removed there: removed here, whatever this Mac changed meanwhile.
-        try Personalities.shared.update(Personality(id: id, name: "Calm", description: "Changed here.", symbol: "person.crop.circle"))
-        link.takeDocuments(["give": [try lab.sign("personalities", 6, ["personalities": [], "removed": [["id": id, "removed": 1_760_000_000_001]]])]], from: lab.id)
-        #expect(Personalities.shared.personality(id) == nil)
+        try await shared.update(Personality(id: id, name: "Calm", description: "Changed here.", symbol: "person.crop.circle"))
+        await link.takeDocuments(["give": [try lab.sign("personalities", 6, ["personalities": [], "removed": [["id": id, "removed": 1_760_000_000_001]]])]], from: lab.id)?.value
+        #expect(shared.personality(id) == nil)
+        // None left for the suites after.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        await shared.refresh()
+    }
+
+    /// One that comes while this Mac's box isn't up (Kuvo Code starting) isn't lost: this Mac
+    /// doesn't say it has it, so the machine gives it again.
+    @Test func aMachinesViewThatCouldntBeTakenIsAskedForAgain() async throws {
+        let lab = Machine(id: "lab.invalid")
+        let (link, file) = try link(machines: [lab])
+        defer { try? FileManager.default.removeItem(at: file) }
+        Personalities.shared.box = { nil }
+        let made = ["id": "custom.lab-calm", "name": "Calm", "description": "Made on the machine.", "symbol": "person.crop.circle", "updated": 1_760_000_000_000] as [String: Any]
+        await link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)?.value
+        let origin = Documents.origin(of: lab.key)
+        let have = link.documents.digest(origin: "this-mac")
+        #expect(!have.contains { $0.first as? String == origin && $0[1] as? String == "personalities" }, "its view isn't claimed: \(have)")
+        #expect(PhoneLink(file: file).documents.views[origin] == nil, "nor after a restart")
     }
 
     @Test func aMachineYouRemoveIsToldThisMacLetItGo() throws {
@@ -127,21 +157,5 @@ import Testing
         link.takeDocuments(["have": [[first.origin, "peers", 7, "x"]]], from: lab.id)
         let now = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
         #expect(now.n == 8)
-    }
-
-    @Test func yourPersonalitiesRefuseAChangePastWhatADocumentHolds() throws {
-        let folder = AppInfo.testRoot.appending(path: "Personalities/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let store = Personalities(folder: folder)
-        let words = String(repeating: "Words. ", count: 285)
-        var refused: Error?
-        for i in 0..<400 where refused == nil {
-            do { _ = try store.add(name: "P\(i)", description: words) } catch { refused = error }
-        }
-        #expect(refused?.localizedDescription == "There’s no room for more in your personalities. Shorten or remove one, then try again.")
-        let count = store.custom.count
-        #expect(count > 100)
-        #expect(Personalities(folder: folder).custom.count == count, "nothing kept of the one refused")
     }
 }

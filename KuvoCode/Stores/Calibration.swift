@@ -103,7 +103,7 @@ nonisolated enum Backups {
     /// How many are kept: older ones go as a new one is made.
     static let kept = 3
     /// What's copied from Kuvo Code's folder, where there.
-    static let files = ["bots.json", "groups.json", "groups", "personalities.json", "agent-messages.json", "phone-link.json"]
+    static let files = ["bots.json", "groups.json", "groups", "bots/personalities.json", "personalities.json", "personalities-removed.json", "agent-messages.json", "phone-link.json"]
     /// The settings that hold your things (machines, projects, worktrees): one of them means
     /// there's something to keep.
     static let settings = ["machines", "projectFolders", "worktrees", "projectSettings"]
@@ -142,6 +142,8 @@ nonisolated enum Backups {
             for name in files {
                 let source = AppInfo.supportDirectory.appending(path: name)
                 guard manager.fileExists(atPath: source.path) else { continue }
+                // One in a folder (this Mac's box's personalities, in its bots folder) in one of its own.
+                try manager.createDirectory(at: partial.appending(path: name).deletingLastPathComponent(), withIntermediateDirectories: true)
                 try manager.copyItem(at: source, to: partial.appending(path: name))
             }
             if let domain = UserDefaults.standard.persistentDomain(forName: AppInfo.bundleID) {

@@ -94,8 +94,10 @@ final class AppModel {
     /// Opened at login (Open at Login): this Mac's box runs in the background, its engine, bots and
     /// phone link at work, and the window waits until you open Kuvo Code.
     var startedAtLogin = false
-    /// A start under way, from launch or from the window: one at a time.
-    @ObservationIgnored private var isStarting = false
+    /// The start under way, from launch or from the window: one at a time. A stop gives it up
+    /// (`stop`), so a start after it (a restart, the engine started again after it stopped while
+    /// its start was still finishing) isn't turned away by it.
+    @ObservationIgnored private var starting: UUID?
     /// Settings fill the main window in place of the sessions while this is on.
     var showsSettings = false
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
@@ -204,9 +206,11 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
-        // This Mac's bots are told what your personalities are by its box, from its kit (the
-        // machines hear of them too once they start: `startMachines`).
-        Personalities.shared.onChange = { [weak self] in self?.bots.personalitiesChanged() }
+        // Your personalities, one library on every computer, kept by this Mac's box. However one
+        // changed there (here, from a phone, taken from a machine's copy), the machines take it,
+        // and this Mac's bots with it are told what it is now, by its box.
+        Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        Personalities.shared.onChange = { [weak self] _ in self?.personalitiesChanged() }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
@@ -287,12 +291,15 @@ final class AppModel {
         case .preparing, .failed: break
         }
         // Asked twice before the first got as far as saying so (launch, and the window opening).
-        guard !isStarting else { return }
-        isStarting = true
-        defer { isStarting = false }
+        guard starting == nil else { return }
+        let start = UUID()
+        starting = start
+        defer { if starting == start { starting = nil } }
         // What you keep here, up to date with this version (once, after an update), before the
         // engine starts.
         await calibration.run(self)
+        // Stopped meanwhile (the app quitting, a restart begun): this start gives up.
+        guard starting == start else { return }
         let launch = UUID()
         self.launch = launch
         engineStoppedWhileRunning = false
@@ -429,18 +436,26 @@ final class AppModel {
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = await boxEnvironment(shell)
+            guard launch == self.launch else { return }
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
+                // Your personalities, as it keeps them, before they're followed.
+                await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
-                // (what was kept here before goes there).
-                if boxFollowed == nil {
+                // (what was kept here before goes there); not for a start given up meanwhile,
+                // whose stop has ended them.
+                if boxFollowed == nil, launch == self.launch {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let wakes: Void = wakeUps.follow()
+                        async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
+                        // What a 0.8.0 beta changed of your personalities where it kept them.
+                        await Personalities.shared.takeFromOld()
                         await workspace.followProjects()
                         await worktrees
                         await wakes
+                        await personalities
                         await bots
                     }
                 }
@@ -634,6 +649,7 @@ final class AppModel {
     func stop() {
         // A start still on its way gives up, and the stopped engine's exit is expected.
         launch = UUID()
+        starting = nil
         #if DEBUG
         E2E.forget()
         #endif

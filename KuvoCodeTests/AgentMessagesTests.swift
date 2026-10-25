@@ -82,17 +82,29 @@ import Testing
 
     /// A shared bot's personality on this Mac: a preset by its ID; someone's own added to yours
     /// once, and found again (not added twice) by its name and words.
-    @Test func aSharedBotsPersonality() throws {
+    @Test func aSharedBotsPersonality() async throws {
+        // Yours, kept by this Mac's box.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        let box = try await SettingsBox(port: 47_936)
+        Personalities.shared.box = { box.client }
+        defer {
+            Personalities.shared.box = { nil }
+            box.stop()
+            try? FileManager.default.removeItem(at: Personalities.boxFile)
+        }
+        await Personalities.shared.refresh()
         let preset = try BotRecipe.read(file(#"{"kind":"kuvo-bot","version":1,"name":"Ci","job":"j","instructions":"i","look":\#(look),"personality":{"id":"preset.mentor","name":"Mentor","description":"x"}}"#))
-        #expect(try preset.personalityHere()?.id == "preset.mentor")
-        #expect(try preset.personalityHere()?.added == false)
+        #expect(try await preset.personalityHere()?.id == "preset.mentor")
+        #expect(try await preset.personalityHere()?.added == false)
         let words = "Talks like a pirate. \(UUID().uuidString)"
         let theirs = try BotRecipe.read(file(#"{"kind":"kuvo-bot","version":1,"name":"Ci","job":"j","instructions":"i","look":\#(look),"personality":{"id":"custom.abc","name":"Pirate","description":"\#(words)"}}"#))
-        let first = try #require(try theirs.personalityHere())
+        let first = try #require(try await theirs.personalityHere())
         #expect(first.added)
-        let again = try #require(try theirs.personalityHere())
+        let again = try #require(try await theirs.personalityHere())
         #expect(!again.added && again.id == first.id)
         #expect(Personalities.shared.custom.filter { $0.description == words }.count == 1)
-        if let added = Personalities.shared.personality(first.id) { Personalities.shared.delete(added) }
+        // None left for the suites after.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        await Personalities.shared.refresh()
     }
 }
