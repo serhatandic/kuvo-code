@@ -103,6 +103,57 @@
       ]
     },
     {
+      "name": "a bot made is told who it is and where it runs, and its conversation marked as its",
+      "steps": [
+        {
+          "send": "POST kuvo/bots",
+          "body": { "name": "Herald", "template": "news", "model": { "providerID": "opencode", "id": "big-pickle" } },
+          "expect": { "status": 201, "json": { "bot": { "name": "Herald" } } },
+          "save": { "made": "bot.id", "madeSession": "bot.session" }
+        },
+        { "engineGot": { "method": "PATCH", "path": "/api/session/{{madeSession}}", "json": { "metadata": { "kuvo": { "bot": "{{made}}" } } } } },
+        { "engineGot": { "method": "PUT", "path": "/api/experimental/session/{{madeSession}}/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "You are Herald, one of the user's bots in Kuvo Code" } } } },
+        {
+          "only": "mac", "why": "A bot on a Mac is told it runs there, with tabs in your browser on it.",
+          "engineGot": { "method": "PUT", "path": "/api/experimental/session/{{madeSession}}/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "You run on this Mac." } } }
+        },
+        {
+          "only": "machine", "why": "A bot on a machine is told it runs there, in your time zone, with the machine's own browser.",
+          "engineGot": { "method": "PUT", "path": "/api/experimental/session/{{madeSession}}/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "You run on the Linux machine" } } }
+        }
+      ]
+    },
+    {
+      "name": "what Edit Bot changes reaches the bot's conversation: its name, personality and model",
+      "steps": [
+        { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "name": "Ada Lovelace" }, "expect": { "status": 200, "json": { "bot": { "name": "Ada Lovelace" } } } },
+        { "engineGot": { "method": "PATCH", "path": "/api/session/ses_ada", "json": { "title": "Ada Lovelace" } } },
+        { "engineGot": { "method": "PUT", "path": "/api/experimental/session/ses_ada/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "You are Ada Lovelace, one of the user's bots" } } } },
+        { "send": "PATCH kuvo/bots/bot_ada", "body": { "personality": "preset.straight" }, "expect": { "status": 200, "json": { "bot": { "personality": "preset.straight" } } } },
+        { "engineGot": { "method": "PUT", "path": "/api/experimental/session/ses_ada/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "Your personality: Straight Shooter." } } } },
+        {
+          "send": "PATCH kuvo/bots/bot_ada", "body": { "model": { "providerID": "opencode", "id": "big-pickle" } },
+          "expect": { "status": 200, "json": { "bot": { "model": { "providerID": "opencode", "id": "big-pickle" } } } }
+        },
+        { "engineGot": { "method": "POST", "path": "/api/session/ses_ada/model", "json": { "model": { "providerID": "opencode", "id": "big-pickle" } } } }
+      ]
+    },
+    {
+      "name": "a bot is made on the computer asked: one named for another computer isn't made here",
+      "steps": [
+        {
+          "send": "POST kuvo/bots",
+          "body": { "name": "Herald", "machine": "elsewhere.invalid", "model": { "providerID": "opencode", "id": "big-pickle" } },
+          "why": "A Mac's box makes only its own bots, and says so; a machine's ignores `machine`, as every bot made there lives there.",
+          "expect": {
+            "mac": { "status": 400, "json": { "message": "<string>" } },
+            "machine": { "status": 201, "json": { "bot": { "name": "Herald", "machine": "lab.invalid" } } }
+          }
+        }
+      ]
+    },
+    {
       "name": "deleting a bot, and one that isn't there",
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
