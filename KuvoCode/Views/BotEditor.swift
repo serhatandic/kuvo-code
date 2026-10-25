@@ -24,6 +24,9 @@ struct BotEditor: View {
     /// How it talks.
     @State private var personality: String?
     @State private var name: String
+    /// Its job, as Edit Bot shows it: in a few words, and the details.
+    @State private var jobLine: String
+    @State private var jobDetails: String
     /// What a template or a shared bot says its job is: typed in its new conversation, for you
     /// to change and send (its job is what you tell it there).
     @State private var firstMessage: String
@@ -59,6 +62,13 @@ struct BotEditor: View {
         self.created = created
         _look = State(initialValue: bot?.look ?? recipe?.look ?? .random())
         _name = State(initialValue: bot?.name ?? recipe?.name ?? "")
+        _jobLine = State(initialValue: bot?.job ?? "")
+        // (Its details as a memory kept them began with its line: said once.)
+        _jobDetails = State(initialValue: bot.map { bot in
+            var lines = bot.instructions.components(separatedBy: "\n")
+            if !bot.job.isEmpty, let first = lines.first, Bots.job(inMemory: "## Job\n" + first)?.line == bot.job { lines.removeFirst() }
+            return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        } ?? "")
         _firstMessage = State(initialValue: recipe.map { BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions) } ?? "")
         _machine = State(initialValue: bot?.machine)
         _project = State(initialValue: bot?.project)
@@ -205,6 +215,16 @@ struct BotEditor: View {
                 }
 
                 identity
+
+                if let bot {
+                    section("Job", note: jobStyle == .fields
+                            ? "It keeps its job up to date as you tell it more in its conversation. Change it here too, and it hears the new one."
+                            : nil) {
+                        JobWell(style: jobStyle, name: bot.name, line: $jobLine, details: $jobDetails) {
+                            app.tabs.open(.session(bot.sessionID))
+                        }
+                    }
+                }
 
                 section("Look") {
                     LookPicker(look: $look)
@@ -404,11 +424,14 @@ struct BotEditor: View {
                             .focused($focus, equals: .name)
                     }
                 }
-                Text(bot.map { $0.job.isEmpty ? "\($0.name)'s job is what you tell it in its conversation." : "Its job: \($0.job). It keeps its job in its memory, as you tell it in its conversation." }
-                     ?? "Its job is what you tell it in its conversation. It keeps it in its memory and works on it from then on.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // As tall as its row, beside the avatar.
+                .fixedSize(horizontal: false, vertical: true)
+                if isNew {
+                    Text("Its job is what you tell it in its conversation. It keeps it and works on it from then on.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -549,6 +572,15 @@ struct BotEditor: View {
         }
     }
 
+    /// How the job shows: fields to change it, or its words as the bot keeps them.
+    private var jobStyle: JobWell.Style {
+        #if DEBUG
+        // KUVO_DEMO_BOT_JOB=fields|text: one way or the other, to compare them.
+        if let style = ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_JOB"].flatMap(JobWell.Style.init(rawValue:)) { return style }
+        #endif
+        return .text
+    }
+
     private func section(_ title: String, note: String? = nil, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -561,6 +593,75 @@ struct BotEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+/// A bot's job in Edit Bot: what it does in a few words (shown under its name) and the details,
+/// as fields to change, or as the bot keeps them.
+private struct JobWell: View {
+    enum Style: String { case fields, text }
+    let style: Style
+    let name: String
+    @Binding var line: String
+    @Binding var details: String
+    /// Its conversation, where you tell it its job.
+    let talk: () -> Void
+
+    var body: some View {
+        switch style {
+        case .fields: fields
+        case .text: words
+        }
+    }
+
+    private var fields: some View {
+        WellGroup {
+            WellRow {
+                Image(systemName: "briefcase")
+            } content: {
+                TextField("In a Few Words", text: $line, prompt: Text("In a few words, like Keeps the build green"))
+                    .textFieldStyle(.plain)
+            }
+            WellDivider()
+            TextField("Details", text: $details, prompt: Text("The details: what to watch, what to make, what never to do without asking"), axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(3...14)
+                .padding(12)
+        }
+    }
+
+    /// Its job as it keeps it: words to read, not fields, and the way to change it, in its conversation.
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "briefcase")
+                    .foregroundStyle(.secondary)
+                Text(line.isEmpty ? "No job yet" : line)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(line.isEmpty ? .secondary : .primary)
+            }
+            Text(detailsShown)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 26)
+            HStack(spacing: 4) {
+                Text("It keeps its job itself, as you tell it.")
+                    .foregroundStyle(.secondary)
+                Button("Tell It in Its Conversation", action: talk)
+                    .buttonStyle(TextButtonStyle())
+            }
+            .font(.callout)
+            .padding(.leading, 26)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(line.isEmpty ? "\(name) has no job yet" : "\(name)'s job: \(line)")
+    }
+
+    private var detailsShown: String {
+        if !details.isEmpty { return details }
+        return line.isEmpty ? "Tell \(name) what you'd like it to do in its conversation." : "No details yet."
     }
 }
 
