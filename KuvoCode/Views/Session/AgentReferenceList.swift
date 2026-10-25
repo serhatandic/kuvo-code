@@ -13,11 +13,12 @@ import SwiftUI
     @ObservationIgnored fileprivate var typed: String?
 
     /// The agents the "&" being typed at the end of `text` matches, while its list is open; not
-    /// the conversation `excluding`, which the message is written in.
-    func matches(in text: String, excluding: String?) -> [AgentMail.Agent]? {
+    /// the conversation `excluding`, which the message is written in, nor one `reaching` says the
+    /// message can't name.
+    func matches(in text: String, excluding: String?, reaching: (AgentMail.Agent) -> Bool = { _ in true }) -> [AgentMail.Agent]? {
         guard !text.hasPrefix("!"), let (query, start) = AgentReferences.query(in: text),
               text.distance(from: text.startIndex, to: start) != dismissed else { return nil }
-        let found = AgentReferences.matches(query, in: AgentReferences.candidates(excluding: excluding))
+        let found = AgentReferences.matches(query, in: AgentReferences.candidates(excluding: excluding).filter(reaching))
         return found.isEmpty ? nil : found
     }
 

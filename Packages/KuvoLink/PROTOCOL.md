@@ -222,7 +222,7 @@ connection.
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
-  again at once (within a minute before bridge 0.9.63).
+  again at once (within a minute before bridge 0.9.63), once in ten seconds at most for each.
   - A machine's bridge writes `run/agents.json` (what `list_agents` reads there) from its own
     agents and its peers', relay or not, keeping its own as last written while it can't say now
     (its engine starting).
@@ -258,8 +258,10 @@ connection.
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
-    days, and a letter whose agent no box lists now waits. Before a letter goes, its sender is
-    told of to that box, if it wasn't.
+    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation a
+    Mac says moved (`moved`) goes where it lives now, whichever box it was left for. Before a
+    letter goes, its sender is told of to that box, if it wasn't. Its words are cut on a character's
+    boundary.
 - **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
   (`kuvo/link/letters`), which leaves each in its own `run/outbox/sending` and sends it as below;
   a waiting one is answered as the route's answer. The box never hands its letters to anyone over
@@ -1482,12 +1484,15 @@ For the app only (anyone else gets `403`):
   to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
 - `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
   one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
-  key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once; with
-  `wait` (and `from`), once its answer comes: `{"id", "text"}`, or `{"id", "failed"}` or `{"id",
-  "note"}` when it didn't get there or no answer can come, or `{"id", "text": null}` after eleven
-  minutes or the request closed (its turn stopped), when it goes on without waiting and an answer
-  that comes later reaches the conversation as a message. `404` for a `peer` that isn't one of this
-  Mac's machines.
+  key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a
+  `note` when it was to be waited for but the box is off the relay now: it goes once the box is back
+  on it, and its answer comes as a message). With `wait` (and `from`), on the relay: lines
+  (`application/x-ndjson`), `{"id"}` once it's kept, so a request cut off after that knows it went,
+  then once its answer comes `{"text"}`, or `{"failed"}` or `{"note"}` when it didn't get there or
+  no answer can come, or `{"text": null}` after eleven minutes or the request closed (its turn
+  stopped), when it goes on without waiting and an answer that comes later reaches the
+  conversation as a message. The box keeps who waits in memory, and gives an answer to the
+  request only while it's still open. `404` for a `peer` that isn't one of this Mac's machines.
 - `POST kuvo/link/letters/take {"letters": [{id, from, to, text, peer, at, answers?}], "seen": {"<id>":
   <at>}}`: the letters an older Kuvo Code sent itself and had on their way (`agent-letters.json`),
   into the box's outbox, and those it delivered, remembered so one sent again isn't twice

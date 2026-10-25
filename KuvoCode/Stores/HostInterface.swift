@@ -234,7 +234,7 @@ final class HostInterface {
             // Whether one of this Mac's conversations is moving to or from another computer now
             // (the app runs the move): a letter for it comes again once it's there.
             guard let session = given["session"] as? String else { return .init(status: 400) }
-            return .json(["moving": Moves.frozen.contains(session) || Moves.isFrozen(session)])
+            return .json(["moving": Moves.isFrozen(session)])
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.

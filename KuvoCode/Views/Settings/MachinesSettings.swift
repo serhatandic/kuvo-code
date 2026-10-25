@@ -86,6 +86,15 @@ struct MachinesSettings: View {
                         }
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    } else if let problem = app.phoneLink.peerProblem(of: engine.machine.id) {
+                        Label {
+                            Text(problem)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                     }
                 }
             }

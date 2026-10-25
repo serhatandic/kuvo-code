@@ -489,3 +489,41 @@ test("a Mac that signs no documents yet: its list is never passed on, and once i
   link.receiveMail(mailFrom(mac, { at: 20, peers: [mac.peer] }));
   assert.deepEqual(link.peersOf(link.readLink()).map(peer => peer.name).sort(), ["mac", "second"]);
 });
+
+test("letters go oldest first; one whose conversation moved goes where it lives now, whichever box it was left for", () => {
+  fresh({ legacy: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer, stranger.peer], moved: [{ session: "ses_moved", key: stranger.pub }] } } });
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({ [second.pub]: { at: 1, kind: "machine", list: [{ session: "ses_target", name: "API", kind: "session" }, { session: "ses_moved", name: "Moved", kind: "session" }] } }));
+  const sending = path.join(run, "outbox", "sending");
+  fs.mkdirSync(sending, { recursive: true });
+  const now = Date.now();
+  // Left in this order, with ids that sort the other way.
+  const write = (id, letter) => fs.writeFileSync(path.join(sending, `${id}.json`), JSON.stringify({ from: "ses_here", text: "Hi", wait: false, ...letter }));
+  write("ltr_c_first", { to: "ses_target", at: now - 3000 });
+  write("ltr_b_second", { to: "ses_target", at: now - 2000 });
+  write("ltr_a_third", { to: "ses_target", at: now - 1000 });
+  // Left for second (as a Mac leaves one, by its key), but it lives on stranger now.
+  write("ltr_moved", { to: "ses_moved", peer: second.pub, at: now - 500 });
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  link.sendOutbox(host, link.readLink(), now);
+  link.sendOutbox(host, link.readLink(), now + 3000);
+  const went = sent.map(bytes => {
+    for (const to of [second, stranger]) try { return { to: to.peer.name, id: opened(bytes, to).payload.letter.id }; } catch {}
+    return null;
+  }).filter(Boolean);
+  assert.deepEqual(went.filter(each => each.to === "second").map(each => each.id), ["ltr_c_first", "ltr_b_second", "ltr_a_third"]);
+  assert.deepEqual(went.filter(each => each.id === "ltr_moved").map(each => each.to), ["stranger"]);
+});
+
+test("a letter's words are cut where a character ends, never in the middle of one", async t => {
+  fresh();
+  const { prompts, target } = await engine(t);
+  const said = [];
+  const long = "a".repeat(31_999) + "😀" + "b";
+  // (A box of its own: the others sent their twenty in ten minutes already.)
+  const fourth = box("machine", "fourth");
+  await link.takeLetter(fourth.peer, { id: "ltr_" + crypto.randomBytes(6).toString("hex"), from: "ses_x", to: "ses_target", text: long, at: Date.now() },
+    { send: (peer, message) => said.push(message), targets: [target], told: {}, peers: [fourth.peer], wait: 10 });
+  const words = prompts.at(-1).text.split("\n\n").slice(1).join("\n\n");
+  assert.equal(words, "a".repeat(31_999), "the emoji that didn't fit whole is left out");
+});

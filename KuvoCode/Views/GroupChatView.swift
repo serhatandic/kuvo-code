@@ -577,7 +577,9 @@ private struct GroupComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let named = agents.matches(in: text, excluding: nil) {
+            // A group chat names those its computer knows of: its own, and its peers' (a machine
+            // that isn't one, Settings › Machines says why).
+            if let named = agents.matches(in: text, excluding: nil, reaching: { agent in agent.machine.map { AgentMail.shared.app?.phoneLink.talksToPeers($0) == true } ?? true }) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
                     .preference(key: ComposerListShown.self, value: true)
             }

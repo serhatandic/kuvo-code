@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -81,5 +82,56 @@ import Testing
         #expect(asked.all.isEmpty && prompts.all.isEmpty)
         let read = await AgentMail.shared.read("API", query: nil, caller: here)
         #expect(read.isError && read.text.contains("isn't connected"), "\(read.text)")
+    }
+
+    /// A letter handed to this Mac's box (`kuvo/link/letters`), as the box answers it. Cut off once
+    /// the box kept it (it started again while the agent waited): it's on its way, and the agent
+    /// isn't told it failed (it would send it again, and it would come twice). Cut off before: it
+    /// didn't go.
+    @Test func aLetterTheBoxKeptIsOnItsWayWhateverHappensAfter() async {
+        func answer(_ lines: [String], cutOff: Bool, status: Int = 200) -> AsyncThrowingStream<LinkResponsePart, Error> {
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: status, headers: ["content-type": "application/x-ndjson"]))
+                for line in lines { continuation.yield(.body(Data((line + "\n").utf8))) }
+                if cutOff { continuation.finish(throwing: URLError(.networkConnectionLost)) } else { continuation.finish() }
+            }
+        }
+        let kept = await AgentMail.mailed(answer([#"{"id":"ltr_1"}"#], cutOff: true), to: "API", on: "lab", waits: true)
+        #expect(kept == .done("On its way to API on lab. Its answer, if it writes one, comes to you as a message."))
+        guard case .failed = await AgentMail.mailed(answer([], cutOff: true), to: "API", on: "lab", waits: true) else { Issue.record("cut off before it was kept"); return }
+        #expect(await AgentMail.mailed(answer([#"{"id":"ltr_1"}"#, #"{"text":"Shipped."}"#], cutOff: false), to: "API", on: "lab", waits: true) == .done("API answered:\n\nShipped."))
+        #expect(await AgentMail.mailed(answer([#"{"id":"ltr_1"}"#, #"{"text":null}"#], cutOff: false), to: "API", on: "lab", waits: true)
+            == .done("API hasn't answered yet. It may still write back with send_message."))
+        guard case .failed = await AgentMail.mailed(answer([#"{"id":"ltr_1"}"#, #"{"failed":"There's no such conversation here."}"#], cutOff: false), to: "API", on: "lab", waits: true) else {
+            Issue.record("didn't get there"); return
+        }
+        guard case .failed = await AgentMail.mailed(answer([#"{"message":"That isn't one of this Mac's computers."}"#], cutOff: false, status: 404), to: "API", on: "lab", waits: false) else {
+            Issue.record("refused"); return
+        }
+    }
+
+    /// Who's on your other computers, as this Mac's box answers (`kuvo/link/agents`): listed by
+    /// each machine's name here, a bot with its id and look; one it names that isn't one of this
+    /// Mac's machines, and one that told nothing yet, left out.
+    @Test func whoIsOnYourOtherComputersComesFromTheBox() async throws {
+        _ = await start()
+        defer { done() }
+        let before = AgentMail.shared.app
+        AgentMail.shared.app = app
+        defer { AgentMail.shared.app = before }
+        _ = app.machines.add("lab.invalid")
+        defer { app.removeMachine("lab.invalid") }
+        let answer = #"""
+            {"peers":[{"key":"k1","id":"lab.invalid","at":5,"features":["groups.seats"],"list":[
+              {"session":"ses_api","name":"API","kind":"session","project":"api"},
+              {"session":"ses_ada","name":"Ada","kind":"bot","id":"bot_ada","look":{"color":"sky","shape":"round","face":"calm"},"about":"Ships"}]},
+              {"key":"k2","id":"gone.invalid","at":5,"features":[],"list":[{"session":"ses_ghost","name":"Ghost","kind":"session"}]},
+              {"key":"k3","id":null,"at":0,"features":[],"list":[]}]}
+            """#
+        AgentMail.shared.takeElsewhere(answer: Data(answer.utf8))
+        let listed = AgentMail.shared.directory().filter { $0.machine != nil }
+        #expect(listed.map(\.session).sorted() == ["ses_ada", "ses_api"])
+        let ada = try #require(listed.first { $0.session == "ses_ada" })
+        #expect(ada.machine == "lab.invalid" && ada.kind == "bot" && ada.id == "bot_ada" && ada.look?.color.rawValue == "sky" && ada.about == "Ships")
     }
 }

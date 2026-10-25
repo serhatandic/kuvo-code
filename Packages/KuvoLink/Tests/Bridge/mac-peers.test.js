@@ -29,11 +29,14 @@ for (const home of [macHome, machineHome]) fs.mkdirSync(path.join(home, "run"), 
 const waitingForChange = [];
 const changed = () => new Promise(resolve => waitingForChange.push(resolve));
 const poke = () => { for (const resolve of waitingForChange.splice(0)) resolve(); };
+// Looked at again each time a stand-in records something, until it's there, or the test runs out
+// of time (`signal`), saying what never came.
 async function arrived(found) {
   for (;;) {
     const value = await found();
     if (value) return value;
-    await changed();
+    if (signal?.aborted) throw new Error(`It never came: ${found}`);
+    await Promise.race([changed(), new Promise(resolve => signal?.addEventListener("abort", resolve, { once: true }))]);
   }
 }
 // What a box wrote that tells nothing here when it does (the machine is another process; mail
@@ -113,6 +116,8 @@ async function bridgeWith() {
     const done = () => response.writeHead(200, { "content-type": "application/json" }).end("{}");
     if (request.method === "GET" && request.url === "/api/kuvo/peers/mail") {
       response.writeHead(200, { "content-type": "application/x-ndjson" });
+      // Followed from now, as the bridge answers at once.
+      response.flushHeaders();
       seen.streams.add(response);
       response.on("close", () => seen.streams.delete(response));
       poke();
@@ -188,8 +193,10 @@ async function ask(method, p, given, { abort } = {}) {
   for await (const part of handle({ method, path: p, headers: {}, body: given ? Buffer.from(JSON.stringify(given)) : Buffer.alloc(0), fromApp: true }, {}, abort)) parts.push(part);
   const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
   let json;
-  try { json = JSON.parse(text); } catch {}
-  return { status: parts[0].head.status, json };
+  // (A stream of lines: each, and the last as the answer.)
+  const lines = parts[0].head.headers?.["content-type"] === "application/x-ndjson" ? text.trim().split("\n").map(line => JSON.parse(line)) : null;
+  try { json = lines ? lines.at(-1) : JSON.parse(text); } catch {}
+  return { status: parts[0].head.status, json, lines };
 }
 
 const run = file => path.join(machineHome, "run", file);
@@ -262,6 +269,8 @@ test("a letter from this Mac's conversation reaches the machine's, and its answe
   labEngine.seen.answers.set("ses_lab1", "Shipped this morning.");
   const answer = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_mac1", to: "ses_lab1", text: "Is the API out?", wait: true });
   assert.equal(answer.status, 200);
+  // Kept first (so one cut off after knows it went), then answered.
+  assert.match(answer.lines[0].id, /^ltr_/);
   assert.equal(answer.json.text, "Shipped this morning.");
   const prompt = labEngine.seen.prompts.find(each => each.session === "ses_lab1");
   assert.match(prompt.text, /^\[Message from Release notes · ses_mac1\] \(They're waiting for your reply/);
@@ -358,4 +367,28 @@ test("this Mac in use reaches the machine, with what of its own this Mac's notif
     try { return JSON.parse(link.openOneWay(link.readFrame(each.payload).body, labKey, link.publicOf(macKey)).payload.toString()); } catch { return null; }
   }).find(payload => payload?.attention));
   assert.deepEqual(said.attention, { for: 30, sessions: ["ses_mac1", "ses_lab1"], shown: [{ session: "ses_lab1", ask: true, request: "per_1" }] });
+});
+
+test("a letter left while this Mac's box is off the relay says so at once, and goes once it's back", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  link.stopMacLink();
+  await arrived(() => !relay.has(macAddress));
+  const left = await ask("POST", "kuvo/link/letters", { peer: lab.key, from: "ses_mac1", to: "ses_lab1", text: "Sent while away.", wait: true });
+  assert.equal(left.status, 200);
+  assert.match(left.json.note, /can't be reached through the relay now/);
+  assert.equal(left.json.text, undefined, "not waited for");
+  link.runMacLink();
+  await arrived(() => labEngine.seen.prompts.find(each => each.text.includes("Sent while away.")));
+});
+
+test("the coding agents' bridge going and coming back: this Mac's box follows its group chats' mail again", { timeout: 60_000 }, async t => {
+  signal = t.signal;
+  await arrived(() => macBridge.seen.streams.size > 0);
+  const told = macBridge.seen.peers.length;
+  // The bridge restarting: its stream ends.
+  for (const stream of macBridge.seen.streams) stream.end();
+  // Followed again, and told who your other computers are again.
+  await arrived(() => macBridge.seen.streams.size > 0 && macBridge.seen.peers.length > told);
+  macBridge.give({ id: "seat_again1", to: lab.key, mail: { kind: "turn", chat: "grp_2", text: "Still there?" }, durable: true });
+  await arrived(() => labBridge.seen.mail.find(each => each.mail.chat === "grp_2"));
 });

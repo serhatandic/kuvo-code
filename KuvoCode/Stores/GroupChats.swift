@@ -7,6 +7,8 @@ import OpenCodeKit
 @MainActor @Observable
 final class GroupChats {
     let boxes: BoxGroups
+    /// Your last message on its way: the next goes after it.
+    @ObservationIgnored private var sending: Task<Void, Never>?
 
     init(boxes: BoxGroups) {
         self.boxes = boxes
@@ -51,12 +53,14 @@ final class GroupChats {
     func send(_ text: String, to id: String) -> Bool {
         // Held for a move (its computer's status): it waits too, until it's where it's going.
         guard boxes.reach(id) == .ready, boxes.chat(id)?.held != true else { return false }
-        let here = boxes.machine(of: id) == nil
-        Task {
+        // Who it names with & is worked out where it lives: this Mac's box from the list as it is
+        // now. In the order you sent them, each after the one before.
+        let refresh = boxes.machine(of: id) == nil && text.contains(AgentReferences.trigger)
+        let before = sending
+        sending = Task {
+            await before?.value
             do {
-                // Who it names with & is worked out where it lives: this Mac's box from the list as
-                // it is now.
-                if here { await AgentMail.shared.refreshBoxDirectory() }
+                if refresh { await AgentMail.shared.refreshBoxDirectory() }
                 try await boxes.send(text, to: id)
             } catch {
                 let key = BotGroups.tabKey(id)

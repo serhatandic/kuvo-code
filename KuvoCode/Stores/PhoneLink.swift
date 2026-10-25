@@ -201,6 +201,10 @@ final class PhoneLink {
     /// other), phone or not. Set by the app.
     @ObservationIgnored var hasMachines: () -> Bool = { false }
 
+    /// What an earlier Kuvo Code kept of your agents' letters, handed to this Mac's box before it
+    /// meets your other computers. Set by the app (`AgentMail.handOver`).
+    @ObservationIgnored var handOver: (BoxClient) async -> Void = { _ in }
+
     /// This Mac connects to the relay: for your phones, or for your other computers. A Mac on its
     /// own, without the phone link, makes no connection.
     var relayWanted: Bool { Self.isEnabled || hasMachines() }
@@ -271,6 +275,7 @@ final class PhoneLink {
     private func follow() async {
         var missed = 0
         while !Task.isCancelled {
+            if let client = box() { await handOver(client) }
             if let client = box(),
                (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
                await tellPeers(client), await takePhonesFromFile(client), await sendRemovals(client) {
@@ -700,6 +705,17 @@ final class PhoneLink {
         machineHosts[machine]?.peers == true && machineHosts[machine]?.anotherMac != true
     }
 
+    /// Why agents on your other computers can't reach `machine`'s, nor this Mac's group chats name
+    /// them, for Settings › Machines: nil when they can, or it's not set up yet, or it couldn't be
+    /// (`setupFailed` says so).
+    func peerProblem(of machine: String) -> String? {
+        guard relayWanted, let host = machineHosts[machine], !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
+        if host.anotherMac == true {
+            return "Agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them: another Mac runs its engine."
+        }
+        return "Agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them, until its bridge is up to date. Kuvo Code updates it when it next connects."
+    }
+
     /// Whether `machine`'s bridge talks to your other computers itself, and this Mac meets it at
     /// the relay now.
     func reachesByMail(_ machine: String) -> Bool {
@@ -1071,7 +1087,7 @@ final class PhoneLink {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 // Who a message names with & is worked out there, from the list as it is now.
-                if writes { await AgentMail.shared.refreshBoxDirectory() }
+                if writes, String(decoding: request.body, as: UTF8.self).contains(AgentReferences.trigger) { await AgentMail.shared.refreshBoxDirectory() }
                 var answered = false
                 do {
                     for try await part in EngineRoutes.forward(forwarded, to: base, password: bridge.password, allowing: { path, _ in path.hasPrefix("api/kuvo/link/groups") }) {

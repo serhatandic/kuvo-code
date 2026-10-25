@@ -45,6 +45,7 @@ extension AppModel {
         // Agents writing to each other, here and on machines (and with machines this Mac isn't
         // connected to, through this Mac's box).
         AgentMail.shared.app = self
+        phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         if mailTick == nil {
             mailTick = Task {
                 while !Task.isCancelled {
