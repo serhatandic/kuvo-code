@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.46";
+export const BRIDGE_VERSION = "0.9.49";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -33,7 +33,7 @@ export const BRIDGE_VERSION = "0.9.46";
 export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
+  "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
@@ -2137,6 +2137,23 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // New bots and group chats, made here as New Bot and New Group Chat make them on the Mac,
     // which takes them in when it next connects.
+    // The library followed: a line now, and again as it changes, from a route here, a peer's copy
+    // met, or another process (a Mac's `box personalities` over SSH, the bridge beside this box).
+    if (route === "kuvo/personalities/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path.dirname(PERSONALITIES_FILE)] });
+    }
+    // The library whole, and another computer's copy met with it: for the app beside this box only
+    // (it signs the library for your other computers), never a phone.
+    if (route === "kuvo/personalities/document" || route === "kuvo/personalities/take") {
+      if (!request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
+      const method = request.method.toUpperCase();
+      if (route === "kuvo/personalities/document") return yield* method === "GET" ? json(200, personalitiesDocument()) : json(405, {});
+      if (method !== "POST") return yield* json(405, {});
+      const [status, value] = takePersonalitiesDocument(parsed(request.body), readEngine, readBridge);
+      return yield* json(status, value);
+    }
     // The personalities you make, this machine's copy of the library.
     const personality = route.match(/^kuvo\/personalities(?:\/([^/]+))?$/);
     if (personality) {
@@ -4103,8 +4120,11 @@ export async function watchAsks(tell, { signal, every = 2000, read = readAsks, a
 // each change moves on from the one before it (`updated`), whatever any clock says. Kuvo Code's own
 // presets aren't in it; they come with the kit.
 
-const PERSONALITIES_FILE = path.join(K, "bots", "personalities.json");
+// Beside the bots: where a Mac's app keeps them (KUVO_BOTS), a machine in its own folder.
+const PERSONALITIES_FILE = path.join(BOTS, "personalities.json");
 const PERSONALITIES_LOCK = path.join(RUN, ".personalities.lock");
+// Those following the library (`kuvo/personalities/events`), told of each change written here.
+const personalityFollowers = new Set();
 const PERSONALITY_ID = /^custom\.[A-Za-z0-9._-]{1,80}$/;
 // Removals noted, the newest kept.
 const MOST_REMOVALS = 500;
@@ -4165,20 +4185,56 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
     const library = mergePersonalities(change(readPersonalities(file)));
     // Written only when it changed (a Mac meets this copy every minute).
     const text = JSON.stringify({ kuvo: 1, ...library }, null, 2) + "\n";
-    if (textOf(file) !== text) writePrivate(file, text);
+    if (textOf(file) !== text) {
+      writePrivate(file, text);
+      for (const tell of personalityFollowers) tell();
+    }
     return library;
   });
+}
+
+// Another copy met with this one's, under its lock: the ids whose personality or removal changed
+// here; or null, changing nothing, when `fits` and the two together wouldn't fit in a document.
+function meetPersonalities(given, file, lock, { fits = false } = {}) {
+  let changed = null;
+  changePersonalities(library => {
+    const was = new Map([...library.personalities, ...library.removed].map(entry => [entry.id, JSON.stringify(entry)]));
+    const met = mergePersonalities(library, given);
+    if (fits && !fitsLibrary(met)) return library;
+    changed = [...met.personalities, ...met.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
+    return met;
+  }, file, lock);
+  return changed;
 }
 
 // Another copy met with this one's (a peer's view, a Mac's over SSH): the personalities that changed
 // here, whose bots here are told what they are now.
 export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
-  const before = readPersonalities(file);
-  const was = new Map([...before.personalities, ...before.removed].map(entry => [entry.id, JSON.stringify(entry)]));
-  const after = changePersonalities(library => mergePersonalities(library, given), file, lock);
-  const changed = [...after.personalities, ...after.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
+  const changed = meetPersonalities(given, file, lock) ?? [];
   if (changed.length) await retellBots(changed, readEngine, readBridge).catch(() => {});
   return changed;
+}
+
+// The library whole, as this box keeps it and signs it (`kuvo/personalities/document`).
+export function personalitiesDocument(file = PERSONALITIES_FILE) {
+  return { kuvo: 1, ...readPersonalities(file) };
+}
+
+// Another computer's copy, given by the app beside this box (`kuvo/personalities/take`), met with
+// this one's by the same rules as a peer's: `[status, value]`, with the ids that changed here. Their
+// bots here are told (not waited for), and the other boxes, as after a change through the routes.
+export function takePersonalitiesDocument(body, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
+  const given = body?.document;
+  if (!isObject(given) || !Array.isArray(given.personalities) || (given.removed !== undefined && !Array.isArray(given.removed))) {
+    return [400, { message: "Send a library of personalities: {document: {personalities, removed}}." }];
+  }
+  const changed = meetPersonalities(given, file, lock, { fits: true });
+  if (!changed) return [400, { message: FULL_LIBRARY }];
+  if (changed.length) {
+    noteDocsChanged();
+    retellBots(changed, readEngine, readBridge).catch(() => {});
+  }
+  return [200, { changed }];
 }
 
 // Bots here whose personality is among `ids` (changed, or gone), told what they are now, as a
