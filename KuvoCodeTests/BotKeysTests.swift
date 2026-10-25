@@ -37,6 +37,9 @@ import Testing
 
     @Test func aBotsOwnKeyIsNamedOnlyWhereItWorks() async throws {
         TestEnvironment.prepare()
+        // This Mac's box, whose settings a new machine starts with a copy of.
+        let box = try await SettingsBox(port: 47_917)
+        defer { box.stop() }
         let service = try #require(BotKeys.services.first { !Integrations.keys(of: $0.way).isEmpty })
         let names = Integrations.keys(of: service.way).map(\.name)
         let ada = try bot("bot_ada"), ben = try bot("bot_ben")
@@ -66,7 +69,7 @@ import Testing
 
         // Nobody else's.
         #expect(settings(of: ben) == nil, "another bot's folder doesn't name it")
-        let seed = await app.machineSeed()
+        let seed = try await app.machineSeed()
         #expect(!seed.keys.keys.contains(where: IntegrationKeys.isBots), "no bot's own key")
         #expect(!seed.keys.values.contains { $0.contains(token) }, "what a new machine starts with doesn't carry it")
 

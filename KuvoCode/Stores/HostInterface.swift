@@ -11,11 +11,11 @@ final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
 
-    /// Starts answering (once), and says what the box is to be given to reach it: where, its
-    /// password, and the folder the engine reads keys from.
+    /// Starts answering (once), and says what the box is to be given to reach it: where, and its
+    /// password. (Where the engine reads keys from, `KUVO_KEYS`, `BoxProcess` gives it.)
     func start() async throws -> [String: String] {
         let port = try await server.start()
-        return ["KUVO_HOST_URL": "http://127.0.0.1:\(port)", "KUVO_HOST_PASSWORD": password, "KUVO_KEY_FILES": IntegrationKeys.folder.path]
+        return ["KUVO_HOST_URL": "http://127.0.0.1:\(port)", "KUVO_HOST_PASSWORD": password]
     }
 
     func stop() { server.stop() }

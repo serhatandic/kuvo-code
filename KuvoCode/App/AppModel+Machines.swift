@@ -88,8 +88,8 @@ extension AppModel {
         // One machine at two addresses: the one added later is one of the other's addresses, and
         // what's kept under its name is the other's.
         machines.onFolded = { [weak self] address, machine in self?.machineFolded(address, into: machine) }
-        // Settings changed here (a mode, a rule): machines take them too, not only when they connect.
-        engineConfig.onSaved = { [weak self] in self?.settingsSaved() }
+        // This Mac's settings changed (a mode, a rule), wherever from: its group chats follow.
+        engineConfig.onChanged = { [weak self] in self?.settingsSaved() }
         engineConfig.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Each machine's settings are its own: its sessions, bots and group chats go by them.
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
@@ -560,7 +560,7 @@ extension AppModel {
         if !compatibility.isEmpty { environment["OPENCODE_CONFIG_CONTENT"] = AppModel.merged(compatibility, into: nil) }
         let base = environment["OPENCODE_CONFIG_CONTENT"]
         var launch = MachineEngine.Launch(environment: environment, helper: MachineBrowserInstaller.helper, agents: MachineEngine.agentsBridge)
-        launch.seed = { [weak self] in await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
+        launch.seed = { [weak self] in try await self?.machineSeed() ?? .init(settings: [:], keys: [:]) }
         launch.fromBox = { settings in
             let sites = Integrations.sites(Integrations.added(inSettings: settings).filter { !Integrations.macOnly.contains($0) })
             return ["OPENCODE_CONFIG_CONTENT": AppModel.merged(MachineBrowserInstaller.engineConfig(sites: sites), into: base)]
@@ -592,10 +592,9 @@ extension AppModel {
         }
     }
 
-    /// Settings changed here (a mode, a permission rule…): the machines connected now take them
-    /// as they would the next time they connect, their engines started over with them once nothing
-    /// runs there; a moment after the last change, so typing in a field doesn't start one over
-    /// for each letter.
+    /// This Mac's settings changed (a mode, a permission rule…), here, from a phone or by hand:
+    /// what its group chats go by follows, a moment after the last change, so typing in a field
+    /// doesn't tell them for each letter.
     func settingsSaved() {
         settingsSync?.cancel()
         settingsSync = Task { [weak self] in
@@ -642,11 +641,15 @@ extension AppModel {
     /// What a machine with no settings yet starts with, once (`MachineBox.adopt`): this Mac's
     /// engine settings, minus what only makes sense here, and its integrations' keys. From then
     /// on they're the machine's own, changed in its own tab in Settings.
-    func machineSeed() async -> MachineBox.Seed {
-        // Web search that works, as on this Mac, unless the file chose otherwise.
-        engineConfig.addDefaults()
+    /// Refused while this Mac's settings can't be read (its box isn't up): a copy of nothing would
+    /// stay the machine's for good.
+    func machineSeed() async throws -> MachineBox.Seed {
+        await prepareSettings()
+        guard engineConfig.isLoaded else {
+            throw MachineBox.Failure.refused("This Mac’s settings can’t be read now, and a new machine starts with a copy of them. Try again in a moment.")
+        }
         var seed: [String: JSONValue] = [:]
-        if let data = try? Data(contentsOf: engineConfig.file),
+        if engineConfig.isLoaded, engineConfig.problem == nil, let data = try? JSONEncoder().encode(engineConfig.settings),
            var settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             // A shell or a worktree folder on this Mac means nothing on the machine, nor do
             // integrations that use this Mac's apps.

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 /// The Keychain, as Kuvo Code reaches it: SecItem's four calls, in this one place (the phone
@@ -10,32 +11,43 @@ import Security
 /// ("wants to use your confidential information"), and the test reading it would wait on that
 /// prompt, with no one there to answer it.
 nonisolated enum Keychain {
-    static func copyMatching(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+    static func copyMatching(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?,
+                             file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory { return lock.withLock { standIn.copyMatching(query, result) } }
-        return SecItemCopyMatching(query as CFDictionary, result)
+        return said(SecItemCopyMatching(query as CFDictionary, result), "read", file, line)
     }
 
     @discardableResult
-    static func add(_ attributes: [String: Any]) -> OSStatus {
+    static func add(_ attributes: [String: Any], file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory { return lock.withLock { standIn.add(attributes) } }
-        return SecItemAdd(attributes as CFDictionary, nil)
+        return said(SecItemAdd(attributes as CFDictionary, nil), "add", file, line)
     }
 
-    static func update(_ query: [String: Any], _ changes: [String: Any]) -> OSStatus {
+    static func update(_ query: [String: Any], _ changes: [String: Any], file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory { return lock.withLock { standIn.update(query, changes) } }
-        return SecItemUpdate(query as CFDictionary, changes as CFDictionary)
+        return said(SecItemUpdate(query as CFDictionary, changes as CFDictionary), "change", file, line)
     }
 
     @discardableResult
-    static func delete(_ query: [String: Any]) -> OSStatus {
+    static func delete(_ query: [String: Any], file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory { return lock.withLock { standIn.delete(query) } }
-        return SecItemDelete(query as CFDictionary)
+        return said(SecItemDelete(query as CFDictionary), "remove", file, line)
     }
 
-    /// For the tests' copy: anything that still reaches the real Keychain (a framework, a package)
-    /// fails at once, rather than waiting on a prompt no one is there to answer.
+    /// For the tests' copy and a demo copy that never prompts (`AppInfo.neverPrompts`): anything
+    /// that still reaches the real Keychain (a framework, a package) fails at once, rather than
+    /// waiting on a prompt no one is there to answer.
     static func neverAsk() {
         SecKeychainSetUserInteractionAllowed(false)
+    }
+
+    /// What macOS said, and in the log where it was asked from when it would have asked you.
+    private static func said(_ status: OSStatus, _ what: String, _ file: StaticString, _ line: UInt) -> OSStatus {
+        if status == errSecInteractionNotAllowed {
+            Logger(subsystem: AppInfo.realBundleID, category: "prompts")
+                .notice("A Keychain \(what, privacy: .public) (\(String(describing: file), privacy: .public):\(Int(line))) failed rather than ask you: this copy never shows a macOS prompt")
+        }
+        return status
     }
 
     /// Hosting tests, never the real Keychain: SecItem isn't called at all.

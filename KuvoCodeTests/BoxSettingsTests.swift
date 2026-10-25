@@ -163,13 +163,13 @@ import Testing
 
     @Test func aMachineThatCantBeReachedSaysSo() async throws {
         struct Away: RemoteSettings {
-            func read() async throws -> [String: JSONValue] { throw MachineBox.Failure.notOwnYet }
-            func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] { throw MachineBox.Failure.notOwnYet }
+            func read() async throws -> [String: JSONValue] { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
+            func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] { throw MachineBox.Failure.refused("ssh: connect to host box port 22: Connection refused") }
         }
         let config = EngineConfig(remote: Away())
         config.reload()
         try await until { config.problem != nil }
-        #expect(config.problem?.contains("next time Kuvo Code starts it") == true)
+        #expect(config.problem == "Its settings couldn't be read: ssh: connect to host box port 22: Connection refused")
         #expect(!config.isLoaded)
         // Nothing's changed while it can't be read.
         config.set(.string("anthropic/sonnet"), at: ["model"])

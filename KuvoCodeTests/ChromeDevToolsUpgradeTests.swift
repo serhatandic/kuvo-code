@@ -13,9 +13,7 @@ import Testing
 
     init() throws {
         TestEnvironment.prepare()
-        let folder = AppInfo.testRoot.appending(path: "MCP/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        config = EngineConfig(file: folder.appending(path: "opencode.json"))
+        config = EngineConfig.inMemory()
     }
 
     private func added(_ command: [String], environment: [String: String]? = nil) {

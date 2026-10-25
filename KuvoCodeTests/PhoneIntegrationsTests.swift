@@ -34,11 +34,13 @@ import Testing
     }
 
     @Test func aPhoneAddsAndRemovesOneOfThisMacs() async throws {
+        // This Mac's box, which keeps its settings.
+        let box = try await SettingsBox(port: 47_926)
+        defer { box.stop() }
         let config = app.config(for: .mac)
-        defer {
-            config.set(nil, at: MCPSettings.path + ["todoist"])
-            IntegrationKeys.set(nil, for: IntegrationKeys.variable("todoist", "TODOIST_API_KEY"))
-        }
+        await config.refresh()
+        let file = try #require(config.file)
+        defer { IntegrationKeys.set(nil, for: IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) }
         let listed = try #require(try await ask("kuvo/integrations").json["integrations"] as? [[String: Any]])
         #expect(listed.count == Integrations.all.count)
         #expect(listed.map { $0["kind"] as? String }.first == Integrations.Kind.allCases.first?.rawValue, "by kind, in the page's order")
@@ -60,12 +62,12 @@ import Testing
         #expect(try await ask("kuvo/integrations/nothing", method: "POST", body: [:]).status == 404)
 
         // A settings file changed by hand so it can't be changed here: nothing's removed, and it says so.
-        let written = try String(contentsOf: config.file, encoding: .utf8)
-        try ("// mine\n" + written).write(to: config.file, atomically: true, encoding: .utf8)
+        let written = try String(contentsOf: file, encoding: .utf8)
+        try ("// mine\n" + written).write(to: file, atomically: true, encoding: .utf8)
         let refused = try await ask("kuvo/integrations/todoist", method: "DELETE")
         #expect(refused.status == 409)
-        try written.write(to: config.file, atomically: true, encoding: .utf8)
-        config.reload()
+        try written.write(to: file, atomically: true, encoding: .utf8)
+        await config.refresh()
         #expect(IntegrationKeys.value(IntegrationKeys.variable("todoist", "TODOIST_API_KEY")) == "tok_123")
 
         #expect(try await ask("kuvo/integrations/todoist", method: "DELETE").status == 200)
@@ -76,9 +78,11 @@ import Testing
     /// One turned off in MCP Servers says so (`disabled`, "Off" in Settings), not that it's
     /// starting, so a phone doesn't wait for a server that won't start; turned on, it starts.
     @Test func oneTurnedOffSaysSo() async throws {
+        let box = try await SettingsBox(port: 47_927)
+        defer { box.stop() }
         let config = app.config(for: .mac)
+        await config.refresh()
         let service = try #require(Integrations.all.first { if case .official = $0.way { true } else { false } })
-        defer { config.set(nil, at: MCPSettings.path + [service.id]) }
         config.set(.object(["type": .string("remote"), "url": .string("https://example.invalid/mcp"), "disabled": .bool(true)]), at: MCPSettings.path + [service.id])
         func health() async throws -> String? {
             let listed = try #require(try await ask("kuvo/integrations").json["integrations"] as? [[String: Any]])

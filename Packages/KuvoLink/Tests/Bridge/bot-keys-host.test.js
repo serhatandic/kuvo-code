@@ -1,6 +1,6 @@
 // A bot's keys of its own on this Mac's box, which keeps no keys itself: it asks its app, through
 // the host interface (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`; PROTOCOL.md, "Host interface"), which
-// keeps them in the Keychain and in the files the engine reads (`KUVO_KEY_FILES`). Here a stand-in
+// keeps them in the Keychain and in the files the engine reads (`KUVO_KEYS`). Here a stand-in
 // for the app keeps them in memory. The scenarios in bot-keys-scenarios.js, then what's this Mac's
 // own: only `KUVO_KEY_…` names asked for, a key or the password never in its output, and the app
 // not answering said plainly.
@@ -19,7 +19,7 @@ const PASSWORD = "host-password-not-a-key";
 const host = await standInHost(PASSWORD);
 // The app's temporary folder, where the engine reads each key from a file the app writes.
 const keyFiles = path.join(root, "app-temp", "integration-keys");
-const hostEnv = { KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_KEY_FILES: keyFiles };
+const hostEnv = { KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD, KUVO_KEYS: keyFiles };
 Object.assign(process.env, hostEnv);
 const link = await import(script);
 after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -29,7 +29,6 @@ import Testing
             IntegrationKeys.set(nil, for: name)
         }
         let password = try #require(environment["KUVO_HOST_PASSWORD"])
-        #expect(environment["KUVO_KEY_FILES"] == IntegrationKeys.folder.path)
 
         #expect(try await ask("/keys/set", ["name": name, "value": "ghp_hosted"], password: password, at: environment).status == 200)
         #expect(IntegrationKeys.value(name) == "ghp_hosted", "in the Keychain")

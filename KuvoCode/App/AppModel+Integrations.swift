@@ -76,6 +76,8 @@ extension AppModel {
         var signIn = listed
         if signIn == nil, let api { signIn = (try? await api.mcpServers())?.first { $0.name == service.id }?.integrationID }
         config.set(nil, at: MCPSettings.path + [service.id])
+        // Taken out of the settings where this Mac's box keeps them, or its keys and sign-in stay.
+        if let failure = await config.settled() { return failure }
         if let signIn { forgetSignIn(signIn, on: box) }
         for variable in Integrations.keys(of: service.way).map({ IntegrationKeys.variable(service.id, $0.name) }) { IntegrationKeys.set(nil, for: variable) }
         // What its server kept: its own folder (and the file it once kept).

@@ -20,18 +20,23 @@ fi
 
 TEMP="${TMPDIR:-/tmp}"
 BUILD="${TEMP%/}/KuvoCodeTests-build"
+BUNDLE=run.kuvo.code.tests
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
-    APP_BUNDLE_ID=run.kuvo.code.tests CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+    APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 for only in ${ONLY:-}; do set -- "$@" -only-testing:"$only"; done
 
 # The Bun that runs the agents bridge the app ships, for the tests that run it for real: `bun` on
-# PATH, else the engine Kuvo Code installed (Bun, as the app runs it). Passed to the tests as
-# KUVO_TEST_BUN (xcodebuild hands TEST_RUNNER_ variables on).
+# PATH, else the engine a demo, perf or e2e copy installed (Bun, as the app runs it), never the
+# real Kuvo Code's. Passed to the tests as KUVO_TEST_BUN (xcodebuild hands TEST_RUNNER_ variables on).
+. scripts/real-app-guard.sh
 if [ -z "${KUVO_TEST_BUN:-}" ]; then
-    KUVO_TEST_BUN=$(command -v bun 2>/dev/null || ls -d "$HOME/Library/Application Support/run.kuvo.code/engine/"*/opencode 2>/dev/null | tail -n 1 || true)
+    KUVO_TEST_BUN=$(command -v bun 2>/dev/null || newest_copy_engine || true)
 fi
 export TEST_RUNNER_KUVO_TEST_BUN="${KUVO_TEST_BUN:-}"
+
+# Never the real app's bundle ID, folders or engine.
+real_app_guard "scripts/test-app.sh" "$BUNDLE" "$KUVO_TEST_BUN"
 
 # What the test copy keeps under its own bundle ID (settings, caches, website data): gone before
 # a run, so each starts clean, and after it.

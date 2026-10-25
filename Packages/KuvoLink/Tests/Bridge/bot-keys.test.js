@@ -14,7 +14,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bot-keys-"));
 process.env.HOME = root;
 const home = path.join(root, ".kuvo-code");
 process.env.KUVO_HOME = home;
-for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEY_FILES"]) delete process.env[name];
+for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS"]) delete process.env[name];
 const link = await import(script);
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
