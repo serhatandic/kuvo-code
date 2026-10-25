@@ -284,12 +284,26 @@ final class MacBox {
 
     struct Answer { var status: Int; var type: String; var body: Data }
 
-    /// What this Mac answers a paired phone's request, whole.
+    /// What this Mac answers a paired phone's request, whole: through its box, as the phone's link
+    /// hands it over.
     private func ask(_ method: String, _ path: String, body: Any?) async throws -> Answer {
         let data: Data = switch body {
         case nil: Data()
         case let text as String: Data(text.utf8)
         case let value?: try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed)
+        }
+        // The engine's API and the coding agents': this Mac's box passes them on itself, as the
+        // phone's link hands it them.
+        if path == "api" || path.hasPrefix("api/") || path.hasPrefix("kuvo/agents/") {
+            let endpoint = try #require(box?.process.endpoint)
+            var request = URLRequest(url: try #require(URL(string: path, relativeTo: endpoint.url)))
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            if let password = endpoint.password { request.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
+            if !["GET", "HEAD"].contains(method) { request.httpBody = data }
+            let (body, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            let http = response as? HTTPURLResponse
+            return Answer(status: http?.statusCode ?? 0, type: http?.value(forHTTPHeaderField: "content-type") ?? "", body: body)
         }
         let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: data)
         var answer = Answer(status: 0, type: "", body: Data())
