@@ -90,6 +90,24 @@ import Testing
         try await shared.update(Personality(id: id, name: "Calm", description: "Changed here.", symbol: "person.crop.circle"))
         await link.takeDocuments(["give": [try lab.sign("personalities", 6, ["personalities": [], "removed": [["id": id, "removed": 1_760_000_000_001]]])]], from: lab.id)?.value
         #expect(shared.personality(id) == nil)
+        // None left for the suites after.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        await shared.refresh()
+    }
+
+    /// One that comes while this Mac's box isn't up (Kuvo Code starting) isn't lost: this Mac
+    /// doesn't say it has it, so the machine gives it again.
+    @Test func aMachinesViewThatCouldntBeTakenIsAskedForAgain() async throws {
+        let lab = Machine(id: "lab.invalid")
+        let (link, file) = try link(machines: [lab])
+        defer { try? FileManager.default.removeItem(at: file) }
+        Personalities.shared.box = { nil }
+        let made = ["id": "custom.lab-calm", "name": "Calm", "description": "Made on the machine.", "symbol": "person.crop.circle", "updated": 1_760_000_000_000] as [String: Any]
+        await link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)?.value
+        let origin = Documents.origin(of: lab.key)
+        let have = link.documents.digest(origin: "this-mac")
+        #expect(!have.contains { $0.first as? String == origin && $0[1] as? String == "personalities" }, "its view isn't claimed: \(have)")
+        #expect(PhoneLink(file: file).documents.views[origin] == nil, "nor after a restart")
     }
 
     @Test func aMachineYouRemoveIsToldThisMacLetItGo() throws {

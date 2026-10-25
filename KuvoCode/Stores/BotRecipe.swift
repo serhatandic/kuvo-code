@@ -64,6 +64,9 @@ struct BotRecipe: Codable, Equatable {
     func personalityHere() async throws -> (id: String, added: Bool)? {
         guard let shared = personality else { return nil }
         let personalities = Personalities.shared
+        // Yours as they are, so one you have already is found, not added again (a shared bot
+        // opened as Kuvo Code starts).
+        await personalities.loaded()
         if let known = personalities.all.first(where: { $0.id == shared.id && !$0.isCustom }) { return (known.id, false) }
         if let same = personalities.all.first(where: { $0.name == shared.name && $0.description == shared.description }) { return (same.id, false) }
         return (try await personalities.add(name: shared.name, description: shared.description).id, true)

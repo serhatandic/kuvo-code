@@ -60,6 +60,15 @@ final class Personalities {
 
     private(set) var custom: [Personality] = []
     private(set) var removed: [Removal] = []
+    /// Read from this Mac's box at least once: until then `custom` is empty only because it hasn't
+    /// been read, not because you have none.
+    private(set) var isLoaded = false
+    /// Waiting for the first read (`loaded()`).
+    @ObservationIgnored private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// The reads asked for, and the last one whose answer was taken: an answer to an older read
+    /// that comes after a newer one's changes nothing.
+    @ObservationIgnored private var asked = 0
+    @ObservationIgnored private var applied = 0
     /// This Mac's box, where the library is kept.
     @ObservationIgnored var box: () -> BoxClient? = { nil }
     /// Its library changed (made, changed or removed here, from a phone, or taken from another
@@ -86,13 +95,27 @@ final class Personalities {
     /// The box's library as it is now, in place of this one: what changed, told.
     @discardableResult
     func refresh() async -> Set<String> {
-        guard let client = box(), let now = try? await client.value(Library.self, "GET", "kuvo/personalities/document") else { return [] }
+        asked += 1
+        let read = asked
+        guard let client = box(), let now = try? await client.value(Library.self, "GET", "kuvo/personalities/document"), read > applied else { return [] }
+        applied = read
         return apply(now)
+    }
+
+    /// Once the library has been read from this Mac's box (at once if it has).
+    func loaded() async {
+        if isLoaded { return }
+        await withCheckedContinuation { waiting.append($0) }
     }
 
     /// `now` in place of the library as it was: what changed, by ID, told.
     @discardableResult
     private func apply(_ now: Library) -> Set<String> {
+        if !isLoaded {
+            isLoaded = true
+            for waiter in waiting { waiter.resume() }
+            waiting = []
+        }
         guard now != library else { return [] }
         let before = Dictionary(custom.map { ($0.id, $0) }) { first, _ in first }
         let after = Dictionary(now.personalities.map { ($0.id, $0) }) { first, _ in first }
@@ -139,13 +162,10 @@ final class Personalities {
     }
 
     /// Another computer's copy, met with this one where it's kept: the IDs of those that changed here.
+    /// Nil when the box couldn't take it (it isn't running). (The app's own store has been read
+    /// again as the box answered, `PhoneLink.respond`, so for it what changed is told, not returned.)
     @discardableResult
-    func take(_ other: Library) async -> Set<String> {
-        await taken(other) ?? []
-    }
-
-    /// `take`, nil when the box couldn't take it.
-    private func taken(_ other: Library) async -> Set<String>? {
+    func take(_ other: Library) async -> Set<String>? {
         struct Taking: Encodable { var document: Library }
         struct Taken: Decodable { var changed: [String] }
         guard let client = box(), (try? await client.value(Taken.self, "POST", "kuvo/personalities/take", body: Taking(document: other))) != nil else { return nil }
@@ -201,7 +221,7 @@ final class Personalities {
     func takeFromOld() async {
         guard let changed = Self.oldChanged, changed.timeIntervalSince1970 > UserDefaults.standard.double(forKey: Self.takenKey) else { return }
         // Not taken (the box away): tried again at the next start.
-        guard await taken(Self.oldLibrary) != nil else { return }
+        guard await take(Self.oldLibrary) != nil else { return }
         UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.takenKey)
     }
 }

@@ -556,7 +556,8 @@ final class PhoneLink {
 
     /// Your personalities as this Mac has them; none once they're past what a document holds.
     private var personalitiesBody: Data? {
-        guard let body = try? Self.canonical.encode(Personalities.shared.library), body.count <= Documents.mostBody else { return nil }
+        // Not read from this Mac's box yet: none, rather than an empty one as a new version.
+        guard Personalities.shared.isLoaded, let body = try? Self.canonical.encode(Personalities.shared.library), body.count <= Documents.mostBody else { return nil }
         return body
     }
 
@@ -613,14 +614,14 @@ final class PhoneLink {
         var given = (docs["give"] as? [Any] ?? []).prefix(64).compactMap(Documents.Envelope.init)
         if let part = docs["part"] as? [String: Any], let whole = assembler.take(part, from: sender.key) { given.append(whole) }
         var passOn: [Documents.Document] = []
-        var libraries: [Personalities.Library] = []
+        var libraries: [(origin: String, library: Personalities.Library)] = []
         for envelope in given {
             guard let (doc, mine) = documents.take(envelope, machines: machines, origin: origin) else { continue }
             if doc.kind == "phones", let removals = doc.decoded(PhonesRemovals.self)?.removed {
                 paired.takeRemovals(removals, macs: [key.publicBytes.base64URL])
             }
             if doc.kind == "personalities", let library = doc.decoded(Personalities.Library.self) {
-                libraries.append(library)
+                libraries.append((doc.origin, library))
             }
             if !mine, doc.kind == "phones" { passOn.append(doc) }
         }
@@ -665,7 +666,14 @@ final class PhoneLink {
         if !gone.isEmpty { Task { [server] in for phone in gone { await server?.forget(phone: phone) } } }
         save()
         // Met with this Mac's where its box keeps them: what changed is told (`Personalities.onChange`).
-        let meeting = libraries.isEmpty ? nil : Task { for library in libraries { await Personalities.shared.take(library) } }
+        let meeting = libraries.isEmpty ? nil : Task { [weak self] in
+            for (origin, library) in libraries where await Personalities.shared.take(library) == nil {
+                // Not taken (this Mac's box isn't up): this Mac doesn't say it has it, so the
+                // machine gives it again.
+                self?.documents.views[origin] = nil
+                self?.save()
+            }
+        }
         guard let server, status == .connected else { return meeting }
         let have = ask ? documents.digest(origin: origin) : nil
         let targets = documentMachines
@@ -785,6 +793,7 @@ final class PhoneLink {
             if method == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding {
                 follow = { await link?.wakesChanged(session) }
             } else if method != "GET", parts.count >= 2, parts[1] == "personalities" {
+                // (The app's own change reads it again after this too, and finds nothing new.)
                 follow = { await Personalities.shared.refresh() }
             } else {
                 follow = nil

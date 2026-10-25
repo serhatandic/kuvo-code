@@ -94,14 +94,6 @@ extension AppModel {
         // Each machine's settings are its own: its sessions, bots and group chats go by them.
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
         EngineConfig.machines = { [weak self] in self?.machines.engines.values.map(\.config) ?? [] }
-        // Your personalities, one library on every computer.
-        // However one changed where this Mac's box keeps them (here, from a phone, taken from a
-        // machine's copy), the machines take it, and bots with it hear what it is now.
-        Personalities.shared.onChange = { [weak self] changed in
-            guard let self else { return }
-            personalitiesChanged()
-            Task { for id in changed { await self.bots.personalityChanged(id) } }
-        }
         workspace.onRunEnded = { [weak self] session in
             self?.bots.runEnded(session: session)
             // An ask its agent left in this Mac's browser has no one waiting for it now.

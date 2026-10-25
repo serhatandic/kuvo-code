@@ -124,5 +124,8 @@ import Testing
         let again = try #require(try await theirs.personalityHere())
         #expect(!again.added && again.id == first.id)
         #expect(Personalities.shared.custom.filter { $0.description == words }.count == 1)
+        // None left for the suites after.
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        await Personalities.shared.refresh()
     }
 }

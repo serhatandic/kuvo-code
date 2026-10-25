@@ -36,7 +36,7 @@ import Testing
         #expect((store.personality(owl.id)?.updated ?? 0) > (owl.updated ?? 0))
         #expect(told == [[owl.id], [owl.id]], "each change is told, so its bots hear it")
         // A machine's copy from before the change: nothing here changes.
-        #expect(await store.take(older).isEmpty)
+        #expect(await store.take(older) == [])
         #expect(store.personality(owl.id)?.description == "Works late, writes short.")
         // Removed: noted, and kept so after the app starts again.
         try await store.delete(try #require(store.personality(owl.id)))
@@ -44,7 +44,7 @@ import Testing
         let again = self.store(on: box)
         await again.refresh()
         #expect(again.removed.map(\.id) == [owl.id])
-        #expect(await store.take(older).isEmpty, "an older copy doesn't bring it back")
+        #expect(await store.take(older) == [], "an older copy doesn't bring it back")
         #expect(store.personality(owl.id) == nil)
         // One made on a machine comes in, with what changed.
         let made = Personality(id: "custom.machine-made", name: "Calm", description: "Unhurried.", symbol: "person.crop.circle", updated: (Date.now.timeIntervalSince1970 * 1000) + 5)
@@ -54,9 +54,30 @@ import Testing
     }
 
     @Test func withoutItsBoxAChangeSaysSoAndNothingIsKept() async throws {
-        let store = Personalities()
-        await #expect(throws: Personalities.Unreachable.self) { _ = try await store.add(name: "Night Owl", description: "Works late.") }
-        #expect(store.custom.isEmpty)
+        forgetOld()
+        defer { forgetOld() }
+        let box = try await SettingsBox(port: 47_937)
+        let store = store(on: box)
+        let owl = try await store.add(name: "Night Owl", description: "Works late.")
+        // Kuvo Code's background service stops (it's starting again, say).
+        box.stop()
+        do {
+            _ = try await store.add(name: "Calm", description: "Unhurried.")
+            Issue.record("made with no box to keep it")
+        } catch {
+            #expect(error.localizedDescription == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+        }
+        #expect(store.custom.map(\.id) == [owl.id], "what was read stays")
+        #expect(await store.take(Personalities.Library()) == nil, "a machine's copy isn't taken, and says so")
+    }
+
+    /// The app's own store emptied again, as its box's library is (none, after a test).
+    private func forgetShared(_ box: SettingsBox) async {
+        try? FileManager.default.removeItem(at: Personalities.boxFile)
+        let shared = Personalities.shared
+        shared.box = { box.client }
+        await shared.refresh()
+        shared.box = { nil }
     }
 
     @Test func aPhoneMakesChangesAndRemovesThemHere() async throws {
@@ -67,10 +88,20 @@ import Testing
         // The app's own, which shows what a phone changes as it's answered.
         let shared = Personalities.shared
         shared.box = { box.client }
-        defer { shared.box = { nil } }
         await shared.refresh()
+        // As a phone asks, through this Mac's link.
+        let link = PhoneLink()
+        let engine = try #require(URL(string: box.engine.url + "/"))
         func ask(_ path: String, method: String = "GET", body: String = "") async throws -> (status: Int, json: [String: Any]?) {
-            let (status, data) = try await box.client.send(method, path, body: body.isEmpty ? nil : Data(body.utf8))
+            let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: Data(body.utf8))
+            var status = 0
+            var data = Data()
+            for try await part in PhoneLink.respond(to: request, link: link, engine: engine, password: "test", agents: nil, asking: Data("a phone".utf8)) {
+                switch part {
+                case .head(let code, _): status = code
+                case .body(let chunk): data += chunk
+                }
+            }
             return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
         let made = try await ask("kuvo/personalities", method: "POST", body: #"{"name": "  Night   Owl ", "description": "Works late."}"#)
@@ -87,6 +118,50 @@ import Testing
         #expect(try await ask("kuvo/personalities/\(id)", method: "DELETE").status == 200)
         #expect(shared.personality(id) == nil)
         #expect(shared.removed.contains { $0.id == id })
+        // Only the app beside the box reads the library whole.
+        #expect(try await ask("kuvo/personalities/document").status == 403)
+        await forgetShared(box)
+    }
+
+    /// Its personality stays when a read of yours comes back without it (a file the box couldn't
+    /// read, say), and goes only when it's deleted.
+    @Test func aBotKeepsItsPersonalityUntilItsDeleted() async throws {
+        forgetOld()
+        defer { forgetOld() }
+        let box = try await SettingsBox(port: 47_938)
+        defer { box.stop() }
+        let owl = try await store(on: box).add(name: "Night Owl", description: "Works late.")
+        let folder = Bots.root.appending(path: "bot_owl")
+        let file = AppInfo.supportDirectory.appending(path: "bots.json")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("ses_bot_owl".utf8).write(to: folder.appending(path: "session"))
+        let bot: [String: Any] = [
+            "id": "bot_owl", "name": "Ollie", "job": "Reads at night", "instructions": "Reads at night.", "jobInMemory": true,
+            "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": folder.path(percentEncoded: false),
+            "sessionID": "ses_bot_owl", "created": "2026-10-21T09:00:00Z", "personality": owl.id,
+        ]
+        try JSONSerialization.data(withJSONObject: [bot]).write(to: file)
+        defer {
+            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let app = AppModel()
+        app.workspace.api = box.engine.api
+        app.wireStores()
+        await Personalities.shared.refresh()
+        #expect(Personalities.shared.personality(owl.id) != nil)
+        // A read that comes back without it, though it wasn't deleted.
+        try Data(#"{"kuvo":1,"personalities":[],"removed":[]}"#.utf8).write(to: Personalities.boxFile)
+        await Personalities.shared.refresh()
+        await app.bots.personalityChanged(owl.id)
+        #expect(app.bots.list.first?.personality == owl.id, "kept: it wasn't deleted")
+        // Read again, then deleted.
+        try JSONSerialization.data(withJSONObject: ["kuvo": 1, "personalities": [["id": owl.id, "name": owl.name, "description": owl.description, "symbol": owl.symbol, "updated": owl.updated ?? 1]], "removed": []]).write(to: Personalities.boxFile)
+        await Personalities.shared.refresh()
+        try await Personalities.shared.delete(try #require(Personalities.shared.personality(owl.id)))
+        await app.bots.personalityChanged(owl.id)
+        #expect(app.bots.list.first?.personality == nil, "deleted: it talks its own way again")
+        await forgetShared(box)
     }
 
     @Test func yourPersonalitiesRefuseOneThereIsNoRoomFor() async throws {
@@ -144,14 +219,11 @@ import Testing
         #expect(store.personality("custom.owl")?.description == "Works late.")
         #expect(store.removed.map(\.id) == ["custom.gone"])
         #expect(FileManager.default.fileExists(atPath: oldFile.path), "a copy stays, for going back to an older version")
-        // Taken once: changing them on the box isn't undone by the old copy.
-        var changed = try #require(store.personality("custom.owl"))
-        changed.description = "Works late, writes short."
-        try await store.update(changed)
-        Personalities.moveToBox()
+        // Deleted since: the old copy, taken in again, doesn't bring it back.
+        try await store.delete(try #require(store.personality("custom.owl")))
+        try writeOld([["id": "custom.owl", "name": "Night Owl", "description": "Works late.", "symbol": "moon"]], at: old.addingTimeInterval(60))
         await store.takeFromOld()
-        await store.refresh()
-        #expect(store.personality("custom.owl")?.description == "Works late, writes short.")
+        #expect(store.personality("custom.owl") == nil)
     }
 
     @Test func oneAnOlderVersionMadeSinceComesInToo() async throws {

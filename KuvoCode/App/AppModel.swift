@@ -208,8 +208,15 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
-        // Your personalities, kept by this Mac's box.
+        // Your personalities, one library on every computer, kept by this Mac's box. However one
+        // changed there (here, from a phone, taken from a machine's copy), the machines take it,
+        // and bots with it hear what it is now.
         Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        Personalities.shared.onChange = { [weak self] changed in
+            guard let self else { return }
+            personalitiesChanged()
+            Task { for id in changed { await self.bots.personalityChanged(id) } }
+        }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
@@ -431,8 +438,14 @@ final class AppModel {
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = await boxEnvironment(shell)
-            Task {
+            // Your personalities read from it before bots are told what they are and machines
+            // given them (below).
+            let boxStarted = Task {
                 await box.start(engine: binary, environment: boxEnvironment)
+                await Personalities.shared.refresh()
+            }
+            Task {
+                await boxStarted.value
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
                 // (what was kept here before goes there).
                 if boxFollowed == nil {
@@ -460,6 +473,7 @@ final class AppModel {
             // Machines start once this Mac's engine is up (they get its accounts and settings),
             // without waiting on its catalog.
             await workspaceLoaded
+            await boxStarted.value
             guard launch == self.launch else { return }
             startMachines()
             bots.startSyncing()

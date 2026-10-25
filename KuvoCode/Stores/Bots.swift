@@ -481,15 +481,21 @@ final class Bots {
     }
 
     /// A personality you changed or deleted: the bots with it hear the new words, or go back to
-    /// their own way.
+    /// their own way. One whose words are what its bots last heard (read again as the app
+    /// starts) changes nothing.
     func personalityChanged(_ id: String) async {
+        let sent = UserDefaults.standard.dictionary(forKey: Self.sentKey) as? [String: String] ?? [:]
         for bot in list.filter({ $0.personality == id }).map(\.id) {
             // Each as it is by then: one edited while another was being told (renamed, given
             // another personality) keeps that.
             guard let index = list.firstIndex(where: { $0.id == bot }), list[index].personality == id else { continue }
-            if Personalities.shared.personality(id) == nil {
+            // Deleted: only one your personalities say was removed (not one just missing from a
+            // read that came back empty).
+            if Personalities.shared.personality(id) == nil, Personalities.shared.removed.contains(where: { $0.id == id }) {
                 list[index].personality = nil
                 list[index].updated = .now
+            } else if Personalities.shared.personality(id) == nil || sent[list[index].sessionID] == Self.digest(Self.instructions(for: list[index])) {
+                continue
             }
             // Saved even when unchanged, so its session hears the new wording.
             save()
