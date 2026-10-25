@@ -245,6 +245,14 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   const personalities = await it.request("GET", "kuvo/personalities");
   assert.equal(personalities.status, 200);
   assert.deepEqual(JSON.parse(personalities.body), { personalities: [] });
+  // As every box answers them: a file named in a reply, a sign-in that returns here, this Mac's
+  // sign-ins, a command stopped. Here, not the app's (which answers whatever it's handed).
+  const asked = app.asked.length;
+  assert.equal((await it.request("GET", "kuvo/file?uri=https%3A%2F%2Fexample.com%2Fa.png")).status, 400);
+  assert.equal((await it.request("GET", "kuvo/sign-in/return")).status, 405);
+  assert.equal((await it.request("GET", "kuvo/accounts/credentials")).status, 503, "no engine here to list them");
+  assert.equal((await it.request("POST", "kuvo/shell/sh_1/stop")).status, 503, "no engine here to stop it in");
+  assert.equal(app.asked.length, asked, "none went to the app");
   // The Mac's own: the app's, with which phone asked.
   const usage = await it.request("GET", "kuvo/usage");
   assert.deepEqual(JSON.parse(usage.body), { answered: "app", path: "kuvo/usage", phone: it.public });

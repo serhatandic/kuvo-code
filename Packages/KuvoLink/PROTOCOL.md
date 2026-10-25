@@ -1454,7 +1454,9 @@ as on a machine, without the keys, the relay or its name. Nothing its link meets
 frame that isn't one, the app away) stops the box's own routes.
 
 What a phone asks, it answers itself for the areas that have moved onto it and its phones
-(`kuvo/phones…`); the rest (the Mac's own routes, and those not on the box yet) it hands the app
+(`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
+`kuvo/accounts/credentials` and `kuvo/shell/<id>/stop` (bridge 0.9.64; the app did before); the
+rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
 0.9.62), and their agents, letters and group chats' mail (from 0.9.63).

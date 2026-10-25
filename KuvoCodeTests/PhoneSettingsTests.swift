@@ -4,8 +4,9 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// What a phone changes on this Mac that this Mac answers itself: starting the engine over, and
-/// finishing a sign-in whose page sends the browser back to this Mac, which a phone can't load.
+/// What a phone changes on this Mac: starting the engine over, which the app answers itself, and
+/// finishing a sign-in whose page sends the browser back to this Mac, which a phone can't load
+/// (this Mac's box's, as every box's).
 /// (Its engine settings and keys are its box's: SettingsOnBoxTests, PhoneIntegrationsTests and the
 /// route scenarios.)
 @MainActor
@@ -47,8 +48,13 @@ import Testing
 
     @Test func aSignInThatReturnsHereIsLoadedHere() async throws {
         StubWeb.start(hosts: ["127.0.0.1", "example.com"])
-        defer { StubWeb.stop() }
+        let engine = StubEngine(port: 47_969, alongside: true)
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop(); StubWeb.stop() }
+        // Where the sign-in's page sends the browser back: an address on this Mac.
         StubWeb.handle("http://127.0.0.1:19876/") { _, _ in StubWeb.Answer(status: 302) }
+        try await StubWeb.listen(port: 19876)
+        defer { StubWeb.stopListening(port: 19876) }
 
         let loaded = try await ask("kuvo/sign-in/return", method: "POST", body: #"{"url": "http://127.0.0.1:19876/mcp/oauth/callback?code=c&state=s#_=_"}"#)
         #expect(loaded.status == 200 && loaded.json?["status"] as? Int == 302)

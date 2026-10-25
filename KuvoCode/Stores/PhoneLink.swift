@@ -6,7 +6,6 @@ import OpenCodeKit
 import os
 import UsageKit
 import Security
-import UniformTypeIdentifiers
 import SystemConfiguration
 
 /// Kuvo Code for iPhone's way in: this Mac answers the phones you've paired, through the relay,
@@ -820,7 +819,6 @@ final class PhoneLink {
         }
         var routed = request
         routed.path = route
-        if route == "kuvo/file" { return Self.file(request.path) }
         // A conversation carried on with the coding agents, as picking one of their models in it does.
         if let id = Self.sessionID(in: route, then: "agents") {
             return AsyncThrowingStream { continuation in
@@ -861,41 +859,7 @@ final class PhoneLink {
             }
         }
         if route == "kuvo/asks/events" { return Self.following { link?.asksJSON() } }
-        // A sign-in's page that sent the browser back to this Mac, loaded here.
-        if route == "kuvo/sign-in/return" {
-            return AsyncThrowingStream { continuation in
-                let task = Task {
-                    let (status, body) = request.method.uppercased() == "POST" ? await Self.loadSignInReturn(request.body) : (405, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-                continuation.onTermination = { _ in task.cancel() }
-            }
-        }
         if route == "kuvo/usage/events" { return Self.following { link?.usageJSON() } }
-        // This Mac's sign-ins, listed (`api/credential` has what each is signed in with too).
-        if route == "kuvo/accounts/credentials" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let reads = ["GET", "HEAD"].contains(request.method.uppercased())
-                    let (status, body) = reads ? await link?.credentialsJSON() ?? (503, Data()) : (405, Data("{}".utf8))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        if let id = Self.shellID(in: route), request.method.uppercased() == "POST" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.stopShell(id, with: request.body) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
                 let (status, body) = link?.answer(routed) ?? (503, Data())
@@ -1045,7 +1009,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1245,78 +1209,6 @@ final class PhoneLink {
         (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 
-    // MARK: Files
-
-    /// The biggest file `kuvo/file` sends.
-    nonisolated static let fileLimit = 25 * 1024 * 1024
-
-    /// `kuvo/file?uri=<file:// URI>`: a file on this Mac, as an agent's reply or tool names it: its
-    /// bytes with its type; 404 with a `message` for one that isn't there (or isn't a file), 413
-    /// over `fileLimit`.
-    nonisolated static func file(_ path: String) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task.detached {
-                let (status, type, body) = readFile(path)
-                continuation.yield(.head(status: status, headers: ["content-type": type]))
-                // In pieces, as the engine's bodies go.
-                var start = body.startIndex
-                while start < body.endIndex, !Task.isCancelled {
-                    let end = body.index(start, offsetBy: 32 * 1024, limitedBy: body.endIndex) ?? body.endIndex
-                    continuation.yield(.body(body.subdata(in: start..<end)))
-                    start = end
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    nonisolated static func readFile(_ path: String) -> (status: Int, type: String, body: Data) {
-        let json = "application/json"
-        guard let uri = URLComponents(string: path)?.queryItems?.first(where: { $0.name == "uri" })?.value,
-              let url = URL(string: uri), url.isFileURL else {
-            return (400, json, message("That isn’t a file:// address."))
-        }
-        let file = url.resolvingSymlinksInPath()
-        let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-        guard values?.isRegularFile == true else { return (404, json, message("That file isn’t there anymore.")) }
-        guard (values?.fileSize ?? 0) <= fileLimit else { return (413, json, message("That file is too big to open here.")) }
-        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return (404, json, message("That file isn’t there anymore.")) }
-        return (200, UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream", data)
-    }
-
-    /// `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back
-    /// to this Mac (an MCP server's, or a plan's that finishes here), which a phone can't load,
-    /// loaded here, as the browser would have. Only this Mac's own address
-    /// (`EngineRoutes.signInReturn`), and no further than it answers (a redirect isn't followed).
-    /// Answers with the status it got (`{"status"}`): 2xx or 3xx, it took it.
-    nonisolated private static func loadSignInReturn(_ body: Data) async -> (Int, Data) {
-        struct Given: Decodable { var url: String }
-        guard let given = try? JSONDecoder().decode(Given.self, from: body), let url = EngineRoutes.signInReturn(given.url) else {
-            return (400, message("That isn't an address a sign-in returns to on this computer."))
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 15
-        guard let (_, response) = try? await URLSession.shared.data(for: request, delegate: StaysThere()),
-              let status = (response as? HTTPURLResponse)?.statusCode else {
-            return (502, message("Nothing on this computer took it. Start the sign-in again."))
-        }
-        return (200, (try? JSONEncoder().encode(["status": status])) ?? Data())
-    }
-
-    // MARK: Accounts
-
-    /// `kuvo/accounts/credentials`: each sign-in this Mac's engine keeps, by its ID, with the plan
-    /// it's for, its name and whether it's the one in use: the list alone (the engine's
-    /// `api/credential` has what each is signed in with too).
-    private func credentialsJSON() async -> (Int, Data) {
-        guard let api = workspace?.api else { return (503, Data()) }
-        guard let credentials = try? await api.credentials() else { return (502, Data()) }
-        struct Listed: Encodable { var id: String; var integrationID: String; var label: String; var active: Bool }
-        let listed = credentials.map { Listed(id: $0.id, integrationID: $0.integrationID, label: $0.label, active: $0.active) }
-        return (200, (try? JSONEncoder().encode(["credentials": listed])) ?? Data())
-    }
-
     // MARK: Asks
 
     /// What agents ask you for while they browse, waiting now: a sign-in (with the fields the
@@ -1503,30 +1395,15 @@ final class PhoneLink {
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A plan signed out (`kuvo/accounts/<id>/forget`), the box's too.
-            || (route.hasPrefix("kuvo/accounts/") && route.hasSuffix("/forget") && route.dropFirst("kuvo/accounts/".count).dropLast("/forget".count).contains("/") == false)
+            // A plan signed out (`kuvo/accounts/<id>/forget`), and a command stopped
+            // (`kuvo/shell/<id>/stop`): the box's too.
+            || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/shell/", "/stop")
     }
 
-    /// `kuvo/shell/<id>/stop` → the engine's id of the command.
-    nonisolated private static func shellID(in path: String) -> String? {
-        let parts = path.split(separator: "/")
-        guard parts.count == 4, parts[0] == "kuvo", parts[1] == "shell", parts[3] == "stop" else { return nil }
-        return String(parts[2]).removingPercentEncoding
-    }
-
-    /// Stops a command an agent left running, as Stop in the bar over the composer does: found
-    /// among the ones this Mac follows, or asked of the engine of `session` when given.
-    private func stopShell(_ id: String, with body: Data) async -> (Int, Data) {
-        struct Given: Decodable { var session: String? }
-        guard let workspace else { return (503, Data()) }
-        var found = workspace.shellJobs.lazy.compactMap { session, jobs in jobs.first { $0.id == id }.map { (session, $0) } }.first
-        if found == nil, let session = (try? JSONDecoder().decode(Given.self, from: body))?.session, let api = workspace.api(forSession: session),
-           let job = try? await api.shell(id, directory: workspace.session(session)?.location.directory), job.status == "running" {
-            found = (session, job)
-        }
-        guard let (session, job) = found else { return (404, Data("{}".utf8)) }
-        let how = await workspace.stopShellJob(job, in: session)
-        return (200, Data(#"{"stopped":"\#(how)"}"#.utf8))
+    /// Whether `route` is `<start><one part><end>`.
+    nonisolated private static func oneOf(_ route: String, _ start: String, _ end: String) -> Bool {
+        route.hasPrefix(start) && route.hasSuffix(end) && route.count > start.count + end.count
+            && !route.dropFirst(start.count).dropLast(end.count).contains("/")
     }
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
@@ -1626,14 +1503,5 @@ final class PhoneLink {
         item[kSecAttrLabel as String] = "Kuvo Code phone link"
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         Keychain.add(item)
-    }
-}
-
-/// Stops at the first answer an address gives, rather than following where it sends the browser
-/// next (`kuvo/sign-in/return`).
-nonisolated private final class StaysThere: NSObject, URLSessionTaskDelegate, Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        completionHandler(nil)
     }
 }

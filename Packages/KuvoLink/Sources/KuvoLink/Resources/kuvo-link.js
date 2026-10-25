@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.63";
+export const BRIDGE_VERSION = "0.9.64";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -8190,10 +8190,12 @@ export function startUpdate(options = {}) {
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
-  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended"];
-// (A plan signed out from a phone: `kuvo/accounts/<id>/forget`, the box's too.)
-const macAnswersForget = route => /^kuvo\/accounts\/[^/]+\/forget$/.test(route);
-export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersForget(route);
+  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
+  "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return"];
+// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
+// `kuvo/shell/<id>/stop`: the box's too.)
+const macAnswersAlso = route => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route);
+export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 

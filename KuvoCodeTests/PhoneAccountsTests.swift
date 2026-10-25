@@ -5,7 +5,7 @@ import Testing
 @testable import KuvoCode
 
 /// Your plan accounts from a phone, as this Mac answers it: the sign-ins it has, listed by name and
-/// which is in use, or as the engine keeps them. A sign-in page started there reaches the engine
+/// which is in use (this Mac's box's, as every box's), or as the engine keeps them. A sign-in page started there reaches the engine
 /// with what its method's form fills in. The plans whose sign-in ended, and Disconnect, are this
 /// Mac's box's, as every box's (the bridge's tests' accounts). The engine is faked.
 @MainActor
@@ -51,7 +51,8 @@ import Testing
     }
 
     @Test func aPhoneSeesThisMacsSignIns() async throws {
-        defer { StubWeb.stop() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop(); StubWeb.stop() }
         engine.store("anthropic", label: "Work", value: ["type": "key", "key": "sk-ant-secret"])
         engine.store("openai", label: "me", value: ["type": "oauth", "access": "a", "refresh": "rt_secret", "expires": 1], active: false)
         let listed = try await ask("kuvo/accounts/credentials")
