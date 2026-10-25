@@ -450,15 +450,18 @@ final class Bots {
     /// then what shows. One its box says no to (a name it won't take, a bot that's gone) is let go.
     func sendWaiting(to box: String) async {
         for (id, edit) in edits.waiting where edit.box == box {
-            guard let bot = known.first(where: { $0.id == id }) else {
-                edits.drop(id)
-                continue
-            }
             if Moves.isFrozen(id) { continue }
             do {
                 if edit.delete {
-                    try await deleteOnBox(bot)
+                    // One deleted while its machine was removed: it's gone from the list already.
+                    guard let client = client(box) else { continue }
+                    let (status, data) = try await client.send("DELETE", "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id))
+                    guard (200..<300).contains(status) || status == 404 else { throw BoxRefusal(status: status, data: data) }
                 } else {
+                    guard let bot = known.first(where: { $0.id == id }) else {
+                        edits.drop(id)
+                        continue
+                    }
                     try await send(edit.fields, to: bot)
                 }
                 edits.drop(id)
