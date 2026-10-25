@@ -2232,6 +2232,17 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       return yield* forwardGroups(target, route, request, signal);
     }
+    // Its bots told what they are now where that changed, as its app asks after a change to its kit
+    // (your personalities, on a Mac).
+    if (route === "kuvo/bots/retell") {
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      for (const read of [readEngine, readBridge]) {
+        let target = null;
+        try { target = read(); } catch {}
+        if (target?.port) await freshenBots(target);
+      }
+      return yield* json(200, {});
+    }
     // Its bots followed: a line now, and again as they change (made, changed, deleted, a wake-up
     // added or sent), as a client shows them.
     if (route === "kuvo/bots/events") {
@@ -3187,7 +3198,7 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     return no(503, `The bot couldn’t be made: ${error?.message ?? error}`);
   }
   // Without a template's or a shared bot's job for you to send, it writes first.
-  const firstMessage = template?.firstMessage ?? shared;
+  const firstMessage = (template ? firstMessageOf(template.job, template.instructions) || null : null) ?? shared;
   if (!firstMessage) await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/synthetic`, { text: kit.greeting, description: "A new bot's first message" }, signal).catch(() => {});
   noteBotsChanged();
   const bot = listBots(machine).find(each => each.id === id);
@@ -3246,8 +3257,38 @@ export async function freshenBot(target, sessionID) {
   if (!fs.existsSync(memory)) try { fs.writeFileSync(memory, kit.memory.replaceAll("⟦name⟧", () => here.described.name)); } catch {}
   const told = toldOf(here.folder);
   const text = toldNow(kit, here);
-  if (told.session !== sessionID || told.instructions !== toldDigest(text)) await tellBot(target, here, sessionID, text);
+  // What its conversation has now, where that can be read: one that told it something else (a Mac
+  // of an earlier version) is put right; otherwise what was last told it here.
+  const there = await toldThere(target, sessionID);
+  const stale = there === undefined ? told.session !== sessionID || told.instructions !== toldDigest(text) : there !== text;
+  if (stale) await tellBot(target, here, sessionID, text);
   if (told.rules !== here.folder && await repairRules(target, here, sessionID)) noteTold(here.folder, { rules: here.folder });
+}
+
+// What a conversation on `target` is told as a bot (its `kuvo.bot` entry): its words, null for
+// none, undefined when that can't be read (it isn't there, or `target` doesn't say).
+async function toldThere(target, sessionID) {
+  try {
+    const entries = await call(target, "GET", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries`);
+    if (!Array.isArray(entries)) return undefined;
+    const entry = entries.find(each => each?.key === "kuvo.bot");
+    return typeof entry?.value === "string" ? entry.value : null;
+  } catch {
+    return undefined;
+  }
+}
+
+// Every bot whose conversation is on `target`, told what it is now if that changed (after an update,
+// or what a Mac of an earlier version told it), and its rules put right: as the box finds its engine
+// or its coding agents' bridge (it started, or they did), so a bot's next turn starts on its own
+// words. The ones on the other are left to it.
+export async function freshenBots(target) {
+  for (const id of listOf(BOTS)) {
+    const here = botHere(id);
+    if (!here || isMoving(here.folder)) continue;
+    if (await toldThere(target, here.session) === undefined && !(await call(target, "GET", `/api/session/${encodeURIComponent(here.session)}`).then(() => true, () => false))) continue;
+    await freshenBot(target, here.session).catch(() => {});
+  }
 }
 
 // A bot's own rules as they're made now (`external_directory` for its folder), after the rest of
@@ -3475,6 +3516,42 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
 }
 
+// Bots deleted here whose keys of their own are still to go (`run/bot-keys-left.json`): where the
+// keys couldn't be reached as one was deleted (this Mac's app not answering), they go the next time
+// they can be, as the box starts or another bot is deleted.
+const KEYS_LEFT_FILE = path.join(RUN, "bot-keys-left.json");
+function keysLeft() {
+  try {
+    const listed = JSON.parse(textOf(KEYS_LEFT_FILE) ?? "");
+    return Array.isArray(listed?.bots) ? listed.bots.filter(each => typeof each === "string" && /^bot_[A-Za-z0-9]+$/.test(each)) : [];
+  } catch {
+    return [];
+  }
+}
+function noteKeysLeft(id, left) {
+  const bots = keysLeft().filter(each => each !== id);
+  if (left) bots.push(id);
+  try {
+    fs.mkdirSync(RUN, { recursive: true });
+    if (!bots.length) return fs.rmSync(KEYS_LEFT_FILE, { force: true });
+    fs.writeFileSync(`${KEYS_LEFT_FILE}.new`, JSON.stringify({ bots }));
+    fs.renameSync(`${KEYS_LEFT_FILE}.new`, KEYS_LEFT_FILE);
+  } catch {}
+}
+export async function forgetLeftKeys() {
+  for (const id of keysLeft()) {
+    if (botHere(id)) {
+      // Here again (a move brought it back): its keys are its own.
+      noteKeysLeft(id, false);
+      continue;
+    }
+    try {
+      for (const name of await keyNames({ suffix: botVariable("", id) })) await deleteKey(name);
+      noteKeysLeft(id, false);
+    } catch {}
+  }
+}
+
 // The bots deleted here, the latest first (the last 500), for the Mac to let go of as it next
 // connects: `{"deleted": [<bot id>…]}` (Bots.deletedFile).
 const DELETED_FILE = path.join(BOTS, "deleted.json");
@@ -3514,13 +3591,16 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
-  // On this Mac, on to the Finder's Trash, where you look for what you deleted.
-  if (ON_MAC) await hostTrash(trashed).catch(() => {});
+  // On this Mac, on to the Finder's Trash, where you look for what you deleted, and the folder that
+  // held it here goes once it's empty.
+  if (ON_MAC) {
+    await hostTrash(trashed).catch(() => {});
+    if (!fs.existsSync(trashed)) try { fs.rmdirSync(path.dirname(trashed)); } catch {}
+  }
   // Its keys of its own (`KUVO_KEY_…__<ID>`). Where they can't be reached now (this Mac's app not
-  // answering), the bot is deleted all the same.
-  try {
-    for (const name of await keyNames({ suffix: botVariable("", id) })) await deleteKey(name);
-  } catch {}
+  // answering), the bot is deleted all the same, and its keys go once they can be.
+  noteKeysLeft(id, true);
+  await forgetLeftKeys();
   let agents;
   try {
     agents = readBridge();
@@ -4148,6 +4228,8 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
+      // Found it (it started, or this did): its bots told what they are now, before their next turn.
+      freshenBots(source).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session; a bot's job read from its memory as
@@ -7459,6 +7541,8 @@ async function serve() {
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
   refreshBotsKeys().catch(() => {});
+  // Keys of bots deleted while they couldn't be reached.
+  forgetLeftKeys().catch(() => {});
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app

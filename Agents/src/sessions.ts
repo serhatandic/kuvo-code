@@ -1243,6 +1243,12 @@ export class Sessions {
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory)
   }
 
+  /** A session's instruction entries, as the engine lists them (`{key, value}` each). */
+  instructionEntries(id: string): { key: string; value: string }[] {
+    const entries = (this.record(id).agent.kuvoInstructions as Record<string, string> | undefined) ?? {}
+    return Object.entries(entries).map(([key, value]) => ({ key, value }))
+  }
+
   setInstruction(id: string, key: string, text: string | undefined) {
     const record = this.record(id)
     const entries = (record.agent.kuvoInstructions as Record<string, string> | undefined) ?? {}

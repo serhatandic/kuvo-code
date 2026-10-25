@@ -9576,6 +9576,10 @@ class Sessions {
     this.store.save(id, true);
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory);
   }
+  instructionEntries(id) {
+    const entries = this.record(id).agent.kuvoInstructions ?? {};
+    return Object.entries(entries).map(([key, value]) => ({ key, value }));
+  }
   setInstruction(id, key, text) {
     const record = this.record(id);
     const entries = record.agent.kuvoInstructions ?? {};
@@ -15163,7 +15167,9 @@ function handler(context) {
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
-        if (c === "instructions" && d === "entries" && e) {
+        if (c === "instructions" && d === "entries" && !e && method === "GET")
+          return json4({ data: sessions.instructionEntries(id) });
+        if (c === "instructions" && d === "entries" && e && (method === "PUT" || method === "DELETE")) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
           return json4({});
         }
@@ -15441,4 +15447,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 3cc448f8358ebb95857224d3b79d44cca0879f784e2f9514fc77b93f495b4757
+// Built from Agents/src 73851ca40bb76c90a982eb0fde271f6b4ad3a519a502493f7857e29a6f1cc492

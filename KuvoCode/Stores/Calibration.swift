@@ -28,6 +28,9 @@ final class Calibration {
         // This Mac's bots kept by its box from here on: what you changed of a machine's bots while
         // it was away, which an earlier version still had to tell it, waits for it as an edit.
         Step(version: 2, name: "bots' waiting edits") { app in app.bots.takeOldWaitingEdits() },
+        // Each of this Mac's bots with what its box finds it by, so none drops out as the box starts
+        // keeping them (an earlier version could leave a description half written).
+        Step(version: 3, name: "bots' folders") { app in app.bots.describeOld() },
     ]
 
     /// The last step done, in the app's settings.

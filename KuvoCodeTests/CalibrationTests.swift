@@ -180,6 +180,35 @@ import Testing
         #expect(BotEdits().waiting["bot_away000001"] == waiting)
     }
 
+    /// A bot of this Mac whose folder an earlier version left without a description or a note of its
+    /// conversation (one written half, or not at all) is still there once this Mac's box keeps its
+    /// bots: the update writes them, and one whose folder is here is never let go of because its box
+    /// can't read it.
+    @Test func aBotWhoseFolderIsMissingWhatItsBoxReadsStaysAfterTheUpdate() async throws {
+        defer { Self.clean() }
+        let scout = try folder("bot_scout00001", memory: "# Scout's memory\n\n## Job\nWatches the build\n")
+        try Data("{\"kuvo\": 1, \"id\": \"bot_sco".utf8).write(to: scout.appending(path: Bot.Descriptor.file))
+        try savedBefore(macFolder: scout).write(to: botsFile)
+        let engine = StubEngine(port: 47_982)
+        defer { engine.stop() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
+
+        let app = AppModel()
+        app.bots.app = app
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
+        // Before the update: its box can't read it, and it stays all the same.
+        await app.bots.refresh(BoxClient.mac)
+        #expect(app.bots.bot("bot_scout00001")?.name == "Scout", "its folder is here")
+        await app.calibration.run(app)
+        await app.bots.refresh(BoxClient.mac)
+        struct Listed: Decodable { var bots: [ListedBot] }
+        let listed = try await box.client(engine: engine.url).value(Listed.self, "GET", "kuvo/bots").bots
+        #expect(listed.map(\.id) == ["bot_scout00001"], "its box finds it now")
+        #expect(listed.first?.session == "ses_scout")
+        #expect(app.bots.bot("bot_scout00001")?.job == "Watches the build")
+    }
+
     @Test func machinesThatWontReadAreSetAsideNotOverwritten() {
         defer { Self.clean() }
         let damaged = Data("[{\"destination\": 42}]".utf8)

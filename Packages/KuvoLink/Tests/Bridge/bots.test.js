@@ -293,7 +293,7 @@ test("a bot on its way to another computer isn't woken or changed from a phone u
 // What New Bot needs, as the Mac leaves it on the machine as it connects (Bots.MachineKit).
 const kit = {
   kuvo: 1,
-  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false, firstMessage: "Your job, in a few words: Sends you a morning news digest." }],
+  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false }],
   personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Your personality: Straight Shooter. Direct." }],
   looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
   startingModel: { id: "big-pickle", providerID: "opencode" },
@@ -395,7 +395,7 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     // From a template: its look and personality, and its job for your composer; it waits for you.
     const herald = await ask(handle, "POST", "kuvo/bots", { name: "Herald", template: "news" });
     assert.equal(herald.status, 201);
-    assert.equal(herald.json.firstMessage, kit.templates[0].firstMessage);
+    assert.equal(herald.json.firstMessage, "Your job, in a few words: Sends you a morning news digest.\n\nEvery morning…\n\nStart now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up.");
     assert.equal(engine.asked.some(each => each.url === `/api/session/${herald.json.bot.session}/synthetic`), false);
     assert.deepEqual(herald.json.bot.look, kit.templates[0].look);
     const plain = engine.asked.find(each => each.url === `/api/experimental/session/${herald.json.bot.session}/instructions/entries/kuvo.bot`).body.value;
@@ -465,9 +465,9 @@ test("a bot's job is set as a whole (its set_job tool, Edit Bot): shown under it
 });
 
 
-// The Mac's job reader is held to these (Bots.job(inMemory:)), and the box's, which takes a job
-// from a memory once (jobOf).
-const groupVectors = JSON.parse(fs.readFileSync(new URL("../../../../Agents/test/box-vectors.json", import.meta.url), "utf8"));
+// How bots kept their job in their memory before (frozen as the Mac read it), which the box takes a
+// job from once (jobOf).
+const groupVectors = JSON.parse(fs.readFileSync(new URL("../../Vectors/memory-jobs.json", import.meta.url), "utf8"));
 
 test("a bot's job is read from its memory as the Mac reads it", () => {
   assert.ok(groupVectors.job.length > 5);

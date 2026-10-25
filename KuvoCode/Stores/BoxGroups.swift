@@ -477,8 +477,9 @@ final class BoxGroups {
     /// A folder this Mac's box or bridge put in its trash (a chat's, a deleted bot's), moved on to
     /// the Finder's Trash; only one in that trash folder.
     static func toFinderTrash(_ path: String) {
-        let folder = URL(filePath: path).standardizedFileURL
-        let trash = macTrash.standardizedFileURL.path + "/"
+        // Links followed on both sides, so one can't lead out of the trash folder.
+        let folder = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL
+        let trash = macTrash.resolvingSymlinksInPath().standardizedFileURL.path + "/"
         guard folder.path.hasPrefix(trash), FileManager.default.fileExists(atPath: folder.path) else { return }
         do {
             try FileManager.default.moveToTrash(folder)

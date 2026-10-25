@@ -83,6 +83,8 @@ import Testing
         #expect(app.bots.bot(bot.id)?.job == "Sorts my inbox twice a day")
         #expect(told("ses_inbox").last?.contains("Morning and evening. Archive newsletters.") == true)
         #expect(Bots().list.first?.job == "Sorts my inbox twice a day", "kept")
+        // Gone back to 0.8.0-beta.1, which reads jobs from memories: it finds this one, as kept.
+        #expect(Beta1.jobs(in: botsFile)[bot.id] == "Sorts my inbox twice a day")
     }
 
     /// The engine couldn't make its conversation: no bot, and no folder left of it.
@@ -99,5 +101,37 @@ import Testing
         #expect(app.bots.list.isEmpty)
         let after = (try? FileManager.default.contentsOfDirectory(atPath: Bots.root.path(percentEncoded: false))) ?? []
         #expect(Set(after).subtracting(before).subtracting(["kit.json"]).isEmpty, "a folder was left: \(Set(after).subtracting(before))")
+    }
+}
+
+/// How Kuvo Code 0.8.0-beta.1 took a bot's job from `bots.json` as it opened (its `Bots.syncJob`),
+/// frozen: one marked as keeping its job in its memory (`jobInMemory: true`) had it read from there,
+/// under a Job heading; any other had the job written in the list moved into its memory, unless its
+/// memory had one of its own.
+enum Beta1 {
+    static func jobs(in file: URL) -> [String: String] {
+        struct Listed: Decodable { var id: String; var job: String; var instructions: String; var jobInMemory: Bool?; var folder: String; var machine: String? }
+        guard let data = try? Data(contentsOf: file), let bots = try? JSONDecoder().decode([Listed].self, from: data) else { return [:] }
+        var jobs: [String: String] = [:]
+        for bot in bots where bot.machine == nil {
+            let memory = (try? String(contentsOfFile: (bot.folder as NSString).appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+            let fromMemory = jobLine(in: memory)
+            if bot.jobInMemory != true, !(bot.job.isEmpty && bot.instructions.isEmpty) {
+                jobs[bot.id] = fromMemory ?? bot.job
+            } else {
+                jobs[bot.id] = fromMemory ?? ""
+            }
+        }
+        return jobs
+    }
+
+    /// The first line under a Job heading ("## Job", "## My job", "## Job: …"), as beta.1 read it.
+    private static func jobLine(in memory: String) -> String? {
+        let lines = memory.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { line in
+            let title = line.trimmingCharacters(in: .whitespaces).drop { $0 == "#" }.trimmingCharacters(in: .whitespaces).lowercased()
+            return line.trimmingCharacters(in: .whitespaces).hasPrefix("#") && (title == "job" || title == "my job" || title == "the job" || title.hasPrefix("job:"))
+        }) else { return nil }
+        return lines[(start + 1)...].map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty && !$0.hasPrefix("#") } ?? ""
     }
 }

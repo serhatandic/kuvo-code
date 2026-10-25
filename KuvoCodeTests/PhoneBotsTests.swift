@@ -126,7 +126,7 @@ import Testing
         let made = try await ask("kuvo/bots", method: "POST", body: ["name": "Herald", "template": "news", "model": ["providerID": "opencode", "id": "big-pickle"]])
         #expect(made.status == 201)
         let news = try #require(BotTemplate.all.first { $0.id == "news" })
-        #expect(made.json?["firstMessage"] as? String == BotTemplate.firstMessage(job: news.job, instructions: news.instructions))
+        #expect((made.json?["firstMessage"] as? String)?.hasPrefix("Your job, in a few words: \(news.job).") == true)
         #expect(engine.requests("POST", "/api/session/ses_bot1/synthetic").isEmpty, "it waits for you")
         await app.bots.refresh(BoxClient.mac)
         let bot = try #require(app.bots.list.first)

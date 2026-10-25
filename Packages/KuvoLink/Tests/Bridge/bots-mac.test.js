@@ -34,7 +34,7 @@ const write = (file, text) => {
 const kit = {
   kuvo: 1,
   version: "0.8.0",
-  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false, firstMessage: "Your job, in a few words: Sends you a morning news digest." }],
+  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false }],
   personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Your personality: Straight Shooter. Direct." }],
   looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
   startingModel: { id: "big-pickle", providerID: "opencode" },
@@ -74,6 +74,8 @@ beforeEach(() => {
 // its providers ready, and its events sent (`send`) to whoever follows them.
 async function engine({ rules = {} } = {}) {
   const asked = [];
+  // What each conversation is told, by its entries' keys, as the engine keeps them.
+  const entries = {};
   const followers = [];
   const awaited = [];
   let next = 1;
@@ -94,7 +96,10 @@ async function engine({ rules = {} } = {}) {
       asked.push(entry);
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       const one = request.url.match(/^\/api\/session\/([^/]+)$/);
-      if (request.method === "GET" && request.url === "/api/provider") reply({ data: [{ id: "opencode" }] });
+      const instruction = request.url.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries(?:\/([^/]+))?$/);
+      if (instruction && request.method === "PUT") { (entries[instruction[1]] ??= {})[instruction[2]] = given.value; reply({}); }
+      else if (instruction && request.method === "GET" && !instruction[2]) reply({ data: Object.entries(entries[instruction[1]] ?? {}).map(([key, value]) => ({ key, value })) });
+      else if (request.method === "GET" && request.url === "/api/provider") reply({ data: [{ id: "opencode" }] });
       else if (request.method === "POST" && request.url === "/api/session") reply({ data: { id: `ses_made${next++}` } });
       else if (one && request.method === "GET") reply({ data: { id: one[1], permissions: rules[one[1]] ?? [] } });
       else if (one && request.method === "PATCH" && given?.permissions) { rules[one[1]] = given.permissions; reply({ data: {} }); }
@@ -107,7 +112,7 @@ async function engine({ rules = {} } = {}) {
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
-    asked, rules, following, read: () => ({ port: server.address().port, password: "p" }),
+    asked, rules, entries, following, read: () => ({ port: server.address().port, password: "p" }),
     send: event => { for (const follower of followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); },
     request: match => asked.find(match) ? Promise.resolve(asked.find(match)) : new Promise(resolve => awaited.push({ match, resolve })),
     close: () => { server.closeAllConnections(); server.close(); },
@@ -164,32 +169,44 @@ test("this Mac's box makes bots with its app's kit, never a release's words", as
   assert.equal(link.readKit().instructions, kit.instructions);
 });
 
-test("a bot is told what it is now at its next run, once, not all at once as the box starts", async t => {
+test("a bot is told what it is now as the box finds its engine and as its runs start, once each time it changed", async t => {
   const fake = await engine();
   t.after(fake.close);
   bot("bot_scout00001");
   bot("bot_quiet00001", { name: "Quiet" });
+  // Told by an earlier version, in words that point at its memory.
+  fake.entries.ses_bot_quiet00001 = { "kuvo.bot": "You are Quiet. Keep your job under ## Job in your memory." };
   const stop = new AbortController();
   t.after(() => stop.abort());
   link.watchEvents(fake.read, () => true, stop.signal, () => {}, { bots: true });
-  await fake.following;
-  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 0, "nothing told before it runs");
-
-  fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_scout00001" } });
-  const first = await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions"));
-  assert.match(first.body.value, /You are Scout, one of the user's bots\. You run on this Mac\./);
+  // As the box finds its engine (after an update, say): each bot on its words now, before its next turn.
+  await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions"));
+  const quiet = await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_quiet00001/instructions"));
+  assert.match(quiet.body.value, /You are Quiet, one of the user's bots\. You run on this Mac\./);
   // Its next run: told already, so not again (the engine opens a bot's folder each time it is).
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_scout00001" } });
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_quiet00001" } });
-  await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_quiet00001/instructions"));
-  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
-
-  // New words (an update, a personality's): told at its next run.
+  // New words (an update, a personality's): told at its next run, and at once when its app asks.
   write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, instructions: kit.instructions.replace("You run on this Mac.", "You run on this Mac, now.") }));
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_scout00001" } });
-  const again = await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions") && each.body.value.includes("now."));
-  assert.ok(again);
+  await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions") && each.body.value.includes("now."));
   assert.equal(told(fake.asked, "ses_bot_scout00001").length, 2);
+  const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
+  assert.equal((await ask(handle, "POST", "kuvo/bots/retell")).status, 200);
+  assert.ok(told(fake.asked, "ses_bot_quiet00001").at(-1).body.value.includes("now."), "the other bot, at once");
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 2, "not again: it has them");
+});
+
+test("a bot told other words behind the box's back (by a Mac of an earlier version) is put right at its next run", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  bot("bot_scout00001");
+  await link.freshenBot(fake.read(), "ses_bot_scout00001");
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
+  fake.entries.ses_bot_scout00001["kuvo.bot"] = "You are Scout. Keep your job under ## Job in your memory.";
+  await link.freshenBot(fake.read(), "ses_bot_scout00001");
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 2);
+  assert.match(fake.entries.ses_bot_scout00001["kuvo.bot"], /You run on this Mac\./);
 });
 
 test("a bot's own rules are put right at its next run: its folder its own, an old version's kuvo-wake rules gone", async t => {
@@ -280,4 +297,22 @@ test("this Mac's bots' jobs are kept once from where they were: a memory's Job s
   // Kept: the app's old list no longer counts.
   fs.rmSync(path.join(support, "bots.json"));
   assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.find(each => each.name === "Older").job, "Sends the digest");
+});
+
+test("a template's or a shared bot's job as the first message says its job once, then the rest whole, then to start", () => {
+  const start = "Start now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up.";
+  // Details that begin with the job's line say it once; a line that goes on keeps the rest.
+  assert.equal(link.firstMessageOf("Keeps CI green", "Keeps CI green.\n\nWatch main; when it fails, fix it on a branch."), `Your job, in a few words: Keeps CI green.\n\nWatch main; when it fails, fix it on a branch.\n\n${start}`);
+  assert.equal(link.firstMessageOf("Keeps CI green", "Keeps CI green. Watch main; when it fails, fix it on a branch.\n\nTell me what broke."), `Your job, in a few words: Keeps CI green.\n\nWatch main; when it fails, fix it on a branch.\n\nTell me what broke.\n\n${start}`);
+  assert.equal(link.firstMessageOf("Keeps CI green. Fast", "Keeps CI green. Fast.\n\nWatch main.").split("Keeps CI green").length, 2);
+  assert.equal(link.firstMessageOf("", ""), "");
+  // Each of New Bot's templates, as this Mac's kit has them.
+  const macKit = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/mac-bot-kit.json", import.meta.url), "utf8"));
+  assert.ok(macKit.templates.length > 1);
+  for (const template of macKit.templates) {
+    const message = link.firstMessageOf(template.job, template.instructions);
+    assert.ok(message.startsWith(`Your job, in a few words: ${template.job}.`), template.name);
+    assert.equal(message.split(template.job).length, 2, `${template.name}: its job said once`);
+    assert.ok(message.endsWith("set that up."), template.name);
+  }
 });

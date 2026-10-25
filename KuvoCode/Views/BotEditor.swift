@@ -224,7 +224,9 @@ struct BotEditor: View {
                     // Its job as the bot keeps it, changed while this was open: yours stays, unless
                     // you take its own.
                     .onChange(of: bots.bot(bot.id).map { JobDraft.Job(line: $0.job, details: $0.instructions) }) { _, kept in
-                        if let kept { withAnimation(.ui) { job.botKept(kept) } }
+                        // (Not what your own Save brings back, as its box words it.)
+                        guard let kept, !isWorking else { return }
+                        withAnimation(.ui) { job.botKept(kept) }
                     }
                 }
 
@@ -615,16 +617,24 @@ private struct JobFields: View {
 
     private enum Field { case line, details }
 
+    static func keptWords(_ kept: JobDraft.Job, name: String) -> String {
+        kept.line.isEmpty ? "\(name) cleared its job meanwhile. Save keeps yours." : "\(name) changed its job meanwhile, to “\(kept.line)”. Save keeps yours."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let kept = job.keptMeanwhile {
                 // The bot changed its job while you were changing it here.
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.secondary)
-                    Text(kept.line.isEmpty ? "\(name) cleared its job meanwhile. Save keeps yours." : "\(name) changed its job meanwhile, to “\(kept.line)”. Save keeps yours.")
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(Self.keptWords(kept, name: name))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
                     Spacer(minLength: 8)
                     Button("Use Its Job") { withAnimation(.ui) { job.useKept() } }
                         .buttonStyle(TextButtonStyle())
@@ -649,6 +659,10 @@ private struct JobFields: View {
                     .accessibilityLabel("Job details")
                     .padding(12)
             }
+        }
+        // Said as it appears, for one who can't see it come.
+        .onChange(of: job.keptMeanwhile) { _, kept in
+            if let kept { AccessibilityNotification.Announcement(Self.keptWords(kept, name: name)).post() }
         }
     }
 }

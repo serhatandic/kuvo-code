@@ -14,8 +14,9 @@ struct Bot: Codable, Identifiable, Hashable {
     var job: String
     /// Its job in full: what to watch, what to make, what never to do.
     var instructions: String
-    /// Always true now (its job is its box's): an earlier version, going back to it, reads the job
-    /// as written here rather than moving it into its memory.
+    /// Left out now (its job is its box's): an earlier version, going back to one, takes the job as
+    /// written here (it moves it into the bot's memory, where it reads jobs) rather than reading an
+    /// older one from its memory.
     var jobInMemory: Bool?
     var look: BotLook
     /// The machine it lives on; nil for this Mac.
@@ -234,7 +235,7 @@ final class Bots {
         let made = listed.map { entry -> Bot in
             let before = known.first { $0.id == entry.id }
             let folder = entry.folder ?? before?.folder ?? (machine == nil ? Self.root.appending(path: entry.id).path : "$HOME/\(RemoteEngineInstaller.root)/bots/\(entry.id)")
-            var bot = Bot(id: entry.id, name: Self.oneLine(entry.name), job: entry.job ?? "", instructions: entry.jobDetails ?? "", jobInMemory: true, look: entry.look,
+            var bot = Bot(id: entry.id, name: Self.oneLine(entry.name), job: entry.job ?? "", instructions: entry.jobDetails ?? "", jobInMemory: nil, look: entry.look,
                           machine: machine, project: entry.project.map { path in machine.map { RemoteFolder.folder(path, on: $0) } ?? path } ?? (entry.folder == nil ? before?.project : nil),
                           folder: folder, sessionID: entry.session, created: entry.created.flatMap(formatter.date(from:)) ?? before?.created ?? .now,
                           model: entry.model, personality: entry.personality, agents: entry.agents == true ? true : nil, updated: before?.updated)
@@ -242,10 +243,13 @@ final class Bots {
             return bot
         }
         let ids = Set(made.map(\.id))
-        let gone = known.filter { $0.box == box && !ids.contains($0.id) && !Moves.isFrozen($0.id) }
+        // One of this Mac's whose folder is still here, though its box doesn't list it (its
+        // description unreadable, say), stays: it isn't gone, and what's here of it stays with it.
+        let kept = { (bot: Bot) in Moves.isFrozen(bot.id) || (box == BoxClient.mac && bot.machine == nil && FileManager.default.fileExists(atPath: bot.folder)) }
+        let gone = known.filter { $0.box == box && !ids.contains($0.id) && !kept($0) }
         // Other computers' as they were, and one moving as it is until its move is done; this box's as
         // it has them now (one it lists that was elsewhere has moved here).
-        var next = known.filter { ($0.box != box && !ids.contains($0.id)) || Moves.isFrozen($0.id) }
+        var next = known.filter { ($0.box != box && !ids.contains($0.id)) || (!ids.contains($0.id) && kept($0)) || Moves.isFrozen($0.id) }
         for bot in made where !next.contains(where: { $0.id == bot.id }) { next.append(bot) }
         next.sort { $0.created < $1.created }
         guard next != known else { return }
@@ -420,8 +424,12 @@ final class Bots {
             show()
             return
         }
+        // What waited for it goes with this, yours of now on top: nothing older goes after it.
+        let waiting = edits.waiting[edited.id]
+        if let waiting, !waiting.delete { fields = waiting.fields.merging(fields) { _, new in new } }
         do {
             try await send(fields, to: current)
+            if let waiting, edits.waiting[edited.id] == waiting { edits.drop(edited.id) }
         } catch let refusal as BoxRefusal {
             throw refusal
         } catch where current.machine != nil {
@@ -462,12 +470,14 @@ final class Bots {
                         edits.drop(id)
                         continue
                     }
+                    // As it waits now: one saved directly meanwhile went already.
+                    guard edits.waiting[id] == edit else { continue }
                     try await send(edit.fields, to: bot)
                 }
-                edits.drop(id)
+                if edits.waiting[id] == edit { edits.drop(id) }
             } catch let refusal as BoxRefusal where refusal.status != 409 && refusal.status < 500 {
                 log.error("A waiting edit to a bot was turned down: \(refusal.message, privacy: .public)")
-                edits.drop(id)
+                if edits.waiting[id] == edit { edits.drop(id) }
             } catch {
                 // Still not there: it waits on.
             }
@@ -549,6 +559,9 @@ final class Bots {
     /// their next run (each machine's has your personalities too).
     func personalitiesChanged() {
         writeMacKit()
+        // Told at once, as before, rather than at their next run.
+        guard let client = client(BoxClient.mac) else { return }
+        Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
     }
 
     // MARK: Moving (until moves go through the boxes)
@@ -637,77 +650,6 @@ final class Bots {
 
     static func blankMemory(_ name: String) -> String {
         "# \(name)'s memory\n\nWhat \(name) keeps for next time: preferences, how things are set up, where ongoing work stands. Nothing yet.\n"
-    }
-
-    /// The job in a memory file: its "## Job" section (any heading named Job), all of it, and its
-    /// first line in a few words, for under the bot's name. Nil when it has none.
-    static func job(inMemory text: String) -> (line: String, section: String)? {
-        let lines = text.components(separatedBy: "\n")
-        guard let (start, end) = jobLines(lines) else { return nil }
-        var section = lines[(start + 1)..<end].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        // The job written in its heading ("## Job: Keeps CI green"): its first line. In another
-        // heading ("## Job — keeps CI green"), only with nothing under it: else it names the
-        // section ("## Job — what I do").
-        if let (inline, isColon) = jobInHeading(lines[start]), isColon || section.isEmpty {
-            section = [inline, section].filter { !$0.isEmpty }.joined(separator: "\n")
-        }
-        let first = section.components(separatedBy: "\n").lazy.map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
-        var line = first
-        for mark in ["- ", "* ", "> "] where line.hasPrefix(mark) { line.removeFirst(mark.count) }
-        line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
-        if line.lowercased().hasPrefix("job:") { line = String(line.dropFirst(4)) }
-        line = line.trimmingCharacters(in: .whitespaces)
-        // A first line that goes on (the details written right after it): its first sentence.
-        if line.count > 48, let end = line.range(of: ". ") { line = String(line[..<end.lowerBound]) }
-        // A sentence's end, not a line's: "Keeps the build green." shows as "Keeps the build green".
-        if line.hasSuffix("."), !line.hasSuffix("..") { line.removeLast() }
-        return (line, section)
-    }
-
-    /// Where the job section is: its heading's line, and the line it ends before. It goes on to the
-    /// next heading of its level or above (its own sub-headings, "### Rules", are part of it), not
-    /// counting a line in a code block ("# run the tests") or one that isn't a heading ("#1 first").
-    private static func jobLines(_ lines: [String]) -> (heading: Int, end: Int)? {
-        guard let start = lines.firstIndex(where: isJobHeading) else { return nil }
-        let level = headingLevel(lines[start]) ?? 1
-        var inCode = false
-        for index in (start + 1)..<lines.endIndex {
-            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { inCode.toggle(); continue }
-            if !inCode, let other = headingLevel(lines[index]), other <= level { return (start, index) }
-        }
-        return (start, lines.endIndex)
-    }
-
-    /// A Markdown heading's level ("## Job" is 2), nil for a line that isn't one.
-    private static func headingLevel(_ line: String) -> Int? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        let marks = trimmed.prefix { $0 == "#" }.count
-        guard (1...6).contains(marks) else { return nil }
-        let after = trimmed.dropFirst(marks)
-        return after.isEmpty || after.first == " " ? marks : nil
-    }
-
-    /// What a job heading says after "Job" ("Job: …", "Job — …", "Job (…)"), and whether after a
-    /// colon; nil when nothing.
-    private static func jobInHeading(_ line: String) -> (String, isColon: Bool)? {
-        let title = line.trimmingCharacters(in: .whitespaces).drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
-        guard title.lowercased().hasPrefix("job") else { return nil }
-        var rest = title.dropFirst(3).trimmingCharacters(in: .whitespaces)
-        guard let mark = rest.first, ":-–—(".contains(mark) else { return nil }
-        rest = rest.dropFirst().trimmingCharacters(in: .whitespaces)
-        if mark == "(", rest.hasSuffix(")") { rest = String(rest.dropLast()).trimmingCharacters(in: .whitespaces) }
-        return rest.isEmpty ? nil : (rest, mark == ":")
-    }
-
-    private static func isJobHeading(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("#") else { return false }
-        let title = trimmed.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces).lowercased()
-        if title == "job" || title == "my job" || title == "the job" || title.hasPrefix("job:") { return true }
-        // "Job — what I do" or "Job (keeps the build green)", not "Job log" or "Job history".
-        guard title.hasPrefix("job ") else { return false }
-        return title.dropFirst(4).trimmingCharacters(in: .whitespaces).first.map { "-–—:(".contains($0) } ?? false
     }
 
     /// Whether a path is a bot's memory file.
@@ -799,17 +741,28 @@ final class Bots {
 
     // MARK: From earlier versions
 
-    /// For an update from a version before bots had descriptions: each of this Mac's bots gets its
-    /// description beside its memory (`bot.json`), from the app's list, so its box finds it. One
-    /// that has one keeps it; one whose folder has gone gets none.
+    /// For an update from a version before bots had descriptions, and as this Mac's box starts keeping
+    /// them: each of this Mac's bots has its description (`bot.json`) and its conversation (`session`)
+    /// beside its memory, from the app's list, so its box finds it. A readable one is kept; one
+    /// whose folder has gone gets none.
     func describeOld() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         for bot in known where bot.machine == nil {
             var isFolder: ObjCBool = false
-            let file = URL(filePath: bot.folder).appending(path: Bot.Descriptor.file)
-            guard FileManager.default.fileExists(atPath: bot.folder, isDirectory: &isFolder), isFolder.boolValue,
-                  !FileManager.default.fileExists(atPath: file.path), let data = Self.descriptorData(bot) else { continue }
+            guard FileManager.default.fileExists(atPath: bot.folder, isDirectory: &isFolder), isFolder.boolValue else { continue }
+            let folder = URL(filePath: bot.folder)
+            let file = folder.appending(path: Bot.Descriptor.file)
+            // One its box couldn't read (an earlier version could leave it half written) is written
+            // again, as the app's list has the bot.
+            let readable = (try? Data(contentsOf: file)).flatMap { try? decoder.decode(Bot.Descriptor.self, from: $0) }
             do {
-                try data.write(to: file, options: .atomic)
+                if readable?.id != bot.id || readable?.kuvo != Bot.Descriptor.version, let data = Self.descriptorData(bot) { try data.write(to: file, options: .atomic) }
+                // Its conversation, which its box finds it by.
+                let session = folder.appending(path: "session")
+                if (try? String(contentsOf: session, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) != bot.sessionID {
+                    try Data(bot.sessionID.utf8).write(to: session, options: .atomic)
+                }
             } catch {
                 log.error("A bot's description wasn't written: \(error.localizedDescription, privacy: .public)")
             }
@@ -884,8 +837,6 @@ extension Bots {
     struct MachineKit: Encodable {
         struct Template: Encodable {
             var id: String, name: String, job: String, instructions: String, look: BotLook, personality: String?, wantsProject: Bool
-            /// The template's job, as the first message to the bot, for your composer.
-            var firstMessage: String
         }
         struct Personality: Encodable { var id: String, name: String, description: String, custom: Bool, instruction: String }
         struct Looks: Encodable { var colors: [String], shapes: [String], faces: [String] }
@@ -954,7 +905,7 @@ extension Bots {
         working.instructions = "⟦jobDetails⟧"
         return MachineKit(
             templates: BotTemplate.all.map { .init(id: $0.id, name: $0.name, job: $0.job, instructions: $0.instructions, look: $0.look, personality: $0.personality,
-                                                   wantsProject: $0.wantsProject, firstMessage: BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions)) },
+                                                   wantsProject: $0.wantsProject) },
             personalities: Personalities.presets.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: false, instruction: $0.instruction) },
             looks: .init(colors: BotLook.Tint.allCases.map(\.rawValue), shapes: BotLook.Form.allCases.map(\.rawValue), faces: BotLook.Face.allCases.map(\.rawValue)),
             startingModel: nil, projects: [],
