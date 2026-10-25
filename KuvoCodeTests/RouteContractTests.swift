@@ -240,7 +240,7 @@ final class MacBox {
         // What its box makes and tells this Mac's bots with, as the app gives it as the box starts.
         app.bots.writeMacKit()
         self.app = app
-        #expect(app.skillsFolder == Self.skills && app.engineConfig.file == Self.folders.configFile, "the box's folders are the app's")
+        #expect(app.engineConfig.file == Self.folders.configFile, "the box's folders are the app's")
         await settle()
     }
 
@@ -327,8 +327,15 @@ final class MacBox {
             try write(string("text"), to: folder.appending(path: "SKILL.md"))
             if let github = given["github"] as? [String: String] {
                 try write(String(decoding: JSONSerialization.data(withJSONObject: ["branch": "main", "path": github["path"] ?? "", "repository": github["repository"] ?? ""]), as: UTF8.self),
-                          to: folder.appending(path: SkillLibrary.sourceFile))
+                          to: folder.appending(path: ".kuvo-source.json"))
             }
+        case "trashedSkill":
+            // One in Recently Deleted, put away `daysAgo` days ago, named by when, as this Mac’s box keeps them
+            // (given once it runs: it starts in a folder of its own).
+            if app == nil { await start() }
+            let when = Date.now.addingTimeInterval(-(given["daysAgo"] as? Double ?? 0) * 86_400)
+            let folder = BoxProcess.home.appending(path: "trash/skills/\(string("name"))-\(Int(when.timeIntervalSince1970))")
+            try write(string("text"), to: folder.appending(path: "SKILL.md"))
         case "settings":
             let value = try JSONSerialization.data(withJSONObject: given["value"] ?? [String: Any]())
             let text = given["text"] as? String ?? String(decoding: value, as: UTF8.self)

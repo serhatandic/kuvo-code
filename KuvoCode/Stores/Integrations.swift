@@ -204,51 +204,73 @@ nonisolated enum Integrations {
 
     static func service(_ id: String) -> Service? { all.first { $0.id == id } }
 
-    /// How an added integration is doing on a computer, as Settings › Integrations
-    /// says it: its server's status, then whether it waits for you. `disabled`: turned off in MCP
-    /// Servers, so it won't start until it's turned on.
-    enum Health: String, Sendable {
-        case connected, starting, waitsForCode, needsSignIn, failed, disabled
+    /// The tag Settings shows after its name: how it's added.
+    static func how(_ way: Way) -> String {
+        switch way {
+        case .official: "Official"
+        case .officialToken: "Official · your token"
+        case .officialApp: "Official · your app"
+        case .package(_, let keys, _, _, _, let macOnly): keys.isEmpty ? (macOnly ? "On this Mac" : "Open source") : "Open source · your key"
+        case .browser: "In the browser"
+        }
     }
 
-    /// `server`, its server as the engine lists it; `off`, turned off in the computer's settings
-    /// (`isOff`); `signedIn`, the integrations the engine keeps a sign-in for; `waitsForCode`,
-    /// Outlook's sign-in not made yet (`waitsForCode(_:)`).
-    static func health(_ service: Service, server: MCPServer?, off: Bool, signedIn: Set<String>, waitsForCode: Bool) -> Health {
-        var health: Health = switch server?.status.status {
-        case _ where off: .disabled
-        case "connected": .connected
-        case "needs_auth": .needsSignIn
-        case "failed": .failed
-        case "disabled": .disabled
-        default: .starting
+    /// An integration as a computer's box lists it (PROTOCOL.md, `kuvo/integrations`): what it is,
+    /// how it's added, and, added, how it's doing there. The box works all of it out; Settings
+    /// shows it.
+    struct Entry: Decodable, Identifiable, Equatable, Sendable {
+        struct Key: Decodable, Equatable, Sendable {
+            let name: String
+            let label: String
+            let prompt: String
         }
-        // A server can answer without a sign-in (Google's do), then turn every call down.
-        if health == .connected, let integration = server?.integrationID, !signedIn.contains(integration) {
-            switch service.way {
-            case .official, .officialApp: health = .needsSignIn
-            default: break
-            }
+
+        /// How an added one is doing there: its server's status, then whether it waits for you.
+        /// `disabled`: turned off in MCP Servers, so it won't start until it's turned on.
+        enum Health: String, Decodable, Sendable {
+            case connected, starting, waitsForCode, needsSignIn, failed, disabled
         }
-        if health == .connected, waitsForCode { health = .waitsForCode }
-        return health
+
+        let id: String
+        let title: String
+        let summary: String
+        /// Its kind's title, which heads its section.
+        let kind: String
+        let symbol: String
+        let site: String
+        /// The tag after its name.
+        let how: String
+        /// `official`, `token`, `app`, `package` or `browser`.
+        let way: String
+        var keys: [Key]?
+        var help: String?
+        var redirect: String?
+        var by: String?
+        var added: Bool
+        var keysSaved: Bool?
+        var health: Health?
+        /// The engine's integration its sign-in goes through.
+        var signIn: String?
+        /// One used on its site: whether that computer's browser is signed in there, when its box
+        /// can tell (this Mac's).
+        var siteSignedIn: Bool?
+
+        var isBrowser: Bool { way == "browser" }
+        var isApp: Bool { way == "app" }
+        var takesKeys: Bool { !(keys ?? []).isEmpty }
     }
 
-    /// Turned off in MCP Servers, in `config` (its settings say `disabled`).
-    @MainActor static func isOff(_ service: Service, in config: EngineConfig) -> Bool {
-        config.value(at: MCPSettings.path + [service.id, "disabled"])?.bool == true
+    /// Those a computer's box lists, and why its settings can't be changed, when they can't.
+    struct Listed: Decodable, Equatable, Sendable {
+        var integrations: [Entry]
+        /// Its engine isn't running or answering, so an added one's health isn't known.
+        var engineDown: Bool?
+        var problem: String?
     }
 
     /// On again, as its switch in MCP Servers turns it on.
-    @MainActor static func turnOn(_ service: Service, in config: EngineConfig) {
-        config.set(nil, at: MCPSettings.path + [service.id, "disabled"])
-    }
-
-    /// Microsoft 365, without its sign-in yet, on this Mac (a machine's isn't looked at): its
-    /// server signs in by itself, with a code, when the agent first uses it.
-    static func waitsForCode(_ service: Service) -> Bool {
-        guard let files = signInFiles[service.id], let first = files.first else { return false }
-        return !FileManager.default.fileExists(atPath: AppInfo.supportDirectory.appending(path: "integrations/\(service.id)/\(first)").path)
+    @MainActor static func turnOn(_ id: String, in config: EngineConfig) {
+        config.set(nil, at: MCPSettings.path + [id, "disabled"])
     }
 
     // MARK: Their sites

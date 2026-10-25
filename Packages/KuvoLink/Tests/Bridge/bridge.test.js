@@ -899,7 +899,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"],
     personalities: ["GET", "kuvo/personalities"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
-    "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
+    "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;

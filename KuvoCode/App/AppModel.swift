@@ -89,8 +89,6 @@ final class AppModel {
     /// else a machine's ID (see `renewEngines`).
     @ObservationIgnored var renewals: Set<String> = []
     @ObservationIgnored var renewing: Task<Void, Never>?
-    /// Skills added in Settings, beside the settings file: the engine reads them for every project.
-    var skillsFolder: URL { engineFolders.configFile.deletingLastPathComponent().appending(path: "skills") }
     /// Brings the main window back (set by the window itself; the usage menu's "Open Kuvo Code").
     var openMainWindow: (() -> Void)?
     /// Opened at login (Open at Login): this Mac's box runs in the background, its engine, bots and
@@ -196,7 +194,7 @@ final class AppModel {
     @ObservationIgnored var restartedStuckEngine = false
     private let log = Logger(subsystem: "run.kuvo.code", category: "engine")
 
-    /// This Mac's engine's folders (its box keeps its settings there too: `BoxProcess`).
+    /// This Mac's engine's folders (its box keeps its settings and reads its skills there too: `BoxProcess`).
     nonisolated static var engineFolders: EngineFolders {
         EngineFolders(root: AppInfo.supportDirectory.appending(path: "opencode"))
     }
@@ -355,7 +353,7 @@ final class AppModel {
             // Read off the main thread: the keychain can wait on you (a prompt to allow it).
             await Task.detached { IntegrationKeys.writeFiles() }.value
             IntegrationKeys.keepFresh()
-            let integrations = AppInfo.supportDirectory.appending(path: "integrations")
+            let integrations = BoxProcess.integrations
             try? FileManager.default.createDirectory(at: integrations, withIntermediateDirectories: true)
             shell["KUVO_INTEGRATIONS"] = integrations.path
             // This Mac's box, before the engine: it keeps the engine's settings (and the other

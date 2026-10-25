@@ -1,124 +1,46 @@
-// Settings › Integrations on a machine, from a phone with the Mac closed: from the catalog the Mac
-// leaves there, one added with its keys (or the keys it has), one used on its site turned away,
-// and one removed with everything that goes with it: its keys, what its server kept, its bots'
-// own keys and folder settings, all on the machine itself.
-import { test, after } from "node:test";
+// Settings › Integrations on a machine, from a phone or a Mac with the Mac closed: from the catalog
+// the Mac leaves there, its keys in files only you can read (`box/keys`, a bot's own in
+// `box/bot-keys`), all on the machine itself. The scenarios are in integrations-scenarios.js.
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { boxRoute } from "./bot-keys-scenarios.js";
+import { integrationScenarios, standInEngine } from "./integrations-scenarios.js";
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-integrations-"));
+const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-integrations-")));
 process.env.KUVO_HOME = home;
+delete process.env.KUVO_INTEGRATIONS;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 
-const keyFile = "{file:~/.kuvo-code/box/keys/KUVO_KEY_TODOIST_API_KEY}";
-const catalog = { integrations: [
-  { id: "todoist", title: "Todoist", summary: "Tasks", kind: "Code and Work", symbol: "checklist", site: "https://todoist.com", how: "Open source · your key", way: "package",
-    keys: [{ name: "API_KEY", label: "API token", prompt: "From Todoist" }], variables: { API_KEY: "KUVO_KEY_TODOIST_API_KEY" },
-    settings: { type: "local", command: ["kuvo-npx", "@doist/todoist-mcp@1.0.0"], environment: { API_KEY: keyFile }, codemode: false } },
-  { id: "linkedin", title: "LinkedIn", summary: "Posts", kind: "Social", symbol: "person", site: "https://linkedin.com", how: "In the browser", way: "browser" },
-] };
-fs.mkdirSync(path.join(home, "bin"), { recursive: true });
-fs.writeFileSync(path.join(home, "bin", "integrations.json"), JSON.stringify(catalog));
-fs.mkdirSync(path.join(home, "box"), { recursive: true });
-fs.writeFileSync(path.join(home, "box", "opencode.json"), JSON.stringify({ mcp: { servers: {} } }));
-const settings = () => JSON.parse(fs.readFileSync(path.join(home, "box", "opencode.json"), "utf8"));
-const ask = (method, route, body) => link.answerIntegrations(method, route, body, null, undefined);
+const keyFile = name => path.join(home, "box", name.includes("__") ? "bot-keys" : "keys", name);
 
-test("listed from the Mac's catalog, added with its keys or the ones it has, never one used on its site", async () => {
-  const listed = await ask("GET", "kuvo/integrations");
-  assert.deepEqual(listed.value.integrations.map(each => [each.id, each.added, each.keysSaved]), [["todoist", false, false], ["linkedin", false, undefined]]);
-  assert.equal(listed.value.integrations[0].settings, undefined, "its settings stay the machine's");
+integrationScenarios({ link, home, mac: false, store: {
+  settingsFile: path.join(home, "box", "opencode.json"),
+  named: path.join(home, "box", "keys"),
+  data: path.join(home, "integrations"),
+  kept: name => { try { return fs.readFileSync(keyFile(name), "utf8"); } catch { return null; } },
+  keep: (name, value) => {
+    fs.mkdirSync(path.dirname(keyFile(name)), { recursive: true });
+    fs.writeFileSync(keyFile(name), value);
+  },
+} });
 
-  const missing = await ask("POST", "kuvo/integrations/todoist", {});
-  assert.equal(missing.status, 400);
-  assert.match(missing.value.message, /API token/);
-  const added = await ask("POST", "kuvo/integrations/todoist", { keys: { API_KEY: " tok_123 " } });
-  assert.equal(added.status, 200);
-  assert.equal(added.value.integration.added, true);
-  assert.equal(fs.readFileSync(path.join(home, "box", "keys", "KUVO_KEY_TODOIST_API_KEY"), "utf8"), "tok_123");
-  // Where this box keeps its keys (here, the test's own folder), whatever folder the catalog names.
-  assert.deepEqual(settings().mcp.servers.todoist.environment, { API_KEY: `{file:${home}/box/keys/KUVO_KEY_TODOIST_API_KEY}` });
-  // Again, without keys: the ones it has do.
-  assert.equal((await ask("POST", "kuvo/integrations/todoist", {})).status, 200);
-
-  assert.equal((await ask("POST", "kuvo/integrations/linkedin", {})).status, 409);
-  assert.equal((await ask("POST", "kuvo/integrations/nothing", {})).status, 404);
-});
-
-test("one turned off in MCP Servers says so (disabled), not that it's starting, so a phone doesn't wait for it", async t => {
-  const health = async engine => (await link.answerIntegrations("GET", "kuvo/integrations", undefined, engine, undefined)).value.integrations.find(each => each.id === "todoist").health;
-  const turn = off => {
-    const written = settings();
-    if (off) written.mcp.servers.todoist.disabled = true; else delete written.mcp.servers.todoist.disabled;
-    fs.writeFileSync(path.join(home, "box", "opencode.json"), JSON.stringify(written));
-  };
-  assert.equal((await ask("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_123" } })).status, 200);
-  t.after(() => turn(false));
-  assert.equal(await health(null), "starting", "on, with no engine to say more");
-  turn(true);
-  assert.equal(await health(null), "disabled");
-  // As the engine says it too, whatever its settings say.
-  turn(false);
-  const http = await import("node:http");
-  const server = http.createServer((request, response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ data: request.url === "/api/mcp" ? [{ name: "todoist", status: { status: "disabled" } }] : [] }));
+// A Mac's Save on a machine goes over SSH (`box route`), a command that ends with its answer: its
+// server still connects again a moment later, in every folder the machine's engine has open.
+test("new keys from a Mac over SSH: its server connects again a moment later, everywhere", async () => {
+  const { engine, asked } = await standInEngine(() => [], ["/work/app"]);
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine));
+  const connected = new Promise(resolve => {
+    asked.onAsked = () => { if (asked.includes("POST /api/experimental/mcp/todoist/connect in /work/app")) resolve(); };
   });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  assert.equal(await health({ port: server.address().port, password: "pw" }), "disabled");
-});
-
-test("removed with its keys, what its server kept, and its bots' own keys and folder settings", async () => {
-  fs.mkdirSync(path.join(home, "integrations", "todoist"), { recursive: true });
-  fs.mkdirSync(path.join(home, "box", "bot-keys"), { recursive: true });
-  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT"), "theirs");
-  fs.writeFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "stays");
-  const own = path.join(home, "bots", "bot_scout", "workspace", ".opencode");
-  fs.mkdirSync(own, { recursive: true });
-  fs.writeFileSync(path.join(own, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "local", environment: { API_KEY: "{file:~/.kuvo-code/box/bot-keys/KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT}" } } } } }));
-  // Another bot's, written by hand without keys of its own: it stays, as the Mac leaves it.
-  const theirs = path.join(home, "bots", "bot_atlas", "workspace", ".opencode");
-  fs.mkdirSync(theirs, { recursive: true });
-  fs.writeFileSync(path.join(theirs, "opencode.json"), JSON.stringify({ mcp: { servers: { todoist: { type: "remote", url: "https://example.com/mcp" } } } }));
-
-  assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 200);
-  assert.equal(settings().mcp?.servers?.todoist, undefined);
-  assert.equal(fs.existsSync(path.join(home, "box", "keys", "KUVO_KEY_TODOIST_API_KEY")), false);
-  assert.equal(fs.existsSync(path.join(home, "integrations", "todoist")), false);
-  assert.equal(fs.existsSync(path.join(home, "box", "bot-keys", "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT")), false);
-  assert.equal(fs.readFileSync(path.join(home, "box", "bot-keys", "KUVO_KEY_OTHER_API_KEY__BOT_SCOUT"), "utf8"), "stays");
-  assert.equal(fs.existsSync(own), false, "a bot's settings naming only it go, with their folder");
-  assert.equal(JSON.parse(fs.readFileSync(path.join(theirs, "opencode.json"), "utf8")).mcp.servers.todoist.type, "remote");
-  assert.equal(fs.existsSync(path.join(home, "box", "integrations-removed.json")), false, "nothing for a Mac to see to: the machine has done it all");
-  assert.equal((await ask("DELETE", "kuvo/integrations/todoist")).status, 404);
-});
-
-test("new keys: its server connects again a moment later, as Settings has it", async () => {
-  const asked = [];
-  const http = await import("node:http");
-  const server = http.createServer((request, response) => {
-    asked.push(`${request.method} ${request.url}`);
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ data: [] }));
-  });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  after(() => { server.closeAllConnections(); server.close(); });
-  const engine = { port: server.address().port, password: "pw" };
-  // What waits a moment, run when the test says.
-  const waiting = [];
-  const later = (run, ms) => waiting.push({ run, ms });
-  const added = await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_789" } }, engine, undefined, undefined, later);
-  assert.equal(added.status, 200);
+  const saved = await boxRoute({ method: "POST", path: "kuvo/integrations/todoist", body: { keys: { API_KEY: "tok_ssh" } } }, { ...process.env, KUVO_HOME: home });
+  assert.equal(saved.status, 200);
   assert.ok(!asked.some(each => each.includes("/connect")), "not before the engine has read them");
-  assert.deepEqual(waiting.map(each => each.ms), [2_000]);
-  await waiting[0].run();
-  assert.ok(asked.includes("POST /api/experimental/mcp/todoist/connect"));
-  // Without new keys, nothing to connect again for.
-  waiting.length = 0;
-  await link.answerIntegrations("POST", "kuvo/integrations/todoist", {}, engine, undefined, undefined, later);
-  assert.equal(waiting.length, 0);
+  await connected;
+  assert.ok(asked.includes("POST /api/experimental/mcp/todoist/connect"), `its own copy too: ${asked}`);
+  fs.rmSync(path.join(home, "run", "engine.json"));
 });

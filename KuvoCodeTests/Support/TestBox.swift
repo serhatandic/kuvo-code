@@ -26,7 +26,8 @@ final class TestBox {
     /// Started, finding the engine at `engine` (StubWeb's, started already). `process`: an app's
     /// own (`AppModel.box`), else one of its own. `defaultsAdded`: it starts as one that added its
     /// defaults to this Mac's settings before (a test's settings stay as it gives them).
-    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true) async throws {
+    /// `environment`: what else it runs with (GitHub's stand-in, `KUVO_TEST_GITHUB`).
+    init(engine: String, password: String = "test", process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true, environment: [String: String] = [:]) async throws {
         guard let node = Self.node else { throw TestFailure("Node runs this Mac's box in the tests, and there's none.") }
         let url = try URL(string: engine).orThrow("Not an engine's address: \(engine)")
         self.process = process
@@ -37,7 +38,7 @@ final class TestBox {
         // As the app starts it: its environment, and the app's own wake-up folders and kuvo-wake,
         // with which it sends this Mac's wake-ups.
         try WakeUps.installCommand()
-        var environment = ProcessInfo.processInfo.environment
+        var environment = ProcessInfo.processInfo.environment.merging(environment) { _, given in given }
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path

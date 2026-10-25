@@ -772,7 +772,7 @@ final class PhoneLink {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
-            let forwarded = EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
+            let forwarded = EngineRoutes.forward(request, to: base, password: box.password, session: Self.boxSession, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                                  allowing: { path, _ in path.hasPrefix("kuvo/") })
             // A change to a conversation's wake-ups: what the app shows of them (and `kuvo/bots`
             // lists) has it before the answer goes back, so what's read next agrees.
@@ -824,28 +824,6 @@ final class PhoneLink {
                 Task { @MainActor in
                     let posts = request.method.uppercased() == "POST"
                     let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // Settings › Integrations: this Mac's, added and removed as the page does it.
-        if route == "kuvo/integrations" || route.hasPrefix("kuvo/integrations/") {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerIntegrations(request) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // Settings › Skills: this Mac's skills, and GitHub's collections, reached from here.
-        if ["kuvo/skills", "kuvo/skill-library"].contains(where: { route == $0 || route.hasPrefix($0 + "/") }) {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerSkills(request) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1118,9 +1096,17 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/bots"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
+    /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
+    /// (projects, worktrees) hold theirs open, and many requests at once (a phone reading a big
+    /// collection) never hold up another (adding a skill). Kept in memory only.
+    nonisolated static let boxSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpMaximumConnectionsPerHost = 64
+        return URLSession(configuration: configuration)
+    }()
 
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
@@ -1195,7 +1181,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+        "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1292,11 +1278,6 @@ final class PhoneLink {
             return answerPersonalities(nil, request)
         case let path where path.hasPrefix("kuvo/personalities/"):
             return answerPersonalities(String(path.dropFirst("kuvo/personalities/".count)).removingPercentEncoding ?? "", request)
-        case "kuvo/keys":
-            guard request.method.uppercased() == "GET" else { return (405, Data()) }
-            return (200, (try? JSONSerialization.data(withJSONObject: ["keys": IntegrationKeys.shared])) ?? Data("{}".utf8))
-        case let path where path.hasPrefix("kuvo/keys/"):
-            return answerKey(String(path.dropFirst("kuvo/keys/".count)).removingPercentEncoding ?? "", request)
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (`kuvo/info` answers again).
@@ -1345,31 +1326,6 @@ final class PhoneLink {
             guard let personality = store.custom.first(where: { $0.id == id }) else { return (404, Data()) }
             store.delete(personality)
             return (200, Data("{}".utf8))
-        default:
-            return (405, Data())
-        }
-    }
-
-    // MARK: Settings
-
-    /// `kuvo/keys/<name>`: one of this Mac's integrations' keys (`KUVO_KEY_…`, not a bot's own),
-    /// in your Keychain: GET its value, PUT `{"value": …}` to set it, DELETE to remove it. The
-    /// engine reads it as it next reads its settings.
-    private func answerKey(_ name: String, _ request: LinkRequest) -> (Int, Data) {
-        guard name.range(of: #"\AKUVO_KEY_[A-Za-z0-9_]+\z"#, options: .regularExpression) != nil, !IntegrationKeys.isBots(name) else {
-            return (400, Self.message("That isn't a key's name."))
-        }
-        switch request.method.uppercased() {
-        case "GET":
-            guard let value = IntegrationKeys.value(name) else { return (404, Data()) }
-            return (200, (try? JSONSerialization.data(withJSONObject: ["value": value])) ?? Data())
-        case "PUT":
-            guard let value = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["value"] as? String, !value.isEmpty else {
-                return (400, Self.message("Send {\"value\": \"…\"}."))
-            }
-            return IntegrationKeys.set(value, for: name) ? (200, Data("{}".utf8)) : (500, Self.message("It couldn't be saved in the Keychain."))
-        case "DELETE":
-            return IntegrationKeys.set(nil, for: name) ? (200, Data("{}".utf8)) : (500, Self.message("It couldn't be removed from the Keychain."))
         default:
             return (405, Data())
         }
