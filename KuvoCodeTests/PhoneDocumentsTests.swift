@@ -129,6 +129,22 @@ import Testing
         #expect(older.documents.own["phones"]?.n == phones.n)
     }
 
+    /// The file was this version's own last (it's what this Mac's box keeps, copied): how far this
+    /// Mac's documents had come still goes to the box as it starts, so it never starts over below
+    /// what your machines have.
+    @Test func thisMacsCountsGoToTheBoxWhicheverVersionWroteTheFileLast() async throws {
+        let lab = Machine(id: "lab.invalid")
+        try kept(machines: [lab], counts: ["peers": 30, "phones": 12])
+        let date = try #require(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date)
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: "phoneLink.written")
+        let box = try await SettingsBox(port: 47_966)
+        let link = try await started(on: box)
+        defer { done(box, link) }
+        let now = try await own(box)
+        #expect(try #require(now["peers"]).n > 30)
+        #expect(try #require(now["phones"]).n > 12)
+    }
+
     /// Removed on a machine (its phones document, as setting it up brings it, or its mail): gone
     /// from this Mac's box, here, and where an older version reads your phones.
     @Test func aPhoneRemovedOnAMachineLeavesThisMacToo() async throws {
@@ -141,15 +157,15 @@ import Testing
         defer { done(box, link) }
         let from = lab.x25519.publicBytes.base64URL
         let given = { (doc: [String: Any]) throws -> Data in try JSONSerialization.data(withJSONObject: ["from": from, "docs": ["give": [doc]]]) }
-        // Signed by another key, as if by the machine: nothing.
-        let forged = try given(Documents.sign(Documents.SigningKey(), kind: "phones", n: 1, body: Data(#"{"phones":[],"removed":[{"key":"\#(lost)","pairing":"p1"}]}"#.utf8)).json)
+        // Signed by another key, as if by the machine, removing the one that stays: nothing.
+        let forged = try given(Documents.sign(Documents.SigningKey(), kind: "phones", n: 1, body: Data(#"{"phones":[],"removed":[{"key":"\#(keep)","pairing":"p2"}]}"#.utf8)).json)
         _ = try await box.client.send("POST", "kuvo/link/docs", body: forged)
-        #expect(link.phones.map(\.key).sorted() == [lost, keep].sorted())
         // The machine's own: the lost phone removed itself there.
         let own = try given(try lab.sign("phones", 1, ["phones": [], "removed": [["key": lost, "pairing": "p1"]]]))
         _ = try await box.client.send("POST", "kuvo/link/docs", body: own)
         try await until { link.phones.map(\.key) == [keep] }
         #expect(link.paired.removed.contains(.init(key: lost, pairing: "p1")))
+        #expect(!link.paired.removed.contains(.init(key: keep, pairing: "p2")), "the forged one changed nothing")
         #expect(PhoneLink(file: file).phones.map(\.key) == [keep], "kept so after a restart, and for an older version")
     }
 }

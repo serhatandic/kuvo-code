@@ -70,9 +70,6 @@ public enum Documents {
 
     static func shortHash(_ data: Data) -> String { Data(SHA256.hash(data: data)).prefix(8).base64URL }
 
-    /// The hash of a body, to tell whether one of this box's own changed.
-    public static func bodyHash(_ body: Data) -> String { shortHash(body) }
-
     /// `envelope` checked: signed by the origin it names, of a kind there is, its version a whole number
     /// from 1, no bigger than a document can be. Nil otherwise.
     public static func read(_ envelope: Envelope) -> Document? {

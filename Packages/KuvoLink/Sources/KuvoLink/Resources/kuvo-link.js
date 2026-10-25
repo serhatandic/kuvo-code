@@ -4952,13 +4952,14 @@ const pause = (ms, signal) => new Promise(resolve => {
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
 // its bots' part of the box's work (this Mac's box, whose app does the rest).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal } = {}) {
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn } = {}) {
   const answered = id => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold });
+  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
 }
 
-export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null } = {}) {
+// `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
+export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {} } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -4979,7 +4980,7 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
         // its run ends.
         // A bot's run starting: what it's told brought up to date first.
         if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
-        if (signIns) noteSignIn(event, source).catch(() => {});
+        if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
           if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
@@ -6415,7 +6416,8 @@ export function docMails(docs) {
 // (`send`, `[{to, docs}]`). Each document it took goes on to the boxes that take it, but back to the
 // one it came from; its own that changed, to all of them; and for a digest, what the sender lacks,
 // and, unless it's an answer, this box's own digest when the sender has something newer.
-export function docsWork(state, sender, docs) {
+// `stay`: a Mac whose removal of this box it doesn't take (the Mac setting it up over SSH now).
+export function docsWork(state, sender, docs, { stay = null } = {}) {
   const { link } = state;
   const sends = new Map();
   const to = (peer, change) => {
@@ -6447,7 +6449,7 @@ export function docsWork(state, sender, docs) {
     const named = Array.isArray(doc.body.boxes) && doc.body.boxes.some(box => box?.key === own);
     if (mac && !named && Array.isArray(doc.body.left) && doc.body.left.includes(own)) left.push(mac);
   }
-  for (const mac of left) leaveMac(link, mac);
+  for (const mac of left.filter(each => each !== stay)) leaveMac(link, mac);
   pruneDocs(link);
   foldPhones(link);
   const personalities = took.filter(doc => doc.kind === "personalities").map(doc => doc.body);
@@ -6514,7 +6516,7 @@ export function docsWork(state, sender, docs) {
   }
   return {
     took,
-    left,
+    left: left.filter(each => each !== stay),
     send: [...sends.values()].filter(docs => docs.give.length || docs.have).map(({ peer, ...docs }) => ({ to: peer, docs: { ...docs, give: dedupe(docs.give) } })),
   };
 }
@@ -7297,7 +7299,8 @@ async function afterDocs(work, before, library, link, host) {
   if (library !== before) await takePersonalities(library).catch(() => {});
   for (const mac of work.left) forgetMacsAgents(mac, link);
   host?.keepOnly?.(new Set((link.phones ?? []).map(phone => phone.key)));
-  writeAgents(link);
+  // (On this Mac its app keeps the list of agents, until that's the box's too.)
+  if (!IS_MAC) writeAgents(link);
   sendDocs(host, link, work.send);
 }
 
@@ -8299,17 +8302,22 @@ export function takeMacDocuments(link, given) {
 }
 
 // Your machines this Mac set up (over SSH), as its app says: those that sign their documents, each
-// `{key, sign, address, name, id}`; and the conversations being moved, `{session, key}` each. One no
-// longer there is one this Mac removed: its peers document names it so it lets this Mac go, and it
-// hears that once, now; one set up again isn't. False for what isn't that.
+// `{key, sign, address, name, id}`; the conversations being moved, `{session, key}` each; and the
+// machines you removed, by key (`removed`): its peers document names them so they let this Mac go,
+// and they hear that once. One just missing from the list (it can't be reached to be set up, say)
+// isn't a peer now, and nothing more; one set up again is no longer removed. One that isn't a
+// machine's record is left out (a line in the box's log says so), never the rest with it. No link
+// for what isn't a list.
 export function setMacPeers(link, given) {
   if (!isObject(given) || !Array.isArray(given.peers)) return { link: null, gone: [] };
   const now = given.peers.slice(0, MOST_PEERS).map(peer => ({ ...peer, kind: "machine" }))
     .filter(peer => fitsPeer(peer) && typeof peer.sign === "string" && SIGN.test(peer.sign)).map(cleanPeer);
-  if (now.length !== Math.min(given.peers.length, MOST_PEERS)) return { link: null, gone: [] };
-  const gone = peersOf(link).filter(peer => !now.some(each => each.key === peer.key));
-  const kept = (Array.isArray(link.left) ? link.left : []).filter(key => !now.some(peer => peer.key === key) && !gone.some(peer => peer.key === key));
-  link.left = [...kept, ...gone.map(peer => peer.key)].slice(-64);
+  const skipped = Math.min(given.peers.length, MOST_PEERS) - now.length;
+  if (skipped) console.error(`${skipped} of this Mac's machines weren't records the box could take, and were left out.`);
+  const removed = (Array.isArray(given.removed) ? given.removed : []).filter(key => typeof key === "string" && KEY.test(key) && !now.some(peer => peer.key === key));
+  const gone = peersOf(link).filter(peer => removed.includes(peer.key));
+  const kept = (Array.isArray(link.left) ? link.left : []).filter(key => !now.some(peer => peer.key === key) && !removed.includes(key));
+  link.left = [...kept, ...removed].slice(-64);
   link.macPeers = now;
   link.macMoved = cleanMoved(given.moved);
   pruneDocs(link);
@@ -8317,10 +8325,18 @@ export function setMacPeers(link, given) {
 }
 
 // Machines this Mac removed hear its peers document once, while it still knows where they are: they
-// let this Mac go.
+// let this Mac go. Off the relay, they hear it once it's back (`link.untold`).
 function tellGone(gone) {
   const host = macLink.host;
-  if (!host?.welcomed || !gone.length) return;
+  if (!gone.length) return;
+  if (!host?.welcomed) {
+    updateLink(link => {
+      if (!link) return null;
+      link.untold = [...(Array.isArray(link.untold) ? link.untold : []).filter(peer => !gone.some(each => each.key === peer.key)), ...gone].slice(-64);
+      return link;
+    });
+    return;
+  }
   let envelope = null;
   const link = updateLink(link => {
     const made = link?.sign ? ownDoc(link, "peers", macPeersBody(link)) : null;
@@ -8332,6 +8348,18 @@ function tellGone(gone) {
     const bytes = mailFor(peer, { docs: { give: [envelope] }, at: Date.now() }, link);
     if (bytes) try { host.send(bytes); } catch {}
   }
+}
+
+// On the relay again: the machines removed meanwhile hear it now (one set up again since, not).
+function tellUntold() {
+  let untold = [];
+  updateLink(link => {
+    untold = (Array.isArray(link?.untold) ? link.untold : []).filter(peer => fitsPeer(peer) && !peersOf(link).some(each => each.key === peer.key));
+    if (!link?.untold) return null;
+    delete link.untold;
+    return link;
+  });
+  tellGone(untold.map(cleanPeer));
 }
 
 const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;
@@ -8406,10 +8434,13 @@ async function* macLinkRoute(route, request, signal) {
       // signed with, its own documents as they are now and those it keeps of your machines.
       if (method !== "GET") return yield* json(405, {});
       await macKeys();
+      // `?key=`: a machine set up again, no longer one this Mac removed.
+      const again = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("key");
       const library = readPersonalities();
       let docs = [];
       const link = updateLink(link => {
         if (!link?.sign) return null;
+        if (again && Array.isArray(link.left)) link.left = link.left.filter(key => key !== again);
         const own = ownDocs({ link, library });
         docs = [...Object.values(own).map(made => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => (a.d < b.d ? -1 : 1))];
         return link;
@@ -8549,8 +8580,10 @@ export async function runMacLink() {
       const started = Date.now();
       const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, () => {
         setLinkStatus("connected");
-        // Meeting your machines: this Mac's documents as they are now, and its digest to each.
+        // Meeting your machines: this Mac's documents as they are now, and its digest to each; and
+        // those removed while it was away hear it.
         try { docsChanged(host, { greet: true }); } catch {}
+        try { tellUntold(); } catch {}
       });
       clearInterval(looking);
       if (macLink.host === host) macLink.host = null;
@@ -9131,7 +9164,8 @@ async function setup() {
     if (typeof input.macID === "string" && /^[A-Za-z0-9-]{1,100}$/.test(input.macID)) next.tolerantIDs = { ...(next.tolerantIDs ?? {}), [input.macID]: input.tolerates === 1 };
     // Its documents, and those it carries of your other computers: taken as any are.
     const state = { link: next, library: before };
-    work = docsWork(state, { key: mac ?? "", sign: mac ? macSign(next, mac) : undefined }, { give: Array.isArray(input.docs) ? input.docs : [] });
+    // (The Mac setting it up wants it: a removal it signed before never counts here now.)
+    work = docsWork(state, { key: mac ?? "", sign: mac ? macSign(next, mac) : undefined }, { give: Array.isArray(input.docs) ? input.docs : [] }, { stay: mac ?? null });
     library = state.library;
     if (!next.phones.length && !peersOf(next).length) return current ? next : null;
     next.relay = String(input.relay);

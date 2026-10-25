@@ -1117,6 +1117,8 @@ extension AgentMail {
         let list = announcedList()
         guard let data = try? JSONEncoder().encode(list) else { return }
         let now = Date.now
+        // This Mac's digest of documents, once a round (its box brings its own up to date for it).
+        let have = await app.phoneLink.documentsDigest()
         for machine in app.machines.list.map(\.id) where app.phoneLink.reachesByMail(machine) {
             if let last = announcedTo[machine], last.data == data, now.timeIntervalSince(last.at) < 600 { continue }
             // As many as fit in one mail: the first (bots, then the latest sessions) first.
@@ -1125,7 +1127,7 @@ extension AgentMail {
                 // With this Mac's digest of documents, so a machine that missed one gets it now.
                 // With what this Mac's box answers: its bots take a chat's turns there (`groups.seats`).
                 var payload: [String: Any] = ["agents": ["at": Self.now, "list": encoded, "features": PhoneLink.features], "at": Self.now]
-                if let have = await app.phoneLink.documentsDigest() { payload["docs"] = ["have": have] }
+                if let have { payload["docs"] = ["have": have] }
                 let mailed = await app.phoneLink.mail(payload, to: machine)
                 if mailed == .sent { announcedTo[machine] = (data, now, Set(list.prefix(count).map(\.session))) }
                 if mailed != .tooBig { break }

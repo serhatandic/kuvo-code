@@ -82,26 +82,6 @@ async function ask(method, route) {
   return { status: parts[0].head.status, json };
 }
 const ended = async () => (await ask("GET", "kuvo/accounts/ended")).json.providers;
-// The box's record of the sign-ins that ended, once it holds `provider`: waited for as it's written.
-function noted(provider) {
-  const file = path.join(home, "run", "ended-sign-ins.json");
-  const has = () => {
-    try { return provider in JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
-  };
-  return new Promise(resolve => {
-    // Watched before it's looked at, so a write in between isn't missed.
-    const watcher = fs.watch(path.dirname(file), () => {
-      if (!has()) return;
-      watcher.close();
-      resolve();
-    });
-    if (has()) {
-      watcher.close();
-      resolve();
-    }
-  });
-}
-
 // A run on the engine, as its events say it ended.
 const refused = session => link.noteSignIn({ type: "session.execution.failed", data: { sessionID: session, error: { type: "provider.auth", message: "Request failed with status 401" } } }, engine.source);
 
@@ -166,10 +146,12 @@ test("a plan whose sign-in ran out is noted as the box watches its engine, which
     const stop = new AbortController();
     t.after(() => stop.abort());
     const following = engine.nextFollower();
-    link.watchBox({ ...watching, signal: stop.signal });
+    let looked;
+    const signedIn = new Promise(resolve => { looked = resolve; });
+    link.watchBox({ ...watching, signal: stop.signal, signedIn: event => event.type === "session.execution.failed" && looked() });
     await following;
     engine.send({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "provider.auth", message: "Request failed with status 401" } } });
-    await noted("openai");
+    await signedIn;
     stop.abort();
     assert.deepEqual(await ended(), ["openai"], JSON.stringify(watching));
     // What a Mac asks a machine's box over SSH (`box route`), a process of its own: the same.

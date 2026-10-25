@@ -27,4 +27,17 @@ struct MacDocuments: Codable, Equatable {
     var views: [String: Seen] = [:]
     /// The keys of machines this Mac removed, the newest last.
     var left: [String] = []
+
+    /// `other` (the box's, as it is now) met with this copy: each count the higher of the two, so the
+    /// copy an older Kuvo Code goes on from never goes back; the machines removed, `other`'s.
+    func merged(with other: MacDocuments) -> MacDocuments {
+        var merged = other
+        for (kind, mine) in own where mine.n > (other.own[kind]?.n ?? 0) { merged.own[kind] = mine }
+        for (key, mine) in held {
+            let n = { (envelope: Documents.Envelope?) in envelope.flatMap(Documents.read)?.n ?? 0 }
+            if n(mine) > n(other.held[key]) { merged.held[key] = mine }
+        }
+        for (origin, mine) in views where mine.n > (other.views[origin]?.n ?? 0) { merged.views[origin] = mine }
+        return merged
+    }
 }

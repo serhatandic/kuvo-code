@@ -76,6 +76,17 @@ struct MachinesSettings: View {
                             .foregroundStyle(.secondary)
                     }
                     MachineStatus(engine: engine)
+                    // Set up for your phones and other computers: one that couldn't finish says so.
+                    if let problem = app.phoneLink.setupProblems[engine.machine.id] {
+                        Label {
+                            Text("Your phones and other computers can’t reach it yet. \(problem) Kuvo Code tries again when it next connects.")
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
             .settingsText()

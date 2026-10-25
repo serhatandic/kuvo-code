@@ -238,9 +238,14 @@ final class PhoneLink {
     @ObservationIgnored private var pairedForDemo = false
 
     /// KUVO_DEMO_PHONE_REMOVING: Settings › Phone as when a phone's removal waits for the box.
+    /// KUVO_DEMO_MACHINE_SETUP_FAILED=<machine>|<why>: Settings › Machines as when that machine
+    /// couldn't be set up for your phones and other computers.
     func showRemovalForDemo() {
-        guard ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_REMOVING"] != nil else { return }
-        removalProblem = Self.removalWaiting
+        let environment = ProcessInfo.processInfo.environment
+        if environment["KUVO_DEMO_PHONE_REMOVING"] != nil { removalProblem = Self.removalWaiting }
+        if let failed = environment["KUVO_DEMO_MACHINE_SETUP_FAILED"]?.split(separator: "|", maxSplits: 1).map(String.init), failed.count == 2 {
+            setupProblems[failed[0]] = failed[1]
+        }
     }
 
     private func pairForDemo() {
@@ -281,6 +286,8 @@ final class PhoneLink {
                (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
                await tellPeers(client), await takePhonesFromFile(client), await sendRemovals(client) {
                 missed = 0
+                // Told: your machines are set up with what it keeps (one that couldn't be before).
+                syncMachines()
                 #if DEBUG
                 pairForDemo()
                 #endif
@@ -329,17 +336,20 @@ final class PhoneLink {
             var phones: [Phone]
             var removed: [PairedPhones.Removal]
             var pairing: Bool?
-            var documents: MacDocuments?
         }
         guard let kept = try? JSONDecoder().decode(Kept.self, from: line) else { return }
+        // Read apart from the phones: one that doesn't read leaves the phones as they are.
+        struct Documented: Decodable { var documents: MacDocuments }
+        let documents = (try? JSONDecoder().decode(Documented.self, from: line))?.documents
         let now = Self.without(toRemove, PairedPhones(phones: kept.phones.map {
             Phone(key: $0.key, name: $0.name ?? "", added: Date(timeIntervalSince1970: $0.added ?? 0), address: $0.address, pairing: $0.pairing ?? "")
         }, removed: kept.removed))
         // The link shown was used, or ran out: it's done.
         if kept.pairing == false { pairing = nil }
-        // This Mac's documents as the box has them now, for an older Kuvo Code's copy.
-        if let documents = kept.documents, documents != self.documents {
-            self.documents = documents
+        // This Mac's documents as the box has them now, for an older Kuvo Code's copy: each count
+        // the higher of the two, so the copy never goes back.
+        if let documents, self.documents.merged(with: documents) != self.documents {
+            self.documents = self.documents.merged(with: documents)
             if now == paired { save() }
         }
         guard now != paired else { return }
@@ -348,45 +358,47 @@ final class PhoneLink {
         syncMachines()
     }
 
-    /// What an older Kuvo Code kept of your phones (phone-link.json), met with the box's, where
-    /// it's changed since this one last wrote it: the first time, and after going back to one.
     /// Tells this Mac's box who your machines are, as it starts (before it takes what an older
     /// version kept of documents: what they signed is checked against them). False: it didn't take
     /// it, so it's told again.
     private func tellPeers(_ client: BoxClient) async -> Bool {
-        guard let body = peersBody else { return true }
+        guard let body = peersBody() else { return true }
         return (try? await client.send("PUT", "kuvo/link/peers", body: body))?.status == 200
     }
 
-    /// False: the box didn't take them (it's starting again), so they're tried again.
+    /// What phone-link.json keeps, met with the box's: your phones where an older Kuvo Code changed
+    /// them since this one last wrote it (the first time, and after going back to one), and how far
+    /// this Mac's documents had come, at every start, whatever the file's date (the box only ever
+    /// raises them, so a copy behind it changes nothing). False: the box didn't take them (it's
+    /// starting again), so they're tried again.
     private func takePhonesFromFile(_ client: BoxClient) async -> Bool {
         let written = UserDefaults.standard.double(forKey: Self.writtenKey)
-        guard let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date,
-              changed.timeIntervalSince1970 > written + 0.5 else {
-            phonesTaken = true
-            return true
-        }
+        let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date
+        let phonesChanged = changed.map { $0.timeIntervalSince1970 > written + 0.5 } ?? false
         let older = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
-        let given: [String: Any] = [
-            "phones": older.phones.map { phone -> [String: Any] in
+        var given: [String: Any] = [
+            "phones": [],
+            "removed": [],
+            "documents": (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(older.documents))) ?? [:],
+        ]
+        if phonesChanged {
+            given["phones"] = older.phones.map { phone -> [String: Any] in
                 var entry: [String: Any] = ["key": phone.key, "name": phone.name, "added": phone.added.timeIntervalSince1970.rounded(), "pairing": phone.pairing]
                 if let address = phone.address { entry["address"] = address }
                 return entry
-            },
-            "removed": older.removed.map { ["key": $0.key, "pairing": $0.pairing] },
-            // How far this Mac's documents had come, never back.
-            "documents": (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(older.documents))) ?? [:],
-        ]
+            }
+            given["removed"] = older.removed.map { ["key": $0.key, "pairing": $0.pairing] }
+        }
         guard let body = try? JSONSerialization.data(withJSONObject: given),
               (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return false }
-        UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey)
+        if phonesChanged, let changed { UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey) }
         phonesTaken = true
         return true
     }
 
-    /// This Mac's box has what phone-link.json kept of your phones, this launch. Until then, what's
-    /// saved leaves the file's phones as they are and its date unrecorded (a machine set up, a
-    /// document taken, a phone removed: each saves), so they're still taken, and never lost.
+    /// This Mac's box has what phone-link.json kept, this launch. Until then, what's saved leaves
+    /// the file's phones as they are and its date unrecorded (a machine set up, a phone removed:
+    /// each saves), so they're still taken, and never lost.
     @ObservationIgnored private var phonesTaken = false
 
     /// When this Kuvo Code last wrote phone-link.json (its file's date then): one newer was an
@@ -570,10 +582,23 @@ final class PhoneLink {
                 var macID = MachineEngine.macID
             }
             let settings = folder.appending(path: "setup.json")
-            // This Mac's keys and documents, as its box keeps them.
+            // This Mac's keys and documents, as its box keeps them (a box starting, or not told
+            // its settings yet, a moment later).
             struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope] }
             guard let client = box() else { throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t running.") }
-            let given = try await client.value(Given.self, "GET", "kuvo/link/setup")
+            var tries = 0
+            var given: Given?
+            // One set up before (removed since, say): no longer one this Mac removed.
+            let again = machineHosts[machine.id].map { "?key=" + $0.key } ?? ""
+            while given == nil {
+                do {
+                    given = try await client.value(Given.self, "GET", "kuvo/link/setup" + again)
+                } catch let refusal as BoxRefusal where refusal.status == 503 && tries < Self.setupTries {
+                    tries += 1
+                    try await Task.sleep(for: .seconds(2))
+                }
+            }
+            guard let given else { return }
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
                                            docs: given.docs, id: machine.id)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
@@ -598,10 +623,20 @@ final class PhoneLink {
                let body = try? JSONSerialization.data(withJSONObject: ["from": key, "docs": ["give": docs.map(\.json)]]) {
                 toBox("kuvo/link/docs", body, using: client)
             }
+            setupProblems[machine.id] = nil
         } catch {
             log.error("Couldn't set up the phone link on a machine: \(error.localizedDescription, privacy: .public)")
+            setupProblems[machine.id] = error.localizedDescription
         }
     }
+
+    /// Tries of this Mac's box, two seconds apart, before setting a machine up gives up until it
+    /// next connects.
+    private static let setupTries = 10
+
+    /// Why a machine couldn't be set up for your phones and other computers just now, by machine,
+    /// for Settings › Machines; tried again when it next connects, or this Mac's box starts.
+    private(set) var setupProblems: [String: String] = [:]
 
     /// A conversation being moved, and the key of the computer it lives on now (PROTOCOL.md,
     /// "Peers"): the one it left may still list it.
@@ -623,19 +658,27 @@ final class PhoneLink {
     /// are that Mac's to tell), with the conversations being moved. The box signs it, meets your
     /// machines' documents and mails them; a machine no longer here is one this Mac removed, which
     /// the box tells to let it go.
-    func peersChanged() {
-        guard let body = peersBody else { return }
+    /// `removed`: the keys of machines you removed (one just missing from the list, as one that
+    /// couldn't be set up just now is, isn't).
+    func peersChanged(removed: [String] = []) {
+        guard let body = peersBody(removed: removed) else { return }
         toBox("kuvo/link/peers", body, method: "PUT")
     }
 
     /// What `peersChanged` tells the box; none while there's no link to your machines (nothing's
     /// made for it then).
-    private var peersBody: Data? {
+    private func peersBody(removed: [String] = []) -> Data? {
         guard relayWanted, hasIdentity else { return nil }
         struct Peer: Encodable { var key: String; var sign: String; var address: String; var name: String; var id: String }
-        struct Body: Encodable { var peers: [Peer]; var moved: [Moved] }
-        let peers = documentMachines.compactMap { id, host in host.sign.map { Peer(key: host.key, sign: $0, address: host.address, name: host.name, id: id) } }
-        return try? JSONEncoder().encode(Body(peers: peers, moved: moved))
+        struct Body: Encodable { var peers: [Peer]; var moved: [Moved]; var removed: [String] }
+        // Only whole records (one that isn't would be left out by the box anyway).
+        let base64URL = /[A-Za-z0-9_-]+/
+        let peers = documentMachines.compactMap { id, host -> Peer? in
+            guard let sign = host.sign, [host.key, sign, host.address].allSatisfy({ $0.wholeMatch(of: base64URL) != nil }),
+                  host.key.count == 43, sign.count == 43, host.address.count == 22 else { return nil }
+            return Peer(key: host.key, sign: sign, address: host.address, name: host.name, id: id)
+        }
+        return try? JSONEncoder().encode(Body(peers: peers, moved: moved, removed: removed))
     }
 
     /// This Mac just met the relay, and may have missed what your machines said: each tells it its
@@ -644,7 +687,6 @@ final class PhoneLink {
         guard let server, status == .connected else { return }
         for (_, host) in documentMachines { await send(["ask": "agents"], to: host, server: server) }
     }
-
 
     /// Mails `payload` to one of your machines' bridges (one that talks to other computers
     /// itself): `offline` when it can't go now (no relay connection, or it isn't such a machine),
@@ -697,9 +739,10 @@ final class PhoneLink {
     /// A machine you removed: phones stop being told about it, and this Mac's box tells it to let
     /// this Mac go (`peersChanged`).
     func forget(machine id: String) {
-        guard machineHosts.removeValue(forKey: id) != nil else { return }
+        guard let host = machineHosts.removeValue(forKey: id) else { return }
         save()
-        peersChanged()
+        // Removed, said so (not just missing): unless it's still one of this Mac's, under another name.
+        peersChanged(removed: machineHosts.values.contains { $0.key == host.key } ? [] : [host.key])
     }
 
     // MARK: Documents
@@ -719,9 +762,9 @@ final class PhoneLink {
         return object["have"] as? [[Any]]
     }
 
-    /// Mails `payload` (with `extra` beside it) to a machine.
-    private func send(_ payload: [String: Any], extra: [String: Any] = [:], to host: MachineHost, server: BoxRelay) async {
-        var mail = payload.merging(extra) { $1 }
+    /// Mails `payload` to a machine.
+    private func send(_ payload: [String: Any], to host: MachineHost, server: BoxRelay) async {
+        var mail = payload
         mail["at"] = Int64(Date.now.timeIntervalSince1970 * 1000)
         guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
               let data = try? JSONSerialization.data(withJSONObject: mail) else { return }
@@ -1501,7 +1544,6 @@ final class PhoneLink {
         guard parts.count == 4, parts[0] == "kuvo", parts[1] == "shell", parts[3] == "stop" else { return nil }
         return String(parts[2]).removingPercentEncoding
     }
-
 
     /// Stops a command an agent left running, as Stop in the bar over the composer does: found
     /// among the ones this Mac follows, or asked of the engine of `session` when given.

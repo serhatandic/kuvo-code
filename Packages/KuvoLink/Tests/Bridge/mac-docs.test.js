@@ -94,12 +94,17 @@ test("who this Mac's computers are: itself and its machines, each with the key i
   assert.deepEqual(peers.boxes.map(box => box.id ?? box.kind).sort(), ["lab.invalid", "mac", "shed.invalid"]);
   assert.equal(peers.boxes.find(box => box.id === "lab.invalid").sign, lab.peer.sign);
   assert.deepEqual(peers.left, []);
-  // Removed: named as left.
+  // Just missing (it couldn't be set up just now): not one now, and not removed either.
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [lab.peer], moved: [] })).status, 200);
   peers = (await own()).peers.body;
   assert.deepEqual(peers.boxes.filter(box => box.kind === "machine").map(box => box.id), ["lab.invalid"]);
-  assert.deepEqual(peers.left, [shed.peer.key]);
-  // Set up again: no longer.
+  assert.deepEqual(peers.left, []);
+  // Removed: named as left.
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [lab.peer], moved: [], removed: [shed.peer.key] })).status, 200);
+  assert.deepEqual((await own()).peers.body.left, [shed.peer.key]);
+  // Set up again: no longer, as setting it up asks (`?key=`), and once it's back among them.
+  const setup = await ask("GET", `kuvo/link/setup?key=${shed.peer.key}`);
+  assert.deepEqual(setup.json.docs.map(link.readDoc).find(doc => doc?.origin === macSign && doc.kind === "peers").body.left, []);
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [lab.peer, shed.peer], moved: [] })).status, 200);
   assert.deepEqual((await own()).peers.body.left, []);
 });
@@ -125,8 +130,10 @@ test("a machine's view of your personalities comes in, an older or forged one ch
   // An older view, though it counts the change higher: nothing.
   await give(lab.sign("personalities", 4, { personalities: [{ ...made, description: "Older.", updated: 1_760_000_000_900 }], removed: [] }));
   assert.equal((await personality())?.description, "Made on the machine.");
-  // Signed by another key, as if by the machine: nothing.
+  // Signed by another key, as if by the machine; or the machine's own, with its signature broken: nothing.
   await give(link.signDoc(link.newSigningSeed(), "personalities", 9, { personalities: [{ ...made, description: "Forged.", updated: 1_770_000_000_000 }], removed: [] }));
+  const broken = lab.sign("personalities", 9, { personalities: [{ ...made, description: "Broken.", updated: 1_770_000_000_000 }], removed: [] });
+  await give({ d: broken.d, s: Buffer.from(Buffer.from(broken.s, "base64url").map((byte, i) => (i === 0 ? byte ^ 1 : byte))).toString("base64url") });
   assert.equal((await personality())?.description, "Made on the machine.");
   // Removed there: removed here.
   await give(lab.sign("personalities", 6, { personalities: [], removed: [{ id, removed: 1_760_000_000_001 }] }));
@@ -168,4 +175,86 @@ test("the digest this Mac's agents' mail carries names its own documents as they
   const have = (await ask("GET", "kuvo/link/documents")).json.have;
   const named = have.map(([origin, kind, n]) => `${origin === macSign ? "mac" : origin === lab.peer.sign ? "lab" : origin} ${kind} ${n}`).sort();
   assert.deepEqual(named, ["lab phones 2", "mac peers 1", "mac personalities 1", "mac phones 1"]);
+});
+
+test("a machine's view coming in is told to whoever follows your personalities here (the app, which tells its bots), and removed there wins over a change made here", async () => {
+  const lab = machine("lab.invalid");
+  await fresh(lab);
+  const id = `custom.lab-${crypto.randomUUID()}`;
+  const made = { id, name: "Calm", description: "Made on the machine.", symbol: "person.crop.circle", updated: 1_760_000_000_000 };
+  // Followed, as the app follows it.
+  const stop = new AbortController();
+  const lines = [];
+  let heard;
+  const following = (async () => {
+    for await (const part of handle({ method: "GET", path: "kuvo/personalities/events", headers: {}, body: Buffer.alloc(0), fromApp: true }, {}, stop.signal)) {
+      if (!part.body) continue;
+      for (const line of part.body.toString().split("\n").filter(Boolean)) {
+        lines.push(JSON.parse(line));
+        heard?.();
+      }
+    }
+  })();
+  const next = () => new Promise(resolve => { heard = resolve; });
+  try {
+    await next();
+    const told = next();
+    await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { give: [lab.sign("personalities", 5, { personalities: [made], removed: [] })] } });
+    await told;
+    assert.equal(lines.at(-1).personalities.find(each => each.id === id)?.description, "Made on the machine.");
+    // Changed here, then removed there: gone.
+    assert.equal((await ask("PATCH", `kuvo/personalities/${id}`, { description: "Changed here." })).status, 200);
+    await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { give: [lab.sign("personalities", 6, { personalities: [], removed: [{ id, removed: 1_760_000_000_001 }] })] } });
+    assert.equal((await ask("GET", "kuvo/personalities")).json.personalities.find(each => each.id === id), undefined);
+  } finally {
+    stop.abort();
+    await following.catch(() => {});
+  }
+});
+
+test("a machine's record that isn't one is left out, never the rest with it", async () => {
+  const lab = machine("lab.invalid"), shed = machine("shed.invalid");
+  await fresh();
+  const broken = { ...shed.peer, address: "not an address" };
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [lab.peer, broken], moved: [] })).status, 200);
+  assert.deepEqual((await own()).peers.body.boxes.filter(box => box.kind === "machine").map(box => box.id), ["lab.invalid"]);
+  // What isn't a list at all is still refused.
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: "lab" })).status, 400);
+});
+
+test("what this Mac takes of its own and its machines': a copy of its own further on (it lost count) moves it past it, an older one never back; a machine's word on who your computers are, never", async () => {
+  const lab = machine("lab.invalid");
+  await fresh(lab);
+  const give = async envelope => assert.equal((await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { give: [envelope] } })).status, 200);
+  // Its own peers document at version 50, as a machine kept it: this Mac goes past it.
+  await give(link.signDoc(macSeed, "peers", 50, { boxes: [], moved: [], left: [] }));
+  assert.equal((await own()).peers.n, 51);
+  // An older copy of its own phones: nothing goes back.
+  const phones = (await own()).phones.n;
+  await give(link.signDoc(macSeed, "phones", 1, { phones: [], removed: [] }));
+  assert.equal((await own()).phones.n, phones);
+  // A machine saying who your computers are: not this Mac's to take.
+  await give(lab.sign("peers", 3, { boxes: [], moved: [], left: [] }));
+  const have = (await ask("GET", "kuvo/link/documents")).json.have;
+  assert.ok(!have.some(([origin, kind]) => origin === lab.peer.sign && kind === "peers"), JSON.stringify(have));
+});
+
+test("with the phone link off, this Mac's documents say nothing of your phones (your machines keep what they had)", async () => {
+  const lab = machine("lab.invalid");
+  await fresh(lab);
+  assert.equal((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: "ws://127.0.0.1:9", name: "Studio Mac", app: "0.9.0" })).status, 200);
+  const setup = await ask("GET", "kuvo/link/setup");
+  const kinds = setup.json.docs.map(link.readDoc).filter(doc => doc?.origin === macSign).map(doc => doc.kind).sort();
+  assert.deepEqual(kinds, ["peers", "personalities"]);
+});
+
+test("a machine's documents coming in leave alone what this Mac's app keeps of its agents", async () => {
+  const lab = machine("lab.invalid");
+  await fresh(lab);
+  const agents = path.join(support, "box", "run", "agents.json");
+  fs.mkdirSync(path.dirname(agents), { recursive: true });
+  const kept = JSON.stringify({ machine: null, agents: [{ session: "ses_mine", name: "Ada", kind: "bot" }] });
+  fs.writeFileSync(agents, kept);
+  assert.equal((await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { give: [lab.sign("phones", 2, { phones: [], removed: [] })] } })).status, 200);
+  assert.equal(fs.readFileSync(agents, "utf8"), kept);
 });

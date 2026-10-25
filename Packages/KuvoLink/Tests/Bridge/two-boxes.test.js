@@ -97,23 +97,25 @@ const machineHas = kind => {
   const envelope = machineLink()?.docs?.[`${macSign} ${kind}`];
   return envelope ? JSON.parse(Buffer.from(envelope.d, "base64url").toString("utf8")).n : 0;
 };
-// Looked at again whenever the machine writes its files (it's another process).
-async function onTheMachine(found) {
-  const run = path.join(machineHome, "run");
-  fs.mkdirSync(run, { recursive: true });
-  for (;;) {
-    const value = found();
-    if (value) return value;
-    // Watched before it's looked at again, so a write in between isn't missed.
-    const watcher = fs.watch(run);
-    const wrote = new Promise(resolve => watcher.once("change", resolve));
-    if (found()) {
-      watcher.close();
-      continue;
-    }
-    await wrote;
-    watcher.close();
-  }
+// What the machine (another process, which can't tell this one) has written, looked at again
+// every few milliseconds until it's there (a watch on its files starts a moment late and can miss
+// a write in that moment), or until the test runs out of time (`signal`).
+let signal;
+function onTheMachine(found) {
+  return new Promise((resolve, reject) => {
+    const look = () => {
+      const value = found();
+      if (!value) return;
+      clearInterval(timer);
+      resolve(value);
+    };
+    const timer = setInterval(look, 20);
+    signal?.addEventListener("abort", () => {
+      clearInterval(timer);
+      reject(new Error("the machine never got there"));
+    }, { once: true });
+    look();
+  });
 }
 
 // The machine set up as the app sets one up over SSH: this Mac's keys and documents in, its own
@@ -188,7 +190,8 @@ function phone() {
   };
 }
 
-test("this Mac's documents from before its box held them, and after, reach a machine; a phone the machine lets go reaches this Mac's app; mail goes both ways", async () => {
+test("this Mac's documents from before its box held them, and after, reach a machine; a phone the machine lets go reaches this Mac's app; mail goes both ways; a machine you remove lets this Mac go, and comes back when set up again", { timeout: 90_000 }, async t => {
+  signal = t.signal;
   // Before the move: the Mac (its app, then) had signed who its computers are, and its phones up
   // to version 7, and set the machine up with them.
   const before = {
@@ -234,4 +237,21 @@ test("this Mac's documents from before its box held them, and after, reach a mac
   });
   assert.ok(!removed.phones.some(each => each.key === it.public), "off this Mac's phones too");
   assert.ok(app.mailed.length > mailedBefore, "the machine's mail reached the app");
+
+  // Removed in Settings › Machines: it hears this Mac's peers document, and lets this Mac go.
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [], moved: [], removed: [lab.key] })).status, 200);
+  await onTheMachine(() => !(machineLink()?.macs ?? []).includes(mac));
+  // Set up again over SSH: this Mac's again, whatever it said before.
+  const again = await ask("GET", `kuvo/link/setup?key=${lab.key}`);
+  const back = setUp(again.json.docs);
+  assert.equal(back.key, lab.key, JSON.stringify(back));
+  assert.ok((machineLink()?.macs ?? []).includes(mac));
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
+
+  // Removed while this Mac's box is off the relay: the machine hears it once it's back.
+  link.stopMacLink();
+  await arrived(() => !relay.has(macAddress));
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [], moved: [], removed: [lab.key] })).status, 200);
+  link.runMacLink();
+  await onTheMachine(() => !(machineLink()?.macs ?? []).includes(mac));
 });

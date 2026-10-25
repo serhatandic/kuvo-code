@@ -90,18 +90,6 @@ public struct PairedPhones: Equatable, Sendable {
         return true
     }
 
-    /// Removals another computer's phones document carries (PROTOCOL.md, "Documents"), noted here
-    /// too: each pairing named stays out here, and one paired here with it goes. Never a Mac's
-    /// key. Whether anything changed.
-    @discardableResult
-    public mutating func takeRemovals(_ removals: [Removal], macs: Set<String>) -> Bool {
-        let before = self
-        for removal in removals.prefix(Self.mostKept) where Self.fits(Entry(key: removal.key, pairing: removal.pairing), macs: macs) {
-            takeOff(removal.key, pairing: removal.pairing)
-        }
-        return self != before
-    }
-
     /// Whether `entry` names a phone as a removal names it (its key, 32 bytes base64url, and its
     /// pairing if given): never one of `macs`.
     public static func fits(_ entry: Entry, macs: Set<String>) -> Bool {
