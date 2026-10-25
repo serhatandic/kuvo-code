@@ -203,32 +203,14 @@ public struct EngineInstaller: Sendable {
         guard status == errSecSuccess else { throw EngineInstallError.badSignature(status) }
     }
 
-    /// Waited for without holding a thread (`waitUntilExit` on one of Swift's could miss the exit),
-    /// with what tar says read as it comes, so a lot of it never blocks tar on a full pipe.
+    /// Unpacked by this Mac's tar (`ChildProcess`: waited for without holding a thread, with what
+    /// it says read as it comes). The engine's archive takes seconds: one still going after five
+    /// minutes is stuck, and stopped.
     private func untar(_ archive: URL, into directory: URL) async throws {
-        let tar = Process()
-        tar.executableURL = URL(filePath: "/usr/bin/tar")
-        tar.arguments = ["-xzf", archive.path, "-C", directory.path]
-        let pipe = Pipe.unshared()
-        tar.standardError = pipe
-        let errors = LogTail()
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                errors.close()
-            } else {
-                errors.append(data)
-            }
-        }
-        let exited = Arrival<Int32>()
-        tar.terminationHandler = { exited.deliver($0.terminationStatus) }
-        try tar.run()
-        let status = await withTaskCancellationHandler { await exited.wait() } onCancel: { tar.terminate() }
-        guard let status else { throw CancellationError() }
-        guard status == 0 else {
-            await errors.closed(within: .seconds(1))
-            throw EngineInstallError.extractionFailed(errors.text)
+        let result = try await ChildProcess.run("/usr/bin/tar", ["-xzf", archive.path, "-C", directory.path], output: .discard,
+                                                limit: .seconds(300))
+        guard result.succeeded else {
+            throw EngineInstallError.extractionFailed(result.timedOut ? "tar didn't finish in five minutes." : result.errorText)
         }
     }
 

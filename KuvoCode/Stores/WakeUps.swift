@@ -242,7 +242,8 @@ final class WakeUps {
     }
 
     /// This Mac's kuvo-wake with `arguments`, in your shell's environment (with `adding`): what it
-    /// prints. It's stopped after `stopAfter` seconds (each check stops itself after a minute).
+    /// prints. It's stopped after `stopAfter` seconds (each check stops itself after a minute),
+    /// and what a check leaves running in the background doesn't hold it up.
     private func run(_ arguments: [String], stopAfter: TimeInterval, adding: [String: String] = [:]) async -> String {
         await runWithStatus(arguments, stopAfter: stopAfter, adding: adding, errors: false).output
     }
@@ -253,24 +254,11 @@ final class WakeUps {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = Self.root.path
         environment.merge(adding) { _, new in new }
-        let arguments = [Self.command.path] + arguments
-        return await Task.detached { () -> (String, Int32) in
-            let process = Process()
-            process.executableURL = URL(filePath: "/bin/sh")
-            process.arguments = arguments
-            process.environment = environment
-            process.standardInput = FileHandle.nullDevice
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = errors ? pipe : FileHandle.nullDevice
-            guard (try? process.run()) != nil else { return ("", -1) }
-            let stop = DispatchWorkItem { if process.isRunning { process.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + stopAfter, execute: stop)
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            stop.cancel()
-            return (String(decoding: data, as: UTF8.self), process.terminationStatus)
-        }.value
+        // Never stopped half way by the caller going away: it changes what's kept.
+        guard let result = try? await ChildProcess.run("/bin/sh", [Self.command.path] + arguments, environment: environment,
+                                                       errors: errors ? .withOutput : .discard, limit: .seconds(stopAfter),
+                                                       cancellable: false) else { return ("", -1) }
+        return (result.outputText, result.status)
     }
 
     // MARK: The agent's tools

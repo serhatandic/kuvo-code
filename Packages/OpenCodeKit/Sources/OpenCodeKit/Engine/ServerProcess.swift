@@ -268,26 +268,28 @@ extension Pipe {
 }
 
 /// The last few kilobytes of a stream.
-final class LogTail: @unchecked Sendable {
+public final class LogTail: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = Data()
     private let limit = 16 * 1024
     /// Everything's been read: the other end closed.
     let closed = Arrival<Void>()
 
-    func append(_ data: Data) {
+    public init() {}
+
+    public func append(_ data: Data) {
         lock.withLock {
             buffer.append(data)
             if buffer.count > limit { buffer.removeFirst(buffer.count - limit) }
         }
     }
 
-    func close() {
+    public func close() {
         closed.deliver(())
     }
 
     /// Waits until it's closed, or `limit` at most (something the process started can keep it).
-    func closed(within limit: Duration) async {
+    public func closed(within limit: Duration) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { _ = await self.closed.wait() }
             group.addTask { try? await Task.sleep(for: limit) }
@@ -296,7 +298,7 @@ final class LogTail: @unchecked Sendable {
         }
     }
 
-    var text: String {
+    public var text: String {
         lock.withLock { String(decoding: buffer, as: UTF8.self) }
     }
 }

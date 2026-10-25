@@ -370,19 +370,15 @@ nonisolated enum Git {
     }
 
     /// Runs git for something that changes the repository; nil when it worked, else what git
-    /// said. It never waits for a password: with nothing to answer, it fails instead.
+    /// said. It never waits for a password: with nothing to answer, it fails instead. As long as
+    /// it takes (a push, a commit's hooks), and what a hook leaves running doesn't hold it up.
     static func report(_ arguments: [String], in directory: String, environment: [String: String]) -> String? {
         var environment = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
-        let process = process(arguments, in: directory, environment: environment)
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = output
-        do { try process.run() } catch { return error.localizedDescription }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus != 0 else { return nil }
-        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let result: ChildProcess.Result
+        do { result = try run(git: arguments, in: directory, environment: environment, errors: .withOutput, limit: nil) } catch { return error.localizedDescription }
+        guard !result.succeeded else { return nil }
+        let text = result.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
     }
 
@@ -438,26 +434,22 @@ nonisolated enum Git {
         return RemoteFolder.machine(of: directory).map { RemoteFolder.folder(path, on: $0) } ?? path
     }
 
-    /// git in `directory`: this Mac's, or, for a folder on a machine, the machine's own git over
-    /// SSH (its credentials, not this Mac's; only git's own settings go along).
-    private static func process(_ arguments: [String], in directory: String, environment: [String: String]) -> Process {
-        let process = Process()
+    /// git in `directory`, waited for off the main thread: this Mac's, or, for a folder on a
+    /// machine, the machine's own git over SSH (its credentials, not this Mac's; only git's own
+    /// settings go along).
+    private static func run(git arguments: [String], in directory: String, environment: [String: String],
+                            errors: ChildProcess.Errors, limit: Duration?) throws -> ChildProcess.Result {
         if let remote = RemoteFolder.parse(directory) {
             // Only git's settings that mean the same there: a command, key or config file named
             // here (GIT_SSH_COMMAND, GIT_CONFIG_GLOBAL…) is a path on this Mac.
             let portable = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"]
             let settings = environment.filter { portable.contains($0.key) }.map { "\($0.key)=\(SSHConnection.quoted($0.value))" }.sorted()
             let command = (["exec", "env"] + settings + ["git"] + arguments.map(SSHConnection.quoted)).joined(separator: " ")
-            process.executableURL = URL(filePath: "/usr/bin/ssh")
-            process.arguments = SSHConnection(destination: remote.machine).arguments(running: "cd \(SSHConnection.quoted(remote.path)) && \(command)")
-            process.standardInput = FileHandle.nullDevice
-        } else {
-            process.executableURL = URL(filePath: "/usr/bin/git")
-            process.arguments = arguments
-            process.currentDirectoryURL = URL(filePath: directory)
-            process.environment = environment
+            let ssh = SSHConnection(destination: remote.machine).arguments(running: "cd \(SSHConnection.quoted(remote.path)) && \(command)")
+            return try ChildProcess.runBlocking("/usr/bin/ssh", ssh, errors: errors, limit: limit)
         }
-        return process
+        return try ChildProcess.runBlocking("/usr/bin/git", arguments, environment: environment, directory: URL(filePath: directory),
+                                            errors: errors, limit: limit)
     }
 
     /// Runs git and returns its output, or nil when it fails.
@@ -465,19 +457,15 @@ nonisolated enum Git {
         data(arguments, in: directory).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    /// Runs git and returns its raw output (for file contents), or nil when it fails.
+    /// Runs git and returns its raw output (for file contents), or nil when it fails. Reading
+    /// takes a while in a big repository, but never ten minutes: one still going then is stuck
+    /// (on a lock, a full disk, a machine's hung filesystem), and stopped.
     static func data(_ arguments: [String], in directory: String) -> Data? {
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_OPTIONAL_LOCKS"] = "0"  // Reading only: don't hold the index lock.
-        let process = process(arguments, in: directory, environment: environment)
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return data
+        guard let result = try? run(git: arguments, in: directory, environment: environment, errors: .discard, limit: .seconds(600)),
+              result.succeeded else { return nil }
+        return result.output
     }
 }
 

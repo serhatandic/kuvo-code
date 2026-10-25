@@ -17,13 +17,13 @@ public enum BoxFiles {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
         }
         try Data(hash.utf8).write(to: bin.appending(path: ".kuvo-boot"))
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", ["set -e", Wakes.installScript, Launcher.installScript, CommandEnvironment.installScript].joined(separator: "\n")]
-        process.environment = ["K": folder.path, "PATH": "/usr/bin:/bin"]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+        // Writing a few files: a minute is more than enough.
+        let script = ["set -e", Wakes.installScript, Launcher.installScript, CommandEnvironment.installScript].joined(separator: "\n")
+        let result = try ChildProcess.runBlocking("/bin/sh", ["-c", script], environment: ["K": folder.path, "PATH": "/usr/bin:/bin"],
+                                                  output: .discard, limit: .seconds(60))
+        guard result.succeeded else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: result.timedOut ? "Its install scripts didn’t finish in a minute." : "Its install scripts failed: " + result.errorText])
+        }
     }
 }
 #endif

@@ -1145,15 +1145,26 @@ final class Machines {
             running: "cat >/dev/null", extra: ["-o", "ExitOnForwardFailure=yes", "-L", "\(port):localhost:\(port)"], shared: false)
         process.standardInput = Pipe.unshared()
         process.standardOutput = FileHandle.nullDevice
-        let errors = Pipe()
+        // What it says, read as it comes (never to its end once it's gone: see `ChildProcess`).
+        let errors = Pipe.unshared()
         process.standardError = errors
+        let said = LogTail()
+        errors.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                said.close()
+            } else {
+                said.append(data)
+            }
+        }
         process.terminationHandler = { [weak self] ended in
             // Ended by itself right away: the port taken here, or the machine out of reach.
             guard ended.terminationReason == .exit, ended.terminationStatus != 0 else { return }
-            let said = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             Task { @MainActor in
+                await said.closed(within: .seconds(1))
                 guard let self, self.process === ended else { return }
-                self.problem = Self.problem(said, port: port, machine: machine)
+                self.problem = Self.problem(said.text, port: port, machine: machine)
                 self.process = nil
             }
         }
@@ -1218,47 +1229,34 @@ nonisolated enum RemoteFolder {
 /// Short commands on a machine, over its shared SSH connection, for what the panel and sheets
 /// read there (the engine has no file API).
 nonisolated enum RemoteShell {
-    /// Runs `script` with `sh` on `machine`: its output, or nil when it (or SSH) fails.
+    /// Runs `script` with `sh` on `machine`: its output, or nil when it (or SSH) fails. Off the
+    /// main thread (it waits). SSH notices a machine gone away by itself; one whose command is
+    /// still going after five minutes is stuck (these are short: a listing, a file read), and
+    /// stopped, rather than holding up what asked for ever.
     static func run(_ script: String, on machine: String) -> Data? {
         #if DEBUG
         if let standIn = SSHConnection.standIn { return standIn(SSHConnection(destination: machine).address, script).map { Data($0.utf8) } }
         #endif
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = SSHConnection(destination: machine).arguments(running: script)
-        process.standardInput = FileHandle.nullDevice
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return process.terminationStatus == 0 ? data : nil
+        guard let result = try? ChildProcess.runBlocking("/usr/bin/ssh", SSHConnection(destination: machine).arguments(running: script),
+                                                         errors: .discard, limit: .seconds(300)),
+              result.succeeded else { return nil }
+        return result.output
     }
 
     /// Copies `file` into `folder` under the home folder of `machine` (inside Kuvo Code's own,
     /// `~/.kuvo-code/...`): its full path there, or nil when it couldn't. The folder is made for
     /// it, and isn't used if it's there already, so a file never takes another's place. Copies
-    /// there more than two weeks old go, so attachments don't pile up.
+    /// there more than two weeks old go, so attachments don't pile up. As long as the copy takes.
     static func upload(_ file: URL, into folder: String, on machine: String) -> String? {
-        guard let input = try? FileHandle(forReadingFrom: file) else { return nil }
-        defer { try? input.close() }
         let parent = "\"$HOME\"/" + SSHConnection.quoted((folder as NSString).deletingLastPathComponent)
         let target = "\"$HOME\"/" + SSHConnection.quoted(folder)
         let name = SSHConnection.quoted(file.lastPathComponent)
         let script = "find \(parent) -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null; umask 077; mkdir -p \(parent) && mkdir \(target) && cat > \(target)/\(name) && cd \(target) && printf '%s/%s' \"$(pwd -P)\" \(name)"
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = SSHConnection(destination: machine).arguments(running: script)
-        process.standardInput = input
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let path = String(decoding: data, as: UTF8.self)
-        return process.terminationStatus == 0 && path.hasPrefix("/") ? path : nil
+        guard let result = try? ChildProcess.runBlocking("/usr/bin/ssh", SSHConnection(destination: machine).arguments(running: script),
+                                                         input: .file(file), errors: .discard),
+              result.succeeded else { return nil }
+        let path = result.outputText
+        return path.hasPrefix("/") ? path : nil
     }
 
     /// A folder typed on `machine` (`~` for its home), as the full path it is there, or nil when

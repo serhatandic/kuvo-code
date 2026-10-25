@@ -975,20 +975,14 @@ final class MachineBrowser {
                 // there: never a half-copied file under its name, nor one left if the app quits.
                 let partial = FileManager.default.temporaryDirectory.appending(path: "kuvo-download-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: partial) }
-                guard FileManager.default.createFile(atPath: partial.path, contents: nil), let handle = try? FileHandle(forWritingTo: partial) else {
+                guard FileManager.default.createFile(atPath: partial.path, contents: nil) else {
                     return .failed("Couldn't write to Downloads.")
                 }
-                let process = Process()
-                process.executableURL = URL(filePath: "/usr/bin/ssh")
-                process.arguments = connection.arguments(running: "cat -- '" + download.path.replacingOccurrences(of: "'", with: "'\\''") + "'")
-                process.standardOutput = handle
-                process.standardError = FileHandle.nullDevice
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                } catch {}
-                try? handle.close()
-                guard process.terminationStatus == 0 else { return .failed("The file isn't on the machine any more.") }
+                // As long as the copy takes (SSH notices a machine gone away by itself).
+                let script = "cat -- '" + download.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+                let copied = try? await ChildProcess.run("/usr/bin/ssh", connection.arguments(running: script), output: .file(partial),
+                                                         errors: .discard, cancellable: false)
+                guard copied?.succeeded == true else { return .failed("The file isn't on the machine any more.") }
                 // Marked as downloaded, as a browser marks what it saves: macOS checks it before it
                 // opens (an app, a script) as it would any download.
                 var values = URLResourceValues()
