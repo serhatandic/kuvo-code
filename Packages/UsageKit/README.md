@@ -56,8 +56,10 @@ here.
 - **Commands never hang the panel** (`Services/ProcessRunner.swift`): the runner reads stdout and stderr as
   they come and, once a command has exited, waits only a moment for the end of its output, so a login
   shell whose profile leaves something running with its output can't hold every refresh up; what that
-  leftover says later is read and let go until it ends, so it's never killed or stuck on the pipe. It
-  waits for the exit through the termination handler, never `waitUntilExit()`.
+  leftover says later is read and let go until it ends, so it's never killed or stuck on the pipe, for
+  32 runs at a time and 10 minutes each at most (`LingeringReads`), so the host's descriptors can't
+  run out. It waits for the exit through the termination handler, never `waitUntilExit()`, and its
+  pipes close on exec, so a terminal the host starts meanwhile doesn't keep them open.
 
 Everything else, including providers, pricing, pace, layout and the views, is upstream code. Kuvo
 Code-specific code lives in `Sources/UsageKit/Embedding` and `Support/HostApp.swift`. Other edits are

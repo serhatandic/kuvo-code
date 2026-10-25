@@ -26,6 +26,83 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "hello")
     }
 
+    /// A leftover that waits on `go`, then prints more than a pipe holds and says on `told` whether
+    /// that worked. It takes no notice of SIGPIPE, so a closed pipe shows as a failed print rather
+    /// than a leftover that's gone and a test waiting on it.
+    private func leftover(_ index: Int, in directory: URL) throws -> (script: String, go: URL, told: URL) {
+        let go = directory.appendingPathComponent("go-\(index)"), told = directory.appendingPathComponent("told-\(index)")
+        XCTAssertEqual(mkfifo(go.path, 0o600), 0)
+        XCTAssertEqual(mkfifo(told.path, 0o600), 0)
+        let script = "(trap '' PIPE; read x < '\(go.path)'; /usr/bin/head -c 200000 /dev/zero; echo \"printed $?\" > '\(told.path)') & echo now"
+        return (script, go, told)
+    }
+
+    /// Lets the leftover go on, and what it says about its print. Opening each end waits for the
+    /// other: the leftover reading `go`, then writing `told`.
+    private func release(_ leftover: (script: String, go: URL, told: URL)) throws -> String {
+        let writer = try XCTUnwrap(FileHandle(forWritingAtPath: leftover.go.path))
+        try writer.write(contentsOf: Data("go\n".utf8))
+        try writer.close()
+        let reader = try XCTUnwrap(FileHandle(forReadingAtPath: leftover.told.path))
+        defer { try? reader.close() }
+        return String(decoding: try reader.readToEnd() ?? Data(), as: UTF8.self)
+    }
+
+    private func temporaryFolder() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// Runs that something they left running keeps read are capped, so they can never use up the
+    /// host's descriptors: past the cap the oldest are let go (their pipes closed), and the rest
+    /// read on.
+    func testLingeringRunsAreCappedOldestFirst() throws {
+        let directory = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lingering = LingeringReads(cap: 32, limit: 600, now: { ProcessInfo.processInfo.systemUptime })
+        let runner = SystemProcessRunner(afterExit: 0, lingering: lingering)
+        var leftovers: [(script: String, go: URL, told: URL)] = []
+        for index in 0..<40 {
+            let leftover = try leftover(index, in: directory)
+            leftovers.append(leftover)
+            _ = try runner.run(executable: "/bin/sh", arguments: ["-c", leftover.script], environment: [:], timeout: 10)
+        }
+        XCTAssertEqual(lingering.count, 32, "never more than the cap")
+        for (index, leftover) in leftovers.enumerated() {
+            XCTAssertEqual(try release(leftover), index < 8 ? "printed 1\n" : "printed 0\n", "leftover \(index): the 8 oldest let go, the rest read")
+        }
+    }
+
+    /// One read on longer than its limit is let go; before that it's read.
+    func testALingeringRunIsLetGoAfterItsLimit() throws {
+        let directory = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let clock = TestClock()
+        let lingering = LingeringReads(cap: 32, limit: 600, now: { clock.now })
+        let runner = SystemProcessRunner(afterExit: 0, lingering: lingering)
+        let (early, late) = (try leftover(0, in: directory), try leftover(1, in: directory))
+        _ = try runner.run(executable: "/bin/sh", arguments: ["-c", early.script], environment: [:], timeout: 10)
+        clock.advance(by: 599)
+        lingering.sweep()
+        XCTAssertEqual(lingering.count, 1, "not yet")
+        XCTAssertEqual(try release(early), "printed 0\n", "read until then")
+
+        _ = try runner.run(executable: "/bin/sh", arguments: ["-c", late.script], environment: [:], timeout: 10)
+        clock.advance(by: 600)
+        lingering.sweep()
+        XCTAssertEqual(lingering.count, 0)
+        XCTAssertEqual(try release(late), "printed 1\n", "let go: its pipes closed")
+    }
+
+    /// A clock the test moves.
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seconds: TimeInterval = 1000
+        var now: TimeInterval { lock.withLock { seconds } }
+        func advance(by interval: TimeInterval) { lock.withLock { seconds += interval } }
+    }
+
     /// Re-run only this test in a fresh process. A broken drain can otherwise hang in drained.wait()
     /// even after the command's own timeout; the outer watchdog must not use SystemProcessRunner.
     func testOutputAndTimeoutInIsolatedProcess() throws {
