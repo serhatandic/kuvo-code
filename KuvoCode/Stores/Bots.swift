@@ -1186,8 +1186,15 @@ extension Bots {
         kitWords(machine: "⟦machine⟧", timeZone: "⟦timeZone⟧")
     }
 
-    /// What every machine's kit has alike, for `machine`, in `timeZone`; the preset personalities.
-    private static func kitWords(machine: String, timeZone: String) -> MachineKit {
+    /// The kit as this Mac's box makes its own bots with it: the words for a bot on this Mac, and
+    /// none of what's this Mac's own (its starting model, projects, rules and time zone).
+    static func macKitWords() -> MachineKit {
+        kitWords(machine: nil, timeZone: "UTC")
+    }
+
+    /// What every machine's kit has alike, for `machine` (nil: this Mac), in `timeZone`; the preset
+    /// personalities.
+    private static func kitWords(machine: String?, timeZone: String) -> MachineKit {
         let sample = Bot(id: "bot_sample", name: "⟦name⟧", job: "", instructions: "", look: .random(), machine: machine, project: nil,
                          folder: "⟦folder⟧", sessionID: "", created: .now)
         var working = sample
