@@ -205,6 +205,8 @@ public final class ServerProcess: @unchecked Sendable {
                 return try await group.next()!
             }
         } catch {
+            // As `stop` does: its stdin closed (a server's signal to go), and it's stopped.
+            try? stdin.fileHandleForWriting.close()
             process.terminate()
             throw error
         }
@@ -231,12 +233,7 @@ public final class ServerProcess: @unchecked Sendable {
             // stdout closed before the handshake: the server died while starting. What it said
             // as it went, read to its end (not after a moment, if something it started keeps it).
             guard let status = await exit.wait() else { throw CancellationError() }
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { _ = await log.closed.wait() }
-                group.addTask { try? await Task.sleep(for: .seconds(1)) }
-                await group.next()
-                group.cancelAll()
-            }
+            await log.closed(within: .seconds(1))
             throw ServerProcessError.exited(status: status, output: log.text)
         }
         struct Handshake: Decodable { var url: URL }
@@ -287,6 +284,16 @@ final class LogTail: @unchecked Sendable {
 
     func close() {
         closed.deliver(())
+    }
+
+    /// Waits until it's closed, or `limit` at most (something the process started can keep it).
+    func closed(within limit: Duration) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { _ = await self.closed.wait() }
+            group.addTask { try? await Task.sleep(for: limit) }
+            await group.next()
+            group.cancelAll()
+        }
     }
 
     var text: String {
