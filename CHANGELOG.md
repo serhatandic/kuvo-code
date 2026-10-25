@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Kuvo Code no longer stays on Starting for ever when the engine, the agents bridge or the background service on your Mac doesn't answer as it starts: the one held up no longer holds up the others, and it's given up on, with a message, when its time is up.
+- Kuvo Code no longer stays on Starting for ever now and then: reading your shell's settings as it starts can no longer wait for ever, and when the engine, the agents bridge or the background service on your Mac doesn't answer as it starts, the one held up no longer holds up the others and is given up on, with a message, when its time is up.
 - Each computer keeps its own skills through its box, your Mac's too, where they've always been, and a machine downloads a skill you add there from GitHub itself.
 - A skill you delete in Settings › Skills goes to Recently Deleted on that computer, where it's kept for 30 days and you can restore it, on your Mac as on a machine.
 - Settings › Integrations works through each computer's own background service, your Mac the same way as a machine, with your keys still in your Keychain. An integration you just turned on says Starting rather than Off until the engine picks it up, Outlook says it's not signed in yet on machines too, Connect and Remove show they're under way and say why when they couldn't be done, and the page says when the background service on your Mac isn't running, with Try Again, or when the engine isn't. A key changed from your phone, or on a machine with your Mac closed, reaches sessions in every project.
