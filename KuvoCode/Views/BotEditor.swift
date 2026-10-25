@@ -161,6 +161,18 @@ struct BotEditor: View {
             // bots had a model: the one its conversation uses.
             if let bot, model == bot.model, let talking = app.bots.talkingModel(of: bot) { model = talking }
             if model == nil { model = bot.flatMap { workspace.session($0.sessionID)?.model } ?? placeCatalog.startingModel(lastModel, scope: modelScope) }
+            #if DEBUG
+            // KUVO_DEMO_EDIT_BOT_SAVE=<job>: its job in a few words changed to that, and saved, to
+            // see what Save says (a computer that's away, this Mac's box down).
+            if let line = ProcessInfo.processInfo.environment["KUVO_DEMO_EDIT_BOT_SAVE"], bot != nil {
+                job.line = line
+                Task {
+                    // (After KUVO_DEMO_BOX_FAILED has stopped this Mac's box.)
+                    try? await Task.sleep(for: .seconds(10))
+                    save()
+                }
+            }
+            #endif
         }
         .alert("Delete \(bot?.name ?? "This Bot")?", isPresented: $confirmsDelete) {
             Button("Delete", role: .destructive) {

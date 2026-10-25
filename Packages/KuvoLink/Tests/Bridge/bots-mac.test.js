@@ -275,7 +275,7 @@ test("this Mac's bots' jobs are kept once from where they were: a memory's Job s
   ]));
   const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
   const byName = Object.fromEntries((await ask(handle, "GET", "kuvo/bots")).json.bots.map(each => [each.name, [each.job, each.jobDetails]]));
-  assert.deepEqual(byName, { Remembers: ["Keeps CI green", "Keeps CI green.\nFix flaky tests."], Older: ["Sends the digest", "Every morning at 8."], Nothing: ["", ""] });
+  assert.deepEqual(byName, { Remembers: ["Keeps CI green", "Fix flaky tests."], Older: ["Sends the digest", "Every morning at 8."], Nothing: ["", ""] });
   assert.equal(fs.readFileSync(path.join(remembers, "MEMORY.md"), "utf8"), memory, "its memory stays as it was");
   // Kept: the app's old list no longer counts.
   fs.rmSync(path.join(support, "bots.json"));

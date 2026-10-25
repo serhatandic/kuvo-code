@@ -2860,10 +2860,10 @@ function jobOf(here) {
   if (kept) return kept;
   const memory = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
   // Without one in its memory, what its description said (a Mac kept a job Edit Bot gave it there).
-  let job = memory ? { line: memory.line, details: memory.section } : { line: plainName(here.described.job ?? ""), details: "" };
+  let job = memory ? { line: memory.line, details: detailsBeyond(memory.line, memory.section) } : { line: plainName(here.described.job ?? ""), details: "" };
   if (ON_MAC && !memory) {
     const listed = macListed().find(each => each?.id === here.described.id);
-    if (listed && listed.jobInMemory !== true) job = { line: plainName(listed.job ?? ""), details: trimmed(String(listed.instructions ?? "")) };
+    if (listed && listed.jobInMemory !== true) job = { line: plainName(listed.job ?? ""), details: detailsBeyond(plainName(listed.job ?? ""), listed.instructions) };
   }
   // Not while it moves: its folder is the move's until it's there.
   if (!isMoving(here.folder)) try { writeJob(here, job); } catch {}
@@ -3078,21 +3078,24 @@ export function jobLine(text) {
 // for no job at all.
 export function firstMessageOf(line, details) {
   const job = trimmed(String(line ?? ""));
-  let rest = trimmed(String(details ?? ""));
-  const lines = rest.split("\n");
-  const lineOf = text => jobLine(text);
-  if (job && lines.length && lineOf(lines[0]) === job) {
-    // Only the job's sentence: a line that goes on after it (its details) keeps the rest.
-    const first = lines[0];
-    const end = first.indexOf(". ");
-    if (end >= 0 && spaces(first.slice(end + 2)) && lineOf(first.slice(0, end)) === job) lines[0] = spaces(first.slice(end + 2));
-    else lines.shift();
-    rest = trimmed(lines.join("\n"));
-  }
+  const rest = detailsBeyond(job, details);
   if (!job && !rest) return "";
   return [job ? `Your job, in a few words: ${job}.` : "", rest,
     "Start now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up."]
     .filter(part => part.length > 0).join("\n\n");
+}
+
+// A job's details without its line, for details that begin with it (as a memory's Job section did,
+// and a template's or shared bot's job does): said once. A first line that goes on after the job's
+// sentence keeps the rest.
+function detailsBeyond(job, details) {
+  const lines = trimmed(String(details ?? "")).split("\n");
+  if (!job || !lines.length || jobLine(lines[0]) !== job) return lines.join("\n");
+  const first = lines[0];
+  const end = first.indexOf(". ");
+  if (end >= 0 && spaces(first.slice(end + 2)) && jobLine(first.slice(0, end)) === job) lines[0] = spaces(first.slice(end + 2));
+  else lines.shift();
+  return trimmed(lines.join("\n"));
 }
 
 // Those following this box's bots (`kuvo/bots/events`), told of a change made here at once (one

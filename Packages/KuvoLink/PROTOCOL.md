@@ -940,67 +940,69 @@ host serves:
   503. Start answers `202 {}` and the engine is up once `kuvo/info` says `running`; it answers
   `409 {"message"}` on a machine never started from a Mac, as restart does. There's no stop: a
   machine's engine keeps running.
-- `kuvo/bots`: bots by their session, with their `id` (`bot_…`, as group chats name their
-  members), their name, look and job (`job`, what it does in a few words, shown under its name, and
-  `jobDetails`, all of it), whether their wake-ups are paused, the next one (`wakes`,
-  left out when none waits), how many things each watches, `machine` (the machine it lives on,
-  left out for the Mac), and `agents`: its conversation is with the coding agents, so it's read
-  and written through `kuvo/agents/api/…` (a group chat's members carry the same flag).
-  `personality` (its id) and `model` (`{providerID, id, variant}`) are the ones Edit Bot shows,
-  left out when it has none. A Mac lists all of yours, wherever they live. A machine's bridge
-  lists the bots that live on that machine, as their folders are now, with the Mac closed too:
-  their name, look and job as the Mac last wrote them there (`bot.json`, which the Mac writes
-  when they change and each time it connects, and the bridge when a phone changes them; one it
-  hasn't written yet isn't listed). A bot's job is its box's record of it (`job.json` in its
-  folder), which the bot keeps with its set_job tool (`{summary, details}`, through `PATCH
-  kuvo/bots/<id>` with `job`) and Edit Bot can change; its memory is its own to write as it likes.
-  A job from before that is taken once from where it was: the Job section of its memory (left
-  there as it is), or else what Edit Bot wrote before memories kept jobs. `?memory=1` adds
-  `memoryJob` (`{line, section}`, the same job), for a Mac of 0.8.0-beta.1 or earlier, which takes
-  a machine's bots' jobs from it. For a machine's bot, its machine's list is
-  the newer while it answers. `GET kuvo/bots/events` follows the list (`application/x-ndjson`): the
-  list now, then again each time it changes (`bots.events` in `features`). A box keeps each of its
-  bots told what it is (its instructions): at once when it's made or changed, and otherwise as its
-  next run starts, when what it would be told has changed (new words in an update, a personality's),
-  rather than every bot at once as the box starts; its own rules for its folder are put right then
-  too.
-- On a Mac, making a bot as New Bot does. `GET kuvo/bots/templates` is what New Bot offers:
-  `{"templates": [{id, name, job, instructions, look, personality, wantsProject}],
-  "personalities": [{id, name, description, custom}], "looks": {colors, shapes, faces},
-  "startingModel": {"mac": {providerID, id, variant} | null, "<machine id>": … | null},
-  "projects": [{directory, name, machine}]}`. A template's `personality` and a project's
-  `machine` (null for the Mac) are left out when there's none. `startingModel`'s keys are the
-  places a bot can live (the Mac and each machine), each with the model New Bot starts with
-  there. `POST kuvo/bots` with `{name, look?, personality?, model?, machine?, project?,
-  template?}` makes one: `personality` by id (`preset.*`, or `custom.*` for one you made);
-  without `look` or `personality`, the template's, or a random look; without `model`, that
-  place's starting model; a `project` on a machine makes it there (`machine` is then ignored).
+- `kuvo/bots`: the bots that live on the computer asked (each box answers for its own, this Mac's
+  as a machine's, with its app closed too), by their session, with their `id` (`bot_…`, as group
+  chats name their members), name and look; their job (`job`, what it does in a few words, shown
+  under its name, and `jobDetails`, all of it); whether their wake-ups are paused, the next one
+  (`wakes`, left out when none waits) and how many things each watches; `machine` (a machine's
+  name, as it calls itself; left out on a Mac); `agents`: its conversation is with the coding
+  agents, so it's read and written through `kuvo/agents/api/…` (a group chat's members carry the
+  same flag); `personality` (its id) and `model` (`{providerID, id, variant}`) as Edit Bot shows
+  them, left out when it has none; and `folder`, `project` (as the box names them; left out for a
+  folder of its own) and `created`. A client asks each box for its own bots; what one last said
+  shows while it's away. `GET kuvo/bots/events` follows the list (`application/x-ndjson`): the
+  list now, then again each time it changes (`bots.events` in `features`).
+  - A bot's job is its box's record of it (`job.json` in its folder): the bot keeps it with its
+    set_job tool (`{summary, details}`), and Edit Bot can change it (`PATCH` with `job`); its memory
+    is its own to write as it likes. A job from before that is taken once from where it was: the
+    Job section of its memory (left there as it is; its details without its line), or else what
+    Edit Bot wrote before memories kept jobs. `?memory=1` adds `memoryJob` (`{line, section}`, the
+    same job), for a Mac of 0.8.0-beta.1 or earlier, which takes a machine's bots' jobs from it.
+  - A box keeps each of its bots told what it is (its instructions, from its kit's words): at once
+    when it's made or changed, and otherwise as its next run starts, when what it would be told
+    has changed (new words in an update, a personality's), rather than every bot at once as the
+    box starts; its own rules for its folder are put right then too.
+- Making a bot as New Bot does, on the computer it's to live on. `GET kuvo/bots/templates` is
+  what New Bot offers there: `{"templates": [{id, name, job, instructions, look, personality,
+  wantsProject}], "personalities": [{id, name, description, custom}], "looks": {colors, shapes,
+  faces}, "startingModel": {"<place>": {providerID, id, variant} | null}, "projects": [{directory,
+  name, machine}]}`. `startingModel` has one key: `mac` on a Mac, the machine's name on a machine.
+  A template's `personality` and a project's `machine` are left out when there's none. `POST
+  kuvo/bots` with `{name, look?, personality?, model?, project?, template?, job?}` makes one:
+  `personality` by id (`preset.*`, or `custom.*` for one you made); without `look` or
+  `personality`, the template's, or a random look; without `model`, the box's starting model.
   It answers `201 {"bot": <as kuvo/bots lists one>, "firstMessage"}`: from a template, the bot
-  waits, and `firstMessage` is its job for your composer, to edit and send; otherwise it's null
-  and the bot writes first. `job: {line, details}` (a shared bot's, from File › Import Bot…) makes
-  it wait the same way, with that job as `firstMessage`. This Mac's box makes only bots that live on
-  it: a `machine` there answers 400 `{"message"}`; one for a machine is made on that machine's box. Errors are `{"message"}`: 400 for a missing name or an unknown
-  template, personality, machine or project; 409 while its machine isn't connected; 422 for a
-  model that can't run there (its account isn't signed in there); 503 when it couldn't be made.
+  waits, and `firstMessage` is its job for your composer, to edit and send; `job: {line, details}`
+  (a shared bot's, from File › Import Bot…) makes it wait the same way, with that job as
+  `firstMessage`; otherwise it's null and the bot writes first. A machine's box ignores
+  `machine`; a Mac's answers 400 for one (a bot for a machine is made on that machine's box).
+  Errors are `{"message"}`: 400 for a missing name or an unknown template, personality or
+  project; 409 while its box has no kit yet (below); 422 for a model that can't run there (its
+  account isn't signed in there); 503 when it couldn't be made.
 - `PATCH kuvo/bots/<id>` with any of `{name, look, personality, model, job}` changes a bot as Edit
   Bot does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`,
   `job` as `{line, details}`, the whole job, which replaces the one it had: its line on one line,
-  without a sentence's end; both `""` for none; 400 for one too long):
-  `200 {"bot": <as kuvo/bots lists one>}`, after a coding agent's model for a bot on the engine
-  has moved its conversation to them (its `session` is the new one, `agents` true; if the move
-  can't happen yet, its machine away, the model is kept and it moves once it can). Errors are `{"message"}`: 400 for an empty name, or a
-  look or personality there isn't; 422 for a model it can't use where it lives (the one it has is
-  always kept); 404 for no such bot; 409 while it moves; 503 when it couldn't be changed (a
-  machine's engine is stopped). `DELETE kuvo/bots/<id>` deletes it as Delete Bot… does, its
-  conversation, wake-ups and folder (to the Trash, or to `~/.kuvo-code/trash` on a machine):
-  `200 {}`, 404, or 409 `{"message"}` while it moves. A Mac answers both for every bot it lists:
-  a machine's bot is changed at once and its conversation told once the machine is connected, as
-  from Edit Bot, while deleting one answers 409 `{"message"}` until it's connected. A machine's
-  bridge answers both for its own bots, with the Mac closed too: a change reaches
-  the bot's conversation as the Mac words it, except that only a Mac carries a conversation on the
-  engine over to the coding agents (422 for a coding agent's model there); a deleted bot leaves
-  the group chats there too, and is noted in `~/.kuvo-code/bots/deleted.json`. The Mac takes both
-  in the next time it connects. Send them to the Mac while it answers.
+  without a sentence's end; both `""` for none; 400 for one too long): `200 {"bot": <as kuvo/bots
+  lists one>}`, after a coding agent's model for a bot on the engine has carried its conversation
+  on with them (its `session` is the new one, `agents` true). Errors are `{"message"}`: 400 for an
+  empty name, or a look or personality there isn't; 422 for a model it can't use where it lives
+  (the one it has is always kept); 404 for no such bot; 409 while it moves; 503 when it couldn't
+  be changed (the engine is stopped). `DELETE kuvo/bots/<id>` deletes it as Delete Bot… does: its
+  conversation, wake-ups, keys of its own and folder (to Kuvo Code's trash folder on a machine; on
+  a Mac on to the Finder's Trash, through the app: "Host interface"); it leaves the group chats
+  there too. `200 {}`, 404, or 409 `{"message"}` while it moves. A machine's box notes a deleted
+  bot in `~/.kuvo-code/bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier.
+- What a box makes and tells its bots with (its kit, `bots/kit.json` in its bots' folder): a
+  machine's from a Mac, which gives it each time it connects, or from the box's own release
+  (`bin/bot-kit.json`) where that's newer or no Mac gave it one, with what's the machine's own
+  filled in (its name, and the time zone a Mac gave it, or else its own); this Mac's from its app,
+  as its box starts and as your personalities change. Until one has a kit, New Bot and changes to
+  a bot there answer `409 {"message"}`. What's a computer's own in a kit, the approval new
+  conversations start with and the model a new bot starts on, comes from a Mac for now; they're
+  to become each box's own settings.
+- A client keeps what you change of a bot whose computer is away (its machine not connected) and
+  sends it as `PATCH kuvo/bots/<id>` once it's back, a later change on top of what waited; what
+  the box then answers is what shows.
 - `POST kuvo/groups` with `{name, members, purpose?, meeting?}` (members by bot `id`, at least
   two, of those `kuvo/groups/joinable` names) makes a group chat on the computer asked, as New
   Group Chat does: `201 {"group": <as kuvo/groups lists one>}`, 400 `{"message"}` without a name
@@ -1022,15 +1024,8 @@ host serves:
   go, and its bots forget it. `200 {}`, for one that's gone already too; 409 `{"message"}` while it
   moves; 503 `{"message"}` when the coding agents' bridge there can't be reached. Each computer
   answers it for the chats that live there; `kuvo/groups/events` leaves it out from then on.
-- A machine's bridge answers the same three, with the Mac closed too: what New Bot
-  offers there (`startingModel` has one key, the machine's name as its bots' `machine` has it,
-  and `projects` are its own); a bot made there, with its folder, conversation and instructions,
-  listed at once (`machine` is ignored); a group chat of its own bots, which lives and runs there.
-  What New Bot needs comes from the Mac, which gives it to the machine each time it connects, or
-  from the box's own release (`bin/bot-kit.json`) where that's newer (it updated
-  itself since) or no Mac gave it one, with what's the machine's own filled in (its name, and the
-  time zone a Mac gave it, or else its own); one with neither answers `409 {"message"}`. The Mac takes in the bots a machine made
-  the next time it connects (its group chats it follows there already).
+- A machine's box answers New Group Chat with the Mac closed too: a group chat of its own bots,
+  which lives and runs there.
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,
   `about` its job) then the latest sessions with a title (`kind: "session"`, `project` its
@@ -1290,8 +1285,8 @@ there.
 
 #### Host interface
 
-What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): today, its
-keys, which the app keeps in the Keychain. The app listens on `127.0.0.1` and passes the box
+What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
+which the app keeps in the Keychain, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and passes the box
 `KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
 starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
 <KUVO_HOST_PASSWORD>` and `content-type: application/json`:
@@ -1299,7 +1294,9 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
 - `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
 - `keys/get {"name"}` → `{"value"}`, or `404` for none;
 - `keys/set {"name", "value"}` → `{}`;
-- `keys/delete {"name"}` → `{}`, for one there wasn't too.
+- `keys/delete {"name"}` → `{}`, for one there wasn't too;
+- `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
+  Finder's Trash (bridge 0.9.47); one anywhere else stays where it is.
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it

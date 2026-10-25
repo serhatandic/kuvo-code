@@ -143,9 +143,10 @@ test("a bot's job is its record: taken once from its memory, read by a Mac of an
   const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
   const read = await ask(handle, "GET", "kuvo/bots?memory=1");
   const byName = Object.fromEntries(read.json.bots.map(each => [each.name, each]));
-  assert.deepEqual([byName.Scout.job, byName.Scout.jobDetails], ["Watches the nightly build", "Watches the nightly build.\nPosts when it breaks."]);
+  // (Its details without its line, which shows on its own.)
+  assert.deepEqual([byName.Scout.job, byName.Scout.jobDetails], ["Watches the nightly build", "Posts when it breaks."]);
   // What a Mac of an earlier version takes a machine's bots' jobs from.
-  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Watches the nightly build.\nPosts when it breaks." });
+  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Posts when it breaks." });
   // Without one in its memory: the job its description had (Edit Bot's, from before), kept.
   assert.deepEqual(byName.First.memoryJob, { line: "Watches the build", section: "" });
   assert.deepEqual(byName.Unread.memoryJob, { line: "Watches the build", section: "" });
@@ -497,7 +498,7 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
     assert.equal(changed.status, 200, JSON.stringify(changed.json));
     assert.deepEqual({ ...changed.json.bot, wakes: undefined }, {
       id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout Prime", look: { color: "mint", shape: "round", face: "happy" }, machine: "my-server",
-      job: "Watches the build", jobDetails: "Watches the build.\nTells you when it breaks.", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+      job: "Watches the build", jobDetails: "Tells you when it breaks.", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
       folder, created: before.created,
     });
     // Its description, for what runs here and for the Mac as it next connects: newer than before.
@@ -510,7 +511,7 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
     // Its conversation: its title, its model, and what it's told, with its job (taken from its memory, once).
     assert.deepEqual(told(engine.asked, "ses_bot_scout00001"), {
       title: "Scout Prime", model: { id: "opus", providerID: "anthropic", variant: "high" },
-      instructions: `You are Scout Prime, one of the user's bots: Watches the build.\n\nYour personality: Straight Shooter. Direct.\n\nYour job, as your memory has it:\nWatches the build.\nTells you when it breaks.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nWho sets what.`,
+      instructions: `You are Scout Prime, one of the user's bots: Watches the build.\n\nYour personality: Straight Shooter. Direct.\n\nYour job, as your memory has it:\nTells you when it breaks.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nWho sets what.`,
     });
 
     // Its own way again: told without a personality; nothing else is touched.

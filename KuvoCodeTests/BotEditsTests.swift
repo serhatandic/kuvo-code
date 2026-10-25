@@ -120,4 +120,27 @@ import Testing
         #expect(app.bots.edits.waiting.isEmpty)
         #expect(app.bots.bot("bot_ada000001")?.name == "Ada")
     }
+
+    /// The bot keeps its job as you talk to it, Edit Bot open or not: while you haven't touched
+    /// the job's fields they show its newest; once you've typed, yours stay, the bot's newer one shows
+    /// beside them, and Save keeps yours, unless you take its own.
+    @Test func aJobTheBotChangesWhileEditBotIsOpenNeverOverwritesWhatYouTyped() {
+        var draft = JobDraft(line: "Keeps CI green", details: "Watch main.")
+        draft.botKept(.init(line: "Keeps CI and docs green", details: "Watch main and the docs."))
+        #expect(draft.line == "Keeps CI and docs green" && draft.keptMeanwhile == nil, "untouched: the bot's newest")
+
+        draft.details = "Watch main, the docs, and the nightly build."
+        draft.botKept(.init(line: "Keeps everything green", details: "Watch it all."))
+        #expect(draft.details == "Watch main, the docs, and the nightly build.", "what you typed stays")
+        #expect(draft.line == "Keeps CI and docs green")
+        #expect(draft.keptMeanwhile == .init(line: "Keeps everything green", details: "Watch it all."), "its newer one, shown beside yours")
+        // The bot comes round to what you typed: nothing to choose between.
+        draft.botKept(.init(line: "Keeps CI and docs green", details: "Watch main, the docs, and the nightly build."))
+        #expect(draft.keptMeanwhile == nil)
+
+        draft.line = "Keeps the lights on"
+        draft.botKept(.init(line: "Keeps the servers up", details: "Page me at night."))
+        draft.useKept()
+        #expect(draft.line == "Keeps the servers up" && draft.details == "Page me at night." && draft.keptMeanwhile == nil, "its own, in place of yours")
+    }
 }

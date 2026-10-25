@@ -424,10 +424,13 @@ final class Bots {
             try await send(fields, to: current)
         } catch let refusal as BoxRefusal {
             throw refusal
-        } catch {
+        } catch where current.machine != nil {
             // It didn't get there (the connection dropped): it waits for its computer.
             edits.put(edited.id, box: current.box, fields: fields)
             show()
+        } catch {
+            // This Mac's box not answering (starting again): said, and nothing waits.
+            throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment.")
         }
     }
 

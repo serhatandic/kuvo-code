@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A bot keeps its job with a tool of its own now, rather than under a heading in its memory, and Edit Bot shows it in two fields you can change, in a few words and the details; the bot hears a change you make there. Your bots' jobs come along as they were, and their memory is theirs to write as they like.
+- Your Mac's bots are kept the same way as a machine's, in what Kuvo Code keeps running in the background: a bot made, changed or deleted from your phone shows in the window at once, and a bot you delete on your Mac goes to the Trash.
 - A bot's own keys are kept and put to use by the computer it lives on, your Mac the same way as a machine (in your Keychain on your Mac). Giving one to a bot whose folder's settings file isn't plain JSON now says so, rather than saving a key its server never reads.
 - Each computer sends its own wake-ups and watches, your Mac the same way as a machine. A wake-up that can't be delivered is tried again after a minute, then less and less often, up to every half hour, on machines too.
 - Your Mac's group chats run the same way as a machine's now, in what Kuvo Code keeps running in the background on your Mac: they meet, talk and hand out work with the window closed, and a group chat on your Mac can have bots from your machines, each taking its turn on its own machine. Your chats move over the first time you open this version, as they were; the old files are kept in Kuvo Code's Backups folder.
