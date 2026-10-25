@@ -312,10 +312,12 @@ struct IntegrationsSettings: View {
             Shown.last[box.id] = found
             failure = nil
             #if DEBUG
-            // KUVO_DEMO_ADD_INTEGRATION=<id>: added, as Connect does.
-            if !demoAdded, let id = ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_INTEGRATION"], let entry = found.integrations.first(where: { $0.id == id }), !entry.added {
+            // KUVO_DEMO_ADD_INTEGRATION=<ids>: those added, as Connect does (comma-separated).
+            if !demoAdded, let ids = ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_INTEGRATION"] {
                 demoAdded = true
-                add(entry)
+                for id in ids.split(separator: ",").map(String.init) {
+                    if let entry = found.integrations.first(where: { $0.id == id }), !entry.added { add(entry) }
+                }
             }
             #endif
         } catch {
