@@ -18,13 +18,16 @@ after(() => fs.rmSync(support, { recursive: true, force: true }));
 
 // The app, as its host interface answers this Mac's box: its keys (your Keychain), the Mac's own
 // routes, and mail from your machines.
-const app = { keys: null, away: false, mailed: [], asked: [], streams: new Set() };
+const app = { keys: null, away: false, turnedAway: 0, mailed: [], asked: [], streams: new Set() };
 const appHost = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
   request.on("end", () => {
     if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
-    if (app.away) return request.socket.destroy();
+    if (app.away) {
+      app.turnedAway += 1;
+      return request.socket.destroy();
+    }
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     if (request.url === "/link/identity") {
       if (!app.keys) return response.writeHead(503).end("{}");
@@ -38,12 +41,20 @@ const appHost = http.createServer((request, response) => {
       app.asked.push(given);
       if (given.path === "kuvo/machines/events") {
         // Followed: a line now, then open until the app goes.
-        response.writeHead(200, { "content-type": "application/x-ndjson" });
+        response.writeHead(200, { "content-type": "application/x-ndjson", "x-kuvo-answer": "1" });
         response.write(JSON.stringify({ machines: ["lab"] }) + "\n");
         app.streams.add(response);
         return;
       }
-      return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ answered: "app", path: given.path, phone: given.phone }));
+      // A real answer says so, whatever its status (a session that's gone is a real 404).
+      if (given.path === "kuvo/gone") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Gone." }));
+      if (given.path === "kuvo/cut") {
+        // An answer cut off halfway (the app quit as it answered).
+        response.writeHead(200, { "content-type": "application/json", "x-kuvo-answer": "1" });
+        response.write('{"half":');
+        return setTimeout(() => request.socket.destroy(), 20);
+      }
+      return response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "x-kuvo-answer": "1" }).end(JSON.stringify({ answered: "app", path: given.path, phone: given.phone }));
     }
     response.writeHead(404).end();
   });
@@ -256,6 +267,22 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
   }
 });
 
+test("the app's own answer reaches the phone as it is, a 404 too; an answer cut off ends as cut off, not as whole", async () => {
+  const { it } = await paired();
+  const gone = await it.request("GET", "kuvo/gone");
+  assert.equal(gone.status, 404);
+  assert.deepEqual(JSON.parse(gone.body), { message: "Gone." });
+  const usage = await it.request("GET", "kuvo/usage");
+  assert.equal(usage.pieces[0].head.h["cache-control"], "no-store");
+  it.send("GET", "kuvo/cut", 9);
+  const pieces = [];
+  for (let piece = await it.piece(); piece; piece = await it.piece()) {
+    pieces.push(piece);
+    if (piece.head.t === "cancel" || piece.head.end === true) break;
+  }
+  assert.equal(pieces.at(-1).head.t, "cancel", "the phone hears it was cut off");
+});
+
 test("mail from your machines goes to the app; the app's mail and pushes go out on the box's connection", async () => {
   app.keys = keys;
   await config({ machines: true });
@@ -284,6 +311,14 @@ test("mail from your machines goes to the app; the app's mail and pushes go out 
   const mine = await arrived(() => relay.pushed.slice(before).find(each => each.to.equals(it.device.address)), "the relay got no push for the phone");
   const opened = link.openOneWay(link.readFrame(mine.payload).body, it.key, link.publicOf(macKey));
   assert.deepEqual(JSON.parse(opened.payload.toString()), { title: "Ada", body: "Done." });
+  // A connection that's closing as it's asked takes nothing: none's said to have gone.
+  const real = link.macLink.host;
+  link.macLink.host = { welcomed: true, send: () => false };
+  try {
+    assert.equal((await ask("POST", "kuvo/link/push", { notice: { title: "Ada", body: "Again." } })).status, 503);
+  } finally {
+    link.macLink.host = real;
+  }
   await config({ machines: false });
 });
 
@@ -312,6 +347,37 @@ test("with the phone link off, phones are let go and refused, and no pairing lin
   assert.equal((await ask("POST", "kuvo/phones/pair")).status, 409);
   assert.deepEqual(await it.open({}), { refused: true });
   await config({ phones: true, machines: false });
+});
+
+test("mail the app couldn't take at once is handed over when it can, in the order it came", async () => {
+  app.keys = keys;
+  await config({ machines: true });
+  await untilStatus("connected");
+  const machine = relay.device();
+  const first = link.frame(link.Frame.mail, 0, crypto.randomBytes(30));
+  const second = link.frame(link.Frame.mail, 0, crypto.randomBytes(31));
+  const before = app.mailed.length;
+  app.away = true;
+  const refused = app.turnedAway;
+  machine.send(macAddress, first);
+  machine.send(macAddress, second);
+  await arrived(() => app.turnedAway > refused, "the app was never asked");
+  app.away = false;
+  await arrived(() => app.mailed.length >= before + 2, "the app never got the mail");
+  assert.deepEqual(app.mailed.slice(before).map(each => each.frame), [first.toString("base64"), second.toString("base64")]);
+  await config({ machines: false });
+});
+
+test("a link no longer wanted leaves the relay, and says it's off", async () => {
+  app.keys = keys;
+  // Nothing paired: it's up for your machines alone.
+  link.updateLink(current => ({ ...(current ?? {}), phones: [], removed: current?.removed ?? [] }));
+  await config({ machines: true });
+  await untilStatus("connected");
+  assert.ok(relay.has(macAddress));
+  await config({ machines: false });
+  await untilStatus("off");
+  await arrived(() => !relay.has(macAddress), "it's still on the relay");
 });
 
 test("whatever the relay sends, and a relay that goes, the box's own routes go on answering", async () => {

@@ -37,28 +37,37 @@ final class HostInterface {
     /// stops when the box goes.
     private static func answer(_ parts: AsyncThrowingStream<LinkResponsePart, Error>) async -> HTTPResponse {
         let (body, sending) = AsyncThrowingStream<Data, Error>.makeStream()
-        let head: (status: Int, type: String) = await withCheckedContinuation { said in
+        let head: (status: Int, headers: [String: String]) = await withCheckedContinuation { said in
             let reading = Task {
                 var told = false
                 do {
                     for try await part in parts {
                         switch part {
                         case .head(let status, let headers):
-                            if !told { said.resume(returning: (status, headers["content-type"] ?? headers["Content-Type"] ?? "application/json")) }
+                            if !told { said.resume(returning: (status, Self.passed(headers))) }
                             told = true
                         case .body(let data):
-                            if !told { said.resume(returning: (200, "application/json")) }
+                            if !told { said.resume(returning: (200, Self.passed([:]))) }
                             told = true
                             sending.yield(data)
                         }
                     }
                 } catch {}
-                if !told { said.resume(returning: (502, "application/json")) }
+                if !told { said.resume(returning: (502, Self.passed([:]))) }
                 sending.finish()
             }
             sending.onTermination = { _ in reading.cancel() }
         }
-        return HTTPResponse(status: head.status, headers: ["Content-Type": head.type], stream: body)
+        return HTTPResponse(status: head.status, headers: head.headers, stream: body)
+    }
+
+    /// What goes back with an answer: its type and how it may be kept, and that it's the app's own
+    /// (`X-Kuvo-Answer`), whatever its status, so the box tells a real 404 from the app not there.
+    private nonisolated static func passed(_ headers: [String: String]) -> [String: String] {
+        let given = Dictionary(headers.map { ($0.key.lowercased(), $0.value) }) { first, _ in first }
+        var passed = ["Content-Type": given["content-type"] ?? "application/json", "X-Kuvo-Answer": "1"]
+        if let cache = given["cache-control"] { passed["Cache-Control"] = cache }
+        return passed
     }
 
     /// What the Keychain didn't do, said as Edit Bot says it.
