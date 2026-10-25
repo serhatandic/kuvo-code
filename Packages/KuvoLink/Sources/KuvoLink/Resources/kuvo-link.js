@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "worktrees", "worktrees.events",
+  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -2018,7 +2018,14 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       yield { body: Buffer.from(JSON.stringify({ sessions: listWakes() })) };
       return;
     }
-    const wakes = route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause))?$/);
+    // Every conversation's wake-ups and watches followed: a line now, and again as they change
+    // (added, fired, canceled, paused), as a Mac shows them (PROTOCOL.md, "Wake-ups").
+    if (route === "kuvo/wakes/events") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => ({ sessions: allWakes() }), wakeFollowers, signal);
+    }
+    const wakes = route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause|watch))?$/);
     if (wakes) {
       let session;
       try {
@@ -2219,8 +2226,11 @@ export function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
 // the folders the app keeps on the machine, so a phone has them with the Mac closed: a bot's
 // description (`bot.json`, which the app writes from its list), its session, and the wake-ups,
 // watches and pause that `kuvo-wake` keeps beside them.
-const BOTS = path.join(K, "bots");
-const SESSION_WAKES = path.join(K, "wakes");
+// A Mac's box finds them where its app keeps them, as the engine does (KUVO_BOTS, KUVO_WAKES, and the
+// app's own kuvo-wake); a machine's, in its folder.
+const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
+const SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
+const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
 const DESCRIPTION = 1;
 const WAKE_MARKER = "[Wake-up] ";
@@ -2305,20 +2315,47 @@ export function listWakes() {
   return sessions;
 }
 
-// A folder's waiting wake-ups (soonest first), its watches, and whether you paused them.
-export function readWakes(folder) {
+// A folder's waiting wake-ups (soonest first), its watches, and whether you paused them: their
+// notes and checks on a line each, or `whole`.
+export function readWakes(folder, { whole = false } = {}) {
+  const line = (text, limit) => whole ? text : oneLine(text, limit);
   const wakes = listOf(path.join(folder, "wakes"))
-    .map(name => wakeOf(name, oneLine(textOf(path.join(folder, "wakes", name)) ?? "", 400)))
+    .map(name => wakeOf(name, line(textOf(path.join(folder, "wakes", name)) ?? "", 400)))
     .filter(Boolean)
     .sort((a, b) => a.due - b.due);
   const watches = listOf(path.join(folder, "watches")).sort().map(letters => {
     const at = path.join(folder, "watches", letters);
     const check = textOf(path.join(at, "check")) ?? "";
     if (!check) return null;
-    return { letters, every: (textOf(path.join(at, "every")) ?? "").trim(), check: oneLine(check, 300), note: oneLine(textOf(path.join(at, "note")) ?? "", 400) };
+    return { letters, every: (textOf(path.join(at, "every")) ?? "").trim(), check: line(check, 300), note: line(textOf(path.join(at, "note")) ?? "", 400) };
   }).filter(Boolean);
   return { wakes, watches, paused: fs.existsSync(path.join(folder, "paused")) };
 }
+
+// A wake-up as a client takes it.
+const listedWake = ({ id, due, note, every }) => ({ id, due, note, every: every ?? undefined });
+
+// Every conversation here with wake-ups, watches or a pause, a bot's or its own, whole: what a
+// client keeps of them, followed (`kuvo/wakes/events`).
+export function allWakes() {
+  const sessions = [];
+  const add = folder => {
+    const session = (textOf(path.join(folder, "session")) ?? "").trim();
+    if (!session) return;
+    const { wakes, watches, paused } = readWakes(folder, { whole: true });
+    if (wakes.length || watches.length || paused) sessions.push({ session, wakes: wakes.map(listedWake), watches, paused });
+  };
+  for (const id of listOf(BOTS)) add(path.join(BOTS, id));
+  for (const name of listOf(SESSION_WAKES)) add(path.join(SESSION_WAKES, name));
+  return sessions;
+}
+
+// Those following them (`kuvo/wakes/events`), told of each change made here; `kuvo-wake fire`'s
+// are seen within a second.
+const wakeFollowers = new Set();
+const wakesChanged = () => {
+  for (const tell of wakeFollowers) tell();
+};
 
 // ---- Group chats that live here ----
 
@@ -3077,15 +3114,20 @@ async function waitForTools(port, authorization, directory, signal) {
 const wakingNow = new Set();
 
 // `kuvo/wakes/<session>`: its wake-ups, watches and pause; `…/cancel` with {"wake"} or {"watch"};
-// `…/now` with {"wake"}, sent at once (one that repeats still comes back at its time).
+// `…/now` with {"wake"}, sent at once (one that repeats still comes back at its time); `…/watch`
+// with {"every", "check", "note"}, a watch made as its agent makes one.
 async function* answerWakes(session, action, request, readEngine, bridge, signal) {
+  const changed = function* (status, value) {
+    wakesChanged();
+    yield* json(status, value);
+  };
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const method = request.method.toUpperCase();
   let folder = wakeFolder(session);
   const listed = () => {
     if (!folder) return { wakes: [], watches: [], paused: false };
     const { wakes, watches, paused } = readWakes(folder);
-    return { wakes: wakes.map(({ id, due, note, every }) => ({ id, due, note, every: every ?? undefined })), watches, paused };
+    return { wakes: wakes.map(listedWake), watches, paused };
   };
   if (!action && (method === "GET" || method === "HEAD")) return yield* json(200, listed());
   if (method !== "POST") return yield* json(405, {});
@@ -3093,9 +3135,30 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   try {
     given = JSON.parse(Buffer.from(request.body ?? []).toString("utf8") || "{}") ?? {};
   } catch {}
+  // Its own kuvo-wake (this computer's clock, its weekends), as its agent runs it: its message when it
+  // says no, else null.
+  const kuvoWake = args => new Promise(resolve => execFile(WAKE_COMMAND, [folder, ...args], { encoding: "utf8", timeout: 30_000 },
+    (error, _out, said) => resolve(error ? { missing: error.code === "ENOENT", refused: error.code === 2, said: String(said ?? "").trim() } : null)));
+  const unavailable = failed => failed.missing
+    ? json(503, { message: "Wake-ups aren’t set up on this computer yet. Try again in a moment." })
+    : json(failed.refused && failed.said ? 400 : 503, { message: failed.refused && failed.said ? failed.said : "It couldn’t be saved. Try again." });
+  if (action === "watch") {
+    const every = typeof given.every === "string" ? given.every.trim() : "";
+    const check = typeof given.check === "string" ? given.check.trim() : "";
+    const note = typeof given.note === "string" ? given.note.trim() : "";
+    if (!every || !check || !note) return yield* json(400, { message: "Send how often (`every`, like 5m, 2h or 1d), the check to run (`check`) and what to do when it changes (`note`)." });
+    if (!folder) {
+      const made = await wakeFolderFor(session, readEngine, bridge);
+      if (!made) return yield* json(404, {});
+      folder = made;
+    }
+    if (isMoving(folder)) return yield* json(409, { message: MOVING });
+    const failed = await kuvoWake(["watch", every, check, note]);
+    if (failed) return yield* unavailable(failed);
+    return yield* changed(200, listed());
+  }
   if (!action) {
-    // One added as the bar over a Mac's composer adds one, with this machine's own kuvo-wake (its
-    // clock, its weekends).
+    // One added as the bar over the composer adds one.
     const due = Number(given.due), note = typeof given.note === "string" ? given.note.trim() : "";
     const every = given.every == null ? null : String(given.every);
     if (!Number.isFinite(due) || !note) return yield* json(400, { message: "Send when it comes (`due`, seconds since 1970) and what it says (`note`)." });
@@ -3108,11 +3171,9 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     }
     if (isMoving(folder)) return yield* json(409, { message: MOVING });
     if (readWakes(folder).wakes.length >= WAKE_LIMIT) return yield* json(409, { message: `There are ${WAKE_LIMIT} wake-ups waiting already. Cancel some first.` });
-    const failed = await new Promise(resolve => execFile(path.join(K, "bin", "kuvo-wake"), [folder, "add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note],
-      { encoding: "utf8", timeout: 30_000 }, error => resolve(error)));
-    if (failed?.code === "ENOENT") return yield* json(503, { message: "Wake-ups aren’t set up on this machine yet. Connect to it from your Mac once, then try again." });
-    if (failed) return yield* json(503, { message: "The wake-up couldn’t be added. Try again." });
-    return yield* json(200, listed());
+    const failed = await kuvoWake(["add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note]);
+    if (failed) return yield* unavailable(failed);
+    return yield* changed(200, listed());
   }
   if (action === "pause" && typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });
   if (!folder) return yield* json(action === "pause" ? 200 : 404, action === "pause" ? listed() : {});
@@ -3121,36 +3182,36 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     // A hold of your own, until you take it away (archiving's and a move's are theirs).
     if (given.paused) fs.writeFileSync(path.join(folder, "paused"), "paused");
     else fs.rmSync(path.join(folder, "paused"), { force: true });
-    return yield* json(200, listed());
+    return yield* changed(200, listed());
   }
   const { wakes, watches } = readWakes(folder);
-  const wake = typeof given.wake === "string" ? wakes.find(each => each.id === given.wake || each.letters === given.wake) : undefined;
+  const chosen = typeof given.wake === "string" ? wakes.find(each => each.id === given.wake || each.letters === given.wake) : undefined;
   if (action === "cancel") {
-    if (wake && LETTERS.test(wake.letters)) {
-      cancelWake(folder, wake.letters);
-      return yield* json(200, {});
+    if (chosen && LETTERS.test(chosen.letters)) {
+      cancelWake(folder, chosen.letters);
+      return yield* changed(200, {});
     }
     const watch = typeof given.watch === "string" ? watches.find(each => each.letters === given.watch) : undefined;
     if (watch && LETTERS.test(watch.letters)) {
       fs.rmSync(path.join(folder, "watches", watch.letters), { recursive: true, force: true });
-      return yield* json(200, {});
+      return yield* changed(200, {});
     }
     return yield* json(404, {});
   }
-  if (!wake) return yield* json(404, {});
-  const key = `${folder}/${wake.id}`;
+  if (!chosen) return yield* json(404, {});
+  const key = `${folder}/${chosen.id}`;
   if (wakingNow.has(key)) return yield* json(200, {});
   wakingNow.add(key);
   try {
     // The whole note, as its time would send it, not the line it's listed by.
-    const note = textOf(path.join(folder, "wakes", wake.id));
+    const note = textOf(path.join(folder, "wakes", chosen.id));
     if (note === null) return yield* json(404, {});
     const agents = (textOf(path.join(folder, "via")) ?? "").trim() === "bridge";
     let target = null;
     try {
       target = agents ? bridge() : readEngine();
     } catch {}
-    if (!target) return yield* json(503, { message: agents ? "The coding agents aren't running on this machine." : "The engine isn't running." });
+    if (!target) return yield* json(503, { message: agents ? "The coding agents aren't running on this computer." : "The engine isn't running." });
     const authorization = `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`;
     const directory = textOf(path.join(folder, "directory"));
     if (!agents && directory) await waitForTools(target.port, authorization, directory, signal);
@@ -3166,8 +3227,8 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
       return yield* json(503, { message: "The wake-up couldn't be sent." });
     }
     if (!response.ok) return yield* json(503, { message: `The wake-up couldn't be sent (${response.status}).` });
-    if (!wake.every) cancelWake(folder, wake.letters);
-    return yield* json(200, {});
+    if (!chosen.every) cancelWake(folder, chosen.letters);
+    return yield* changed(200, {});
   } finally {
     wakingNow.delete(key);
   }

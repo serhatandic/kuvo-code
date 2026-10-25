@@ -1035,6 +1035,16 @@ host serves:
   (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
   `kuvo/bots`. A Mac lists its sessions' and those it has read of its machines'; a machine's
   bridge its own.
+- `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
+  makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
+  that computer, `note` what to do when its output changes. It answers the list as it is then;
+  `400 {"message"}` in `kuvo-wake`'s own words for what can't be one (20 watches already, say),
+  `404 {}` for a conversation that isn't there, `409 {"message"}` while it moves.
+  `GET kuvo/wakes/events` follows every conversation's wake-ups, watches and pause on the box,
+  its bots' and sessions' (`wakes.events` in `features`), as ndjson: a line now and again each
+  time they change (added, fired, canceled, paused), `{"sessions": [{session, wakes: [{id, due,
+  note, every}], watches: [{letters, every, check, note}], paused}]}` with notes and checks whole,
+  and only conversations that have any or are paused.
 - On a Mac, `kuvo/asks`: what agents ask you for while they browse, on the Mac or a machine: a
   sign-in (the fields the page has, and the accounts Passwords keeps for the site, never
   their passwords), a one-time code, or a step only you can do. `kuvo/asks/events` is the same
@@ -1133,6 +1143,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
+| `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
 | `worktrees` | `kuvo/worktrees…` |
 | `engine.start` | a machine only: `POST kuvo/engine/start` |
 | `groups.joinable` | `kuvo/groups/joinable` |
