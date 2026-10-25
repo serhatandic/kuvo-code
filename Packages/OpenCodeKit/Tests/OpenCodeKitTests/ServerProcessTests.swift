@@ -90,3 +90,63 @@ struct ServerProcessTests {
         #expect(server.recentOutput.contains("gone"))
     }
 }
+
+/// Servers that never say where they listen: the engine, the agents bridge and this Mac's box
+/// each start through `ServerProcess`, so one held up must neither hold up the others nor wait
+/// past its time limit.
+@Suite(.timeLimit(.minutes(1))) struct SilentServerTests {
+    let root = FileManager.default.temporaryDirectory.appending(path: "opencodekit-silent-\(UUID().uuidString)")
+
+    init() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    /// A script that runs as a server would, until its stdin closes, its output still open
+    /// (`then` can redirect it).
+    private func server(_ name: String, _ script: String, then: String = "") throws -> URL {
+        let file = root.appending(path: name)
+        try "#!/bin/sh\n\(script)\nexec /bin/cat \(then)\n".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        return file
+    }
+
+    /// One that says nothing while it starts (a box held up) doesn't keep another from starting
+    /// meanwhile. Each start used to wait for the one before it to say something or stop.
+    @Test func oneThatSaysNothingDoesntHoldUpAnother() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        // It tells the test it's running, then says nothing.
+        let running = root.appending(path: "running")
+        #expect(mkfifo(running.path, 0o600) == 0)
+        let silent = try server("silent", "echo > '\(running.path)'")
+        let (exits, exited) = AsyncStream<Int32>.makeStream()
+        let waiting = Task {
+            try await ServerProcess.start(executable: silent, arguments: [], environment: [:], directory: root, onExit: { exited.yield($0) })
+        }
+        _ = await Task.detached { FileHandle(forReadingAtPath: running.path)?.readDataToEndOfFile() }.value
+
+        let other = try await ServerProcess.start(executable: try server("other", "echo '{\"url\":\"http://127.0.0.1:9\"}'"),
+                                                  arguments: [], environment: [:], directory: root)
+        #expect(other.endpoint.url.absoluteString == "http://127.0.0.1:9")
+        other.stop()
+
+        // The silent one, given up on, is stopped.
+        waiting.cancel()
+        await #expect(throws: (any Error).self) { try await waiting.value }
+        #expect(await exits.first { _ in true } != nil)
+    }
+
+    /// One that never says where it listens is stopped once its time is up, and its start says
+    /// so: it used to go on waiting, and the app's start with it. Whether it keeps its output
+    /// open, or closes it and goes on running.
+    @Test(arguments: ["", ">/dev/null"]) func oneThatNeverAnswersIsStoppedWhenItsTimeIsUp(output: String) async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (exits, exited) = AsyncStream<Int32>.makeStream()
+        do {
+            _ = try await ServerProcess.start(executable: try server("silent", "", then: output), arguments: [], environment: [:], directory: root,
+                                              timeout: .milliseconds(200), onExit: { exited.yield($0) })
+            Issue.record("It started.")
+        } catch ServerProcessError.timedOut {
+        }
+        #expect(await exits.first { _ in true } != nil, "it was stopped")
+    }
+}
