@@ -67,6 +67,18 @@ import Testing
         }
     }
 
+    /// Whether the panel's browser is signed in to the sites the agent uses there, for Settings ›
+    /// Integrations on a phone: each it can tell, as their cookies say; nothing without the password.
+    @Test func whereThePanelsBrowserIsSignedIn() async throws {
+        let environment = try await host.start()
+        defer { host.stop() }
+        let password = try #require(environment["KUVO_HOST_PASSWORD"])
+        let sites = try #require(try await ask("/sites/signed-in", [:], password: password, at: environment).json?["sites"] as? [String: Bool])
+        #expect(Set(sites.keys) == Set(Integrations.signInCookies.keys))
+        #expect(sites.values.allSatisfy { !$0 }, "the test copy's browser is signed in nowhere")
+        #expect(try await ask("/sites/signed-in", [:], password: nil, at: environment).status == 401)
+    }
+
     /// The box the app starts (before its engine, or again after) can send this Mac's wake-ups,
     /// with the app's own kuvo-wake, and reach your Keychain through the app, which it's told is
     /// where its keys are: without that, it would keep keys in files of its own.

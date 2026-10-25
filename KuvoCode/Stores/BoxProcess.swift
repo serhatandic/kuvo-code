@@ -18,6 +18,8 @@ final class BoxProcess {
     /// Where the box keeps what it has: its `KUVO_HOME`.
     static var home: URL { AppInfo.supportDirectory.appending(path: "box") }
     static var run: URL { home.appending(path: "run") }
+    /// What integrations' servers keep, which the engine is given too (`KUVO_INTEGRATIONS`).
+    static var integrations: URL { AppInfo.supportDirectory.appending(path: "integrations") }
 
     /// Where it's reached while it runs.
     private(set) var endpoint: ServerEndpoint?
@@ -80,6 +82,8 @@ final class BoxProcess {
         // where the engine reads the keys you keep in the Keychain, which its settings name.
         env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
         env["KUVO_KEYS"] = IntegrationKeys.folder.path
+        // What integrations' servers keep (a sign-in), where the engine runs them with it.
+        env["KUVO_INTEGRATIONS"] = Self.integrations.path
         // The defaults it adds to them once, as it starts: those an earlier version added here
         // noted as done, so one you took out stays out.
         Self.noteDefaultsAdded(EngineConfig.defaultsAdded())

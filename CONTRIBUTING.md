@@ -298,7 +298,7 @@ when you're there to answer.
 | `KUVO_DEMO_SELECTION_MENU` | `<x>,<y>`: the menu over selected text (Add to Chat, Copy), shown there in the conversation |
 | `KUVO_DEMO_DRAG` | `<x1>,<y1>,<x2>,<y2>`: a drag over the conversation, as events (`KUVO_DEMO_DRAG_AT` seconds after it opens); `KUVO_DEMO_DRAG_DIRECT=1` hands them to the view itself, as a window in the background takes a first click only to come forward |
 | `KUVO_DEMO_INTEGRATION_KEY` | `<id>\|<NAME>\|<value>`: saves an integration's key as Add Key… does, before the engine starts (no value removes it) |
-| `KUVO_DEMO_ADD_INTEGRATION` | With Settings › Integrations open: adds that integration, as Connect does |
+| `KUVO_DEMO_ADD_INTEGRATION` | With Settings › Integrations open: adds those integrations (comma-separated), as Connect does |
 | `KUVO_DEMO_SIGN_IN_SITE` | With Settings › Integrations open: signing in to that service on its site (`x`, `discord`…), in the sheet |
 | `KUVO_DEMO_INTEGRATION_KINDS` | Settings › Integrations shows only these kinds, comma-separated (`mail`, `chat`, `social`, `code`), to get a row in view |
 | `KUVO_DEMO_TAKE_OVER` | Seconds: the panel's browser is taken over from the agent once it starts browsing, and handed back after that long |

@@ -21,6 +21,7 @@
         },
         "type" : "local"
       },
+      "signInFile" : "token-cache.json",
       "site" : "https://outlook.live.com",
       "summary" : "Mail, calendar, contacts and files; you sign in with a code the first time",
       "symbol" : "envelope",
