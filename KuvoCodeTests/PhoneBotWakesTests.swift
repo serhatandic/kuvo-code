@@ -4,18 +4,20 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// A bot's wake-ups from a phone, through this Mac: added and paused in the bot's own folder,
+/// A bot's wake-ups from a phone, through this Mac's box: added and paused in the bot's own folder,
 /// where Edit Bot shows them and its Pause holds them, never in a folder of the conversation's
-/// own. The engine is stubbed; the folders and kuvo-wake are real.
+/// own. The engine is stubbed; the box, the folders and kuvo-wake are real.
 @MainActor
 @Suite(.serialized) struct PhoneBotWakesTests {
     let engine = StubEngine(port: 47973)
-    let folder = AppInfo.testRoot.appending(path: "Bots/bot_waker_\(UUID().uuidString.prefix(6))")
+    let folder = Bots.root.appending(path: "bot_waker")
     let file = AppInfo.supportDirectory.appending(path: "bots.json")
 
     init() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("# Waker's memory\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
+        // Its conversation, as the app notes it in its folder.
+        try Data("ses_bot_waker".utf8).write(to: folder.appending(path: "session"))
         let bot: [String: Any] = [
             "id": "bot_waker", "name": "Waker", "job": "", "instructions": "", "jobInMemory": true,
             "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": folder.path(percentEncoded: false),
@@ -34,6 +36,8 @@ import Testing
 
     @Test func aPhoneAddsAndPausesABotsWakeUpsWhereEditBotShowsThem() async throws {
         defer { done() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
         let app = AppModel()
         app.bots.app = app
         app.wakeUps.app = app
@@ -42,7 +46,6 @@ import Testing
         await app.workspace.refresh()
         let bot = try #require(app.bots.bot("bot_waker"))
         let link = PhoneLink()
-        link.wakeUps = app.wakeUps
         let before = AgentMail.shared.app
         AgentMail.shared.app = app
         defer { AgentMail.shared.app = before }
@@ -55,9 +58,11 @@ import Testing
             return status
         }
         #expect(try await ask("kuvo/wakes/ses_bot_waker", ["due": Date.now.addingTimeInterval(3600).timeIntervalSince1970, "note": "Morning digest"]) == 200)
+        await app.wakeUps.read(bot.wakeOwner)
         #expect(app.wakeUps.wakes[bot.wakeOwner.key]?.map(\.note) == ["Morning digest"], "the bot's own")
         #expect(!FileManager.default.fileExists(atPath: WakeUps.root.appending(path: "ses_bot_waker").path(percentEncoded: false)), "no folder of the conversation's")
         #expect(try await ask("kuvo/wakes/ses_bot_waker/pause", ["paused": true]) == 200)
+        await app.wakeUps.read(bot.wakeOwner)
         #expect(app.wakeUps.paused.contains(bot.wakeOwner.key), "held as the bot's Pause holds them")
     }
 }

@@ -498,25 +498,32 @@ final class Bots {
         }
     }
 
-    // MARK: Wake-ups
+    // MARK: Jobs and instructions
 
-    /// Sends this Mac's wake-ups (its bots' and sessions', see `WakeUps`) as they come due, while
-    /// the app runs, each round after checking the bots' jobs and instructions.
-    func startWaking() {
+    @ObservationIgnored private var syncing: Task<Void, Never>?
+
+    /// Keeps bots' jobs and instructions as their memory and Kuvo Code say, while the app runs: at
+    /// launch, then every 20 seconds. (Their wake-ups are sent by the computer each lives on.)
+    func startSyncing() {
         // Bots made before their memory file was made with them.
         for bot in list where bot.machine == nil && !FileManager.default.fileExists(atPath: bot.memoryFile) {
             try? Data(Self.blankMemory(bot.name).utf8).write(to: URL(filePath: bot.memoryFile))
         }
-        app?.wakeUps.beforeRound = { [weak self] launching in
-            // A job changed in a Mac bot's memory (or, at launch, each one's), before its
-            // conversation's instructions are checked.
-            for id in self?.memoryChanged() ?? [] { await self?.syncJob(of: id) }
-            // At launch, the instructions first (an update may have changed them), so the first
-            // wake-ups go with them; after that apart, so machines slow to answer never hold up
-            // this Mac's wake-ups.
-            if launching { await self?.syncInstructions() } else { self?.syncInstructionsApart() }
+        guard syncing == nil else { return }
+        syncing = Task { [weak self] in
+            var launching = true
+            while !Task.isCancelled {
+                guard let self else { return }
+                // A job changed in a Mac bot's memory (or, at launch, each one's), before its
+                // conversation's instructions are checked.
+                for id in memoryChanged() { await syncJob(of: id) }
+                // At launch, the instructions first (an update may have changed them); after that
+                // apart, so machines slow to answer never hold up the next round.
+                if launching { await syncInstructions() } else { syncInstructionsApart() }
+                launching = false
+                try? await Task.sleep(for: .seconds(20))
+            }
         }
-        app?.wakeUps.start()
     }
 
     /// Whether bots' instructions are being checked, so one check runs at a time.

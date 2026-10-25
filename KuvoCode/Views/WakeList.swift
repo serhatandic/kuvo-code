@@ -173,8 +173,8 @@ struct WakeList: View {
                             failure = nil
                             Task {
                                 do { try await wakeUps.wakeNow(wake, of: owner) } catch {
-                                    // Sent all the same, it stays woken; else it can be tried again.
-                                    if case WakeUps.Failure.wakeStays = error {} else { wokenNow.remove(wake.id) }
+                                    // Not sent: it can be tried again.
+                                    wokenNow.remove(wake.id)
                                     failure = error.localizedDescription
                                 }
                             }

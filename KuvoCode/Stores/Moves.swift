@@ -209,6 +209,11 @@ final class Moves {
         }
         let copied: (exports: [JSONValue], sessions: [Session])
         do {
+            // Its wake-ups wait while it moves (as Pause does), so none goes on the way, and none
+            // twice: first of all, as the computer it lives on sends them by itself.
+            record.wasPaused = try await transport.exists(bot.folder + "/paused", on: bot.machine)
+            save(record)
+            if !record.wasPaused { try await transport.write(Data(Self.hold.utf8), to: bot.folder + "/paused", on: bot.machine) }
             let here = try await transport.home(on: bot.machine)
             let home = try await transport.home(on: machine)
             try await checkApart(here, on: bot.machine, home, on: machine)
@@ -217,10 +222,7 @@ final class Moves {
             moved.folder = home.bots + "/" + bot.id
             let folder = moved.folder
             record.copy = folder
-            record.wasPaused = try await transport.exists(bot.folder + "/paused", on: bot.machine)
             save(record)
-            // Its wake-ups wait while it moves (as Pause does), so none goes on the way, and none twice.
-            if !record.wasPaused { try await transport.write(Data(Self.hold.utf8), to: bot.folder + "/paused", on: bot.machine) }
             try await settle([bot.sessionID], on: source, name: bot.name)
             copied = try await carry(bot.sessionID, from: source, to: target, directory: moved.directory, name: bot.name, record: &record) {
                 // One left there by a move cut short, or by the copy before this one, goes first.

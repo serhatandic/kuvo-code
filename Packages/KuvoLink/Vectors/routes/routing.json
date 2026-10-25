@@ -23,7 +23,7 @@
           "expect": {
             "mac": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "engine.restart", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills", "wakes", "wakes.edit", "worktrees", "worktrees.events",
-                "accounts.ended", "claude-code", "hosts", "mac", "machines"],
+                "accounts.ended", "claude-code", "hosts", "mac", "machines", "wakes.events"],
               "<excludes>": ["engine.start", "update"]
             } } },
             "machine": { "status": 200, "json": { "features": {
