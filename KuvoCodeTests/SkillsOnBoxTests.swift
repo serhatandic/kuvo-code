@@ -89,7 +89,7 @@ import Testing
         let fromGitHub = await #expect(throws: BoxRefusal.self) { try await routes.write("pdf", "Mine now", isNew: false) }
         #expect(fromGitHub?.message == "pdf came from GitHub, so it isn't edited here.")
 
-        // A new one, then put away: in the box's own trash, kept a while, never the Mac's Trash.
+        // A new one, then put away: in the box's Recently Deleted, never the Mac's Trash.
         try await routes.write("changelog", "---\nname: changelog\n---\nOne line each.\n", isNew: true)
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "changelog/SKILL.md").path))
         try await routes.remove("changelog")
@@ -142,6 +142,75 @@ import Testing
         #expect(limited?.message == "GitHub is limiting requests for now. Try again in a while.")
     }
 
+    /// Recently Deleted, as Settings › Skills shows it (`RecentlyDeletedSkills`): a deleted skill
+    /// shows with what it says it is and when it goes, Restore brings it back whole, and the box
+    /// refusing one (a skill has its name now) is shown with the entry kept.
+    @Test func aDeletedSkillIsRestoredFromRecentlyDeleted() async throws {
+        defer { done() }
+        try write("---\nname: release-notes\ndescription: Writes the release notes. From the commits.\n---\nKeep them short.\n", to: "release-notes")
+        try Data("# Notes\n".utf8).write(to: folder.appending(path: "release-notes/template.md"))
+        let deleted = RecentlyDeletedSkills(routes: routes)
+        await deleted.load()
+        #expect(deleted.entries == [], "nothing deleted yet")
+
+        try await routes.remove("release-notes")
+        await deleted.load()
+        let entry = try #require(deleted.entries?.first)
+        #expect(deleted.entries?.count == 1)
+        #expect(entry.name == "release-notes" && entry.description == "Writes the release notes. From the commits.")
+        #expect(entry.when() == "Deleted today · goes in 30 days")
+
+        #expect(await deleted.restore(entry))
+        #expect(deleted.entries == [] && deleted.refusals.isEmpty)
+        #expect(FileManager.default.contents(atPath: folder.appending(path: "release-notes/template.md").path) == Data("# Notes\n".utf8), "back whole")
+
+        // One whose name a skill has now: the box says so, and both stay.
+        try await routes.remove("release-notes")
+        try await routes.write("release-notes", "---\nname: release-notes\n---\nA new one.\n", isNew: true)
+        await deleted.load()
+        let old = try #require(deleted.entries?.first)
+        #expect(await deleted.restore(old) == false)
+        #expect(deleted.refusals[old.id] == "There's a skill called release-notes now. Delete it first to restore this one.")
+        #expect(deleted.entries?.map(\.id) == [old.id], "the entry stays, to restore later")
+        #expect(try await routes.text(of: "release-notes") == "---\nname: release-notes\n---\nA new one.\n")
+        // Once the new one's deleted, the old one comes back, and its refusal goes.
+        try await routes.remove("release-notes")
+        await deleted.load()
+        #expect(await deleted.restore(old))
+        #expect(deleted.refusals.isEmpty)
+        #expect(try await routes.text(of: "release-notes").contains("Keep them short."))
+    }
+
+    /// The box keeps a deleted skill 30 days from when it was deleted, and the page says how long
+    /// it has left; past that, it's gone as the list is read.
+    @Test func recentlyDeletedKeepsASkill30Days() async throws {
+        defer { done() }
+        for name in ["kept", "gone"] {
+            try write("---\nname: \(name)\n---\n", to: name)
+            try await routes.remove(name)
+        }
+        let trash = BoxProcess.home.appending(path: "trash/skills")
+        let entries = try FileManager.default.contentsOfDirectory(atPath: trash.path)
+        // Deleted at a time of the test's choosing: the box dates an entry by when it was deleted.
+        func deleted(_ name: String, daysAgo days: Double) throws {
+            let entry = try #require(entries.first { $0.hasPrefix(name + "-") })
+            try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-days * 86_400)], ofItemAtPath: trash.appending(path: entry).path)
+        }
+        try deleted("kept", daysAgo: 3)
+        try deleted("gone", daysAgo: 31)
+
+        let page = RecentlyDeletedSkills(routes: routes)
+        await page.load()
+        #expect(page.entries?.map(\.folder) == ["kept"])
+        let kept = try #require(page.entries?.first)
+        #expect(kept.when() == "Deleted 3 days ago · goes in 27 days")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: trash.path).allSatisfy { $0.hasPrefix("kept-") }, "gone for good")
+        // How it reads as the days go by, from the box's dates.
+        let day = 86_400.0
+        #expect(kept.when(now: Date(timeIntervalSince1970: kept.deleted + day + 60)) == "Deleted yesterday · goes in 29 days")
+        #expect(kept.when(now: Date(timeIntervalSince1970: kept.goes - 60)) == "Deleted 29 days ago · goes in 1 day")
+    }
+
     /// Many reads of a big collection at once (a phone asking for each skill's description), with
     /// the streams that follow this Mac's box open, never hold up adding a skill.
     @Test func manyReadsAtOnceDontHoldUpAnInstall() async throws {
@@ -189,9 +258,16 @@ import Testing
         try write("---\nname: release-notes\n---\nShort.\n", to: "release-notes")
         box.process.stop()
         let stopped = await #expect(throws: BoxRefusal.self) { try await routes.folder() }
-        #expect(stopped?.message == "This Mac’s box isn’t running. Try again in a moment.")
+        #expect(stopped?.message == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+        // Recently Deleted says so too, and reads again once the box is back.
+        let deleted = RecentlyDeletedSkills(routes: routes)
+        await deleted.load()
+        #expect(deleted.failure == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+        #expect(deleted.entries == nil)
         await box.startAgain()
         #expect(try await routes.text(of: "release-notes") == "---\nname: release-notes\n---\nShort.\n")
+        await deleted.load()
+        #expect(deleted.failure == nil && deleted.entries == [])
     }
 
     /// The name Settings previews for a new skill is the one every box gives it (the shared vector).

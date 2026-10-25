@@ -38,9 +38,22 @@ struct BoxSkills {
         _ = try await box.value(Empty.self, "PUT", "kuvo/skills/" + Self.part(name), body: Written(text: text, new: isNew ? true : nil))
     }
 
-    /// Puts a skill's folder away, in the box's own trash.
+    /// Puts a skill's folder away, in the box's Recently Deleted.
     func remove(_ name: String) async throws {
         _ = try await box.value(Empty.self, "DELETE", "kuvo/skills/" + Self.part(name))
+    }
+
+    /// The box's Recently Deleted, newest first.
+    func deleted() async throws -> [DeletedSkill] {
+        struct Listed: Decodable { var entries: [DeletedSkill] }
+        return try await box.value(Listed.self, "GET", "kuvo/skill-trash").entries
+    }
+
+    /// Puts a skill from Recently Deleted back, under its folder's name; the box refuses (409) when
+    /// a skill has that name now.
+    func restore(_ entry: DeletedSkill) async throws {
+        struct Restored: Decodable { var name: String }
+        _ = try await box.value(Restored.self, "POST", "kuvo/skill-trash/" + Self.part(entry.id) + "/restore")
     }
 
     /// Adds a skill from GitHub to the box, under its folder's name.
@@ -73,6 +86,84 @@ struct BoxSkills {
     /// A part of a route's path, read back exactly as it's named.
     private static func part(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? text
+    }
+}
+
+/// A skill in its box's Recently Deleted (PROTOCOL.md, "Skills"), as the box says it is: kept 30
+/// days from when it was deleted, which the box decides.
+struct DeletedSkill: Decodable, Hashable, Identifiable {
+    /// The entry, as the box names it.
+    var id: String
+    /// The folder's name it goes back under.
+    var folder: String
+    /// What its SKILL.md says it is.
+    var name: String
+    var description: String?
+    /// When it was deleted, and when the box clears it, in seconds since 1970.
+    var deleted: Double
+    var goes: Double
+
+    /// "Deleted 3 days ago · goes in 27 days", as of `now`.
+    func when(now: Date = .now) -> String {
+        let day = 86_400.0
+        let ago = max(0, Int((now.timeIntervalSince1970 - deleted) / day))
+        let left = max(1, Int(((goes - now.timeIntervalSince1970) / day).rounded(.up)))
+        let since = switch ago {
+        case 0: "Deleted today"
+        case 1: "Deleted yesterday"
+        default: "Deleted \(ago) days ago"
+        }
+        return "\(since) · goes in \(left.counting("day"))"
+    }
+}
+
+/// Settings › Skills' Recently Deleted for one box: what the box lists, and restoring from it. The
+/// box decides what's kept and what can be restored; this shows what it says.
+@MainActor @Observable
+final class RecentlyDeletedSkills {
+    let routes: BoxSkills
+    /// Newest first; nil until the box has listed them.
+    private(set) var entries: [DeletedSkill]?
+    /// Why the box couldn't list them.
+    private(set) var failure: String?
+    /// Why the box didn't restore one, by entry: the entry stays, with this under it.
+    private(set) var refusals: [String: String] = [:]
+    /// The entry being restored.
+    private(set) var restoring: String?
+
+    init(routes: BoxSkills) {
+        self.routes = routes
+    }
+
+    /// Lists them again, as the box has them now.
+    func load() async {
+        do {
+            let listed = try await routes.deleted()
+            entries = listed
+            failure = nil
+            // A refusal stays with its entry while it's there.
+            refusals = refusals.filter { id, _ in listed.contains { $0.id == id } }
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    /// Puts one back. True once it's back where it was.
+    @discardableResult
+    func restore(_ entry: DeletedSkill) async -> Bool {
+        guard restoring == nil else { return false }
+        restoring = entry.id
+        refusals[entry.id] = nil
+        defer { restoring = nil }
+        do {
+            try await routes.restore(entry)
+            await load()
+            return true
+        } catch {
+            refusals[entry.id] = error.localizedDescription
+            await load()
+            return false
+        }
     }
 }
 

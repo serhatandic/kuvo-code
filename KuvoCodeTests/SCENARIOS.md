@@ -60,6 +60,7 @@ for Linux's tools).
 | H1, H2, H5 MCP servers and integrations, before and after their keys | MCPCommandTests, ChromeDevToolsUpgradeTests, IntegrationsTests | an integration's card in Settings (UI) |
 | H3 An MCP server asks mid-task | AgentAsksTests | |
 | H4 A skill from GitHub | SkillsOnBoxTests (through this Mac's box), and the bridge's skills.test.js | |
+| A deleted skill in Recently Deleted on its computer: listed with when it goes, restored whole, refused while a skill has its name, gone after 30 days | SkillsOnBoxTests (through this Mac's box), the bridge's skills.test.js, and both boxes' route scenarios (`routes/skills.json`) | the page itself (UI, by hand with the demo copy) |
 | I1 Add a machine, at one or more addresses | AddMachineTests, MachineAddressesTests | choosing the address that answers (needs SSH) |
 | I2 A project on a machine | MachineFoldersTests, AttachmentRoutesTests, SignInSyncTests, MachineSignOutTests | |
 | I3 A machine that's away | MachineAwayTests | |

@@ -27,6 +27,9 @@ struct SkillsSettings: View {
     @State private var writing: SkillDraft?
     /// What the list is narrowed to.
     @State private var search = ""
+    /// Its box's Recently Deleted; nil until the page has read it.
+    @State private var deleted: RecentlyDeletedSkills?
+    @State private var showsDeleted = false
 
     private var config: EngineConfig { app.config(for: box) }
     private var routes: BoxSkills { BoxSkills(box: app.box(box.id), library: app.box(BoxClient.mac)) }
@@ -104,6 +107,23 @@ struct SkillsSettings: View {
                         .font(.callout)
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                // Only while there's something in it.
+                if deleted?.failure == nil, let count = deleted?.entries?.count, count > 0 {
+                    Button {
+                        showsDeleted = true
+                    } label: {
+                        HStack {
+                            Label("Recently Deleted", systemImage: "trash")
+                            Spacer()
+                            Text(count, format: .number)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+                    .accessibilityLabel("Recently Deleted, \(count.counting("skill"))")
                 }
                 Button("New Skill…") { writing = SkillDraft(name: nil) }
             } header: {
@@ -196,11 +216,29 @@ struct SkillsSettings: View {
             repositoryName = String(name)
             openRepository()
         }
+        // KUVO_DEMO_SKILLS_DELETED=open: Recently Deleted opened; restore:<folder> also restores
+        // that one, as Restore does.
+        .task {
+            guard let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_SKILLS_DELETED"] else { return }
+            await refresh()
+            showsDeleted = true
+            guard demo.hasPrefix("restore:"), let deleted, let entry = deleted.entries?.first(where: { $0.folder == demo.dropFirst("restore:".count) }) else { return }
+            if await deleted.restore(entry) { await refresh() }
+        }
         #endif
         .settingsDetail(item: $writing, title: { $0.name ?? "New Skill" }) { draft in
             SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? [])) {
                 writing = nil
                 Task { await refresh() }
+            }
+        }
+        .settingsDetail(isPresented: $showsDeleted, title: "Recently Deleted") {
+            if let deleted {
+                RecentlyDeletedPage(deleted: deleted, computer: box.machine == nil ? nil : app.name(of: box)) {
+                    Task { await refresh() }
+                } done: {
+                    showsDeleted = false
+                }
             }
         }
         .settingsDetail(item: $browsing, title: { $0.collection.title }) { opened in
@@ -222,6 +260,10 @@ struct SkillsSettings: View {
             here = SkillsShown()
             boxFailure = error.localizedDescription
         }
+        // Its Recently Deleted, this box's (the page can be another box's now). While the box
+        // can't list it, the page shows none: the failure above says why.
+        if deleted?.routes.box.box != box.id { deleted = RecentlyDeletedSkills(routes: routes) }
+        await deleted?.load()
         // The engine notices a new folder within a moment.
         try? await Task.sleep(for: .milliseconds(500))
         skills = ((try? await app.api(for: box)?.skills()) ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -319,6 +361,116 @@ private struct FailureLabel: View {
             Spacer()
             Button("Try Again", action: retry)
                 .accessibilityLabel("Try reading \(retrying) again")
+        }
+    }
+}
+
+/// Recently Deleted, in the page's place: the skills its box put away, each kept 30 days from when
+/// it was deleted, to restore. The box says what's there and whether one can be restored.
+private struct RecentlyDeletedPage: View {
+    @Environment(AppModel.self) private var app
+    let deleted: RecentlyDeletedSkills
+    /// The machine's name, for one that isn't this Mac.
+    let computer: String?
+    let changed: () -> Void
+    let done: () -> Void
+    @State private var search = ""
+
+    private var shown: [DeletedSkill] {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return deleted.entries ?? [] }
+        return (deleted.entries ?? []).filter { "\($0.name) \($0.folder) \($0.description ?? "")".localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        SettingsDetailPage {
+            Section {
+                if let failure = deleted.failure {
+                    FailureLabel(title: "Couldn’t read Recently Deleted", detail: failure, retrying: "Recently Deleted") {
+                        Task {
+                            // This Mac's box, started again if it stopped for good.
+                            if computer == nil { await app.box.startAgain() }
+                            await deleted.load()
+                        }
+                    }
+                } else if deleted.entries == nil {
+                    HStack {
+                        Spacer()
+                        Spinner(size: 20)
+                        Spacer()
+                    }
+                    .padding(.vertical, 16)
+                } else if deleted.entries?.isEmpty == true {
+                    Text("No skills were deleted in the last 30 days.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    if (deleted.entries?.count ?? 0) > 6 {
+                        SettingsSearchRow(text: $search, prompt: "Search recently deleted")
+                    }
+                    if shown.isEmpty {
+                        Text("No deleted skill matches “\(search.trimmingCharacters(in: .whitespaces))”.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(shown) { entry in
+                        DeletedSkillRow(entry: entry, isRestoring: deleted.restoring == entry.id, canRestore: deleted.restoring == nil,
+                                        refusal: deleted.refusals[entry.id]) {
+                            Task {
+                                if await deleted.restore(entry) { changed() }
+                            }
+                        }
+                    }
+                }
+            } footer: {
+                Text("Skills you delete\(computer.map { " on \($0)" } ?? "") stay here for 30 days, then they’re gone for good.")
+                    .foregroundStyle(.secondary)
+            }
+        } footer: {
+            EditorFooter(primary: "Done", onPrimary: done)
+        }
+        .task { await deleted.load() }
+    }
+}
+
+/// A deleted skill: what it says it is, when it was deleted and when it goes, and Restore.
+private struct DeletedSkillRow: View {
+    let entry: DeletedSkill
+    let isRestoring: Bool
+    let canRestore: Bool
+    /// Why its box didn't restore it.
+    let refusal: String?
+    let restore: () -> Void
+
+    var body: some View {
+        SettingsRowLayout {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                if let description = entry.description {
+                    Text(SkillsSettings.summary(description))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .help(description)
+                }
+                Text(entry.when())
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if let refusal {
+                    Text(refusal)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .settingsText()
+            .accessibilityElement(children: .combine)
+            HStack {
+                if isRestoring {
+                    Spinner(size: 16)
+                }
+                Button("Restore", action: restore)
+                    .disabled(!canRestore)
+                    .accessibilityLabel("Restore \(entry.name)")
+            }
         }
     }
 }
@@ -424,7 +576,7 @@ private struct SkillEditor: View {
         .confirmationDialog("Delete \(id)?", isPresented: $confirmsRemoval) {
             Button("Delete", role: .destructive, action: delete)
         } message: {
-            Text("Its folder, with anything else in it, is put away in Kuvo Code’s trash for 30 days.")
+            Text("Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it.")
         }
     }
 
