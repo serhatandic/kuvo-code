@@ -26,9 +26,24 @@ const script = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").
 fs.mkdirSync(path.join(support, "bin"), { recursive: true });
 fs.writeFileSync(process.env.KUVO_WAKE_COMMAND, script + "\n", { mode: 0o755 });
 
+// The engine: the conversations here, its tools all connected, and the prompts it's sent.
+const prompted = [];
+let heard = null;
 const engine = http.createServer((request, response) => {
   const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-  if (request.url === "/api/session/ses_mac") return reply(200, { data: { id: "ses_mac", location: { directory: support } } });
+  const asked = /^\/api\/session\/(ses_mac|ses_due)(\/prompt)?$/.exec(request.url);
+  if (asked && asked[2]) {
+    const chunks = [];
+    request.on("data", chunk => chunks.push(chunk));
+    request.on("end", () => {
+      prompted.push({ session: asked[1], text: JSON.parse(Buffer.concat(chunks).toString()).text });
+      heard?.();
+      reply(200, {});
+    });
+    return;
+  }
+  if (asked) return reply(200, { data: { id: asked[1], location: { directory: support } } });
+  if (request.url.startsWith("/api/mcp")) return reply(200, {});
   reply(404, {});
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
@@ -114,4 +129,23 @@ test("a watch is made as its agent makes one, and kuvo-wake's refusal comes back
 
   assert.equal((await ask("POST", "kuvo/wakes/ses_mac/watch", { every: "1h" })).status, 400, "a check and a note are needed");
   assert.equal((await ask("POST", "kuvo/wakes/ses_gone/watch", { every: "1h", check: "date", note: "x" })).status, 404, "not a conversation here");
+});
+
+test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as a machine's keeper does", async () => {
+  // Where the app tells its box its engine is.
+  fs.mkdirSync(path.join(support, "box", "run"), { recursive: true });
+  fs.writeFileSync(path.join(support, "box", "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p" }));
+  const folder = path.join(support, "wakes", "ses_due");
+  fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
+  fs.writeFileSync(path.join(folder, "session"), "ses_due");
+  fs.writeFileSync(path.join(folder, "directory"), support);
+  fs.writeFileSync(path.join(folder, "wakes", `${Math.floor(Date.now() / 1000) - 5}-ghijkl`), "Send the weekly summary");
+  const sent = new Promise(resolve => { heard = () => prompted.some(each => each.session === "ses_due") && resolve(); });
+  const stop = link.sendWakes();
+  try {
+    await sent;
+    assert.deepEqual(prompted.filter(each => each.session === "ses_due").map(each => each.text), ["[Wake-up] Send the weekly summary"]);
+  } finally {
+    stop();
+  }
 });

@@ -1174,8 +1174,10 @@ const worktreeFollowers = new Set();
 const projectFollowers = new Set();
 
 /** What `read` says, a line now and one for each change after, in order: each change this process
- * makes as it's made (`followers` are told), and what another made, looked for each second. */
-async function* followed(read, followers, signal) {
+ * makes as it's made (`followers` are told), and what another made, looked for each second; or,
+ * given `folders` to watch, as the system says they change, looked for again every half minute
+ * only for a change it missed. */
+async function* followed(read, followers, signal, { folders = [] } = {}) {
   const queue = [JSON.stringify(read())];
   let wake = null;
   const told = () => {
@@ -1183,6 +1185,15 @@ async function* followed(read, followers, signal) {
     wake?.();
   };
   followers.add(told);
+  const watchers = folders.flatMap(folder => {
+    try {
+      fs.mkdirSync(folder, { recursive: true });
+      return [fs.watch(folder, { recursive: true }, told)];
+    } catch {
+      return [];
+    }
+  });
+  const every = watchers.length === folders.length && folders.length ? 30_000 : 1000;
   try {
     let last = "";
     while (!signal?.aborted) {
@@ -1195,13 +1206,14 @@ async function* followed(read, followers, signal) {
       }
       await new Promise(done => {
         wake = done;
-        setTimeout(done, 1000);
+        setTimeout(done, every);
       });
       wake = null;
       queue.push(JSON.stringify(read()));
     }
   } finally {
     followers.delete(told);
+    for (const watcher of watchers) watcher.close();
   }
 }
 
@@ -2023,7 +2035,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/wakes/events") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-      return yield* followed(() => ({ sessions: allWakes() }), wakeFollowers, signal);
+      return yield* followed(() => ({ sessions: allWakes() }), wakeFollowers, signal, { folders: [BOTS, SESSION_WAKES] });
     }
     const wakes = route.match(/^kuvo\/wakes\/([^/]+)(?:\/(cancel|now|pause|watch))?$/);
     if (wakes) {
@@ -2350,8 +2362,64 @@ export function allWakes() {
   return sessions;
 }
 
+// When `kuvo-wake fire` next has something to send, in seconds since 1970: the soonest wake-up of a
+// conversation that isn't paused, or the time one that couldn't go is tried again; null for none.
+export function nextWake() {
+  let soonest = null;
+  const look = folder => {
+    if (fs.existsSync(path.join(folder, "paused")) || textOf(path.join(folder, "session")) === null) return;
+    const [retry = 0] = (textOf(path.join(folder, ".retry")) ?? "").trim().split(/\s+/).map(Number);
+    for (const name of listOf(path.join(folder, "wakes"))) {
+      const due = wakeOf(name)?.due;
+      if (due === undefined) continue;
+      const at = Math.max(due, Number.isFinite(retry) ? retry : 0);
+      if (soonest === null || at < soonest) soonest = at;
+    }
+  };
+  for (const id of listOf(BOTS)) look(path.join(BOTS, id));
+  for (const name of listOf(SESSION_WAKES)) look(path.join(SESSION_WAKES, name));
+  return soonest;
+}
+
+/** This computer's wake-ups and watches sent by its box, as a machine's keeper sends its own with
+ * the same `kuvo-wake fire`: at the soonest one's time, at least each minute (for watches, and one
+ * whose time it finds out later), and again as they change here. One still due after it ran (it
+ * couldn't go, or its conversation is archived) waits for the next minute. The returned function
+ * stops it. */
+export function sendWakes() {
+  let timer = null, running = false, again = false, stopped = false;
+  const schedule = (afterFire = false) => {
+    if (stopped) return;
+    clearTimeout(timer);
+    const due = nextWake(), now = Date.now() / 1000;
+    const wait = due === null || (afterFire && due <= now) ? 60_000 : Math.min(60_000, Math.max(500, (due + 1 - now) * 1000));
+    timer = setTimeout(fire, wait);
+  };
+  const fire = () => {
+    if (running) return void (again = true);
+    running = true;
+    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], { timeout: 300_000 }, () => {
+      running = false;
+      if (again) {
+        again = false;
+        fire();
+      } else {
+        schedule(true);
+      }
+    });
+  };
+  const changed = () => schedule();
+  wakeFollowers.add(changed);
+  schedule();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    wakeFollowers.delete(changed);
+  };
+}
+
 // Those following them (`kuvo/wakes/events`), told of each change made here; `kuvo-wake fire`'s
-// are seen within a second.
+// as the system sees their folders change.
 const wakeFollowers = new Set();
 const wakesChanged = () => {
   for (const tell of wakeFollowers) tell();
@@ -6749,6 +6817,8 @@ async function serve() {
     server.listen(0, "127.0.0.1", resolve);
   });
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
+  // Its wake-ups and watches, sent while it runs, with the app's window closed too.
+  sendWakes();
   // Its app gone (its stdin closed): so is it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.on("close", () => process.exit(0));

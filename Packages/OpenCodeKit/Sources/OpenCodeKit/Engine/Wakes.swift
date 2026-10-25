@@ -740,11 +740,18 @@ public enum Wakes {
       for bot in "$bots"/*/; do
         # Paused by you (a session's, while it's archived: see `settle` too): its wake-ups wait.
         [ -e "${bot}paused" ] && continue
+        # One whose last wake-up couldn't go waits before it's tried again (`.retry`: when, and how
+        # long it waited): a minute, then twice as long each time, up to half an hour.
+        r_at=; r_wait=
+        [ -f "${bot}.retry" ] && read -r r_at r_wait <"${bot}.retry"
+        case "$r_at" in ''|*[!0-9]*) r_at=0;; esac
+        [ "$r_at" -le "$now" ] || continue
         tools=
         session=$(cat "$bot/session" 2>/dev/null) || continue
         [ -n "$session" ] || continue
         reach || continue
         settle || continue
+        failed=
         for wake in "$bot"wakes/*; do
           [ -f "$wake" ] || continue
           file=${wake##*/}; rest=${file#*-}; due=${file%%-*}
@@ -767,8 +774,17 @@ public enum Wakes {
             else
               rm -f "$wake"
             fi
+          else
+            failed=1
           fi
         done
+        if [ -n "$failed" ]; then
+          case "$r_wait" in ''|*[!0-9]*) r_wait=30;; esac
+          r_wait=$((r_wait * 2)); [ "$r_wait" -le 1800 ] || r_wait=1800
+          printf '%s %s\n' "$((now + r_wait))" "$r_wait" >"${bot}.retry"
+        else
+          rm -f "${bot}.retry"
+        fi
       done
       rmdir "$lock" 2>/dev/null; trap - EXIT
       # Then their watches, apart (a slow check, up to a minute each, never holds up a wake-up, nor
