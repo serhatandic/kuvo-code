@@ -4756,7 +4756,7 @@ export function takePersonalitiesDocument(body, readEngine = readEngineFile, rea
 }
 
 // Bots here whose personality is among `ids` (changed, or gone), told what they are now, as a
-// Mac tells its own (Bots.personalityChanged).
+// Mac asks after a change to your personalities (`kuvo/bots/retell`).
 export async function retellBots(ids, readEngine = readEngineFile, readBridge = readBridgeFile) {
   const kit = readKit();
   if (!kit) return;

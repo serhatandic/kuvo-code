@@ -298,6 +298,8 @@ final class AppModel {
         // What you keep here, up to date with this version (once, after an update), before the
         // engine starts.
         await calibration.run(self)
+        // Stopped meanwhile (the app quitting, a restart begun): this start gives up.
+        guard starting == start else { return }
         let launch = UUID()
         self.launch = launch
         engineStoppedWhileRunning = false
@@ -434,13 +436,15 @@ final class AppModel {
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = await boxEnvironment(shell)
+            guard launch == self.launch else { return }
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
-                // (what was kept here before goes there).
-                if boxFollowed == nil {
+                // (what was kept here before goes there); not for a start given up meanwhile,
+                // whose stop has ended them.
+                if boxFollowed == nil, launch == self.launch {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let wakes: Void = wakeUps.follow()
