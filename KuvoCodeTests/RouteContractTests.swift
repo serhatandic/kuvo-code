@@ -160,7 +160,6 @@ final class MacBox {
             try? manager.removeItem(at: support.appending(path: name))
         }
         for key in ["worktrees", "projectSettings", "botEditsWaiting"] { UserDefaults.standard.removeObject(forKey: key) }
-        for personality in Personalities.shared.custom { Personalities.shared.delete(personality) }
         for name in IntegrationKeys.shared { _ = IntegrationKeys.set(nil, for: name) }
     }
 
@@ -229,6 +228,8 @@ final class MacBox {
         app.workspace.api = engine.api
         app.wireStores()
         app.wirePhoneLink()
+        // Your personalities as its box keeps them (none, with its bots folder gone).
+        await Personalities.shared.refresh()
         // (AppModel's machines start sets it, for the agents' mail and `&` names.)
         AgentMail.shared.app = app
         self.app = app

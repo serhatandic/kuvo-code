@@ -141,9 +141,14 @@ final class Personalities {
     /// Another computer's copy, met with this one where it's kept: the IDs of those that changed here.
     @discardableResult
     func take(_ other: Library) async -> Set<String> {
+        await taken(other) ?? []
+    }
+
+    /// `take`, nil when the box couldn't take it.
+    private func taken(_ other: Library) async -> Set<String>? {
         struct Taking: Encodable { var document: Library }
         struct Taken: Decodable { var changed: [String] }
-        guard let client = box(), (try? await client.value(Taken.self, "POST", "kuvo/personalities/take", body: Taking(document: other))) != nil else { return [] }
+        guard let client = box(), (try? await client.value(Taken.self, "POST", "kuvo/personalities/take", body: Taking(document: other))) != nil else { return nil }
         return await refresh()
     }
 
@@ -195,7 +200,8 @@ final class Personalities {
     /// taken in, met with the box's library.
     func takeFromOld() async {
         guard let changed = Self.oldChanged, changed.timeIntervalSince1970 > UserDefaults.standard.double(forKey: Self.takenKey) else { return }
-        _ = await take(Self.oldLibrary)
+        // Not taken (the box away): tried again at the next start.
+        guard await taken(Self.oldLibrary) != nil else { return }
         UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.takenKey)
     }
 }

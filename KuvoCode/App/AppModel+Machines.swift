@@ -95,9 +95,8 @@ extension AppModel {
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
         EngineConfig.machines = { [weak self] in self?.machines.engines.values.map(\.config) ?? [] }
         // Your personalities, one library on every computer.
-        // Kept by this Mac's box; however one changed there (here, from a phone, taken from a
+        // However one changed where this Mac's box keeps them (here, from a phone, taken from a
         // machine's copy), the machines take it, and bots with it hear what it is now.
-        Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
         Personalities.shared.onChange = { [weak self] changed in
             guard let self else { return }
             personalitiesChanged()

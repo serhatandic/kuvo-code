@@ -602,9 +602,11 @@ final class PhoneLink {
     /// document's removals taken here (a phone removed there leaves this Mac too), its view of your
     /// personalities met with this Mac's (bots with one that changed told), what's new passed on to
     /// your other machines, what changed of this Mac's own given to all of them, and for a digest,
-    /// what it lacks, and this Mac's own digest when it has something newer.
-    func takeDocuments(_ docs: [String: Any], from machine: String) {
-        guard hasIdentity, let sender = machineHosts[machine] else { return }
+    /// what it lacks, and this Mac's own digest when it has something newer. What it gives back:
+    /// your personalities being met with this Mac's box's, under way.
+    @discardableResult
+    func takeDocuments(_ docs: [String: Any], from machine: String) -> Task<Void, Never>? {
+        guard hasIdentity, let sender = machineHosts[machine] else { return nil }
         let origin = Documents.origin(of: signing)
         let machines = machineSigns
         let phonesBefore = Set(paired.phones.map(\.key))
@@ -663,8 +665,8 @@ final class PhoneLink {
         if !gone.isEmpty { Task { [server] in for phone in gone { await server?.forget(phone: phone) } } }
         save()
         // Met with this Mac's where its box keeps them: what changed is told (`Personalities.onChange`).
-        if !libraries.isEmpty { Task { for library in libraries { await Personalities.shared.take(library) } } }
-        guard let server, status == .connected else { return }
+        let meeting = libraries.isEmpty ? nil : Task { for library in libraries { await Personalities.shared.take(library) } }
+        guard let server, status == .connected else { return meeting }
         let have = ask ? documents.digest(origin: origin) : nil
         let targets = documentMachines
         Task {
@@ -678,6 +680,7 @@ final class PhoneLink {
                 }
             }
         }
+        return meeting
     }
 
     /// The removals a phones document carries.
@@ -773,16 +776,26 @@ final class PhoneLink {
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
             let forwarded = EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                                  allowing: { path, _ in path.hasPrefix("kuvo/") })
-            // A change to a conversation's wake-ups: what the app shows of them (and `kuvo/bots`
-            // lists) has it before the answer goes back, so what's read next agrees.
+            // A change to a conversation's wake-ups, or to your personalities: what the app shows
+            // of them (and `kuvo/bots` and its templates list) has it before the answer goes back,
+            // so what's read next agrees.
             let parts = route.split(separator: "/").map(String.init)
-            guard request.method.uppercased() == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding else { return forwarded }
+            let method = request.method.uppercased()
+            let follow: (@MainActor () async -> Void)?
+            if method == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding {
+                follow = { await link?.wakesChanged(session) }
+            } else if method != "GET", parts.count >= 2, parts[1] == "personalities" {
+                follow = { await Personalities.shared.refresh() }
+            } else {
+                follow = nil
+            }
+            guard let follow else { return forwarded }
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
                         var answer: [LinkResponsePart] = []
                         for try await part in forwarded { answer.append(part) }
-                        await link?.wakesChanged(session)
+                        await follow()
                         for part in answer { continuation.yield(part) }
                         continuation.finish()
                     } catch {
@@ -1216,7 +1229,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+        "personalities.events", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
