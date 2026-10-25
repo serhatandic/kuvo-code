@@ -803,6 +803,16 @@ extension AgentMail {
             || app?.bots.bot(forSession: session).map { $0.machine != machine } == true
     }
 
+    /// Whether a group chat on `chat`'s computer (nil: this Mac) can name `agent`: its own, and the
+    /// agents of computers it meets at the relay. One on a machine that doesn't meet them there
+    /// has the list this Mac gives it over SSH, everyone.
+    func reachable(_ agent: Agent, fromChatOn chat: String?) -> Bool {
+        guard let link = app?.phoneLink else { return true }
+        if let chat, !link.talksToPeers(chat) { return true }
+        guard let machine = agent.machine, machine != chat else { return true }
+        return link.talksToPeers(machine)
+    }
+
     /// The agents this Mac tells your machines of over SSH, for when the relay can't be reached
     /// (`share`): its own, and those of machines it speaks for (whose link doesn't talk to other
     /// computers yet).

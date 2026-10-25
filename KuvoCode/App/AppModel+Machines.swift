@@ -43,9 +43,7 @@ extension AppModel {
         }
         BrowserTools.isInView = { [weak self] session in self?.utilities.isInView(session) ?? false }
         // Agents writing to each other, here and on machines (and with machines this Mac isn't
-        // connected to, through this Mac's box).
-        AgentMail.shared.app = self
-        phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
+        // connected to, through this Mac's box: `wirePhoneLink`).
         if mailTick == nil {
             mailTick = Task {
                 while !Task.isCancelled {

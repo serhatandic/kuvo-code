@@ -1919,6 +1919,8 @@ async function letterAnswer(id, cancelled = () => false) {
     while (Date.now() - began < 660_000 && !cancelled()) {
       fs.writeFileSync(alive, "", { mode: 0o600 });
       await sleep(2000);
+      // Stopped meanwhile: an answer there now is the link's to deliver as a message.
+      if (cancelled()) break;
       const answer = readJSON(file);
       if (!answer) continue;
       fs.rmSync(file, { force: true });

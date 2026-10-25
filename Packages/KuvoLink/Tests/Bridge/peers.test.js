@@ -543,7 +543,8 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   // The tool, still looking.
   fs.writeFileSync(path.join(replies, "ltr_asked1.alive"), "");
   const said = [];
-  await link.takeLetter(second.peer, { id: "ltr_answer1", from: "ses_remote", to: "ses_target", text: "Done, late.", at: now, answers: "ltr_asked1" },
+  // (Whatever conversation the answer says it's for: the one here that asked.)
+  await link.takeLetter(second.peer, { id: "ltr_answer1", from: "ses_remote", to: "ses_elsewhere", text: "Done, late.", at: now, answers: "ltr_asked1" },
     { send: (peer, message) => said.push(message), targets: [target], told: link.readPeerAgents(), peers: link.peersOf(link.readLink()), now });
   assert.equal(said.at(-1).delivered.ok, true, "it's here");
   // The tool stopped right then, without taking it (its turn was stopped).
@@ -555,4 +556,15 @@ test("an answer that came just as the tool waiting for it stopped reaches its co
   const count = prompts.length;
   await link.deliverLeftAnswers(now + 6000, [target]);
   assert.equal(prompts.length, count);
+
+  // One a subagent asked (it can't take letters): not delivered there.
+  fs.writeFileSync(path.join(sending, "ltr_asked2.json"), JSON.stringify({ from: "ses_child", to: "ses_remote", text: "And you?", wait: true, at: now, sentTo: second.pub }));
+  link.letterWent(second.peer, { id: "ltr_asked2", ok: true });
+  fs.writeFileSync(path.join(replies, "ltr_asked2.alive"), "");
+  await link.takeLetter(second.peer, { id: "ltr_answer2", from: "ses_remote", to: "ses_child", text: "Me too.", at: now, answers: "ltr_asked2" },
+    { send: (peer, message) => said.push(message), targets: [target], told: link.readPeerAgents(), peers: link.peersOf(link.readLink()), now });
+  fs.rmSync(path.join(replies, "ltr_asked2.alive"), { force: true });
+  await link.deliverLeftAnswers(now + 20_000, [target]);
+  assert.equal(prompts.length, count);
+  assert.equal(fs.existsSync(path.join(replies, "ltr_asked2.json")), false, "not kept either");
 });

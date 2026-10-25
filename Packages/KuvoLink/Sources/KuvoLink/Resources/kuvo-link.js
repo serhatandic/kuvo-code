@@ -7437,7 +7437,7 @@ export function letterWent(sender, { id, ok, why, retry, answer }) {
 // here: true when one still waits (it notes it does, `<id>.alive`, every two seconds as it looks);
 // else it comes as a message. One the tool doesn't take after all (it stopped as it came) comes as
 // a message too (`deliverLeftAnswers`): it's kept with who it's from and for.
-function answered(sender, { answers: id, text, from, to }, now = Date.now()) {
+function answered(sender, { answers: id, text, from }, now = Date.now()) {
   // On this Mac: the request still waiting for it, if it's still there.
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
@@ -7456,13 +7456,16 @@ function answered(sender, { answers: id, text, from, to }, now = Date.now()) {
   // Its sender as that box named it, when that box alone lists it.
   const told = readPeerAgents();
   const agent = peerOf(from, peersOf(readLink()), told)?.key === sender.key ? (told[sender.key]?.list ?? []).find(each => each.session === from) : null;
-  reply(id, { text: cutText(text, 8000), to, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
+  // For the conversation that asked (as this box's letter has it, not as the answer says).
+  reply(id, { text: cutText(text, 8000), to: letter.from, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
 }
 
 // Answers a tool here was given but never took (its turn stopped as one came): to the conversation
 // that asked, as a message, once the tool's gone (it left `<id>.gaveup`, or stopped noting it
-// waits). Each once: taken out of the tool's way first, put back to try again if it can't go now.
+// waits), if it still takes letters (not a subagent's, a group chat's seat, nor one put away). Each
+// once at most: taken out of the tool's way first, put back to try again if it can't go now; one
+// cut off as it's delivered (this bridge stopped) stays `.delivering`, and is dropped.
 export async function deliverLeftAnswers(now = Date.now(), targets = peerTargets()) {
   for (const name of listOf(REPLIES)) {
     if (!name.endsWith(".json")) continue;
@@ -7478,7 +7481,8 @@ export async function deliverLeftAnswers(now = Date.now(), targets = peerTargets
     try { fs.renameSync(file, taken); } catch { continue; }
     try {
       const place = await placeOfSession(answer.to, targets);
-      if (place) {
+      const kuvo = place?.data?.metadata?.kuvo ?? {};
+      if (place && !place.data?.parentID && !kuvo.seat && !isPutAway(place.data)) {
         await asked(place.target, "POST", `api/session/${encodeURIComponent(answer.to)}/prompt`,
           { id: messageID(), text: composeLetter(String(answer.name ?? "another agent"), String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" });
       }

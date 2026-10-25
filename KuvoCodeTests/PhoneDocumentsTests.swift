@@ -168,4 +168,33 @@ import Testing
         #expect(!link.paired.removed.contains(.init(key: keep, pairing: "p2")), "the forged one changed nothing")
         #expect(PhoneLink(file: file).phones.map(\.key) == [keep], "kept so after a restart, and for an older version")
     }
+
+    /// The letters an earlier Kuvo Code delivered itself go to this Mac's box as the app starts,
+    /// before its link meets your other computers (a letter sent again isn't delivered twice):
+    /// wired as the app wires them, before its machines start.
+    @Test func lettersAnEarlierVersionDeliveredGoToTheBoxBeforeItsLinkMeetsAnyone() async throws {
+        let seen = AgentMail.seenFile
+        try FileManager.default.createDirectory(at: seen.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["ltr_before1": (Date.now.timeIntervalSince1970 * 1000).rounded()]).write(to: seen)
+        let box = try await SettingsBox(port: 47_976)
+        let app = AppModel()
+        app.wirePhoneLink()
+        let link = app.phoneLink
+        let client = box.client
+        link.box = { client }
+        link.hasMachines = { true }
+        box.box.host.phoneLink = link
+        defer {
+            link.stop()
+            box.stop()
+            try? FileManager.default.removeItem(at: seen)
+            try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
+            _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
+            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
+        // Its link up, trying the relay: what was kept went first.
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
+        #expect(!FileManager.default.fileExists(atPath: seen.path), "handed to the box")
+    }
 }

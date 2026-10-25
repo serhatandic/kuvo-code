@@ -236,6 +236,10 @@ final class AppModel {
         phoneLink.workspace = workspace
         phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
         phoneLink.agents = agents
+        // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
+        // this Mac's box before its link meets your other computers (it starts before the machines).
+        AgentMail.shared.app = self
+        phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink

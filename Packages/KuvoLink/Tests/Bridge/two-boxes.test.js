@@ -167,10 +167,14 @@ function phone() {
   const device = relay.device();
   let session = crypto.randomInt(1, 2 ** 31);
   let transport = null, at = null;
+  // What the box it's talking to sends it (another's, a moment late from a session before, isn't).
   const frames = async () => {
-    const message = link.readRelay(await device.next(10_000));
-    if (message?.kind !== "deliver") return { kind: "unreachable" };
-    return link.readFrame(message.payload);
+    for (;;) {
+      const message = link.readRelay(await device.next(10_000));
+      if (message && at && !message.address.equals(at.address)) continue;
+      if (message?.kind !== "deliver") return { kind: "unreachable" };
+      return link.readFrame(message.payload);
+    }
   };
   return {
     key,

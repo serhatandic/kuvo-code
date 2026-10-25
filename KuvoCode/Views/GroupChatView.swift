@@ -88,6 +88,7 @@ struct GroupChatView: View {
                     quoteFocus: quoteFocus,
                     placeholder: "Message \(group.name)…",
                     members: members,
+                    machine: groups.machine(of: group.id),
                     isTalking: groups.isDiscussing(group.id),
                     focusRequest: composerFocus,
                     send: send,
@@ -559,6 +560,8 @@ private struct GroupComposer: View {
     var quoteFocus: UUID?
     let placeholder: String
     let members: [Bot]
+    /// Where the chat lives (nil: this Mac).
+    let machine: String?
     let isTalking: Bool
     /// Goes up when the composer should take the keyboard (a reply put a quote in it).
     var focusRequest = 0
@@ -577,9 +580,9 @@ private struct GroupComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // A group chat names those its computer knows of: its own, and its peers' (a machine
-            // that isn't one, Settings › Machines says why).
-            if let named = agents.matches(in: text, excluding: nil, reaching: { agent in agent.machine.map { AgentMail.shared.app?.phoneLink.talksToPeers($0) == true } ?? true }) {
+            // A group chat names those its computer can reach (a machine that can't be, Settings ›
+            // Machines says why).
+            if let named = agents.matches(in: text, excluding: nil, reaching: { AgentMail.shared.reachable($0, fromChatOn: machine) }) {
                 AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
                     .preference(key: ComposerListShown.self, value: true)
             }
