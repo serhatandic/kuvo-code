@@ -25,13 +25,22 @@ const catalog = { macOnly: ["apple-events", "chrome-devtools"], servers: [
 
 // This Mac's box, started as the app starts it: its settings in the engine's folder, its keys'
 // files where the app writes them.
-async function macBox(t) {
-  const folder = fs.mkdtempSync(path.join(root, "mac-"));
+// `folder`: one started before (it starts again there); `defaultsAdded`: as one that added its
+// defaults before; `settings`: the file's text before it starts.
+async function macBox(t, { folder = fs.mkdtempSync(path.join(root, "mac-")), defaultsAdded = true, settings } = {}) {
   const box = path.join(folder, "box");
   const config = path.join(folder, "opencode", "config");
   const keys = path.join(folder, "integration-keys");
   fs.mkdirSync(path.join(box, "bin"), { recursive: true });
   fs.writeFileSync(path.join(box, "bin", "mcp-catalog.json"), JSON.stringify(catalog));
+  if (defaultsAdded) {
+    fs.mkdirSync(path.join(box, "box"), { recursive: true });
+    fs.writeFileSync(path.join(box, "box", "defaults-added"), "bot-memory\nwebsearch\nsearch-exa\n");
+  }
+  if (settings !== undefined) {
+    fs.mkdirSync(path.join(config, "opencode"), { recursive: true });
+    fs.writeFileSync(path.join(config, "opencode", "opencode.json"), settings);
+  }
   const child = spawn(process.execPath, [script.pathname, "serve"], {
     env: { ...process.env, KUVO_HOME: box, KUVO_ENGINE_CONFIG: config, KUVO_KEYS: keys, OPENCODE_PASSWORD: "pw" }, stdio: ["pipe", "pipe", "inherit"],
   });
@@ -48,8 +57,55 @@ async function macBox(t) {
     const text = await response.text();
     return { status: response.status, json: text ? JSON.parse(text) : undefined };
   };
-  return { ask, file: path.join(config, "opencode", "opencode.json"), keys, folder };
+  const stop = async () => {
+    child.kill();
+    await new Promise(resolve => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once("exit", resolve));
+  };
+  return { ask, file: path.join(config, "opencode", "opencode.json"), keys, folder, stop };
 }
+
+test("this Mac's box adds web search and bots' memory rule as it starts, once: taken out, they stay out", async t => {
+  const first = await macBox(t, { defaultsAdded: false, settings: JSON.stringify({ model: "a/b", websearch: { provider: "random" } }) });
+  const read = (await first.ask("GET", "kuvo/config")).json;
+  assert.deepEqual(read.websearch, { provider: "random" }, "chosen already: left as it is the first time");
+  assert.deepEqual(read.permissions, [link.BOT_MEMORY_RULE]);
+  await first.ask("PATCH", "kuvo/config", { changes: [{ path: ["permissions"], value: null }] });
+  await first.stop();
+  // Again: nothing put back.
+  const again = await macBox(t, { folder: first.folder, defaultsAdded: false });
+  assert.deepEqual((await again.ask("GET", "kuvo/config")).json, { model: "a/b", websearch: { provider: "random" } });
+  await again.stop();
+  // New settings (none yet): web search through Exa.
+  const fresh = await macBox(t, { defaultsAdded: false });
+  assert.deepEqual((await fresh.ask("GET", "kuvo/config")).json, { websearch: { provider: "exa" }, permissions: [link.BOT_MEMORY_RULE] });
+  // One that added them before boxes did (noted): "random" moves to Exa once, nothing else added.
+  const older = fs.mkdtempSync(path.join(root, "mac-"));
+  fs.mkdirSync(path.join(older, "box", "box"), { recursive: true });
+  fs.writeFileSync(path.join(older, "box", "box", "defaults-added"), "bot-memory\nwebsearch\n");
+  const moved = await macBox(t, { folder: older, defaultsAdded: false, settings: JSON.stringify({ websearch: { provider: "random" } }) });
+  assert.deepEqual((await moved.ask("GET", "kuvo/config")).json, { websearch: { provider: "exa" } });
+});
+
+test("a settings file that can't be read is said to be, never taken for an empty one", async t => {
+  const { ask, file, folder } = await macBox(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A link to a file that isn't there (a dotfiles folder on a drive that's away).
+  fs.symlinkSync(path.join(folder, "away", "opencode.json"), file);
+  const away = await ask("GET", "kuvo/config");
+  assert.equal(away.status, 409);
+  assert.match(away.json.problem, /link to a file that isn't there/);
+  assert.equal((await ask("PATCH", "kuvo/config", { changes: [{ path: ["model"], value: "a/b" }] })).status, 409);
+  assert.equal(fs.existsSync(path.join(folder, "away")), false, "nothing made where it points");
+  fs.rmSync(file);
+  // One it may not read.
+  fs.writeFileSync(file, JSON.stringify({ model: "a/b" }));
+  fs.chmodSync(file, 0o000);
+  t.after(() => fs.chmodSync(file, 0o600));
+  const shut = await ask("GET", "kuvo/config");
+  assert.equal(shut.status, 409);
+  assert.match(shut.json.problem, /couldn't be read/);
+  assert.equal((await ask("PATCH", "kuvo/config", { changes: [{ path: ["model"], value: "c/d" }] })).status, 409);
+});
 
 test("this Mac's box reads and writes the Mac's own settings file where it is, its own from the start", async t => {
   const { ask, file } = await macBox(t);

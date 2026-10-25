@@ -3954,13 +3954,20 @@ const isObject = value => Boolean(value) && typeof value === "object" && !Array.
 const sortedKeys = value => Array.isArray(value) ? value.map(sortedKeys)
   : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedKeys(value[key])])) : value;
 
-// The file's settings: {settings}, or {problem} for one that isn't plain JSON (left alone).
+// The file's settings: {settings}, none for a file that isn't there yet, or {problem} for one that
+// can't be read (not plain JSON, a link to a file that isn't there, no permission), left alone:
+// a write would put something else in its place.
 export function readSettings(file = CONFIG_FILE) {
   let text;
   try {
     text = fs.readFileSync(file, "utf8");
-  } catch {
-    return { settings: {} };
+  } catch (error) {
+    let link = false;
+    try { link = fs.lstatSync(file).isSymbolicLink(); } catch {}
+    if (error?.code === "ENOENT" && !link) return { settings: {} };
+    return { problem: link && error?.code === "ENOENT"
+      ? "It's a link to a file that isn't there, so Kuvo Code leaves it alone."
+      : `It couldn't be read, so Kuvo Code leaves it alone (${error?.code ?? error?.message}).` };
   }
   try {
     const parsed = text.trim() ? JSON.parse(text) : {};
@@ -4013,21 +4020,22 @@ export function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) 
 function writeSettings(settings, changes, file) {
   let next = settings;
   for (const change of changes) next = settingAt(next, change.path, keysNamedHere(change.value));
+  // Through a link (to a dotfiles folder, say) to the file it names, so the link stays a link.
+  const target = linkTarget(file);
+  const temporary = `${target}.${process.pid}.tmp`;
   try {
-    // Through a link (to a dotfiles folder, say) to the file it names, so the link stays a link.
-    const target = linkTarget(file);
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    const temporary = `${target}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(sortedKeys(next), null, 2) + "\n", { mode: 0o600 });
     fs.renameSync(temporary, target);
   } catch (error) {
+    // Nothing half written left beside it.
+    fs.rmSync(temporary, { force: true });
     return { status: 500, message: `It couldn't be saved: ${error.message}` };
   }
   return { status: 200, settings: next };
 }
 
-// The file a link names, link after link (one to a file that isn't there yet too); `file` itself
-// when it isn't a link.
+// The file a link names, link after link; `file` itself when it isn't a link.
 function linkTarget(file) {
   let target = file;
   for (let i = 0; i < 8; i++) {
@@ -4137,19 +4145,45 @@ export function adoptBox(seed) {
   }, { stale: 300_000, wait: 120_000 }));
 }
 
-// Bots' memory, theirs to write in any mode (Plan changes no files), as on a Mac: a rule in
-// Settings › Permissions you see and can take out. Once (`defaults-added` says so), so one you
-// took out stays out. Under the settings' lock.
+// What a box starts its engine with, unless its settings set it, each once (`defaults-added` names
+// those done), so one you take out stays out:
+// - bots' memory, theirs to write in any mode (Plan changes no files): a rule in Settings ›
+//   Permissions you see and can take out (`bot-memory`);
+// - on a Mac, web search through Exa, which needs no key (the engine has none chosen, and every
+//   search fails): in settings that are new or empty, or never given it (`websearch`); and once,
+//   Exa in place of "random", as Kuvo Code chose it before (`search-exa`). (A machine's came with
+//   the Mac's settings it started from.)
+// Under the settings' lock.
 export const BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
-function addDefaultRules() {
-  const added = path.join(BOX, "defaults-added");
-  if (fs.existsSync(added)) return;
-  const { settings, problem } = readSettings();
+const DEFAULTS_ADDED = path.join(BOX, "defaults-added");
+function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  let done = [];
+  try { done = fs.readFileSync(marks, "utf8").split("\n").filter(Boolean); } catch {}
+  const wanted = mac ? ["bot-memory", "websearch", "search-exa"] : ["bot-memory"];
+  if (wanted.every(mark => done.includes(mark))) return;
+  const { settings, problem } = readSettings(file);
   if (problem) return;
-  const rules = Array.isArray(settings?.permissions) ? settings.permissions : [];
-  const has = rules.some(rule => rule?.action === BOT_MEMORY_RULE.action && rule?.resource === BOT_MEMORY_RULE.resource && rule?.effect === BOT_MEMORY_RULE.effect);
-  if (!has) writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys({ ...(settings ?? {}), permissions: [...rules, BOT_MEMORY_RULE] }), null, 2) + "\n");
-  writePrivate(added, "bot-memory\n");
+  const changes = [];
+  const exa = { provider: "exa" };
+  if (mac && (!Object.keys(settings).length || !done.includes("websearch"))) {
+    if (settings.websearch === undefined) changes.push({ path: ["websearch"], value: exa });
+    done.push("websearch", "search-exa");
+  } else if (mac && !done.includes("search-exa")) {
+    if (sameJSON(settings.websearch, { provider: "random" })) changes.push({ path: ["websearch"], value: exa });
+    done.push("search-exa");
+  }
+  if (!done.includes("bot-memory")) {
+    const rules = Array.isArray(settings.permissions) ? settings.permissions : [];
+    if (!rules.some(rule => sameJSON(rule, BOT_MEMORY_RULE))) changes.push({ path: ["permissions"], value: [...rules, BOT_MEMORY_RULE] });
+    done.push("bot-memory");
+  }
+  if (changes.length && writeSettings(settings, changes, file).status !== 200) return;
+  writePrivate(marks, [...new Set(done)].join("\n") + "\n");
+}
+
+// This Mac's box, as it starts: its defaults, before any client reads its settings.
+export function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
 }
 
 // The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).
@@ -6848,6 +6882,8 @@ async function serve() {
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  // This Mac's settings with what its engine starts with, before a client reads them.
+  if (IS_MAC) addMacDefaults();
   const server = serveBox(password);
   await new Promise((resolve, reject) => {
     server.once("error", reject);

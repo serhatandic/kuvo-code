@@ -717,8 +717,13 @@ host serves:
   (`{file:<its folder>/KUVO_KEY_…}`, from Also Apply) is written as this computer names its own,
   so send it as the other computer has it. A change can say what it read at its path (`"was"`, `null` for
   nothing): changed since, nothing is changed and it answers `409 {"message"}`, so read again.
-  `409 {"message", "problem"}` too while the file can't be read (it has comments, say): it's
-  changed by hand then, and `problem` says why alone, for a page that names the file already.
+  `409 {"message", "problem"}` too while the file can't be read (it has comments, it's a link to
+  a file that isn't there, it may not be read): it's left alone then, never taken for an empty one,
+  and `problem` says why alone, for a page that names the file already. A box adds what its engine
+  starts with to its settings once each, noted in `box/defaults-added` (a name a line), so one you
+  take out stays out: bots' memory rule (`bot-memory`, in `permissions`), and on a Mac, as its box
+  starts, web search through Exa (`websearch`, for settings that are new, empty or never given it;
+  `search-exa`, Exa once in place of the `random` an older version chose).
   Settings › Permissions keeps its choices and rules under `permissions` (a list of
   `{action, resource, effect}`, effect `allow`, `ask` or `deny`) and its blocks under `policies`.
   Settings › Agents keeps its agents under `agents.<id>` (the engine's own, `build`, `plan`,
@@ -740,7 +745,8 @@ host serves:
   Answers `200 {made: [{path, value}], leftOut: [entry path], kept: [path], macOnly: [server],
   keys: [name], applied, settings}`, in one write: `keys`, those `made` names, which a client sets
   first (`kuvo/keys`) where this box hasn't its own, so ask with `dry` first, which changes
-  nothing; `applied`, something was made, or every change was already so (not when all of them
+  nothing (and takes away a key it brought that the change didn't name after all, or one brought
+  for a change that wasn't made); `applied`, something was made, or every change was already so (not when all of them
   stayed). 400 for changes that aren't these; `409 {"message", "problem"}` while the file can't
   be read, as `kuvo/config`.
 - `kuvo/mcp/catalog`: Settings › MCP Servers' popular servers, `{"servers": [{id,
