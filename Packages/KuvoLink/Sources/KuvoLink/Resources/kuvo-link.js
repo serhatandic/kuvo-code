@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.58";
+export const BRIDGE_VERSION = "0.9.59";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -326,7 +326,7 @@ export class LinkHost {
   // { open, text, binary, end }) → a socket's { send, close } (PROTOCOL.md, "Sockets");
   // send(bytes) → to the relay; confirmed(phone) → its session proved its own: its first message
   // opened with the handshake's keys, which a replayed first handshake message can't do.
-  // mail(from, body) → a mail frame sent to this machine (its Mac's phone list).
+  // mail(from, body, frame) → a mail frame sent to this machine (its Mac's phone list).
   constructor({ key, hello, authorize, handle, connect, send, confirmed, mail }) {
     Object.assign(this, { key, hello, authorize, handle, connect, send, confirmed, mail });
     this.sessions = new Map();
@@ -388,7 +388,8 @@ export class LinkHost {
         if (session) this.end(session, false);
         return;
       case Frame.mail:
-        return this.mail?.(from, parsed.body);
+        // (And the frame whole, for this Mac's box to hand its app.)
+        return this.mail?.(from, parsed.body, payload);
     }
   }
 
@@ -2237,7 +2238,10 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/phones/remove") {
       if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
       const given = parsed(request.body);
-      const changed = updateLink(link => link && removePhones(link, phone?.key?.toString("base64url"), given?.phones) ? link : null);
+      // This Mac's app removes as the Mac does (Settings › Phone, or a removal a machine's
+      // document brought).
+      const asMac = IS_MAC && request.fromApp;
+      const changed = updateLink(link => link && (asMac ? removeAsMac(link, given?.phones) : removePhones(link, phone?.key?.toString("base64url"), given?.phones)) ? link : null);
       if (!changed) return yield* json(400, { message: "Only phones paired here can be removed, and never your Mac." });
       noteDocsChanged();
       // Once this answer is on its way: a phone that removed itself gets it too.
@@ -2248,18 +2252,28 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     // once, for a while; a new one takes the place of the last. DELETE ends it.
     if (route === "kuvo/phones/pair") {
       const method = request.method.toUpperCase();
+      // This Mac's Settings › Phone has one of its own, apart from a phone's.
+      const slot = IS_MAC && request.fromApp ? "appPairing" : "pairing";
       if (method === "DELETE") {
         updateLink(link => {
-          if (!link?.pairing) return null;
-          delete link.pairing;
+          if (!link?.[slot]) return null;
+          delete link[slot];
           return link;
         });
+        macLink.wake?.();
         return yield* json(200, {});
       }
       if (method !== "POST") return yield* json(405, {});
-      const link = updateLink(current => current?.relay ? { ...current, pairing: newPairingToken() } : null);
-      if (!link) return yield* json(409, { message: "This machine has no relay to pair through." });
-      return yield* json(200, { link: pairingLink(link), ends: Math.floor(link.pairing.expires / 1000) });
+      if (IS_MAC && !macLink.config?.phones) return yield* json(409, { message: "The phone link is off on this Mac." });
+      const link = updateLink(current => current?.relay && current?.secret ? { ...current, [slot]: newPairingToken() } : null);
+      if (!link) return yield* json(409, { message: IS_MAC ? "The phone link isn't ready yet. Try again in a moment." : "This machine has no relay to pair through." });
+      macLink.wake?.();
+      return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] }), ends: Math.floor(link[slot].expires / 1000) });
+    }
+    // This Mac's box's link, for its app alone (PROTOCOL.md, "This Mac's box: the relay").
+    if (route === "kuvo/link" || route.startsWith("kuvo/link/")) {
+      if (!IS_MAC || !request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
+      return yield* macLinkRoute(route, request, signal);
     }
     // A client in use here (PROTOCOL.md, "kuvo/attention"): notices for your phones wait a little
     // while one is. GET says whether one is, and how many wait.
@@ -5480,19 +5494,36 @@ export function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, opti
 
 // ---- State ----
 
+// This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`), its keys from the
+// app once it has them (with the relay and name, `overlay`, never written), how it stands, and who
+// follows that and its phones.
+const MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
+export const macLink = { config: null, overlay: null, status: { state: "off" }, host: null, wake: null, statusFollowers: new Set(), phoneFollowers: new Set() };
+
 export function readLink() {
+  let link = null;
   try {
-    return migratedLink(JSON.parse(fs.readFileSync(LINK_FILE, "utf8")));
-  } catch {
-    return null;
-  }
+    link = migratedLink(JSON.parse(fs.readFileSync(LINK_FILE, "utf8")));
+  } catch {}
+  // This Mac's: its keys from its app (kept in your Keychain, never in a file here), and its relay
+  // and name as its app says, beside what the file keeps.
+  if (IS_MAC && macLink.overlay) return { phones: [], ...(link ?? {}), ...macLink.overlay };
+  return link;
 }
 
 export function writeLink(link) {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   const temporary = `${LINK_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(link, null, 2), { mode: 0o600 });
+  // This Mac's keys and what its app says stay out of the file.
+  const kept = IS_MAC ? Object.fromEntries(Object.entries(link).filter(([key]) => !MAC_OVERLAY.includes(key))) : link;
+  fs.writeFileSync(temporary, JSON.stringify(kept, null, 2), { mode: 0o600 });
   fs.renameSync(temporary, LINK_FILE);
+  if (IS_MAC) {
+    // Phones no longer paired lose what they have open, whoever removed them.
+    macLink.host?.keepOnly(new Set((link.phones ?? []).map(phone => phone.key)));
+    for (const tell of macLink.phoneFollowers) tell();
+    return;
+  }
   // For the box's keeper, which keeps this bridge running while it's needed.
   if (needed(link)) fs.writeFileSync(NEEDED_FILE, "", { mode: 0o600 });
   else fs.rmSync(NEEDED_FILE, { force: true });
@@ -5550,13 +5581,18 @@ export function authorizePhone(key, hello, address) {
   // Showing the token: a pairing of its own, paired before or not (one removed comes back).
   let paired = false;
   updateLink(link => {
-    const pairing = link?.pairing;
-    if (!pairing || Date.now() > pairing.expires) return null;
+    // A phone's (`kuvo/phones/pair`), or, on a Mac, the one its Settings › Phone shows: each apart,
+    // so neither ends the other.
     const given = Buffer.from(String(hello.pair), "base64url");
-    const expected = Buffer.from(pairing.token, "base64url");
-    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+    const slot = ["pairing", "appPairing"].find(name => {
+      const pairing = link?.[name];
+      if (!pairing || Date.now() > pairing.expires) return false;
+      const expected = Buffer.from(pairing.token, "base64url");
+      return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    });
+    if (!slot) return null;
     pairPhone(link, { key: encoded, name: String(hello.name ?? "").slice(0, 100), added: Math.floor(Date.now() / 1000), from: "pair", address: address?.toString("base64url"), pairing: newPairing() });
-    delete link.pairing;
+    delete link[slot];
     paired = true;
     return link;
   });
@@ -5623,6 +5659,14 @@ export const newPairing = () => crypto.randomBytes(12).toString("base64url");
 // What removed its others still keeps them out.
 export function pairPhone(link, phone) {
   link.phones = [...(link.phones ?? []).filter(each => each.key !== phone.key), phone];
+}
+
+// Phones this Mac removes (its own box, from its app): Settings › Phone, or the removals a
+// machine's phones document brought. Only phones; false, changing nothing, for anything else.
+export function removeAsMac(link, entries) {
+  if (!Array.isArray(entries) || !entries.length || entries.length > MOST_KEPT || !entries.every(entry => fits(entry, []))) return false;
+  for (const entry of entries) takeOff(link, entry.key, entry.pairing);
+  return true;
 }
 
 // Phones `by` removes ({key, pairing}): only a phone on the list, or a Mac, removes, and only
@@ -7580,6 +7624,309 @@ export function startUpdate(options = {}) {
   return updating;
 }
 
+// ---- This Mac's box's link (PROTOCOL.md, "This Mac's box: the relay") ----
+// On a Mac, `serve` holds the relay connection a machine's `run` holds, in the same process: your
+// phones' sessions, paired and pairing as on a machine, answered here. Its keys stay in your
+// Keychain: the app gives them as the link starts (`link/identity`), and they're kept in memory
+// only; without them the link stays off and says why, and never makes keys of its own. Its app says
+// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet). Until each moves
+// here, what only the app does yet goes to it through the host: what a phone asks of the Mac's own
+// routes (`link/route`), and mail from your machines (`link/mailed`); the app's own mail and pushes
+// go out on this connection (`kuvo/link/send`, `kuvo/link/push`).
+
+// What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
+// `boxRoutes`), and its phones. The rest the app answers, through the host.
+export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
+  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones"];
+export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
+
+const NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
+
+// Whether the link's wanted now: the phone link on, with a phone paired or a pairing waiting; or
+// machines to meet.
+function macNeeded(link, now = Date.now()) {
+  const config = macLink.config;
+  if (!config) return false;
+  if (config.machines) return true;
+  const pairing = ["pairing", "appPairing"].some(slot => link?.[slot] && now < link[slot].expires);
+  return Boolean(config.phones && ((link?.phones ?? []).length || pairing));
+}
+
+function setLinkStatus(state, reason) {
+  const next = reason ? { state, reason } : { state };
+  if (JSON.stringify(next) === JSON.stringify(macLink.status)) return;
+  macLink.status = next;
+  for (const tell of macLink.statusFollowers) tell();
+}
+
+// Waits `ms`, or until the link's told something changed (`macLink.wake`).
+function macLinkWait(ms) {
+  return new Promise(resolve => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      if (macLink.wake === done) macLink.wake = null;
+      resolve();
+    }
+    macLink.wake = done;
+  });
+}
+
+// One of the app's host calls for the link, its JSON; null when the app doesn't answer it.
+async function linkHost(call, body, timeout = 15_000) {
+  if (!APP_HOST) return null;
+  try {
+    const response = await fetch(`${APP_HOST.url}/${call}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${APP_HOST.password}`, "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+const KEY_TEXT = /^[A-Za-z0-9_-]{43}$/;
+
+// This Mac's keys, from its app (your Keychain): its link key, relay secret and signing key, kept
+// with the relay and name it says once it's on. False when the app couldn't give them (the link
+// says so).
+async function macKeys() {
+  const config = macLink.config;
+  if (macLink.overlay || !config || !(config.phones || config.machines)) return true;
+  const given = await linkHost("link/identity", {}, 120_000);
+  if (!given || !["key", "secret", "sign"].every(name => KEY_TEXT.test(given[name] ?? ""))) {
+    setLinkStatus("failed", "Kuvo Code couldn't give this Mac's link its keys from your Keychain. It tries again in a moment.");
+    return false;
+  }
+  macLink.overlay = { key: given.key, secret: given.secret, sign: given.sign, relay: macLink.config.relay, name: macLink.config.name };
+  return true;
+}
+
+// What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
+// at once, when the app isn't answering, and a stream that ends when the app goes.
+async function* toApp(request, phone, signal) {
+  let response = null;
+  if (APP_HOST) {
+    try {
+      response = await fetch(`${APP_HOST.url}/link/route`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${APP_HOST.password}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          method: request.method,
+          path: request.path,
+          headers: request.headers ?? {},
+          body: Buffer.from(request.body ?? EMPTY).toString("base64"),
+          phone: phone?.key?.toString("base64url") ?? null,
+        }),
+        signal,
+      });
+    } catch {
+      response = null;
+    }
+  }
+  if (!response || response.status === 401 || response.status === 404) {
+    await response?.body?.cancel().catch(() => {});
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: NOT_ANSWERING })) };
+    return;
+  }
+  yield { head: { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } } };
+  if (!response.body) return;
+  try {
+    for await (const chunk of response.body) {
+      if (signal?.aborted) break;
+      yield { body: Buffer.from(chunk) };
+    }
+  } catch {}
+}
+
+// A phone's request on this Mac: the box's own areas here, the rest from the app.
+export function macFront(handle = engineHandler(readEngineFile, { name: os.hostname() })) {
+  return async function* (request, phone, signal) {
+    const route = String(request.path ?? "").split("?")[0];
+    if (macAnswers(route)) return yield* handle(request, phone, signal);
+    yield* toApp(request, phone, signal);
+  };
+}
+
+// Phones from where an earlier Kuvo Code kept them (`phone-link.json`), met with this box's: each
+// paired one in, unless a removal of its pairing is known; each removal noted, and taking off what
+// it removes.
+export function takePhones(link, given) {
+  const phones = Array.isArray(given?.phones) ? given.phones.slice(0, 64) : [];
+  const removed = Array.isArray(given?.removed) ? given.removed.slice(0, MOST_KEPT) : [];
+  for (const entry of removed) if (fits(entry, []) && typeof entry.pairing === "string") takeOff(link, entry.key, entry.pairing);
+  for (const phone of phones) {
+    if (!isObject(phone) || !fits(phone, []) || removedAlready(link, phone.key, phone.pairing ?? "")) continue;
+    const known = (link.phones ?? []).find(each => each.key === phone.key);
+    if (known && (known.pairing ?? "") === (phone.pairing ?? "")) continue;
+    pairPhone(link, {
+      key: phone.key,
+      name: String(phone.name ?? "").slice(0, 100),
+      added: Number.isFinite(phone.added) ? Math.floor(phone.added) : Math.floor(Date.now() / 1000),
+      from: "pair",
+      ...(ADDRESS.test(phone.address ?? "") ? { address: phone.address } : {}),
+      pairing: typeof phone.pairing === "string" ? phone.pairing : "",
+    });
+  }
+  return link;
+}
+
+// The phones as the app keeps a copy of them (all of each, with where it is, and every removal).
+const macPhones = () => {
+  const link = readLink();
+  return { phones: link?.phones ?? [], removed: link?.removed ?? [] };
+};
+
+const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;
+
+// `kuvo/link/…`, for this Mac's app.
+async function* macLinkRoute(route, request, signal) {
+  const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+  const method = request.method.toUpperCase();
+  switch (route) {
+    case "kuvo/link/config": {
+      if (method !== "PUT") return yield* json(405, {});
+      const given = parsed(request.body);
+      let relay = null;
+      try { relay = given?.relay ? new URL(String(given.relay)) : null; } catch {}
+      if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
+        return yield* json(400, { message: "Say whether the phone link is on (phones) and there are machines (machines), and the relay." });
+      }
+      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? "") };
+      const before = macLink.config;
+      macLink.config = config;
+      if (macLink.overlay) macLink.overlay = { ...macLink.overlay, relay: config.relay, name: config.name };
+      // Phones not let in any more (the phone link off) lose what they have open; another relay
+      // means another connection.
+      if (!config.phones) macLink.host?.keepOnly(new Set());
+      if (before && (before.relay !== config.relay || before.name !== config.name)) macLink.host?.disconnect?.();
+      // Its keys before this answers, so a pairing link can be made right after.
+      await macKeys();
+      macLink.wake?.();
+      return yield* json(200, macLink.status);
+    }
+    case "kuvo/link/status":
+      if (method !== "GET") return yield* json(405, {});
+      return yield* json(200, macLink.status);
+    case "kuvo/link/status/events":
+      if (method !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => macLink.status, macLink.statusFollowers, signal);
+    case "kuvo/link/phones":
+      if (method !== "GET") return yield* json(405, {});
+      return yield* json(200, macPhones());
+    case "kuvo/link/phones/events":
+      if (method !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(macPhones, macLink.phoneFollowers, signal);
+    case "kuvo/link/phones/take": {
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (!isObject(given) || !Array.isArray(given.phones ?? []) || !Array.isArray(given.removed ?? [])) return yield* json(400, { message: "Send {phones, removed}." });
+      updateLink(link => takePhones(link ?? { phones: [] }, given));
+      macLink.wake?.();
+      return yield* json(200, macPhones());
+    }
+    case "kuvo/link/send": {
+      // Mail the app sealed itself (its documents, its agents' letters, its group chats'), to the
+      // address of one of your machines, on this connection.
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      const frame = typeof given?.frame === "string" ? Buffer.from(given.frame, "base64") : null;
+      if (!frame?.length || !ADDRESS_TEXT.test(given?.to ?? "")) return yield* json(400, { message: "Send {to, frame}." });
+      if (frame.length > MAX_MAIL) return yield* json(413, { message: "It's too big for the relay." });
+      const host = macLink.host;
+      if (!host?.welcomed) return yield* json(503, { message: "Not connected to the relay now." });
+      host.send(relaySend(Buffer.from(given.to, "base64url"), frame));
+      return yield* json(200, {});
+    }
+    case "kuvo/link/push": {
+      // A notice for your phones (`Notice`'s JSON), sealed here for each.
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (!isObject(given?.notice)) return yield* json(400, { message: "Send {notice}." });
+      const host = macLink.host;
+      const link = readLink();
+      if (!host?.welcomed || !link?.key) return yield* json(503, { message: "Not connected to the relay now." });
+      const phones = (link.phones ?? []).filter(each => each.address);
+      const notice = Buffer.from(JSON.stringify(given.notice));
+      for (const each of phones) {
+        try { host.send(pushTo(each, notice, Buffer.from(link.key, "base64url"))); } catch {}
+      }
+      return yield* json(200, { phones: phones.length });
+    }
+    default:
+      return yield* json(404, {});
+  }
+}
+
+// This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,
+// what's the app's yet passed to it. Nothing it meets (the relay gone, a frame that isn't one, the
+// app away) stops the box's own routes.
+export async function runMacLink() {
+  let attempt = 0;
+  macLink.stopped = false;
+  while (!macLink.stopped) {
+    try {
+      const config = macLink.config;
+      // Its keys as soon as it's on (a pairing link needs them before any phone's paired).
+      if (!(await macKeys())) {
+        await macLinkWait(30_000);
+        continue;
+      }
+      if (!macNeeded(readLink())) {
+        setLinkStatus("off");
+        attempt = 0;
+        await macLinkWait(60_000);
+        continue;
+      }
+      const link = readLink();
+      setLinkStatus("connecting");
+      let engine = {};
+      try { engine = readEngineFile(); } catch {}
+      const host = new LinkHost({
+        key: Buffer.from(link.key, "base64url"),
+        hello: { v: 1, kind: "mac", name: config.name, app: config.app, engine: engine.version ?? null },
+        // Phones only while the phone link's on (the relay can be up for your machines alone).
+        authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
+        confirmed: confirmPhone,
+        // Mail from your machines, for the app until what it carries moves here.
+        mail: (from, _body, frame) => { linkHost("link/mailed", { from: from.toString("base64url"), frame: frame.toString("base64") }).catch(() => {}); },
+        handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))))),
+        connect: engineConnect(readEngineFile),
+        send: () => {},
+      });
+      macLink.host = host;
+      const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, () => setLinkStatus("connected"));
+      if (macLink.host === host) macLink.host = null;
+      attempt = welcomed ? 0 : attempt + 1;
+      if (!welcomed) setLinkStatus("failed", `Can't reach the relay at ${new URL(link.relay).host}.`);
+      else setLinkStatus("connecting");
+      await macLinkWait(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
+    } catch (error) {
+      macLink.host = null;
+      setLinkStatus("failed", String(error?.message ?? error));
+      await macLinkWait(5_000);
+    }
+  }
+  setLinkStatus("off");
+}
+
+// Stops it (a test's, as it ends): what's open goes, and the loop with it.
+export function stopMacLink() {
+  macLink.stopped = true;
+  macLink.host?.disconnect?.();
+  macLink.wake?.();
+}
+
 // ---- The relay connection ----
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -7593,8 +7940,17 @@ export function fromRelay(host, message, self) {
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
 }
 
-// Connects once, serves until the connection ends. Resolves whether it got as far as welcome.
-export function connectOnce(relay, secret, host) {
+// What a machine's link does once the relay's welcomed it: your other computers hear who's here,
+// and it tells who's there; a new bridge an update put here says it's well.
+function machineWelcomed(host) {
+  announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
+  try { docsChanged(host, { greet: true }); } catch {}
+  try { confirmUpdate(); } catch {}
+}
+
+// Connects once, serves until the connection ends (or `host.disconnect()`). Resolves whether it got
+// as far as welcome. `onWelcome(host)`: what's done then.
+export function connectOnce(relay, secret, host, onWelcome = machineWelcomed) {
   return new Promise(resolve => {
     const self = addressOf(secret);
     let welcomed = false;
@@ -7622,6 +7978,7 @@ export function connectOnce(relay, secret, host) {
       resolve(welcomed);
     };
     const opening = setTimeout(() => { if (!welcomed) finish(); }, 15_000);
+    host.disconnect = finish;
     socket.onopen = () => socket.send(relayHello(secret));
     socket.onmessage = event => {
       lastHeard = Date.now();
@@ -7632,11 +7989,7 @@ export function connectOnce(relay, secret, host) {
         welcomed = true;
         host.send = bytes => { if (socket.readyState === 1) socket.send(bytes); };
         host.welcomed = true;
-        // Your other computers hear who's here at once, and tell who's there.
-        announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
-        try { docsChanged(host, { greet: true }); } catch {}
-        // A new bridge an update put here: it reached the relay, so it's well.
-        try { confirmUpdate(); } catch {}
+        try { onWelcome(host); } catch {}
         return;
       }
       fromRelay(host, message, self);
@@ -8028,6 +8381,8 @@ async function serve() {
   forgetLeftKeys().catch(() => {});
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
+  // This Mac's link to your phones and machines, once its app says it's wanted.
+  if (IS_MAC) runMacLink().catch(() => {});
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
