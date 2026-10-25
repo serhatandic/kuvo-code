@@ -77,6 +77,8 @@ final class BoxProcess {
         }
         var env = environment
         env["KUVO_HOME"] = Self.home.path
+        // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
+        env["KUVO_BOX"] = "mac"
         // The engine's settings folder, where it reads its settings and the skills you add (a machine's box finds its
         // engine's in its own folder): this Mac's settings and skills stay where they've always been. And
         // where the engine reads the keys you keep in the Keychain, which its settings name.

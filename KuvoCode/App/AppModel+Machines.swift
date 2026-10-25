@@ -21,9 +21,9 @@ extension AppModel {
         workspace.onDeleted = { [weak self] session in
             self?.utilities.closeTabs(of: session)
             // A machine's bot's conversation gone there (carried on with the coding agents from a
-            // phone, say): what it has now is read from the machine.
+            // phone, say): what it has now is read from its box.
             if let self, let machine = bots.list.first(where: { $0.sessionID == session })?.machine {
-                Task { await self.bots.adoptMade(on: machine) }
+                Task { await self.bots.refresh(machine) }
             }
             // Its wake-ups and watches go with it.
             if let found = self?.workspace.session(session) { self?.wakeUps.forget(found) } else { self?.wakeUps.forget(sessionID: session) }
@@ -66,6 +66,10 @@ extension AppModel {
         // Their wake-ups, set with the tools of Kuvo Code's own.
         BrowserTools.wake = { [weak self] name, arguments, caller in
             await self?.wakeUps.call(name, arguments: arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
+        }
+        // A bot on this Mac keeping its job: its box keeps it.
+        BrowserTools.job = { [weak self] arguments, caller in
+            await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
         // The browser sends agents from the sites of integrations you added to their tools.
         BrowserTools.integrationSites = { [weak self] in self.map { Integrations.sites(Integrations.added(in: $0.engineConfig)) } ?? [] }
@@ -404,9 +408,6 @@ extension AppModel {
         guard await MachineConnection.inTurn([
             // Phones you've paired reach it directly, through its own bridge.
             { await self.phoneLink.sync(engine) },
-            // Bots it made, changed or deleted while this Mac was away, taken in (first, so a
-            // deleted one's keys don't go back); and what it needs to make them itself.
-            { await self.bots.adoptMade(on: machine) },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
             { await self.workspace.takeWorktrees(from: machine) },
             // Its bots' keys of their own are its own: any this Mac kept from before go to it, and
@@ -415,11 +416,8 @@ extension AppModel {
             // Your personalities, its copy and this Mac's met, before its kit says what they are.
             { await self.syncPersonalities(with: engine) },
             { await self.bots.writeKit(on: machine) },
-            // Its bots' jobs as their memories there have them now (kept there by the machine
-            // itself), so what this Mac writes of them is current.
-            { await self.bots.takeJobs(on: machine) },
-            // What its bots are, in their folders there, for what runs there without this Mac.
-            { await self.bots.describeAll(on: machine) },
+            // Its bots as its box keeps them, with what you changed of them while it was away.
+            { await self.bots.refresh(machine) },
             // A move to or from it cut short (the app quit, it went away) is finished or taken back.
             { await self.moves.recover() },
             // What you signed in to here works there too, kept in step while it's connected.
@@ -612,6 +610,8 @@ extension AppModel {
     func personalitiesChanged(except machine: String? = nil) {
         // Every machine hears it by mail too, connected or not (PROTOCOL.md, "Documents").
         Task { await phoneLink.tellMachines() }
+        // This Mac's bots with one of them are told what it is now, by its box.
+        bots.personalitiesChanged()
         // This Mac's group chats, what each personality tells a bot.
         Task { await boxGroups.giveSettings(to: nil) }
         for engine in machines.engines.values where engine.machine.id != machine {

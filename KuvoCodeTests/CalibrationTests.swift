@@ -6,8 +6,8 @@ import Testing
 /// The first launch after an update brings what you keep up to date, once: the window says
 /// it's updating, a backup of your lists and settings is made first, and each bot gets its
 /// description beside its memory, while its list stays as an older version wrote it. A new install
-/// has nothing to back up or say. Edits reach a bot's description; a bot whose folder has gone
-/// gets none. A list of machines that won't read is set aside, not written over.
+/// has nothing to back up or say. What an earlier version had waiting for a machine waits for it
+/// here. A list of machines that won't read is set aside, not written over.
 @MainActor
 @Suite(.serialized) struct CalibrationTests {
     var botsFile: URL { AppInfo.supportDirectory.appending(path: "bots.json") }
@@ -18,7 +18,7 @@ import Testing
     }
 
     private static func clean() {
-        for key in [Calibration.key, Calibration.backedUpKey, "calibrationTestMarker"] + Backups.settings {
+        for key in [Calibration.key, Calibration.backedUpKey, "calibrationTestMarker", "botEditsWaiting", "botEditOutbox"] + Backups.settings {
             UserDefaults.standard.removeObject(forKey: key)
         }
         for name in Backups.files + ["Backups", "bots"] {
@@ -158,45 +158,55 @@ import Testing
         #expect(UserDefaults.standard.integer(forKey: Calibration.key) == Calibration.current)
     }
 
-    /// Made, edited, given a job: its description follows. One whose folder has gone gets none,
-    /// and no folder is made for it.
-    @Test func editsReachTheDescription() async throws {
+    /// What you changed of a machine's bot while it was away, which an earlier version kept in its
+    /// list to tell the machine, waits for that machine here, shown as you left it; what the
+    /// earlier version kept stays for it.
+    @Test func aChangeAnEarlierVersionHadWaitingForAMachineWaitsHere() async throws {
         defer { Self.clean() }
-        let engine = StubEngine(port: 47981)
+        let scout = try folder("bot_scout00001", memory: "# Scout's memory\n")
+        try savedBefore(macFolder: scout).write(to: botsFile)
+        UserDefaults.standard.set(["bot_away000001": ["name", "instructions"]], forKey: "botEditsWaiting")
+
+        let app = AppModel()
+        await app.calibration.run(app)
+        let waiting = try #require(app.bots.edits.waiting["bot_away000001"])
+        #expect(waiting.box == "my-server")
+        #expect(waiting.fields["name"]?.string == "Away")
+        #expect(waiting.fields["look"]?["color"]?.string == "mint")
+        #expect(app.bots.waitingFor(try #require(app.bots.bot("bot_away000001"))) == "my-server")
+        #expect(app.bots.edits.waiting["bot_scout00001"] == nil, "this Mac's own bot waits for nothing")
+        #expect(UserDefaults.standard.dictionary(forKey: "botEditsWaiting") != nil, "kept for the earlier version")
+        // Kept across launches, until its machine takes it.
+        #expect(BotEdits().waiting["bot_away000001"] == waiting)
+    }
+
+    /// A bot of this Mac whose folder an earlier version left without a description or a note of its
+    /// conversation (one written half, or not at all) is still there once this Mac's box keeps its
+    /// bots: the update writes them, and one whose folder is here is never let go of because its box
+    /// can't read it.
+    @Test func aBotWhoseFolderIsMissingWhatItsBoxReadsStaysAfterTheUpdate() async throws {
+        defer { Self.clean() }
+        let scout = try folder("bot_scout00001", memory: "# Scout's memory\n\n## Job\nWatches the build\n")
+        try Data("{\"kuvo\": 1, \"id\": \"bot_sco".utf8).write(to: scout.appending(path: Bot.Descriptor.file))
+        try savedBefore(macFolder: scout).write(to: botsFile)
+        let engine = StubEngine(port: 47_982)
         defer { engine.stop() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
+
         let app = AppModel()
         app.bots.app = app
-        app.wakeUps.app = app
-        app.workspace.api = engine.api
-        engine.list([])
-        engine.on("PATCH", "/api/session/*", json: [:])
-        engine.on("PUT", "/api/experimental/session/*", json: [:])
-        engine.on("POST", "/api/session/ses_inbox/*", json: [:])
-        engine.on("POST", "/api/session") { request in
-            StubWeb.json(["data": StubEngine.session("ses_inbox", title: request.body["title"] as? String ?? "", directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")])
-        }
-        await app.workspace.refresh()
-        let bot = try await app.bots.create(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
-        let folder = URL(filePath: bot.folder)
-        #expect(try Self.descriptor(in: folder).name == "Inbox Helper")
-
-        var edited = bot
-        edited.name = "Inbox Keeper"
-        edited.look = BotLook(color: .coral, shape: .gem, face: .wink)
-        await app.bots.update(edited)
-        let renamed = try Self.descriptor(in: folder)
-        #expect(renamed.name == "Inbox Keeper" && renamed.look.color == .coral)
-        #expect(app.bots.bot(bot.id)?.updated != nil, "noted as changed")
-
-        try "# Inbox Keeper's memory\n\n## Job\nSorts my inbox every morning\n".write(toFile: bot.memoryFile, atomically: true, encoding: .utf8)
-        await app.bots.syncJob(of: bot.id)
-        #expect(try Self.descriptor(in: folder).job == "Sorts my inbox every morning")
-
-        // Its folder gone (deleted by hand): no description, and no folder made for it.
-        try FileManager.default.removeItem(at: folder)
-        await app.bots.describeAll(on: nil)
-        #expect(!FileManager.default.fileExists(atPath: folder.path))
-        try? FileManager.default.removeItem(at: botsFile)
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
+        // Before the update: its box can't read it, and it stays all the same.
+        await app.bots.refresh(BoxClient.mac)
+        #expect(app.bots.bot("bot_scout00001")?.name == "Scout", "its folder is here")
+        await app.calibration.run(app)
+        await app.bots.refresh(BoxClient.mac)
+        struct Listed: Decodable { var bots: [ListedBot] }
+        let listed = try await box.client(engine: engine.url).value(Listed.self, "GET", "kuvo/bots").bots
+        #expect(listed.map(\.id) == ["bot_scout00001"], "its box finds it now")
+        #expect(listed.first?.session == "ses_scout")
+        #expect(app.bots.bot("bot_scout00001")?.job == "Watches the build")
     }
 
     @Test func machinesThatWontReadAreSetAsideNotOverwritten() {

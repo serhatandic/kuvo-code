@@ -4,7 +4,6 @@ import { join } from "node:path"
 import {
   compose,
   isPass,
-  jobInMemory,
   mentions,
   nextSpeaker,
   parts,
@@ -29,9 +28,9 @@ import {
 import { next, parseRepeat, planMeeting } from "../src/groups/time"
 
 // The rules every computer's group chats go by (`groups-rules.json`: once what the Mac's own
-// runner said, kept here since this Mac's chats run in its bridge too), and how a bot's job and a
-// repeat are read, as this Mac's app still reads them (`box-vectors.json`, written by
-// scripts/box-vectors.sh from KuvoCodeTests/BoxVectorsTests).
+// runner said, kept here since this Mac's chats run in its bridge too), and how a repeat is read,
+// as this Mac's app still reads it (`box-vectors.json`, written by scripts/box-vectors.sh from
+// KuvoCodeTests/BoxVectorsTests).
 const vectors = {
   ...JSON.parse(readFileSync(join(import.meta.dir, "groups-rules.json"), "utf8")),
   ...JSON.parse(readFileSync(join(import.meta.dir, "box-vectors.json"), "utf8")),
@@ -155,13 +154,6 @@ describe("a group chat goes by its rules", () => {
 
   test("a seat's rules", () => {
     for (const vector of vectors.seatRules) expect(seatRules(vector.folder, vector.askFirst, vector.denies)).toEqual(vector.rules)
-  })
-
-  test("a bot's job, from its memory", () => {
-    for (const vector of vectors.job) {
-      const job = jobInMemory(vector.memory)
-      expect([vector.memory, job?.line ?? null, job?.section ?? null]).toEqual([vector.memory, vector.line, vector.section])
-    }
   })
 
   test("a meeting as you set it up, planned on the chat's computer", () => {

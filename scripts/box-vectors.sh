@@ -1,7 +1,7 @@
 #!/bin/sh
-# Writes Agents/test/box-vectors.json: how this Mac's app reads a bot's job from its memory and
-# works out when a repeat comes back (KuvoCodeTests/BoxVectorsTests), which a box (the agents
-# bridge's Agents/src/groups, and kuvo-link.js) must do the same way, and records the file's hash
+# Writes Agents/test/box-vectors.json: how this Mac's app reads what a message quotes and works out
+# when a repeat comes back (KuvoCodeTests/BoxVectorsTests), which a box (the agents bridge's
+# Agents/src/groups) must do the same way, and records the file's hash
 # in that test. Run it after changing either, then the bridges' tests: `cd Agents && bun test`, and
 # `node --test *.test.js` in Packages/KuvoLink/Tests/Bridge.
 set -eu

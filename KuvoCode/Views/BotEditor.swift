@@ -24,9 +24,8 @@ struct BotEditor: View {
     /// How it talks.
     @State private var personality: String?
     @State private var name: String
-    /// What a template or a shared bot says its job is: typed in its new conversation, for you
-    /// to change and send (its job is what you tell it there).
-    @State private var firstMessage: String
+    /// Its job as you change it here, beside the job it keeps (`JobDraft`).
+    @State private var job: JobDraft
     /// The machine it lives on; nil for this Mac.
     @State private var machine: String?
     /// The project it works in; nil for a folder of its own.
@@ -62,7 +61,7 @@ struct BotEditor: View {
         self.created = created
         _look = State(initialValue: bot?.look ?? recipe?.look ?? .random())
         _name = State(initialValue: bot?.name ?? recipe?.name ?? "")
-        _firstMessage = State(initialValue: recipe.map { BotTemplate.firstMessage(job: $0.job, instructions: $0.instructions) } ?? "")
+        _job = State(initialValue: JobDraft(line: bot?.job ?? "", details: bot?.instructions ?? ""))
         _machine = State(initialValue: bot?.machine)
         _project = State(initialValue: bot?.project)
         _model = State(initialValue: bot?.model)
@@ -175,6 +174,18 @@ struct BotEditor: View {
             // bots had a model: the one its conversation uses.
             if let bot, model == bot.model, let talking = app.bots.talkingModel(of: bot) { model = talking }
             if model == nil { model = bot.flatMap { workspace.session($0.sessionID)?.model } ?? placeCatalog.startingModel(lastModel, scope: modelScope) }
+            #if DEBUG
+            // KUVO_DEMO_EDIT_BOT_SAVE=<job>: its job in a few words changed to that, and saved, to
+            // see what Save says (a computer that's away, this Mac's box down).
+            if let line = ProcessInfo.processInfo.environment["KUVO_DEMO_EDIT_BOT_SAVE"], bot != nil {
+                job.line = line
+                Task {
+                    // (After KUVO_DEMO_BOX_FAILED has stopped this Mac's box.)
+                    try? await Task.sleep(for: .seconds(10))
+                    save()
+                }
+            }
+            #endif
         }
         .alert("Delete \(bot?.name ?? "This Bot")?", isPresented: $confirmsDelete) {
             Button("Delete", role: .destructive) {
@@ -218,6 +229,19 @@ struct BotEditor: View {
                 }
 
                 identity
+
+                if let bot {
+                    section("Job", note: "It keeps its job up to date as you tell it more in its conversation. Change it here too, and it hears the new one.") {
+                        JobFields(name: bot.name, job: $job)
+                    }
+                    // Its job as the bot keeps it, changed while this was open: yours stays, unless
+                    // you take its own.
+                    .onChange(of: bots.bot(bot.id).map { JobDraft.Job(line: $0.job, details: $0.instructions) }) { _, kept in
+                        // (Not what your own Save brings back, as its box words it.)
+                        guard let kept, !isWorking else { return }
+                        withAnimation(.ui) { job.botKept(kept) }
+                    }
+                }
 
                 section("Look") {
                     LookPicker(look: $look)
@@ -318,6 +342,14 @@ struct BotEditor: View {
     /// shows above the buttons, where it's seen.
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // What you changed while its machine was away, waiting for it.
+            if let bot, let place = bots.waitingFor(bot) {
+                Label("Your changes are waiting for \(place), which isn’t connected. They go to it as soon as it’s back.", systemImage: "clock.arrow.circlepath")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let failure {
                 Text(failure)
                     .font(.callout)
@@ -417,11 +449,14 @@ struct BotEditor: View {
                             .focused($focus, equals: .name)
                     }
                 }
-                Text(bot.map { $0.job.isEmpty ? "\($0.name)'s job is what you tell it in its conversation." : "Its job: \($0.job). It keeps its job in its memory, as you tell it in its conversation." }
-                     ?? "Its job is what you tell it in its conversation. It keeps it in its memory and works on it from then on.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // As tall as its row, beside the avatar.
+                .fixedSize(horizontal: false, vertical: true)
+                if isNew {
+                    Text("Its job is what you tell it in its conversation. It keeps it and works on it from then on.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -505,8 +540,21 @@ struct BotEditor: View {
             bot.look = look
             bot.model = model
             bot.personality = personality
-            Task { await bots.update(bot) }
-            close()
+            bot.job = job.line
+            bot.instructions = job.details
+            // Sent to its box; one for a computer that's away waits for it. What its box turns
+            // down shows here, with what you changed as you left it.
+            isWorking = true
+            failure = nil
+            Task {
+                defer { isWorking = false }
+                do {
+                    try await bots.update(bot, job: true)
+                    close()
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
             return
         }
         isWorking = true
@@ -518,15 +566,12 @@ struct BotEditor: View {
             }
             do {
                 try await waitForMachine()
-                let bot = try await bots.create(name: trimmedName, look: look, personality: personality, model: model, machine: machine, project: project)
-                // Its job, typed in its conversation, from a template or a shared bot; otherwise the
-                // bot writes first.
-                if !firstMessage.isEmpty {
-                    Drafts.shared[bot.sessionID].text = firstMessage
-                } else {
-                    Task { await bots.greet(bot) }
-                }
-                created(bot)
+                // From a template or a shared bot, its job is typed in its conversation for you;
+                // otherwise the bot writes first.
+                let made = try await bots.make(name: trimmedName, look: look, personality: personality, model: model, machine: machine, project: project,
+                                               template: template, shared: recipe.map { ($0.job, $0.instructions) })
+                if let first = made.firstMessage, !first.isEmpty { Drafts.shared[made.bot.sessionID].text = first }
+                created(made.bot)
             } catch is CancellationError {
             } catch {
                 failure = error.localizedDescription
@@ -556,7 +601,6 @@ struct BotEditor: View {
         withAnimation(.ui) {
             self.template = template.id
             name = template.name
-            firstMessage = BotTemplate.firstMessage(job: template.job, instructions: template.instructions)
             look = template.look
             personality = template.personality
         }
@@ -573,6 +617,65 @@ struct BotEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// A bot's job in Edit Bot: what it does in a few words (shown under its name) and the details. The
+/// bot keeps it as you talk to it, and a change made here goes to it.
+private struct JobFields: View {
+    let name: String
+    @Binding var job: JobDraft
+    @FocusState private var focus: Field?
+
+    private enum Field { case line, details }
+
+    static func keptWords(_ kept: JobDraft.Job, name: String) -> String {
+        kept.line.isEmpty ? "\(name) cleared its job meanwhile. Save keeps yours." : "\(name) changed its job meanwhile, to “\(kept.line)”. Save keeps yours."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let kept = job.keptMeanwhile {
+                // The bot changed its job while you were changing it here.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(Self.keptWords(kept, name: name))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 8)
+                    Button("Use Its Job") { withAnimation(.ui) { job.useKept() } }
+                        .buttonStyle(TextButtonStyle())
+                }
+                .font(.callout)
+                .transition(.opacity)
+            }
+            WellGroup(isActive: focus != nil) {
+                WellRow(isActive: focus == .line) {
+                    Image(systemName: "briefcase")
+                } content: {
+                    TextField("In a Few Words", text: $job.line, prompt: Text("In a few words, like Keeps the build green"))
+                        .textFieldStyle(.plain)
+                        .focused($focus, equals: .line)
+                        .accessibilityLabel("Job, in a few words")
+                }
+                WellDivider()
+                TextField("Details", text: $job.details, prompt: Text("The details: what to watch, what to make, what never to do without asking"), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(3...12)
+                    .focused($focus, equals: .details)
+                    .accessibilityLabel("Job details")
+                    .padding(12)
+            }
+        }
+        // Said as it appears, for one who can't see it come.
+        .onChange(of: job.keptMeanwhile) { _, kept in
+            if let kept { AccessibilityNotification.Announcement(Self.keptWords(kept, name: name)).post() }
         }
     }
 }

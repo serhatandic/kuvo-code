@@ -128,10 +128,11 @@ final class BrowserToolServer {
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) {
+            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob {
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
-                    let result = BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
+                    let result = name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
+                        : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
                 }
             } else {
@@ -221,6 +222,9 @@ enum BrowserTools {
         tool("list_wake_ups", "List this conversation's wake-ups and watches, with their ids, to check what's scheduled before adding one (never keep two for the same thing)."),
         tool("cancel_wake_up", "Cancel one of this conversation's wake-ups or watches, by its id from list_wake_ups (or the one schedule_wake_up or watch_for_change gave). To change a schedule, cancel it and schedule the new one.",
              ["id": ["type": "string", "description": "Its id."]], required: ["id"]),
+        tool(setJob, "Keep your job, as one of the user's bots: what you do in a few words (Kuvo Code shows it under your name) and the details (what to watch, what to make, what never to do without asking). Call it whenever the user gives you a job or changes it, before anything else, with the whole job as it is now: it replaces the one you had. Only a bot keeps a job.",
+             ["summary": ["type": "string", "description": "What you do, in a few words, like \"Keeps the build green\"."],
+              "details": ["type": "string", "description": "The whole job: what to watch, what to make, when, and what never to do without asking."]], required: ["summary", "details"]),
         tool("start_session", "Start a new session: another agent with a conversation of its own, to work on something alongside you (a separate task, a second opinion, one part of a bigger job). It works in this conversation's folder unless you name another, on your model, and gets the task as a message from you, so it knows who to report to. It shows beside this conversation for the user to follow, and you get its address to write to it with send_message; it can write back to you the same way. With wait, you get its first answer back here.",
              ["task": ["type": "string", "description": "What it's to do: all it needs to know, as it hasn't seen this conversation."],
               "title": ["type": "string", "description": "A short name for it, like \"Write the tests\"."],
@@ -286,6 +290,10 @@ enum BrowserTools {
     }
 
     static var mail: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
+    nonisolated static let setJob = "set_job"
+    /// Carries out its calls from this Mac's conversations.
+    static var job: (_ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _ in ("Only a bot keeps a job, and this conversation isn't one.", true) }
     /// The tools a conversation's wake-ups are set with (see `WakeUps.call`).
     nonisolated static let wakeTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"]
     /// Carries out their calls from this Mac's conversations.

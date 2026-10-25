@@ -2147,6 +2147,68 @@ async function wake(name, args, from) {
   });
 }
 
+// A bot keeping its job (set_job): the box keeps it, in the bot's record (KuvoLink's PROTOCOL.md,
+// `PATCH kuvo/bots/<id>` with `job`), asked through its script (`kuvo-link.js box route`), so what a
+// job is and what a bot is told of it is the box's alone. For the bot whose conversation this is (a
+// subagent's, the one that started it).
+async function setJob(args, from) {
+  if (!from) return text("This needs a conversation of its own.", true);
+  let session = from;
+  for (let step = 0; step < 5; step++) {
+    const found = await findSession(session);
+    if (!found?.data?.parentID) break;
+    session = found.data.parentID;
+  }
+  const bots = process.env.KUVO_BOTS || path.join(K, "bots");
+  const id = (fs.existsSync(bots) ? fs.readdirSync(bots) : []).find((name) => {
+    try {
+      return /^bot_[A-Za-z0-9]+$/.test(name) && fs.readFileSync(path.join(bots, name, "session"), "utf8").trim() === session;
+    } catch {
+      return false;
+    }
+  });
+  if (!id) return text("Only a bot keeps a job, and this conversation isn't one.", true);
+  const job = { line: typeof args.summary === "string" ? args.summary : "", details: typeof args.details === "string" ? args.details : "" };
+  const answer = await boxRoute({ method: "PATCH", path: `kuvo/bots/${id}`, body: { job } });
+  if (!answer) return text("Couldn't keep it: Kuvo Code on this machine didn't answer. Try again in a moment.", true);
+  let said = null;
+  try {
+    said = JSON.parse(answer.body || "{}");
+  } catch {}
+  if (answer.status !== 200) return text(said?.message || `Couldn't keep it (${answer.status}).`, true);
+  const line = said?.bot?.job ?? "";
+  return text(line ? `Kept. Kuvo Code shows "${line}" under your name.` : "Kept: you have no job now.");
+}
+
+/// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
+/// answer (in time).
+function boxRoute(request) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
+      cwd: K,
+      env: { ...process.env, KUVO_HOME: K, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => (output += chunk));
+    const stop = setTimeout(() => child.kill("SIGTERM"), 30_000);
+    child.on("error", () => {
+      clearTimeout(stop);
+      resolve(null);
+    });
+    child.on("close", () => {
+      clearTimeout(stop);
+      try {
+        const answer = JSON.parse(output.trim().split("\n").pop() || "null");
+        resolve(answer && typeof answer.status === "number" ? answer : null);
+      } catch {
+        resolve(null);
+      }
+    });
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
 const startedSessions = new Map();
 
 /// A new session on this machine, from the conversation `from`: an agent of its own, in the caller's
@@ -2700,6 +2762,10 @@ async function mcp() {
         // Nor does writing to another agent.
         if (WAKE_TOOLS.has(params.name)) {
           wake(params.name, params.arguments || {}, params._meta?.["ai.opencode/sessionID"] ?? null).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          return;
+        }
+        if (params.name === "set_job") {
+          setJob(params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
         if (params.name === "list_agents" || params.name === "send_message" || params.name === "read_conversation" || params.name === "start_session") {

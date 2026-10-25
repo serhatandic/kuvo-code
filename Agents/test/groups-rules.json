@@ -4642,6 +4642,11 @@
           "resource": "*"
         },
         {
+          "action": "kuvo-browser_set_job",
+          "effect": "deny",
+          "resource": "*"
+        },
+        {
           "action": "external_directory",
           "effect": "allow",
           "resource": "/home/me/.kuvo-code/bots/bot_ada/*"
@@ -4721,6 +4726,11 @@
         },
         {
           "action": "kuvo-browser_watch_for_change",
+          "effect": "deny",
+          "resource": "*"
+        },
+        {
+          "action": "kuvo-browser_set_job",
           "effect": "deny",
           "resource": "*"
         },

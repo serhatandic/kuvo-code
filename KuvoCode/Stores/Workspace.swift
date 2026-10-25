@@ -1243,6 +1243,11 @@ final class Workspace {
     func moveToAgents(_ id: String, model: ModelRef, opens: Bool = true) async throws -> Session? {
         // Moving to another computer: it goes to the coding agents once it's there.
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
+        // A bot's: its box carries it, as Edit Bot's model does, and the bot keeps it.
+        if let moved = try await onBotToAgents?(id, model) {
+            Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
+            return moved
+        }
         guard let moved = try await carryToAgents(id, model: model) else { return nil }
         Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
         // Its tab (or its place beside one) takes the new one, before the old one goes.
@@ -1255,8 +1260,12 @@ final class Workspace {
         return moved
     }
 
+    /// A bot's conversation carried on with the coding agents by its box (the new one), nil for one
+    /// that isn't a bot's; the app sets it.
+    @ObservationIgnored var onBotToAgents: ((_ id: String, _ model: ModelRef) async throws -> Session?)?
+
     /// Told when a conversation moved to the coding agents (from, to): true when something else
-    /// keeps it (a bot), which then takes it over; the app sets it.
+    /// keeps it, which then takes it over; the app sets it.
     @ObservationIgnored var onMovedToAgents: ((_ from: String, _ to: Session) async -> Bool)?
 
     /// Sessions known to be the agents bridge's before it has told of them (a bot's conversation,
@@ -1336,6 +1345,13 @@ final class Workspace {
     /// Deleted on its engine; one on a machine that's away waits for it (it would come back).
     func delete(_ id: String) async {
         guard !Moves.isFrozen(id), let api = api(forSession: id) else { return }
+        drop(id)
+        try? await api.deleteSession(id)
+    }
+
+    /// A session gone from its engine (deleted by its box, a bot's): what's here of it goes.
+    func drop(_ id: String) {
+        guard !Moves.isFrozen(id) else { return }
         onDeleted?(id)
         if let machine = session(id).flatMap({ RemoteFolder.machine(of: $0.location.directory) }) { keepList(of: machine) }
         sessions.removeAll { $0.id == id }
@@ -1344,7 +1360,6 @@ final class Workspace {
         shellJobs[id] = nil
         Notifier.shared.clear(session: id)
         Drafts.shared.remove(id)
-        try? await api.deleteSession(id)
     }
 
     func rename(_ id: String, to title: String) async {

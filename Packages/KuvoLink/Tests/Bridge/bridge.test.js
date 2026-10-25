@@ -890,7 +890,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   // has now, never as one it doesn't have (403).
   const routes = {
     "accounts.credentials": ["GET", "kuvo/accounts/credentials"], agents: ["GET", "kuvo/agents/api/session"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
-    bots: ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
+    bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
     "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],

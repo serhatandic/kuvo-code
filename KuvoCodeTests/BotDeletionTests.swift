@@ -5,20 +5,25 @@ import Testing
 
 /// Deleting a bot (F8): the bot, its conversation, its wake-ups and what you'd written to it go,
 /// and its folder (its memory, what it made) goes to the Trash rather than for good; after a
-/// relaunch it's still gone. The engine is stubbed; this Mac's box, which keeps its wake-ups, is real.
+/// relaunch it's still gone. The engine is stubbed; this Mac's box, which keeps its bots and their
+/// wake-ups, is real.
 @MainActor
 @Suite(.serialized) struct BotDeletionTests {
     let engine = StubEngine(port: 47986)
-    let folder = Bots.root.appending(path: "bot_gone_\(UUID().uuidString.prefix(6))")
+    static let id = "bot_gone\(UUID().uuidString.prefix(6))"
+    let folder = Bots.root.appending(path: BotDeletionTests.id)
     let file = AppInfo.supportDirectory.appending(path: "bots.json")
 
     init() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("# Ci's memory\n\n## Job\nKeeps CI green.\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
-        // Its conversation, as the app notes it in its folder.
+        // Its conversation and description, as its box keeps them in its folder.
         try Data("ses_bot_gone".utf8).write(to: folder.appending(path: "session"))
+        try Data(#"{"kuvo": 1, "id": "\#(Self.id)", "name": "Ci", "job": "Keeps CI green", "look": {"color": "mint", "shape": "round", "face": "calm"}, "created": "2026-10-21T09:00:00Z", "updated": "2026-10-21T09:00:00Z"}"#.utf8)
+            .write(to: folder.appending(path: "bot.json"))
+        // As the app last saw it.
         let bot: [String: Any] = [
-            "id": "bot_gone", "name": "Ci", "job": "Keeps CI green", "instructions": "Keeps CI green.", "jobInMemory": true,
+            "id": Self.id, "name": "Ci", "job": "Keeps CI green", "instructions": "Keeps CI green.", "jobInMemory": true,
             "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": folder.path(percentEncoded: false),
             "sessionID": "ses_bot_gone", "created": "2026-10-21T09:00:00Z",
         ]
@@ -48,10 +53,12 @@ import Testing
         app.wakeUps.app = app
         app.boxGroups.app = app
         app.workspace.api = engine.api
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
         engine.list([StubEngine.session("ses_bot_gone", title: "Ci", directory: folder.path(percentEncoded: false))])
         engine.on("DELETE", "/api/session/ses_bot_gone", json: [:])
         await app.workspace.refresh()
-        let bot = try #require(app.bots.list.first { $0.id == "bot_gone" }, "bots: \(app.bots.list.map(\.id))")
+        await app.bots.refresh(BoxClient.mac)
+        let bot = try #require(app.bots.list.first { $0.id == Self.id }, "bots: \(app.bots.list.map(\.id))")
         try await app.wakeUps.add(to: bot.wakeOwner, at: .now.addingTimeInterval(86_400), every: .days(1), note: "Check CI")
         #expect(app.wakeUps.wakes[bot.id]?.count == 1)
         Drafts.shared["ses_bot_gone"].text = "Also watch the nightly job"

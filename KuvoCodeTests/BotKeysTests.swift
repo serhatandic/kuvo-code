@@ -83,17 +83,12 @@ import Testing
         TestEnvironment.prepare()
         app.bots.app = app
         defer { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "bots.json")) }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let made = Date(timeIntervalSince1970: 1_792_000_000)
-        func descriptor(_ id: String) throws -> Data {
-            try encoder.encode(Bot.Descriptor(id: id, name: id, job: "", look: BotLook(color: .sky, shape: .round, face: .happy), personality: nil,
-                                              model: nil, project: nil, created: made, updated: made))
-        }
-        _ = app.bots.adopt([
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_scout00001", descriptor: try descriptor("bot_scout00001"), session: "ses_scout", via: ""),
-            Bots.Found(folder: "/home/me/.kuvo-code/bots/bot_herald0001", descriptor: try descriptor("bot_herald0001"), session: "ses_herald", via: ""),
-        ], on: "box")
+        // Its bots, as its box lists them.
+        let look = BotLook(color: .sky, shape: .round, face: .happy)
+        app.bots.take([
+            ListedBot(id: "bot_scout00001", session: "ses_scout", name: "bot_scout00001", look: look, folder: "/home/me/.kuvo-code/bots/bot_scout00001"),
+            ListedBot(id: "bot_herald0001", session: "ses_herald", name: "bot_herald0001", look: look, folder: "/home/me/.kuvo-code/bots/bot_herald0001"),
+        ], from: "box")
         let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
         let name = try #require(Integrations.keys(of: service.way).first?.name)
         let scout = IntegrationKeys.variable(service.id, name, bot: "bot_scout00001")

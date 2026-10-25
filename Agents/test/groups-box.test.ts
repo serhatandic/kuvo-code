@@ -36,7 +36,9 @@ function bot(botID: string, name: string) {
   writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: botID, name, job: "Helps", look: { color: "mint", shape: "round", face: "calm" }, model: { id: "m", providerID: "p" }, created: stamp(), updated: stamp() }))
   writeFileSync(join(folder, "session"), "ses_own_" + name)
   writeFileSync(join(folder, "directory"), join(folder, "workspace"))
-  writeFileSync(join(folder, "MEMORY.md"), `# ${name}'s memory\n\n## Job\nHelps with the release\n`)
+  writeFileSync(join(folder, "MEMORY.md"), `# ${name}'s memory\n`)
+  // Its job, as its box keeps it.
+  writeFileSync(join(folder, "job.json"), JSON.stringify({ line: "Helps with the release", details: "Helps with the release" }))
 }
 
 function group(): Group {

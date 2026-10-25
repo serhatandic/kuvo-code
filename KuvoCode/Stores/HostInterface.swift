@@ -2,11 +2,12 @@ import Foundation
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
-/// files, and whether the panel's browser is signed in to the sites the agent uses there. It
-/// answers on a loopback port, to a password the box is given as it starts (`environment`), and
-/// only for a name of Kuvo Code's own keys (`KUVO_KEY_…`), so the box can reach nothing else in
-/// your Keychain. A key saved or removed here goes to the engine's files too (`IntegrationKeys`);
-/// listing them reads no secret, so it never asks you.
+/// files, and whether the panel's browser is signed in to the sites the agent uses there; and what it
+/// lets go of, moved from its trash folder to the Finder's Trash. It answers on a loopback port, to a
+/// password the box is given as it starts (`environment`), and only for a name of Kuvo Code's own
+/// keys (`KUVO_KEY_…`), so the box can reach nothing else in your Keychain. A key saved or removed
+/// here goes to the engine's files too (`IntegrationKeys`); listing them reads no secret, so it never
+/// asks you.
 @MainActor
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
@@ -60,6 +61,12 @@ final class HostInterface {
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
             // cookies say (read again once they've changed): only those it can tell.
             return .json(["sites": await SiteSignIns.shared.mac()])
+        case "/trash":
+            // What the box let go of (a deleted bot's folder), from its own trash folder only, to
+            // the Finder's Trash, where you look for what you deleted.
+            guard let path = given["path"] as? String else { return .init(status: 400) }
+            BoxGroups.toFinderTrash(path)
+            return .json([:])
         default:
             return .init(status: 404)
         }

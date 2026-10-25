@@ -55,7 +55,7 @@ import Testing
         IntegrationKeys.set("ghp_kept", for: name)
 
         #expect(try await ask("/keys/get", ["name": name], password: nil, at: environment).status == 401)
-        #expect(try await ask("/keys/get", ["name": name], password: String(password.dropLast()) + "0", at: environment).status == 401)
+        #expect(try await ask("/keys/get", ["name": name], password: String(password.dropLast()) + (password.last == "0" ? "1" : "0"), at: environment).status == 401)
         #expect(try await ask("/keys/names", [:], password: "", at: environment).status == 401)
         #expect(try await ask("/keys/delete", ["name": name], password: "wrong", at: environment).status == 401)
         #expect(IntegrationKeys.value(name) == "ghp_kept", "untouched")

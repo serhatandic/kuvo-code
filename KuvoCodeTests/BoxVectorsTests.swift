@@ -4,33 +4,28 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// What this Mac's app still works out itself that a box works out too, until bots' jobs and
-/// wake-ups move onto the box: what a message quotes and says, a bot's job, from its memory (`Bots.job(inMemory:)`, as the agents
-/// bridge's `jobInMemory` and kuvo-link.js read it), and when a repeat comes back
+/// What this Mac's app still works out itself that a box works out too: what a message quotes and
+/// says, and when a repeat comes back
 /// (`Wakes.Repeat.next`, as the bridge's `next` works out a meeting's). Both sides' tests check
 /// against what these say (`Agents/test/box-vectors.json`). `scripts/box-vectors.sh` writes that
 /// file from here and records its hash below, so a change here fails this test until it's run,
 /// and the bridges' tests then say whether they still match.
 @MainActor
 struct BoxVectorsTests {
-    static let recorded = "42871b0c3d2ed437bfa2e153e3e5fea24f65e81a1a552d6275d38b7008df6312"
+    static let recorded = "80559c0bf575b7cbc34c73c4fa80cda3daee016162cf476f4a381d54092280a5"
 
-    @Test func aBoxReadsJobsAndRepeatsAsTheMacDoes() throws {
+    @Test func aBoxReadsQuotesAndRepeatsAsTheMacDoes() throws {
         let data = try JSONSerialization.data(withJSONObject: Self.vectors(), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
         if let path = ProcessInfo.processInfo.environment["KUVO_WRITE_BOX_VECTORS"] {
             try data.write(to: URL(filePath: path))
             return
         }
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        #expect(hash == Self.recorded, "How a job or a repeat is read changed: run scripts/box-vectors.sh, then the bridges' tests.")
+        #expect(hash == Self.recorded, "How a quote or a repeat is read changed: run scripts/box-vectors.sh, then the bridges' tests.")
     }
 
     static func vectors() -> [String: Any] {
         [
-            "job": memories.map { text in
-                let job = Bots.job(inMemory: text)
-                return ["memory": text, "line": job?.line ?? NSNull(), "section": job?.section ?? NSNull()] as [String: Any]
-            },
             "next": repeatCases(),
             "segments": segmentCases.map { text in
                 ["text": text, "segments": Quoting.segments(text).map { ["quote": $0.quote ?? NSNull(), "text": $0.text] as [String: Any] }]
@@ -47,19 +42,6 @@ struct BoxVectorsTests {
         "> Who else?\n\n```\n---\n```\n\nstill the answer",
         "Words first\n\n---\n\nmore words",
         "> Just a quote\n\n---\n\nwords",
-    ]
-
-    static let memories = [
-        "# Scout's memory\n\n## Job\nWatches the build\n",
-        "## Job: Keeps CI green\nMore details here.\n## Notes\nx",
-        "# Memory\n## My job\n- **Job:** Reviews PRs. Looks at each one carefully every morning before the standup starts.\n\n### Rules\nNever merge.\n## Other\n",
-        "## Job — keeps CI green\n",
-        "No job here",
-        "```\n# not a heading\n```\n## Job\nInside code test\n```\n## fake\n```\nstill job\n## Next",
-        "## Job (keeps the build green)\nDetails\n",
-        "## Job log\nnothing",
-        "#Job\nnot a heading\n## The job\n> __Plans the week.__\n",
-        "## Job\n\n\n",
     ]
 
     /// When repeats come back, in time zones with and without daylight saving, across its changes

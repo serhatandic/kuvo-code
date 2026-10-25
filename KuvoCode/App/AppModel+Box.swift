@@ -37,6 +37,8 @@ extension AppModel {
         if hosting == nil { hosting = try? await host.start() }
         if let hosting { environment.merge(hosting) { _, new in new } }
         MachineBox.writeMacCatalog()
+        // What it makes and tells this Mac's bots with.
+        bots.writeMacKit()
         return environment
     }
 }

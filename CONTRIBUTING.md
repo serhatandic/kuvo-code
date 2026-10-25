@@ -124,7 +124,10 @@ Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a m
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
-bridge's real handler. Only the engine is a stand-in, the same small one on both. To add one:
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
+have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
+stand-in, the same small one on each. To add one:
 
 - Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
   each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `trashedSkill`, `settings`, `key`, `credential`,
@@ -143,9 +146,9 @@ bridge's real handler. Only the engine is a stand-in, the same small one on both
   `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
-- Run both runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
-  machine, which the bridge's runner uses) after a change to the integrations, the MCP catalog or
-  bot templates.
+- Run the runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
+  machine, and the kit this Mac's app gives its own box, which the bridge's runners use) after a
+  change to the integrations, the MCP catalog, bot templates or what a bot is told.
 
 `Tests/E2E` tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with
@@ -282,10 +285,11 @@ when you're there to answer.
 | `KUVO_DEMO_ACCOUNTS_MACHINE` | With `KUVO_DEMO_SETTINGS=accounts`: that machine's Accounts, in its own tab |
 | `KUVO_DEMO_WELCOME` | No tabs, so the welcome card shows |
 | `KUVO_DEMO_NEW_BOT` | The New Bot editor, open |
-| `KUVO_DEMO_BOT`, `KUVO_DEMO_BOT_PROMPT` | Make the bot `<name>\|<job>\|<its details>[\|<machine>[\|<project folder>]]` unless one has that name (the job written in its memory, as the bot would; leave it empty for a bot that asks for one, and the machine empty for this Mac), open it, and give it this task |
+| `KUVO_DEMO_BOT`, `KUVO_DEMO_BOT_PROMPT` | Make the bot `<name>\|<job>\|<its details>[\|<machine>[\|<project folder>]]` unless one has that name (its job kept as the bot keeps it with set_job; leave it empty for a bot that asks for one, and the machine empty for this Mac), open it, and give it this task |
 | `KUVO_DEMO_OPEN_STEPS` | Every step in the conversation shows its details, opened, and so does the thinking |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
+| `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
 | `KUVO_DEMO_MOVE_BOT` | With `KUVO_DEMO_BOT`: once that bot is done (and its prompt with it), it moves to this machine, or to this Mac when empty, as Move to Computer does |
 | `KUVO_DEMO_MOVE_GROUP` | With `KUVO_DEMO_GROUP`: that group chat moves to this machine, or to this Mac when empty, as Move to Computer does, before its message goes |
 | `KUVO_DEMO_ADD_WAKE` | With `KUVO_DEMO_EDIT_BOT`: adding a wake-up, every day, with this note (`KUVO_DEMO_ADD_WAKE_NOW`: and adds it) |

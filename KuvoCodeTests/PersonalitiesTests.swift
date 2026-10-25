@@ -123,47 +123,6 @@ import Testing
         await forgetShared(box)
     }
 
-    /// Its personality stays when a read of yours comes back without it (a file the box couldn't
-    /// read, say), and goes only when it's deleted.
-    @Test func aBotKeepsItsPersonalityUntilItsDeleted() async throws {
-        forgetOld()
-        defer { forgetOld() }
-        let box = try await SettingsBox(port: 47_938)
-        defer { box.stop() }
-        let owl = try await store(on: box).add(name: "Night Owl", description: "Works late.")
-        let folder = Bots.root.appending(path: "bot_owl")
-        let file = AppInfo.supportDirectory.appending(path: "bots.json")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data("ses_bot_owl".utf8).write(to: folder.appending(path: "session"))
-        let bot: [String: Any] = [
-            "id": "bot_owl", "name": "Ollie", "job": "Reads at night", "instructions": "Reads at night.", "jobInMemory": true,
-            "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": folder.path(percentEncoded: false),
-            "sessionID": "ses_bot_owl", "created": "2026-10-21T09:00:00Z", "personality": owl.id,
-        ]
-        try JSONSerialization.data(withJSONObject: [bot]).write(to: file)
-        defer {
-            try? FileManager.default.removeItem(at: file)
-            try? FileManager.default.removeItem(at: folder)
-        }
-        let app = AppModel()
-        app.workspace.api = box.engine.api
-        app.wireStores()
-        await Personalities.shared.refresh()
-        #expect(Personalities.shared.personality(owl.id) != nil)
-        // A read that comes back without it, though it wasn't deleted.
-        try Data(#"{"kuvo":1,"personalities":[],"removed":[]}"#.utf8).write(to: Personalities.boxFile)
-        await Personalities.shared.refresh()
-        await app.bots.personalityChanged(owl.id)
-        #expect(app.bots.list.first?.personality == owl.id, "kept: it wasn't deleted")
-        // Read again, then deleted.
-        try JSONSerialization.data(withJSONObject: ["kuvo": 1, "personalities": [["id": owl.id, "name": owl.name, "description": owl.description, "symbol": owl.symbol, "updated": owl.updated ?? 1]], "removed": []]).write(to: Personalities.boxFile)
-        await Personalities.shared.refresh()
-        try await Personalities.shared.delete(try #require(Personalities.shared.personality(owl.id)))
-        await app.bots.personalityChanged(owl.id)
-        #expect(app.bots.list.first?.personality == nil, "deleted: it talks its own way again")
-        await forgetShared(box)
-    }
-
     @Test func yourPersonalitiesRefuseOneThereIsNoRoomFor() async throws {
         forgetOld()
         defer { forgetOld() }

@@ -20,13 +20,15 @@ let engine: Engine
 let events: ServerEvent[]
 let unsubscribe: () => void
 
-function bot(id: string, name: string, memory = `# ${name}'s memory\n\n## Job\nHelps with the release\n`, model = { id: "m", providerID: "p" }) {
+function bot(id: string, name: string, memory = `# ${name}'s memory\n`, model = { id: "m", providerID: "p" }) {
   const folder = join(root, "bots", id)
   mkdirSync(join(folder, "workspace"), { recursive: true })
   writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id, name, job: "Helps", look: { color: "mint", shape: "round", face: "calm" }, model, created: stamp(), updated: stamp() }))
   writeFileSync(join(folder, "session"), "ses_own_" + name)
   writeFileSync(join(folder, "directory"), join(folder, "workspace"))
   writeFileSync(join(folder, "MEMORY.md"), memory)
+  // Its job, as its box keeps it.
+  writeFileSync(join(folder, "job.json"), JSON.stringify({ line: "Helps with the release", details: "Helps with the release" }))
 }
 
 function group(meeting?: Group["meeting"]): Group {

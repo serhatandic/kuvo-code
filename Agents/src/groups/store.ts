@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { emit } from "../events"
 import type { ModelRef } from "../wire"
 import type { SeatResult } from "./seat"
-import { jobInMemory, type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
+import { type Group, type GroupMessage, type Rule, type SeatBot } from "./rules"
 
 /** Goes up only when what's kept changes in a way an older runner can't follow. */
 export const version = 1
@@ -272,14 +272,15 @@ export class GroupStore {
     const described = read(join(folder, "bot.json"))
     const sessionID = text(join(folder, "session"))?.trim()
     if (!described?.name || !sessionID) return undefined
-    const memory = text(join(folder, "MEMORY.md"))
-    const job = memory ? jobInMemory(memory) : undefined
+    // Its job, as its box keeps it (`job.json`: what it does in a few words, and all of it); its
+    // description says it in a few words for one the box hasn't kept yet.
+    const job = read(join(folder, "job.json"))
     const directory = text(join(folder, "directory"))?.trim() || join(folder, "workspace")
     return {
       id,
       name: String(described.name),
-      job: job?.line ?? String(described.job ?? ""),
-      instructions: job?.section ?? "",
+      job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
+      instructions: typeof job?.details === "string" ? job.details : "",
       memoryFile: join(folder, "MEMORY.md"),
       folder,
       sessionID,

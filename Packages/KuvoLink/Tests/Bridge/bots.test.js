@@ -119,7 +119,8 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   assert.deepEqual(answer.json.bots.map(each => each.name), ["First", "Scout"], "described ones, in the order they were made");
   assert.deepEqual(answer.json.bots[1], {
     id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout", look: { color: "sky", shape: "round", face: "calm" }, machine: "my-server",
-    job: "Watches the build", paused: true, wakes: 1792000100, watching: 1, agents: true, model: { id: "big-pickle", providerID: "opencode" },
+    job: "Watches the build", jobDetails: "", paused: true, wakes: 1792000100, watching: 1, agents: true, model: { id: "big-pickle", providerID: "opencode" },
+    folder: scout, created: "2026-10-02T09:00:00Z",
   });
   assert.equal("personality" in answer.json.bots[1], false, "none: left out, as the Mac leaves it out");
   assert.equal("wakes" in answer.json.bots[0], false, "none waiting: left out, as the Mac leaves it out");
@@ -132,19 +133,30 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   assert.equal((await ask(handle, "PUT", "kuvo/bots")).status, 405);
 });
 
-test("a Mac reads the machine's bots with their jobs as their memories have them now, which the machine keeps", async () => {
+test("a bot's job is its record: taken once from its memory, read by a Mac of an earlier version, and never again from its memory", async () => {
   const scout = bot("bot_scout00001");
-  write(path.join(scout, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n\n## Notes\nx\n");
+  const memory = "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n\n## Notes\nx\n";
+  write(path.join(scout, "MEMORY.md"), memory);
   bot("bot_first00001", { name: "First" });
   const unread = bot("bot_unread0001", { name: "Unread" });
   fs.rmSync(path.join(unread, "MEMORY.md"));
   const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
   const read = await ask(handle, "GET", "kuvo/bots?memory=1");
   const byName = Object.fromEntries(read.json.bots.map(each => [each.name, each]));
-  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Watches the nightly build.\nPosts when it breaks." });
-  assert.deepEqual(byName.First.memoryJob, { line: "", section: "" }, "a memory without one: none");
-  assert.equal("memoryJob" in byName.Unread, false, "a memory that can't be read: left out");
-  // A phone's list doesn't carry it.
+  // (Its details without its line, which shows on its own.)
+  assert.deepEqual([byName.Scout.job, byName.Scout.jobDetails], ["Watches the nightly build", "Posts when it breaks."]);
+  // What a Mac of an earlier version takes a machine's bots' jobs from.
+  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Posts when it breaks." });
+  // Without one in its memory: the job its description had (Edit Bot's, from before), kept.
+  assert.deepEqual(byName.First.memoryJob, { line: "Watches the build", section: "" });
+  assert.deepEqual(byName.Unread.memoryJob, { line: "Watches the build", section: "" });
+  // Its memory stays as it was, and its description says the job in a few words.
+  assert.equal(fs.readFileSync(path.join(scout, "MEMORY.md"), "utf8"), memory);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(scout, "bot.json"), "utf8")).job, "Watches the nightly build");
+  // From now on its memory is its own: what it writes there isn't its job.
+  write(path.join(scout, "MEMORY.md"), "# Scout's memory\n\n## Job\nSomething else entirely.\n");
+  assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.find(each => each.name === "Scout").job, "Watches the nightly build");
+  // A phone's list doesn't carry what a Mac reads.
   assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.some(each => "memoryJob" in each), false);
 });
 
@@ -281,7 +293,7 @@ test("a bot on its way to another computer isn't woken or changed from a phone u
 // What New Bot needs, as the Mac leaves it on the machine as it connects (Bots.MachineKit).
 const kit = {
   kuvo: 1,
-  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false, firstMessage: "Your job, in a few words: Sends you a morning news digest." }],
+  templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false }],
   personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Your personality: Straight Shooter. Direct." }],
   looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
   startingModel: { id: "big-pickle", providerID: "opencode" },
@@ -383,7 +395,7 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     // From a template: its look and personality, and its job for your composer; it waits for you.
     const herald = await ask(handle, "POST", "kuvo/bots", { name: "Herald", template: "news" });
     assert.equal(herald.status, 201);
-    assert.equal(herald.json.firstMessage, kit.templates[0].firstMessage);
+    assert.equal(herald.json.firstMessage, "Your job, in a few words: Sends you a morning news digest.\n\nEvery morning…\n\nStart now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up.");
     assert.equal(engine.asked.some(each => each.url === `/api/session/${herald.json.bot.session}/synthetic`), false);
     assert.deepEqual(herald.json.bot.look, kit.templates[0].look);
     const plain = engine.asked.find(each => each.url === `/api/experimental/session/${herald.json.bot.session}/instructions/entries/kuvo.bot`).body.value;
@@ -417,8 +429,45 @@ test("what's missing or unknown is said, and nothing is made", async () => {
   }
 });
 
-// The Mac's and the coding agents' bridge's job readers are held to these (Bots.job(inMemory:)).
-const groupVectors = JSON.parse(fs.readFileSync(new URL("../../../../Agents/test/box-vectors.json", import.meta.url), "utf8"));
+test("a bot's job is set as a whole (its set_job tool, Edit Bot): shown under its name, told to its conversation at once", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_scout00001");
+  const engine = await makingEngine();
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const set = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { job: { line: "  **Keeps CI green.** ", details: "Watch main.\nFix flaky tests; never skip them.\n" } });
+    assert.equal(set.status, 200);
+    assert.deepEqual([set.json.bot.job, set.json.bot.jobDetails], ["Keeps CI green", "Watch main.\nFix flaky tests; never skip them."]);
+    const told = engine.asked.filter(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries/kuvo.bot");
+    assert.equal(told.length, 1);
+    assert.match(told[0].body.value, /one of the user's bots: Keeps CI green\./);
+    assert.match(told[0].body.value, /Watch main\.\nFix flaky tests; never skip them\./);
+    const kept = JSON.parse(fs.readFileSync(path.join(folder, "job.json"), "utf8"));
+    assert.deepEqual([kept.line, kept.details], ["Keeps CI green", "Watch main.\nFix flaky tests; never skip them."]);
+    assert.equal(fs.readFileSync(path.join(folder, "MEMORY.md"), "utf8"), "# Scout's memory\n", "its memory isn't touched");
+    // The same again: nothing to tell.
+    await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { job: { line: "Keeps CI green", details: "Watch main.\nFix flaky tests; never skip them." } });
+    assert.equal(engine.asked.filter(each => each.method === "PUT").length, 1);
+    // What can't be: said, and nothing changes.
+    for (const job of ["Keeps CI green", { line: 3 }, { line: "x".repeat(201) }, { line: "Ok", details: "x".repeat(8001) }]) {
+      const refused = await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { job });
+      assert.equal(refused.status, 400, JSON.stringify(job).slice(0, 40));
+      assert.equal(typeof refused.json.message, "string");
+    }
+    assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots[0].job, "Keeps CI green");
+    // None: an empty job, and its words go back to those of a bot without one.
+    await ask(handle, "PATCH", "kuvo/bots/bot_scout00001", { job: { line: "", details: "" } });
+    assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots[0].job, "");
+    assert.doesNotMatch(engine.asked.filter(each => each.method === "PUT").at(-1).body.value, /Keeps CI green/);
+  } finally {
+    engine.close();
+  }
+});
+
+
+// How bots kept their job in their memory before (frozen as the Mac read it), which the box takes a
+// job from once (jobOf).
+const groupVectors = JSON.parse(fs.readFileSync(new URL("../../Vectors/memory-jobs.json", import.meta.url), "utf8"));
 
 test("a bot's job is read from its memory as the Mac reads it", () => {
   assert.ok(groupVectors.job.length > 5);
@@ -449,7 +498,8 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
     assert.equal(changed.status, 200, JSON.stringify(changed.json));
     assert.deepEqual({ ...changed.json.bot, wakes: undefined }, {
       id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout Prime", look: { color: "mint", shape: "round", face: "happy" }, machine: "my-server",
-      job: "Watches the build", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+      job: "Watches the build", jobDetails: "Tells you when it breaks.", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+      folder, created: before.created,
     });
     // Its description, for what runs here and for the Mac as it next connects: newer than before.
     const described = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
@@ -458,10 +508,10 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
     assert.equal(described.created, before.created);
     assert.match(described.updated, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     assert.ok(described.updated > before.updated);
-    // Its conversation: its title, its model, and what it's told, with its job as its memory has it.
+    // Its conversation: its title, its model, and what it's told, with its job (taken from its memory, once).
     assert.deepEqual(told(engine.asked, "ses_bot_scout00001"), {
       title: "Scout Prime", model: { id: "opus", providerID: "anthropic", variant: "high" },
-      instructions: `You are Scout Prime, one of the user's bots: Watches the build.\n\nYour personality: Straight Shooter. Direct.\n\nYour job, as your memory has it:\nWatches the build.\nTells you when it breaks.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nWho sets what.`,
+      instructions: `You are Scout Prime, one of the user's bots: Watches the build.\n\nYour personality: Straight Shooter. Direct.\n\nYour job, as your memory has it:\nTells you when it breaks.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nWho sets what.`,
     });
 
     // Its own way again: told without a personality; nothing else is touched.
@@ -572,33 +622,6 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
   }
 });
 
-test("with no Mac there, a bot whose run ended has its job read from its memory: its description and what it's told follow, once", async () => {
-  write(path.join(bots, "kit.json"), JSON.stringify(kit));
-  const folder = bot("bot_scout00001");
-  write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
-  const engine = await fakeEngine();
-  try {
-    const target = { port: engine.port, password: "p" };
-    await link.refreshBotJob(target, "ses_bot_scout00001");
-    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "Watches the nightly build");
-    const puts = () => engine.asked.filter(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries/kuvo.bot");
-    assert.equal(puts().length, 1);
-    assert.match(JSON.parse(puts()[0].body).value, /Watches the nightly build\.\nPosts when it breaks\./);
-    // Nothing changed: not told again.
-    await link.refreshBotJob(target, "ses_bot_scout00001");
-    assert.equal(puts().length, 1);
-    // Its memory's job changed: told again.
-    write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks, and who broke it.\n");
-    await link.refreshBotJob(target, "ses_bot_scout00001");
-    assert.equal(puts().length, 2);
-    // Not a bot's conversation: nothing.
-    await link.refreshBotJob(target, "ses_someone");
-    assert.equal(puts().length, 2);
-  } finally {
-    engine.close();
-  }
-});
-
 test("a machine makes bots with its release's words where they're newer than a Mac's kit, or no Mac gave it one, with what's its own", async () => {
   const releaseKit = path.join(home, "bin", "bot-kit.json");
   const words = { ...kit, version: "0.9.0", startingModel: null, projects: [], rules: [], timeZone: "⟦timeZone⟧", instructions: "You are ⟦name⟧, on ⟦machine⟧, in ⟦timeZone⟧." };
@@ -626,26 +649,5 @@ test("a machine makes bots with its release's words where they're newer than a M
     assert.equal(link.readKit().instructions, "Newer words.");
   } finally {
     fs.rmSync(releaseKit, { force: true });
-  }
-});
-
-test("with a Mac connected, a bot here whose run ended still has its job read from its memory, by the machine", async () => {
-  // What a connected Mac of an earlier version leaves each minute: a note that it's there.
-  write(path.join(home, "run", "connected", "mac_1"), "");
-  write(path.join(bots, "kit.json"), JSON.stringify(kit));
-  const folder = bot("bot_scout00001");
-  write(path.join(folder, "MEMORY.md"), "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n");
-  const engine = await fakeEngine();
-  const stop = new AbortController();
-  try {
-    link.watchEvents(() => ({ port: engine.port, password: "p" }), () => true, stop.signal);
-    await engine.following;
-    engine.send({ type: "session.execution.succeeded", data: { sessionID: "ses_bot_scout00001" } });
-    const told = await engine.request(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries/kuvo.bot");
-    assert.match(JSON.parse(told.body).value, /Watches the nightly build\.\nPosts when it breaks\./);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "Watches the nightly build");
-  } finally {
-    stop.abort();
-    engine.close();
   }
 });

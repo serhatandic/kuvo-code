@@ -487,7 +487,9 @@ export function handler(context: Context) {
 
       if (area === "experimental" && a === "session" && b) {
         const id = b
-        if (c === "instructions" && d === "entries" && e) {
+        // Its instruction entries, as the engine lists them; one changed or taken away.
+        if (c === "instructions" && d === "entries" && !e && method === "GET") return json({ data: sessions.instructionEntries(id) })
+        if (c === "instructions" && d === "entries" && e && (method === "PUT" || method === "DELETE")) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""))
           return json({})
         }

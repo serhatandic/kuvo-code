@@ -105,11 +105,9 @@ final class AppModel {
         openSettings(.accounts, on: SidebarBox(machine: machine))
     }
 
-    /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): a bot's goes on
-    /// as the bot's, which keeps it (true); any other's panel goes with it, its terminals, pages
-    /// and files as they were.
+    /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
+    /// with it, its terminals, pages and files as they were. (A bot's is carried by its box.)
     func movedToAgents(from old: String, to new: Session) async -> Bool {
-        if await bots.movedToAgents(from: old, to: new) { return true }
         utilities.handOver(from: old, to: new.id)
         return false
     }
@@ -210,13 +208,9 @@ final class AppModel {
         workspace.boxes = { [weak self] id in self?.box(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
-        // and bots with it hear what it is now.
+        // and this Mac's bots with it are told what it is now, by its box.
         Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
-        Personalities.shared.onChange = { [weak self] changed in
-            guard let self else { return }
-            personalitiesChanged()
-            Task { for id in changed { await self.bots.personalityChanged(id) } }
-        }
+        Personalities.shared.onChange = { [weak self] _ in self?.personalitiesChanged() }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
@@ -225,6 +219,7 @@ final class AppModel {
         seatRelay.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
+        workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
         workspace.runsOnAgents(boxGroups.agentSeatIDs)
@@ -439,14 +434,10 @@ final class AppModel {
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = await boxEnvironment(shell)
-            // Your personalities read from it before bots are told what they are and machines
-            // given them (below).
-            let boxStarted = Task {
-                await box.start(engine: binary, environment: boxEnvironment)
-                await Personalities.shared.refresh()
-            }
             Task {
-                await boxStarted.value
+                await box.start(engine: binary, environment: boxEnvironment)
+                // Your personalities, as it keeps them, before they're followed.
+                await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
                 // (what was kept here before goes there).
                 if boxFollowed == nil {
@@ -454,12 +445,14 @@ final class AppModel {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
+                        async let bots: Void = bots.follow()
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
                         await workspace.followProjects()
                         await worktrees
                         await wakes
                         await personalities
+                        await bots
                     }
                 }
             }
@@ -474,10 +467,8 @@ final class AppModel {
             // Machines start once this Mac's engine is up (they get its accounts and settings),
             // without waiting on its catalog.
             await workspaceLoaded
-            await boxStarted.value
             guard launch == self.launch else { return }
             startMachines()
-            bots.startSyncing()
             await catalogLoaded
         } catch {
             // Stopped, or started over, meanwhile.
@@ -660,6 +651,10 @@ final class AppModel {
         #endif
         eventTask?.cancel()
         eventTask = nil
+        // What it followed of this Mac's box (its projects, worktrees, wake-ups and bots) stops
+        // with it, and starts again with the next start.
+        boxFollowed?.cancel()
+        boxFollowed = nil
         server?.stop()
         server = nil
         BoxProcess.engineChanged(nil, version: nil, pid: nil)

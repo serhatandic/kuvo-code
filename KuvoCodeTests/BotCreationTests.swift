@@ -3,11 +3,12 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Making a bot from scratch (F1): it gets a folder of its own with a memory that names it, and a
-/// conversation of its own in that folder, told who it is; it's listed, and still there when Kuvo
-/// Code opens again; it writes first, asking what it's for. The job it then keeps in its memory is
-/// what shows under its name. One the engine couldn't make leaves nothing behind. The engine is
-/// stubbed.
+/// Making a bot from scratch (F1) on this Mac, whose box makes and keeps it: a folder of its own
+/// with a memory that names it, and a conversation of its own in that folder, told who it is and
+/// where it runs; it's listed, and still there when Kuvo Code opens again; it writes first, asking
+/// what it's for. The job it then keeps with its set_job tool is what shows under its name, and a
+/// job changed in Edit Bot reaches it. One the engine couldn't make leaves nothing behind. The
+/// engine is stubbed; this Mac's box is real.
 @MainActor
 @Suite(.serialized) struct BotCreationTests {
     let engine = StubEngine(port: 47997)
@@ -19,61 +20,118 @@ import Testing
         app.wakeUps.app = app
         app.workspace.api = engine.api
         engine.list([])
-        engine.on("PATCH", "/api/session/*", json: [:])
+        engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         engine.on("PUT", "/api/experimental/session/*", json: [:])
         engine.on("POST", "/api/session/ses_inbox/*", json: [:])
+        engine.on("GET", "/api/session/ses_inbox") { _ in StubWeb.json(["data": StubEngine.session("ses_inbox", title: "Inbox Helper", directory: "/")]) }
     }
 
-    private func done() {
+    private func done(_ box: TestBox) {
+        box.stop()
         engine.stop()
-        for bot in app.bots.list { try? FileManager.default.removeItem(atPath: bot.folder) }
+        try? FileManager.default.removeItem(at: Bots.root)
         try? FileManager.default.removeItem(at: botsFile)
     }
 
+    private func told(_ session: String) -> [String] {
+        engine.requests("PUT", "/api/experimental/session/\(session)/instructions/entries/\(Bots.instructionKey)").compactMap { $0.body["value"] as? String }
+    }
+
     @Test func aBotFromScratch() async throws {
-        defer { done() }
+        let box = try await TestBox(engine: engine.url)
+        defer { done(box) }
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
         engine.on("POST", "/api/session") { request in
             StubWeb.json(["data": StubEngine.session("ses_inbox", title: request.body["title"] as? String ?? "", directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")])
         }
         await app.workspace.refresh()
-        let bot = try await app.bots.create(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+        let made = try await app.bots.make(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: ModelRef(id: "big-pickle", providerID: "opencode"), machine: nil, project: nil)
+        let bot = made.bot
+        #expect(made.firstMessage == nil, "it writes first: nothing for your composer")
 
-        // Its own folder, with a memory that names it, and its conversation there.
+        // Its own folder on this Mac, with a memory that names it, and its conversation there.
+        #expect(bot.folder.hasPrefix(Bots.root.path))
         let memory = try String(contentsOfFile: bot.memoryFile, encoding: .utf8)
         #expect(memory.contains("Inbox Helper"))
-        let made = try #require(engine.requests("POST", "/api/session").first)
-        #expect((made.body["location"] as? [String: Any])?["directory"] as? String == bot.directory)
+        let session = try #require(engine.requests("POST", "/api/session").first)
+        #expect((session.body["location"] as? [String: Any])?["directory"] as? String == bot.directory)
         #expect(bot.sessionID == "ses_inbox")
         #expect(app.workspace.session("ses_inbox") != nil)
-        let told = engine.requests("PUT", "/api/experimental/session/ses_inbox/instructions/entries/\(Bots.instructionKey)").first?.body["value"] as? String
-        #expect(told?.contains("Inbox Helper") == true, "it's told who it is")
-        // Listed, and still there when Kuvo Code opens again.
+        let first = try #require(told("ses_inbox").first)
+        #expect(first.contains("You are Inbox Helper") && first.contains("You run on this Mac."), "it's told who it is and where it runs")
+        // Listed, and still there when Kuvo Code opens again (what its box last said, kept).
         #expect(app.bots.list.map(\.name) == ["Inbox Helper"])
         #expect(Bots().list.map(\.id) == [bot.id])
         #expect(bot.job.isEmpty, "no job until you've told it")
-
         // It writes first.
-        await app.bots.greet(bot)
         #expect(engine.requests("POST", "/api/session/ses_inbox/synthetic").count == 1)
 
-        // You tell it; it keeps its job in its memory, and that's what shows under its name.
-        try (memory + "\n## Job\nSorts my inbox every morning\n\nArchive newsletters; flag anything from my bank.\n").write(toFile: bot.memoryFile, atomically: true, encoding: .utf8)
-        await app.bots.syncJob(of: bot.id)
+        // You tell it; it keeps its job with set_job, and that's what shows under its name.
+        // (As its set_job tool on this Mac carries it out: `BrowserTools.job`.)
+        let kept = await app.bots.setJob(["summary": "Sorts my inbox every morning.", "details": "Archive newsletters; flag anything from my bank."], caller: "ses_inbox")
+        #expect(kept.isError == false, "\(kept.text)")
         #expect(app.bots.bot(bot.id)?.job == "Sorts my inbox every morning")
-        #expect(app.bots.bot(bot.id)?.instructions.contains("flag anything from my bank") == true)
+        #expect(app.bots.bot(bot.id)?.instructions == "Archive newsletters; flag anything from my bank.")
+        #expect(told("ses_inbox").last?.contains("Archive newsletters; flag anything from my bank.") == true, "it hears its job as kept")
+        #expect(try String(contentsOfFile: bot.memoryFile, encoding: .utf8) == memory, "its memory is its own")
+
+        // Changed in Edit Bot: kept by its box, and it hears it.
+        var edited = try #require(app.bots.bot(bot.id))
+        edited.job = "Sorts my inbox twice a day"
+        edited.instructions = "Morning and evening. Archive newsletters."
+        try await app.bots.update(edited, job: true)
+        #expect(app.bots.bot(bot.id)?.job == "Sorts my inbox twice a day")
+        #expect(told("ses_inbox").last?.contains("Morning and evening. Archive newsletters.") == true)
+        #expect(Bots().list.first?.job == "Sorts my inbox twice a day", "kept")
+        // Gone back to 0.8.0-beta.1, which reads jobs from memories: it finds this one, as kept.
+        #expect(Beta1.jobs(in: botsFile)[bot.id] == "Sorts my inbox twice a day")
     }
 
     /// The engine couldn't make its conversation: no bot, and no folder left of it.
     @Test func oneThatCouldntBeMadeLeavesNothing() async throws {
-        defer { done() }
+        let box = try await TestBox(engine: engine.url)
+        defer { done(box) }
+        app.bots.boxes = { _ in box.client(engine: engine.url) }
         engine.on("POST", "/api/session", json: ["message": "Engine busy"], status: 500)
         await app.workspace.refresh()
         let before = (try? FileManager.default.contentsOfDirectory(atPath: Bots.root.path(percentEncoded: false))) ?? []
         await #expect(throws: (any Error).self) {
-            try await app.bots.create(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: nil, machine: nil, project: nil)
+            try await app.bots.make(name: "Inbox Helper", look: BotLook(color: .mint, shape: .round, face: .calm), model: ModelRef(id: "big-pickle", providerID: "opencode"), machine: nil, project: nil)
         }
         #expect(app.bots.list.isEmpty)
         let after = (try? FileManager.default.contentsOfDirectory(atPath: Bots.root.path(percentEncoded: false))) ?? []
-        #expect(Set(after).subtracting(before).isEmpty, "a folder was left: \(Set(after).subtracting(before))")
+        #expect(Set(after).subtracting(before).subtracting(["kit.json"]).isEmpty, "a folder was left: \(Set(after).subtracting(before))")
+    }
+}
+
+/// How Kuvo Code 0.8.0-beta.1 took a bot's job from `bots.json` as it opened (its `Bots.syncJob`),
+/// frozen: one marked as keeping its job in its memory (`jobInMemory: true`) had it read from there,
+/// under a Job heading; any other had the job written in the list moved into its memory, unless its
+/// memory had one of its own.
+enum Beta1 {
+    static func jobs(in file: URL) -> [String: String] {
+        struct Listed: Decodable { var id: String; var job: String; var instructions: String; var jobInMemory: Bool?; var folder: String; var machine: String? }
+        guard let data = try? Data(contentsOf: file), let bots = try? JSONDecoder().decode([Listed].self, from: data) else { return [:] }
+        var jobs: [String: String] = [:]
+        for bot in bots where bot.machine == nil {
+            let memory = (try? String(contentsOfFile: (bot.folder as NSString).appendingPathComponent("MEMORY.md"), encoding: .utf8)) ?? ""
+            let fromMemory = jobLine(in: memory)
+            if bot.jobInMemory != true, !(bot.job.isEmpty && bot.instructions.isEmpty) {
+                jobs[bot.id] = fromMemory ?? bot.job
+            } else {
+                jobs[bot.id] = fromMemory ?? ""
+            }
+        }
+        return jobs
+    }
+
+    /// The first line under a Job heading ("## Job", "## My job", "## Job: …"), as beta.1 read it.
+    private static func jobLine(in memory: String) -> String? {
+        let lines = memory.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { line in
+            let title = line.trimmingCharacters(in: .whitespaces).drop { $0 == "#" }.trimmingCharacters(in: .whitespaces).lowercased()
+            return line.trimmingCharacters(in: .whitespaces).hasPrefix("#") && (title == "job" || title == "my job" || title == "the job" || title.hasPrefix("job:"))
+        }) else { return nil }
+        return lines[(start + 1)...].map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty && !$0.hasPrefix("#") } ?? ""
     }
 }
