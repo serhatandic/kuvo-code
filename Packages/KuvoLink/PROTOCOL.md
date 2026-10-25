@@ -1382,8 +1382,9 @@ sends it for a phone, and the relay and `box route` never carry it), and anythin
   whose personality or removal changed here (none when it had nothing new). Their bots here are
   told what they are now, and the box's own document goes to the others, as after a change
   through the routes. `400 {"message"}` when `document` isn't an object with a `personalities`
-  list (and `removed`, if there, a list), or when the two together wouldn't fit in a document
-  (then nothing changes). 405 for any other method.
+  list (and `removed`, if there, a list). It's met whole, as a peer's copy is, even when the two
+  together are past what a document holds (that library isn't given to the others until it's
+  smaller again). 405 for any other method.
 
 A change on one computer reaches the others it reaches by mail at once, and the rest as they
 connect. A bot made on a machine can have one there at once: its

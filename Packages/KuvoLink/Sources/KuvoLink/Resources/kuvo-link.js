@@ -1341,15 +1341,16 @@ const worktreeFollowers = new Set();
 // Those following its projects (`kuvo/projects/events`).
 const projectFollowers = new Set();
 
-/** `folders` watched, with what's in them, for `changed`: whether the system tells of every change
- * (a watch it can't keep goes, and so does that), and how to stop. */
-function watchFolders(folders, changed) {
+/** `folders` watched, with what's in them (`recursive`) or only their own files, for `changed`:
+ * whether the system tells of every change (a watch it can't keep goes, and so does that), and how
+ * to stop. */
+function watchFolders(folders, changed, { recursive = true } = {}) {
   let whole = folders.length > 0;
   const watchers = [];
   for (const folder of folders) {
     try {
       fs.mkdirSync(folder, { recursive: true });
-      const watcher = fs.watch(folder, { recursive: true }, changed);
+      const watcher = fs.watch(folder, { recursive }, changed);
       watcher.on("error", () => {
         whole = false;
         watcher.close();
@@ -1366,7 +1367,7 @@ function watchFolders(folders, changed) {
  * makes as it's made (`followers` are told), and what another made, looked for each second; or,
  * given `folders` to watch, as the system says they change, looked for again every half minute
  * only for a change it missed. */
-async function* followed(read, followers, signal, { folders = [] } = {}) {
+async function* followed(read, followers, signal, { folders = [], recursive = true } = {}) {
   const queue = [JSON.stringify(read())];
   let wake = null;
   const told = () => {
@@ -1374,7 +1375,7 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
     wake?.();
   };
   followers.add(told);
-  const watching = watchFolders(folders, told);
+  const watching = watchFolders(folders, told, { recursive });
   // Its client gone: it stops now, not at the next look.
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   try {
@@ -2142,7 +2143,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     if (route === "kuvo/personalities/events") {
       if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-      return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path.dirname(PERSONALITIES_FILE)] });
+      return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path.dirname(PERSONALITIES_FILE)], recursive: false });
     }
     // The library whole, and another computer's copy met with it: for the app beside this box only
     // (it signs the library for your other computers), never a phone.
@@ -4194,13 +4195,13 @@ export function changePersonalities(change, file = PERSONALITIES_FILE, lock = PE
 }
 
 // Another copy met with this one's, under its lock: the ids whose personality or removal changed
-// here; or null, changing nothing, when `fits` and the two together wouldn't fit in a document.
-function meetPersonalities(given, file, lock, { fits = false } = {}) {
-  let changed = null;
+// here. Met whole, past what a document holds too, so every copy comes to the same (one past it
+// just isn't given to the others until it's smaller, `ownDocs`).
+function meetPersonalities(given, file, lock) {
+  let changed = [];
   changePersonalities(library => {
     const was = new Map([...library.personalities, ...library.removed].map(entry => [entry.id, JSON.stringify(entry)]));
     const met = mergePersonalities(library, given);
-    if (fits && !fitsLibrary(met)) return library;
     changed = [...met.personalities, ...met.removed].filter(entry => was.get(entry.id) !== JSON.stringify(entry)).map(entry => entry.id);
     return met;
   }, file, lock);
@@ -4210,7 +4211,7 @@ function meetPersonalities(given, file, lock, { fits = false } = {}) {
 // Another copy met with this one's (a peer's view, a Mac's over SSH): the personalities that changed
 // here, whose bots here are told what they are now.
 export async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
-  const changed = meetPersonalities(given, file, lock) ?? [];
+  const changed = meetPersonalities(given, file, lock);
   if (changed.length) await retellBots(changed, readEngine, readBridge).catch(() => {});
   return changed;
 }
@@ -4228,8 +4229,7 @@ export function takePersonalitiesDocument(body, readEngine = readEngineFile, rea
   if (!isObject(given) || !Array.isArray(given.personalities) || (given.removed !== undefined && !Array.isArray(given.removed))) {
     return [400, { message: "Send a library of personalities: {document: {personalities, removed}}." }];
   }
-  const changed = meetPersonalities(given, file, lock, { fits: true });
-  if (!changed) return [400, { message: FULL_LIBRARY }];
+  const changed = meetPersonalities(given, file, lock);
   if (changed.length) {
     noteDocsChanged();
     retellBots(changed, readEngine, readBridge).catch(() => {});

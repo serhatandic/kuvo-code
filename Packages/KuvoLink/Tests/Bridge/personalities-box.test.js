@@ -142,21 +142,29 @@ test("the app gives the box another computer's copy: what changed here comes bac
   assert.equal((await ask("GET", "kuvo/personalities")).json.personalities[0].description, "Kind and patient.");
 });
 
-test("a copy that isn't a library is refused, and one that wouldn't fit beside this one changes nothing", async () => {
+test("a copy that isn't a library is refused", async () => {
   fresh();
   await take({ personalities: [entry("custom.kind", "Kind", 5)] });
-  const before = (await fromApp("GET", "kuvo/personalities/document")).json;
   for (const body of ["not json", {}, { document: [] }, { document: "x" }, { document: { removed: [] } }, { document: { personalities: "x" } }, { document: { personalities: [], removed: {} } }]) {
     const answer = await fromApp("POST", "kuvo/personalities/take", body);
     assert.equal(answer.status, 400, JSON.stringify(body));
     assert.equal(typeof answer.json.message, "string");
   }
   assert.equal((await fromApp("GET", "kuvo/personalities/take")).status, 405);
+});
+
+test("a copy is met even when the two together are past what a document holds, as a peer's is, and removals still reach it", async () => {
+  fresh();
+  await take({ personalities: [entry("custom.kind", "Kind", 5)] });
+  // Two computers that each filled theirs while apart: every box takes the whole of both.
   const big = Array.from({ length: 300 }, (_, i) => entry(`custom.big${i}`, `Big ${i}`, 1, "Words. ".repeat(285)));
-  const full = await take({ personalities: big, removed: [] });
-  assert.equal(full.status, 400);
-  assert.match(full.json.message, /no room for more/);
-  assert.deepEqual((await fromApp("GET", "kuvo/personalities/document")).json, before);
+  const met = await take({ personalities: big, removed: [] });
+  assert.equal(met.status, 200);
+  assert.equal(met.json.changed.length, 300);
+  // Past the limit, a removal from another computer still comes in.
+  const gone = await take({ personalities: [], removed: [{ id: "custom.kind", removed: 9 }] });
+  assert.deepEqual(gone.json, { changed: ["custom.kind"] });
+  assert.ok(!(await fromApp("GET", "kuvo/personalities/document")).json.personalities.some(each => each.id === "custom.kind"));
 });
 
 test("removals are kept to the 500 newest when a copy brings more", async () => {
