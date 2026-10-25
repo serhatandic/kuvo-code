@@ -255,8 +255,8 @@ import Testing
         gate.open()
         try await first.value
         try await second.value
-        // And once more after it went: a one-off isn't there to send again.
-        if !repeating { try await app.wakeUps.wakeNow(wake, of: owner) }
+        // And once more after it went: a one-off isn't there to send again, and says so.
+        if !repeating { await #expect(throws: WakeUps.Failure.self) { try await app.wakeUps.wakeNow(wake, of: owner) } }
 
         #expect(prompts.all == [Wakes.marker + "Check the nightly build"], "sent \(prompts.all.count) times")
         let left = (try? FileManager.default.contentsOfDirectory(atPath: folder(id, "wakes"))) ?? []
