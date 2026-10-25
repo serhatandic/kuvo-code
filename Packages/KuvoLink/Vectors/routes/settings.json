@@ -42,6 +42,109 @@
       ]
     },
     {
+      "name": "agents, permissions, MCP servers and commands, added, changed and taken out as their pages do it",
+      "steps": [
+        { "given": { "settings": { "value": { "model": "anthropic/sonnet" } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "agents", "review" ], "value": { "mode": "subagent", "description": "Reviews code" } } ] },
+          "expect": { "status": 200, "json": { "agents": { "review": { "mode": "subagent", "description": "Reviews code" } } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "agents", "review", "model" ], "value": "openai/luna" }, { "path": [ "agents", "plan", "model" ], "value": "anthropic/haiku" } ] },
+          "expect": { "status": 200, "json": { "agents": { "review": { "mode": "subagent", "model": "openai/luna" }, "plan": { "model": "anthropic/haiku" } } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "default_agent" ], "value": "review" } ] }, "expect": { "status": 200, "json": { "default_agent": "review" } } },
+        {
+          "send": "PATCH kuvo/config",
+          "why": "Settings › Permissions sends its rules and its blocks whole, each at its own path.",
+          "body": { "changes": [
+            { "path": [ "permissions" ], "value": [ { "action": "shell", "resource": "git push *", "effect": "deny" }, { "action": "edit", "resource": "*", "effect": "ask" } ] },
+            { "path": [ "policies" ], "value": [ { "name": "No secrets", "effect": "deny" } ] }
+          ] },
+          "expect": { "status": 200, "json": { "permissions": [ { "action": "shell", "resource": "git push *", "effect": "deny" }, { "action": "edit", "resource": "*", "effect": "ask" } ], "policies": [ { "name": "No secrets", "effect": "deny" } ] } }
+        },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "permissions", "1" ], "value": null } ] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "mcp", "servers", "tools" ], "value": { "type": "local", "command": [ "node", "tools.js" ], "codemode": false } } ] },
+          "expect": { "status": 200, "json": { "mcp": { "servers": { "tools": { "type": "local", "command": [ "node", "tools.js" ] } } } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "mcp", "servers", "tools", "disabled" ], "value": true } ] },
+          "expect": { "status": 200, "json": { "mcp": { "servers": { "tools": { "disabled": true, "command": [ "node", "tools.js" ] } } } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "commands", "ship" ], "value": { "template": "Ship $ARGUMENTS", "description": "Ships it" } } ] },
+          "expect": { "status": 200, "json": { "commands": { "ship": { "template": "Ship $ARGUMENTS", "description": "Ships it" } } } } },
+        {
+          "send": "PATCH kuvo/config",
+          "why": "Taking out the last of something takes out what it leaves empty.",
+          "body": { "changes": [ { "path": [ "mcp", "servers", "tools" ], "value": null }, { "path": [ "commands", "ship" ], "value": null }, { "path": [ "agents", "review" ], "value": null }, { "path": [ "agents", "plan" ], "value": null } ] },
+          "expect": { "status": 200, "json": { "mcp": "<absent>", "commands": "<absent>", "agents": "<absent>", "model": "anthropic/sonnet", "default_agent": "review" } }
+        }
+      ]
+    },
+    {
+      "name": "Also Apply: changes made on another computer, made here as this box has room for them",
+      "steps": [
+        { "given": { "settings": { "value": { "permissions": [ { "action": "shell", "resource": "docker *", "effect": "deny" } ], "shell": "/bin/bash", "agents": { "build": { "model": "a/b" } } } } } },
+        {
+          "send": "POST kuvo/config/apply",
+          "why": "A look first, which changes nothing: what would be made, the keys it names (for a client to bring along first), what this box hasn't got, what it keeps its own.",
+          "body": { "dry": true, "changes": [
+            { "path": [ "permissions" ], "before": [], "after": [ { "action": "shell", "resource": "git push *", "effect": "deny" } ] },
+            { "path": [ "mcp", "servers", "todoist" ], "after": { "type": "local", "environment": { "TODOIST_API_KEY": "{file:/Users/someone/elsewhere/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } },
+            { "path": [ "shell" ], "before": "/bin/zsh", "after": "/bin/fish" },
+            { "path": [ "agents", "review", "model" ], "before": "a/b", "after": "c/d" },
+            { "path": [ "agents", "build", "model" ], "before": "a/b", "after": "c/d" },
+            { "path": [ "commands", "ship" ], "after": { "template": "Ship it" } }
+          ] },
+          "expect": { "status": 200, "json": {
+            "made": [
+              { "path": [ "permissions" ], "value": [ { "action": "shell", "resource": "docker *", "effect": "deny" }, { "action": "shell", "resource": "git push *", "effect": "deny" } ] },
+              { "path": [ "mcp", "servers", "todoist" ], "value": { "environment": { "TODOIST_API_KEY": "{file:{{keys}}/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } },
+              { "path": [ "agents", "build", "model" ], "value": "c/d" },
+              { "path": [ "commands", "ship" ], "value": { "template": "Ship it" } }
+            ],
+            "keys": [ "KUVO_KEY_TODOIST_TODOIST_API_KEY" ], "leftOut": [ [ "agents", "review" ] ], "kept": [ [ "shell" ] ], "macOnly": [], "applied": true,
+            "settings": { "permissions": [ { "action": "shell", "resource": "docker *", "effect": "deny" } ], "mcp": "<absent>" }
+          } }
+        },
+        { "send": "GET kuvo/config", "expect": { "status": 200, "json": { "mcp": "<absent>", "commands": "<absent>", "agents": { "build": { "model": "a/b" } } } } },
+        {
+          "send": "POST kuvo/config/apply",
+          "body": { "changes": [
+            { "path": [ "permissions" ], "before": [], "after": [ { "action": "shell", "resource": "git push *", "effect": "deny" } ] },
+            { "path": [ "mcp", "servers", "todoist" ], "after": { "type": "local", "environment": { "TODOIST_API_KEY": "{file:/Users/someone/elsewhere/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } },
+            { "path": [ "shell" ], "before": "/bin/zsh", "after": "/bin/fish" }
+          ] },
+          "expect": { "status": 200, "json": { "applied": true, "settings": {
+            "permissions": [ { "action": "shell", "resource": "docker *", "effect": "deny" }, { "action": "shell", "resource": "git push *", "effect": "deny" } ],
+            "mcp": { "servers": { "todoist": { "environment": { "TODOIST_API_KEY": "{file:{{keys}}/KUVO_KEY_TODOIST_TODOIST_API_KEY}" } } } },
+            "shell": "/bin/bash"
+          } } }
+        },
+        {
+          "send": "POST kuvo/config/apply",
+          "why": "A rule taken out there goes here too; the rest of this box's own stay.",
+          "body": { "changes": [ { "path": [ "permissions" ], "before": [ { "action": "shell", "resource": "git push *", "effect": "deny" } ], "after": null } ] },
+          "expect": { "status": 200, "json": { "settings": { "permissions": [ { "action": "shell", "resource": "docker *", "effect": "deny" } ] } } }
+        },
+        {
+          "send": "POST kuvo/config/apply",
+          "why": "Chrome DevTools uses a Mac's own Chrome: another Mac runs it, a machine leaves it out and says so.",
+          "body": { "changes": [ { "path": [ "mcp", "servers", "chrome-devtools" ], "after": { "type": "local", "command": [ "kuvo-npx", "chrome-devtools-mcp" ] } } ] },
+          "expect": {
+            "mac": { "status": 200, "json": { "macOnly": [], "applied": true, "settings": { "mcp": { "servers": { "chrome-devtools": "<object>" } } } } },
+            "machine": { "status": 200, "json": { "macOnly": [ "chrome-devtools" ], "made": [], "applied": false, "settings": { "mcp": { "servers": { "chrome-devtools": "<absent>" } } } } }
+          }
+        },
+        { "send": "POST kuvo/config/apply", "body": { "changes": [ { "path": [ "shell" ], "after": "/bin/zsh" } ] }, "expect": { "status": 200, "json": { "made": [], "kept": [ [ "shell" ] ], "applied": false } } },
+        { "send": "POST kuvo/config/apply", "body": { "changes": [] }, "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/config/apply", "body": "not json", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/config/apply", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "Also Apply to a settings file that isn't plain JSON: nothing's made, and it says why",
+      "steps": [
+        { "given": { "settings": { "text": "{\n  // my own\n  \"model\": \"anthropic/sonnet\"\n}\n" } } },
+        { "send": "POST kuvo/config/apply", "body": { "changes": [ { "path": [ "model" ], "after": "openai/luna" } ] },
+          "expect": { "status": 409, "json": { "message": "<string>", "problem": "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)" } } },
+        { "send": "GET kuvo/config", "expect": { "status": 409, "json": { "problem": "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)" } } }
+      ]
+    },
+    {
       "name": "the popular MCP servers, and adding one as its Add button does",
       "steps": [
         {
