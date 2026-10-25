@@ -107,6 +107,25 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(leftover.stdout, "said\n")
         XCTAssertEqual(leftover.stderr, "complained\n")
 
+        // What it left running goes on printing after the result is in, more than a pipe holds,
+        // and finishes: never killed by a closed pipe, nor stuck on one nobody reads (that waited
+        // for ever, past the watchdog). Waited on through named pipes, never a clock.
+        let go = directory.appendingPathComponent("go"), told = directory.appendingPathComponent("told")
+        XCTAssertEqual(mkfifo(go.path, 0o600), 0)
+        XCTAssertEqual(mkfifo(told.path, 0o600), 0)
+        // It takes no notice of SIGPIPE here, so a closed pipe shows as a failed print rather than
+        // a leftover that's gone and a fixture waiting on it.
+        let later = "(trap '' PIPE; read x < '\(go.path)'; /usr/bin/head -c 200000 /dev/zero; echo \"printed $?\" > '\(told.path)') &"
+        let talker = try runner.run(executable: "/bin/sh", arguments: ["-c", later + " echo now"], environment: [:], timeout: 5)
+        XCTAssertEqual(talker.stdout, "now\n")
+        // Opening each end waits for the other: the leftover reading `go`, then writing `told`.
+        let writer = try XCTUnwrap(FileHandle(forWritingAtPath: go.path))
+        try writer.write(contentsOf: Data("go\n".utf8))
+        try writer.close()
+        let reader = try XCTUnwrap(FileHandle(forReadingAtPath: told.path))
+        defer { try? reader.close() }
+        XCTAssertEqual(String(decoding: try reader.readToEnd() ?? Data(), as: UTF8.self), "printed 0\n", "it printed, and finished")
+
         // Keep stdout open while writing more than a pipe buffer to stderr first. A shared serial
         // drain queue blocks waiting for stdout EOF and cannot start the stderr read.
         let result = try runner.run(

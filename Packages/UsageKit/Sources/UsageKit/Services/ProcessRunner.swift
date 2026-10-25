@@ -57,13 +57,11 @@ struct SystemProcessRunner: ProcessRunning {
         // Semaphores, not groups: a group freed while still entered (a pipe given up on) traps.
         let output = SubprocessOutput()
         let drained = DispatchSemaphore(value: 0)
-        drain(stdoutPipe.fileHandleForReading, into: output, isStdout: true, ended: drained)
-        drain(stderrPipe.fileHandleForReading, into: output, isStdout: false, ended: drained)
-        defer {
-            // What the child left running no longer holds this end.
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-        }
+        drain(stdoutPipe, into: output, isStdout: true, ended: drained)
+        drain(stderrPipe, into: output, isStdout: false, ended: drained)
+        // Once the result is in, what the child left running is still read (and let go) until it
+        // closes the pipes: closed here, it would be killed the next time it printed.
+        defer { output.seal() }
 
         // Its exit from the termination handler (registered before `run()` so an instantly-exiting
         // child can't race it), never `waitUntilExit()`, which can miss it and wait for ever.
@@ -90,9 +88,11 @@ struct SystemProcessRunner: ProcessRunning {
     }
 
     /// Reads a pipe as it comes, on the handle's own queue (not the shared utility pool a blocking
-    /// caller may hold), into `output`; `ended` is signalled at its end.
-    private func drain(_ handle: FileHandle, into output: SubprocessOutput, isStdout: Bool, ended: DispatchSemaphore) {
-        handle.readabilityHandler = { handle in
+    /// caller may hold), into `output`; `ended` is signalled at its end. The handler holds the
+    /// pipe, so its reading end stays open until then, however long after the result that is.
+    private func drain(_ pipe: Pipe, into output: SubprocessOutput, isStdout: Bool, ended: DispatchSemaphore) {
+        pipe.fileHandleForReading.readabilityHandler = { [pipe] handle in
+            _ = pipe  // Held until the end, above.
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -146,9 +146,12 @@ private final class SubprocessOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var stdout = Data()
     private var stderr = Data()
+    /// The result is in: what comes after is let go.
+    private var sealed = false
 
-    func appendStdout(_ data: Data) { lock.lock(); stdout.append(data); lock.unlock() }
-    func appendStderr(_ data: Data) { lock.lock(); stderr.append(data); lock.unlock() }
+    func appendStdout(_ data: Data) { lock.lock(); if !sealed { stdout.append(data) }; lock.unlock() }
+    func appendStderr(_ data: Data) { lock.lock(); if !sealed { stderr.append(data) }; lock.unlock() }
+    func seal() { lock.lock(); sealed = true; stdout = Data(); stderr = Data(); lock.unlock() }
 
     var stdoutString: String { lock.lock(); defer { lock.unlock() }; return String(data: stdout, encoding: .utf8) ?? "" }
     var stderrString: String { lock.lock(); defer { lock.unlock() }; return String(data: stderr, encoding: .utf8) ?? "" }
