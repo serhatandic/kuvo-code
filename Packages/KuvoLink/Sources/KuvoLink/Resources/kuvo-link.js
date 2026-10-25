@@ -619,6 +619,28 @@ const AGENTS = "kuvo/agents/";
 // the user is on their iPhone, where a file is shown with show_file. Never shown.
 export const FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it.", "</from-phone>"].join("\n");
 
+// A prompt's body with the agents its text names with "&" told at its end (`naming(text, session)`),
+// as this box lists everyone now; any other body as it is.
+async function namedIn(body, session, naming) {
+  if (!naming) return body;
+  let prompt;
+  try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
+  if (typeof prompt?.text !== "string" || !prompt.text.includes("&")) return body;
+  const text = await naming(prompt.text, session).catch(() => prompt.text);
+  return text === prompt.text ? body : Buffer.from(JSON.stringify({ ...prompt, text }));
+}
+
+// Who a message from a phone names with "&", for `forward`: everyone as this box lists them (its
+// own worked out again first, so one made a moment ago is there too), and where it is.
+function namingHere(readEngine) {
+  return async (text, session) => {
+    await refreshOwn(readEngine).catch(() => {});
+    let everyone = null;
+    try { everyone = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8")); } catch {}
+    return nameAgents(text, { excluding: session, here: everyone?.machine ?? null, agents: Array.isArray(everyone?.agents) ? everyone.agents : [] });
+  };
+}
+
 // A prompt's body with the block at the end of its text, once; any other body as it is.
 export function fromPhone(body) {
   let prompt;
@@ -634,7 +656,7 @@ export function fromPhone(body) {
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
 // streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
 // what `allows` checks.
-async function* forward(target, path, request, signal, allows) {
+async function* forward(target, path, request, signal, allows, naming = null) {
   const method = request.method.toUpperCase();
   const sent = canonicalPath(path);
   if (sent === null || !allows(sent, method)) {
@@ -646,8 +668,9 @@ async function* forward(target, path, request, signal, allows) {
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
-  // A message the phone sends: that it's from the phone goes with it.
-  const prompt = method === "POST" && /^\/api\/session\/[^/]+\/prompt$/.test(url.pathname);
+  // A message the phone sends: who it names with "&" (`naming`), and that it's from the phone, go
+  // with it.
+  const prompt = method === "POST" && /^\/api\/session\/([^/]+)\/prompt$/.exec(url.pathname);
   // A session's metadata changed: whether it was archived before, as the engine has it (null when
   // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
@@ -661,7 +684,7 @@ async function* forward(target, path, request, signal, allows) {
   const response = await fetch(url, {
     method,
     headers,
-    body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(request.body) : request.body,
+    body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(await namedIn(request.body, decodeURIComponent(prompt[1]), naming)) : request.body,
     signal,
   });
   const out = {};
@@ -2457,7 +2480,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
         yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
         return;
       }
-      return yield* forward(target, path, request, signal, agentsAllowed);
+      return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine));
     }
     // The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
     // signing out of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts").
@@ -2678,7 +2701,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
       return yield* stopShell(decodeURIComponent(stop[1]), engine, headers, signal);
     }
-    return yield* forward(engine, request.path, request, signal, allowed);
+    return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
   };
 }
 
@@ -6763,6 +6786,142 @@ export function peerOf(session, peers, told, moved = new Map()) {
   return macs.length === 1 ? macs[0] : null;
 }
 
+// ---- "&" in a message from a phone (the Mac's AgentReferences, in the same words) ----
+// A message names another conversation with "&Name"; a block at its end tells the agent who each
+// one is, with its address, so it can read it (read_conversation) or write to it (send_message).
+// Both sides read the same cases (Vectors/routes/names/agent-naming.json), so they can't drift.
+
+// A block the app adds to the end of a message (MessageBlock.swift): its tag on a line of its own,
+// its heading, what's in it, then its closing tag, with nothing after.
+function messageBlock(start, end, headings) {
+  const find = text => {
+    const body = text.replace(/\s+$/u, "");
+    if (!body.endsWith(`\n${end}`)) return null;
+    const close = body.length - end.length;
+    const opening = `${start}\n`;
+    let before = close;
+    for (;;) {
+      const open = before - opening.length < 0 ? -1 : text.lastIndexOf(opening, before - opening.length);
+      if (open < 0) return null;
+      before = open;
+      if (open !== 0 && text[open - 1] !== "\n") continue;
+      const lines = text.slice(open + opening.length, close).split("\n").slice(0, -1);
+      if (lines.length && headings.includes(lines[0])) return { open, lines };
+    }
+  };
+  return {
+    start,
+    // The words before the block that ends `text` (trimmed), and its lines from its heading on.
+    split: text => {
+      const found = find(text);
+      return found ? { before: text.slice(0, found.open).trim(), lines: found.lines } : null;
+    },
+    // `text` as it can't be read as ending with a block (one copied from a message): its tag gets
+    // a space after it.
+    escaping: text => {
+      let found;
+      while ((found = find(text))) text = text.slice(0, found.open + start.length) + " " + text.slice(found.open + start.length);
+      return text;
+    },
+  };
+}
+
+const FROM_PHONE_BLOCK = messageBlock("<from-phone>", "</from-phone>", ["The user sent this from Kuvo Code on their iPhone."]);
+const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [
+  "The attached files are on disk here (what's in them is in this message already):",
+  "Open these attached files with your tools if you need them:",
+  "These attached files stayed on the user's Mac (they couldn't be read, or copied to this machine):",
+]);
+const REVIEW_BLOCK = messageBlock("<review-comments>", "</review-comments>", ["Comments on lines of the current changes:"]);
+const NAMING_HEADING = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
+const NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [NAMING_HEADING,
+  "Agents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:"]);
+
+// A name as it's compared: case and accents aside.
+const foldName = text => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+const wordCharacter = /[\p{L}\p{N}]/u;
+
+// Where each of `references` ({name, session}) is named with "&" in `text`, last first: longer names
+// win ("&Miranda" isn't "&Mira"), the "&" starts a word and the name ends where a word does.
+export function namesIn(text, references) {
+  if (!text.includes("&")) return [];
+  // The text folded, with where each of its characters came from.
+  let folded = "";
+  const from = [];
+  let at = 0;
+  for (const character of text) {
+    const each = foldName(character);
+    for (let i = 0; i < each.length; i++) from.push(at);
+    folded += each;
+    at += character.length;
+  }
+  from.push(at);
+  const found = [];
+  for (const reference of [...references].sort((a, b) => [...b.name].length - [...a.name].length)) {
+    if (!reference.name) continue;
+    const wanted = `&${foldName(reference.name)}`;
+    for (let start = folded.indexOf(wanted); start >= 0; start = folded.indexOf(wanted, start + wanted.length)) {
+      const lower = from[start], upper = from[start + wanted.length];
+      const previous = lower > 0 ? String.fromCodePoint(text.codePointAt(lower - 1 - (/[\uDC00-\uDFFF]/.test(text[lower - 1]) ? 1 : 0))) : "";
+      const next = upper < text.length ? String.fromCodePoint(text.codePointAt(upper)) : "";
+      if (wordCharacter.test(previous) || wordCharacter.test(next)) continue;
+      if (found.some(each => lower < each.upper && each.lower < upper)) continue;
+      found.push({ lower, upper, reference });
+    }
+  }
+  return found.sort((a, b) => b.lower - a.lower);
+}
+
+// What an agent is, for one `here` (null: the Mac) to read: "bot, on the Mac", "session, on lab,
+// in api" (AgentMail.what).
+const agentIs = (agent, here) => {
+  const machine = agent.machine ?? null;
+  const place = machine === (here ?? null) ? (here == null ? "on the Mac" : "here") : machine == null ? "on the Mac" : `on ${machine}`;
+  return `${agent.kind}, ${place}${typeof agent.project === "string" ? `, in ${agent.project}` : ""}`;
+};
+
+// The agents `texts` name, each once, in the order they're first named, not those `excluding`; of
+// two with the same name, the first `agents` has (bots, then the latest sessions).
+function agentsNamed(texts, excluding, agents) {
+  if (!texts.some(text => text.includes("&"))) return [];
+  const byName = new Map();
+  for (const agent of agents) {
+    if (excluding.has(agent.session)) continue;
+    const name = foldName(agent.name);
+    if (!byName.has(name)) byName.set(name, agent);
+  }
+  const references = [...byName.values()].map(agent => ({ name: agent.name, session: agent.session }));
+  const named = [];
+  for (const text of texts) {
+    for (const { reference } of namesIn(text, references).reverse()) {
+      if (named.some(agent => agent.session === reference.session)) continue;
+      const agent = byName.get(foldName(reference.name));
+      if (agent) named.push(agent);
+    }
+  }
+  return named;
+}
+
+// A message from a phone with the block naming its agents among the others at its end: after its
+// words, before its comments on the changes and its note of attached files (and without the block
+// that says it's from the phone, which goes on again after). One sent again (Retry, Edit) with the
+// block it had loses that, and its agents are named afresh. `excluding`: the conversation it's
+// written in; `here`: this box's name on its Macs (null on a Mac); `agents`: everyone.
+export function nameAgents(message, { excluding = null, here = null, agents = [] } = {}) {
+  message = FROM_PHONE_BLOCK.split(message)?.before ?? message;
+  const withComments = ATTACHED_BLOCK.split(message)?.before ?? message;
+  const words = REVIEW_BLOCK.split(withComments)?.before ?? withComments;
+  const bare = NAMED_BLOCK.split(words)?.before ?? words;
+  if (!bare.includes("&") && bare === words) return message;
+  const text = NAMED_BLOCK.escaping(bare);
+  const agentsHere = agentsNamed([text], new Set(excluding ? [excluding] : []), agents);
+  const lines = agentsHere.map(agent => `- &${agent.name} (${agent.session}): ${agentIs(agent, here)}${typeof agent.about === "string" && agent.about ? `: ${agent.about}` : ""}`);
+  const named = lines.length ? `${text ? `${text}\n\n` : ""}${["<named-agents>", NAMING_HEADING, ...lines, "</named-agents>"].join("\n")}` : text;
+  if (named === words) return message;
+  const at = message.indexOf(words);
+  return at < 0 ? message : message.slice(0, at) + named + message.slice(at + words.length);
+}
+
 // Everyone, for list_agents here: this box's own (`machine` its name on its Macs), then each peer's
 // it alone lists (`peerOf`): a machine's by its name; a Mac's its own (none), and the agents of
 // machines it speaks for (those whose link doesn't talk to other computers yet), by theirs.
@@ -8319,7 +8478,9 @@ async function* toApp(request, phone, signal) {
 export function macFront(handle = engineHandler(readEngineFile, { name: os.hostname() })) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
-    if (macAnswers(route)) return yield* handle(request, phone, signal);
+    // (The engine's API and the coding agents', as a machine's bridge passes them on, who a message
+    // names with "&" told: bridge 0.9.64.)
+    if (macAnswers(route) || /^api(\/|$)/.test(route) || route.startsWith(AGENTS)) return yield* handle(request, phone, signal);
     yield* toApp(request, phone, signal);
   };
 }

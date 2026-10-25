@@ -101,10 +101,11 @@ nonisolated enum AgentReferences {
     /// The agents `texts` name with "&", each once, in the order they're first named; not those in
     /// `excluding` (the conversation they're written in). Of two with the same name, the one last
     /// picked from the list, else the first the list has (bots, then the latest sessions).
-    @MainActor static func named(in texts: [String], excluding: Set<String> = []) -> [AgentMail.Agent] {
+    /// `agents`: everyone (nil: as AgentMail lists them now).
+    @MainActor static func named(in texts: [String], excluding: Set<String> = [], agents: [AgentMail.Agent]? = nil) -> [AgentMail.Agent] {
         guard texts.contains(where: { $0.contains(trigger) }) else { return [] }
         var byName: [String: AgentMail.Agent] = [:]
-        for agent in AgentMail.shared.directory() where !excluding.contains(agent.session) {
+        for agent in agents ?? AgentMail.shared.directory() where !excluding.contains(agent.session) {
             let name = key(agent.name)
             if byName[name] == nil || picked[name] == agent.session { byName[name] = agent }
         }
@@ -134,16 +135,17 @@ nonisolated enum AgentReferences {
     }
 
     /// The same, leaving out each of `sessions` (a group chat's own bots, already there).
-    @MainActor static func text(_ text: String, excludingAll sessions: Set<String>, here machine: String?) -> String {
+    @MainActor static func text(_ text: String, excludingAll sessions: Set<String>, here machine: String?, agents: [AgentMail.Agent]? = nil) -> String {
         let text = block.escaping(text)
-        guard let note = note(naming: named(in: [text], excluding: sessions), here: machine) else { return text }
+        guard let note = note(naming: named(in: [text], excluding: sessions, agents: agents), here: machine) else { return text }
         return (text.isEmpty ? "" : text + "\n\n") + note
     }
 
     /// A message as it came (from the phone), with the block naming its agents among the others
     /// at its end, where `SentMessage.split` reads it: after its words, before its comments on the
-    /// changes and its note of attached files.
-    @MainActor static func naming(in message: String, excluding session: String?, here machine: String?) -> String {
+    /// changes and its note of attached files. Every box does the same (`nameAgents` in
+    /// kuvo-link.js); both read the cases in `Vectors/routes/names/agent-naming.json`.
+    @MainActor static func naming(in message: String, excluding session: String?, here machine: String?, agents: [AgentMail.Agent]? = nil) -> String {
         // From a phone again: that it's from one is said afresh too.
         let message = FromPhone.split(message).text
         let (withComments, _) = Attachments.split(message)
@@ -152,7 +154,7 @@ nonisolated enum AgentReferences {
         let bare = split(words).text
         // (One edited to name nobody now still loses the block it had.)
         guard bare.contains(trigger) || bare != words else { return message }
-        let named = text(bare, excluding: session, here: machine)
+        let named = text(bare, excludingAll: Set([session].compactMap { $0 }), here: machine, agents: agents)
         guard named != words, let range = message.range(of: words) else { return message }
         return message.replacingCharacters(in: range, with: named)
     }

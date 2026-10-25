@@ -758,20 +758,10 @@ final class PhoneLink {
     /// `asking`: the phone's key.
     nonisolated static func respond(to request: LinkRequest, link: PhoneLink?, engine base: URL, password: String?,
                                     agents: OutsideAgents.Address?, asking: Data? = nil) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        guard request.path.hasPrefix("kuvo/") else {
-            return Self.namingAgents(in: request, by: link) { EngineRoutes.forward($0, to: base, password: password) }
-        }
-        // The outside agents' sessions, through their bridge, as the engine's go through it.
-        if request.path.hasPrefix(Self.agentsPrefix) {
-            var forwarded = request
-            forwarded.path = String(request.path.dropFirst(Self.agentsPrefix.count))
-            guard let bridge = agents?.endpoint else { return Self.unavailable() }
-            let base = bridge.url.absoluteString.hasSuffix("/") ? bridge.url : URL(string: bridge.url.absoluteString + "/")!
-            // Their accounts and Auto too; never where the engine is (the Mac says).
-            return Self.namingAgents(in: forwarded, by: link) {
-                EngineRoutes.forward($0, to: base, password: bridge.password, allowing: { EngineRoutes.allowsAgents($0, method: $1) })
-            }
-        }
+        // (A phone's requests to the engine and the coding agents' bridge are this Mac's box's, which
+        // tells the agent who a message names with "&" and that it's from the phone, as every box
+        // does: `nameAgents` in kuvo-link.js.)
+        guard request.path.hasPrefix("kuvo/") else { return EngineRoutes.forward(request, to: base, password: password) }
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
@@ -974,38 +964,6 @@ final class PhoneLink {
         _ = done.wait(timeout: .now() + 2)
     }
 
-    /// Where the outside agents' bridge is reached over the link.
-    nonisolated static let agentsPrefix = "kuvo/agents/"
-
-    /// A message the phone sends (`POST api/session/<id>/prompt`) says who the agents it names
-    /// with "&" are, as one written here does (`AgentReferences`), before `forward` takes it on.
-    /// Told by the path as it's sent (`EngineRoutes.canonical`), however the phone wrote it.
-    nonisolated private static func namingAgents(in request: LinkRequest, by link: PhoneLink?,
-                                                 forward: @escaping @Sendable (LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error>) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        let parts = (EngineRoutes.canonical(request.path) ?? "").split(separator: "?").first?.split(separator: "/") ?? []
-        guard request.method.uppercased() == "POST", parts.count == 4, parts[0] == "api", parts[1] == "session", parts[3] == "prompt",
-              let session = String(parts[2]).removingPercentEncoding else { return forward(request) }
-        return AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                var named = request
-                if var body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any], let text = body["text"] as? String {
-                    let directory = link?.workspace?.session(session)?.location.directory
-                    // Who it names with "&", then that it's from the phone (see `FromPhone`).
-                    let naming = text.contains(AgentReferences.trigger) ? AgentReferences.naming(in: text, excluding: session, here: directory.flatMap(RemoteFolder.machine(of:))) : text
-                    body["text"] = FromPhone.adding(to: naming)
-                    if let data = try? JSONSerialization.data(withJSONObject: body) { named.body = data }
-                }
-                do {
-                    for try await part in forward(named) { continuation.yield(part) }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
@@ -1084,14 +1042,6 @@ final class PhoneLink {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    nonisolated private static func unavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-            continuation.yield(.body(Data(#"{"message":"The coding agents aren't running on this Mac."}"#.utf8)))
-            continuation.finish()
         }
     }
 

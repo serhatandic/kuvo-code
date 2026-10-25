@@ -1134,9 +1134,11 @@ host serves:
   lives: a machine's id, or, asked of a machine, a Mac's name for that Mac's own. A machine's
   bridge answers it too, with the Mac closed: its own, then those its other computers told it of
   (`Peers`). Insert
-  `&` and the name, and send the message as it is: the Mac adds to a prompt it passes on
-  (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, which the
-  agent reads, so a machine's bridge, with the Mac closed, sends it without. A message to a group
+  `&` and the name, and send the message as it is: every box adds to a prompt it passes on
+  (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, from everyone it
+  lists then (its `run/agents.json`, its own worked out again first), which the agent reads
+  (bridge 0.9.64; before, only the Mac did, and a machine sent it without). The Mac and the boxes
+  read the same cases (`Vectors/routes/names/agent-naming.json`). A message to a group
   chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
   there are to name there (not the chat's own bots), for every client alike: send only the words,
   and a block sent is not taken. Show a message
@@ -1146,8 +1148,8 @@ host serves:
   (a bot's in its color), opening that session.
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
-  the words in `FromPhone.swift`, and a line `</from-phone>`. The Mac adds it, and a machine's
-  bridge in the same words with the Mac closed; send the text without it. Show a
+  the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
+  words (this Mac's box since bridge 0.9.64; the app did before); send the text without it. Show a
   message without it (everything from a line `<from-phone>` to the line `</from-phone>`), as
   sent from the phone. It tells the agent to keep replies short and to show files with
   `show_file`.
@@ -1455,7 +1457,9 @@ frame that isn't one, the app away) stops the box's own routes.
 
 What a phone asks, it answers itself for the areas that have moved onto it and its phones
 (`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
-`kuvo/accounts/credentials` and `kuvo/shell/<id>/stop` (bridge 0.9.64; the app did before); the
+`kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, and the engine's API and the coding agents'
+(`api/…`, `kuvo/agents/…`, telling who a message names with `&`) (bridge 0.9.64; the app did
+before); the
 rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from

@@ -50,6 +50,22 @@ import Testing
         #expect(named.components(separatedBy: start).count <= 2)
     }
 
+    /// Who a message from a phone names, told at its end, as every box tells it: the cases this
+    /// Mac and the boxes' `nameAgents` both read (`names/agent-naming.json`).
+    @Test func namedAsEveryBoxNamesThem() throws {
+        struct Vector: Decodable {
+            struct Case: Decodable { var about: String; var message: String; var excluding: String?; var here: String?; var expected: String }
+            var agents: [AgentMail.Agent]
+            var cases: [Case]
+        }
+        let file = try #require(RouteScenarios.folder).appending(path: "names/agent-naming.json")
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
+        #expect(vector.cases.count >= 9)
+        for each in vector.cases {
+            #expect(AgentReferences.naming(in: each.message, excluding: each.excluding, here: each.here, agents: vector.agents) == each.expected, "\(each.about)")
+        }
+    }
+
     /// A message sent before the note's words changed still reads as naming its agents.
     @Test func anEarlierNoteStillReads() {
         let earlier = "Ask &Scout\n\n<named-agents>\nAgents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:\n- &Scout (ses_x): session, on the Mac\n</named-agents>"

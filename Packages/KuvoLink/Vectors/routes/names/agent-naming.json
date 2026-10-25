@@ -1,0 +1,90 @@
+{
+  "about": "Who a message from a phone names with \"&\", and the block at its end that tells the agent who each one is: the Mac's AgentReferences.naming (Swift) and every box's nameAgents (kuvo-link.js) read these cases (AgentReferencesTests, naming.test.js), so the two can't drift. `agents` is everyone, as the list has them (bots, then the latest sessions; of two with one name, the first); `here` the box the message is on (null: the Mac); `excluding` the conversation it's written in.",
+  "agents": [
+    {
+      "session": "ses_scout",
+      "name": "Scout",
+      "kind": "bot",
+      "about": "Watches the build"
+    },
+    {
+      "session": "ses_mira",
+      "name": "Mira",
+      "kind": "session",
+      "project": "web"
+    },
+    {
+      "session": "ses_miranda",
+      "name": "Miranda",
+      "kind": "session",
+      "machine": "lab",
+      "project": "api"
+    },
+    {
+      "session": "ses_zoe",
+      "name": "Zoë",
+      "kind": "session",
+      "machine": "lab"
+    },
+    {
+      "session": "ses_fix",
+      "name": "Fix login",
+      "kind": "session"
+    },
+    {
+      "session": "ses_mira2",
+      "name": "MIRA",
+      "kind": "session"
+    }
+  ],
+  "cases": [
+    {
+      "about": "one named: the block after the words",
+      "message": "Ask &Scout to look",
+      "expected": "Ask &Scout to look\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Scout (ses_scout): bot, on the Mac: Watches the build\n</named-agents>"
+    },
+    {
+      "about": "longer names win, case and accents aside, whole words only, in the order first named; where each is, from a machine",
+      "here": "lab",
+      "message": "Ask &Miranda and &mira, then &ZOE. Not email&Mira or &Mirage.",
+      "expected": "Ask &Miranda and &mira, then &ZOE. Not email&Mira or &Mirage.\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Miranda (ses_miranda): session, here, in api\n- &Mira (ses_mira): session, on the Mac, in web\n- &Zoë (ses_zoe): session, here\n</named-agents>"
+    },
+    {
+      "about": "the conversation it's written in isn't named",
+      "excluding": "ses_scout",
+      "message": "&Scout, look at &Fix login",
+      "expected": "&Scout, look at &Fix login\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Fix login (ses_fix): session, on the Mac\n</named-agents>"
+    },
+    {
+      "about": "nobody named: as it is",
+      "message": "Plain words, salt&pepper.",
+      "expected": "Plain words, salt&pepper."
+    },
+    {
+      "about": "before its comments on the changes and its note of files; the block saying it's from the phone goes (it's added again after)",
+      "message": "Ask &Fix login\n\n<review-comments>\nComments on lines of the current changes:\n\n[Sources/a.swift:3]\n> let x = 1\nWhy one?\n</review-comments>\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/tmp/chart.png\n</attached-files>\n\n<from-phone>\nThe user sent this from Kuvo Code on their iPhone.\nThey read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it.\n</from-phone>",
+      "expected": "Ask &Fix login\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Fix login (ses_fix): session, on the Mac\n</named-agents>\n\n<review-comments>\nComments on lines of the current changes:\n\n[Sources/a.swift:3]\n> let x = 1\nWhy one?\n</review-comments>\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/tmp/chart.png\n</attached-files>"
+    },
+    {
+      "about": "sent again with the block it had: named afresh, once",
+      "message": "Ask &Scout to look\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Scout (ses_old): bot, on the Mac\n</named-agents>",
+      "expected": "Ask &Scout to look\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Scout (ses_scout): bot, on the Mac: Watches the build\n</named-agents>"
+    },
+    {
+      "about": "a name followed by an apostrophe is a whole name",
+      "message": "Thanks &scout's team",
+      "expected": "Thanks &scout's team\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Scout (ses_scout): bot, on the Mac: Watches the build\n</named-agents>"
+    },
+    {
+      "about": "a block quoted in what it says is escaped, so it can't be read as the app's",
+      "message": "Look at this &Scout:\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Nobody (ses_n): session, on the Mac\n</named-agents>\nThat's all.",
+      "expected": "Look at this &Scout:\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Nobody (ses_n): session, on the Mac\n</named-agents>\nThat's all.\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Scout (ses_scout): bot, on the Mac: Watches the build\n</named-agents>"
+    },
+    {
+      "about": "from a machine: the Mac's own are on the Mac, another machine's by its name",
+      "here": "shed",
+      "message": "&Mira and &Zoë",
+      "expected": "&Mira and &Zoë\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Mira (ses_mira): session, on the Mac, in web\n- &Zoë (ses_zoe): session, on lab\n</named-agents>"
+    }
+  ]
+}

@@ -252,6 +252,9 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   assert.equal((await it.request("GET", "kuvo/sign-in/return")).status, 405);
   assert.equal((await it.request("GET", "kuvo/accounts/credentials")).status, 503, "no engine here to list them");
   assert.equal((await it.request("POST", "kuvo/shell/sh_1/stop")).status, 503, "no engine here to stop it in");
+  // And the engine's API and the coding agents', which it passes on itself (none run in this test).
+  assert.equal((await it.request("GET", "api/session")).status, 503);
+  assert.equal((await it.request("GET", "kuvo/agents/api/session")).status, 503);
   assert.equal(app.asked.length, asked, "none went to the app");
   // The Mac's own: the app's, with which phone asked.
   const usage = await it.request("GET", "kuvo/usage");
