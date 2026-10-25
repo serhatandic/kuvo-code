@@ -618,7 +618,8 @@ host serves:
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
   engine's own remove (which deletes the output, and the agent hears the command wasn't found).
   Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, or `404 {}` when no such
-  command runs. A machine's bridge does it there, with the Mac closed too.
+  command runs. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
+  0.9.64). Every box does it for its own, a machine's with the Mac closed too.
 - `kuvo/info`: what the host is and runs: `kind` (`mac` or `machine`), `name`, `engine` (its
   version), a Mac's `app` and a machine's `bridge` version (to show, never to compare: check
   `features`), `features` (below), whether its coding agents' bridge is up (`agents`), and
@@ -1136,7 +1137,8 @@ host serves:
   (`Peers`). Insert
   `&` and the name, and send the message as it is: every box adds to a prompt it passes on
   (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, from everyone it
-  lists then (its `run/agents.json`, its own worked out again first), which the agent reads
+  lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
+  a name after `&` isn't there yet), which the agent reads
   (bridge 0.9.64; before, only the Mac did, and a machine sent it without). The Mac and the boxes
   read the same cases (`Vectors/routes/names/agent-naming.json`). A message to a group
   chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
@@ -1245,9 +1247,9 @@ host serves:
 - `kuvo/file?uri=<file:// URI>`: a file on that computer that an agent's reply or tool names
   (a picture it made, a file it shows you), by its `file://` address, percent-encoded as a query
   value: `200` with its bytes and `content-type` (from its extension; `application/octet-stream`
-  when unknown), `404 {"message"}` for one that isn't there or isn't a file, `413 {"message"}`
-  over 25 MB, `400 {"message"}` for an address that isn't `file://`. A Mac answers for its own
-  files; a machine's bridge for the machine's, with the Mac closed too.
+  when unknown), `404 {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for
+  one it can't read, `413 {"message"}` over 25 MB, `400 {"message"}` for an address that isn't
+  `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it (each provider's
   name, plan, brand color, mark as a PNG to tint, notice, whether it's outdated, and its lines as
   UsageKit writes them), whether a refresh is under way and when the last one ended;
@@ -1459,7 +1461,8 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, and the engine's API and the coding agents'
 (`api/…`, `kuvo/agents/…`, telling who a message names with `&`) (bridge 0.9.64; the app did
-before); the
+before; while its engine starts, or starts again, those answer `503 {"message": "This Mac's engine
+is starting. Try again in a moment."}`, as a machine's say "This machine's"); the
 rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from

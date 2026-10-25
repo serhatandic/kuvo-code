@@ -40,29 +40,21 @@ import Testing
         #expect(AgentReferences.matches("", in: agents, limit: 2).map(\.session) == ["s1", "s2"])
     }
 
-    /// A phone's message sent again (Retry, Edit) still ending with the block it had: that goes, and
-    /// its agents are named afresh, rather than the old block coming back escaped into its words.
-    @Test func aMessageSentAgainIsNamedOnce() throws {
-        let block = try #require(AgentReferences.note(naming: [agent("Scout", "ses_x")], here: nil))
-        let start = String(try #require(block.split(separator: "\n").first))
-        let named = AgentReferences.naming(in: "Ask &Scout to look\n\n" + block, excluding: nil, here: nil)
-        #expect(SentMessage.split(named).text == "Ask &Scout to look")
-        #expect(named.components(separatedBy: start).count <= 2)
-    }
-
-    /// Who a message from a phone names, told at its end, as every box tells it: the cases this
-    /// Mac and the boxes' `nameAgents` both read (`names/agent-naming.json`).
+    /// Who a message names with "&", told at its end, as every box tells it for a phone's: the
+    /// cases this Mac's composer and the boxes' `nameAgents` both read (`names/agent-naming.json`;
+    /// those of a message with the blocks only a phone's has are the boxes').
     @Test func namedAsEveryBoxNamesThem() throws {
         struct Vector: Decodable {
-            struct Case: Decodable { var about: String; var message: String; var excluding: String?; var here: String?; var expected: String }
+            struct Case: Decodable { var about: String; var message: String; var excluding: String?; var here: String?; var expected: String; var composer: Bool? }
             var agents: [AgentMail.Agent]
             var cases: [Case]
         }
         let file = try #require(RouteScenarios.folder).appending(path: "names/agent-naming.json")
         let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
-        #expect(vector.cases.count >= 9)
-        for each in vector.cases {
-            #expect(AgentReferences.naming(in: each.message, excluding: each.excluding, here: each.here, agents: vector.agents) == each.expected, "\(each.about)")
+        let cases = vector.cases.filter { $0.composer == true }
+        #expect(cases.count >= 6)
+        for each in cases {
+            #expect(AgentReferences.text(each.message, excludingAll: Set([each.excluding].compactMap { $0 }), here: each.here, agents: vector.agents) == each.expected, "\(each.about)")
         }
     }
 

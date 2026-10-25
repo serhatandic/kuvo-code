@@ -1,0 +1,55 @@
+// Stopping a command an agent left running (PROTOCOL.md, `kuvo/shell/<id>/stop`), on every box: one
+// the engine runs, and one a coding agent runs, through their bridge. The engine and the bridge are
+// stand-ins.
+//
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/shells.test.js`.
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { after, test } from "node:test";
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-shells-"));
+process.env.KUVO_HOME = home;
+after(() => fs.rmSync(home, { recursive: true, force: true }));
+const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+
+// A server that runs commands, `running` by id: what it was asked to remove.
+async function runner(running) {
+  const removed = [];
+  const server = http.createServer((request, response) => {
+    const id = decodeURIComponent(request.url.split("?")[0].split("/").pop());
+    const json = (status, value) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
+    if (!request.url.startsWith("/api/shell/")) return json(404, {});
+    if (!running.includes(id)) return json(404, { message: "No such command." });
+    if (request.method === "DELETE") {
+      removed.push(id);
+      return json(200, {});
+    }
+    return json(200, { data: { id, status: "running" } });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  after(() => server.close());
+  return { removed, target: { port: server.address().port, password: "pw" } };
+}
+
+test("a command a coding agent left running stops, as one the engine runs does; one nobody runs is a 404", async t => {
+  const engine = await runner(["sh_engine1"]);
+  const bridge = await runner(["shl_agent1"]);
+  // The coding agents' bridge, as it runs (its process says what it is).
+  const process_ = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)", "kuvo-agents"], { stdio: "ignore" });
+  t.after(() => process_.kill());
+  const handle = link.engineHandler(() => engine.target, {}, () => ({ ...bridge.target, pid: process_.pid }));
+  const stop = async id => {
+    const parts = [];
+    for await (const part of handle({ method: "POST", path: `kuvo/shell/${id}/stop`, headers: {}, body: Buffer.from("{}") }, {}, undefined)) parts.push(part);
+    return { status: parts[0].head.status, json: JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString() || "{}") };
+  };
+  assert.deepEqual(await stop("sh_engine1"), { status: 200, json: { stopped: "removed" } });
+  assert.deepEqual(engine.removed, ["sh_engine1"]);
+  assert.deepEqual(await stop("shl_agent1"), { status: 200, json: { stopped: "removed" } });
+  assert.deepEqual(bridge.removed, ["shl_agent1"]);
+  assert.equal((await stop("sh_nobody")).status, 404);
+});

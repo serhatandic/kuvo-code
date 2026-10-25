@@ -2,18 +2,12 @@ import Foundation
 
 /// The block a message from a phone ends with, for the agent: the user is on their iPhone, where
 /// they read a reply on a small screen and can't open paths or the side panel, so a file is shown
-/// with show_file. This Mac adds it to what a phone sends (`PhoneLink`), and a machine's bridge
-/// does with the Mac closed (`kuvo-link.js`, in the same words); it's never shown.
+/// with show_file. Every box adds it to what a phone sends (`kuvo-link.js`, in these words), this
+/// Mac's too; it's never shown.
 nonisolated enum FromPhone {
     static let heading = "The user sent this from Kuvo Code on their iPhone."
     static let advice = "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it."
     private static let block = MessageBlock(start: "<from-phone>", end: "</from-phone>", headings: [heading])
-
-    /// `text` with the block at its end, once.
-    static func adding(to text: String) -> String {
-        guard !isFromPhone(text) else { return text }
-        return text + "\n\n" + [block.start, heading, advice, block.end].joined(separator: "\n")
-    }
 
     /// A message without the block, and whether it had it.
     static func split(_ text: String) -> (text: String, isFromPhone: Bool) {

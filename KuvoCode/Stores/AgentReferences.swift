@@ -85,7 +85,8 @@ nonisolated enum AgentReferences {
     static func find(in text: String, references: [Reference]) -> [(range: Range<String.Index>, reference: Reference)] {
         guard text.contains(trigger) else { return [] }
         var found: [(range: Range<String.Index>, reference: Reference)] = []
-        for reference in references.sorted(by: { $0.name.count > $1.name.count }) where !reference.name.isEmpty {
+        // Longer first, as folded (as every box sorts them: `namesIn` in kuvo-link.js).
+        for reference in references.sorted(by: { key($0.name).count > key($1.name).count }) where !reference.name.isEmpty {
             var start = text.startIndex
             while let range = text.range(of: String(trigger) + reference.name, options: [.caseInsensitive, .diacriticInsensitive], range: start..<text.endIndex) {
                 start = range.upperBound
@@ -135,28 +136,13 @@ nonisolated enum AgentReferences {
     }
 
     /// The same, leaving out each of `sessions` (a group chat's own bots, already there).
+    /// `agents`: everyone (nil: as AgentMail lists them now). Every box names a phone's message's
+    /// agents the same way (`nameAgents` in kuvo-link.js); both read the cases in
+    /// `Vectors/routes/names/agent-naming.json`.
     @MainActor static func text(_ text: String, excludingAll sessions: Set<String>, here machine: String?, agents: [AgentMail.Agent]? = nil) -> String {
         let text = block.escaping(text)
         guard let note = note(naming: named(in: [text], excluding: sessions, agents: agents), here: machine) else { return text }
         return (text.isEmpty ? "" : text + "\n\n") + note
-    }
-
-    /// A message as it came (from the phone), with the block naming its agents among the others
-    /// at its end, where `SentMessage.split` reads it: after its words, before its comments on the
-    /// changes and its note of attached files. Every box does the same (`nameAgents` in
-    /// kuvo-link.js); both read the cases in `Vectors/routes/names/agent-naming.json`.
-    @MainActor static func naming(in message: String, excluding session: String?, here machine: String?, agents: [AgentMail.Agent]? = nil) -> String {
-        // From a phone again: that it's from one is said afresh too.
-        let message = FromPhone.split(message).text
-        let (withComments, _) = Attachments.split(message)
-        let (words, _) = ReviewComments.split(withComments)
-        // Sent again (Retry, Edit) with the block it had: that goes, and its agents are named afresh.
-        let bare = split(words).text
-        // (One edited to name nobody now still loses the block it had.)
-        guard bare.contains(trigger) || bare != words else { return message }
-        let named = text(bare, excludingAll: Set([session].compactMap { $0 }), here: machine, agents: agents)
-        guard named != words, let range = message.range(of: words) else { return message }
-        return message.replacingCharacters(in: range, with: named)
     }
 
     /// The block for `agents`, nil for none: each with "&" and its name, its address, and what it is.

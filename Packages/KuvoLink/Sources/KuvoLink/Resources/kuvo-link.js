@@ -630,15 +630,42 @@ async function namedIn(body, session, naming) {
   return text === prompt.text ? body : Buffer.from(JSON.stringify({ ...prompt, text }));
 }
 
-// Who a message from a phone names with "&", for `forward`: everyone as this box lists them (its
-// own worked out again first, so one made a moment ago is there too), and where it is.
+// Who a message from a phone names with "&", for `forward`: everyone as this box lists them now,
+// at once, and where it is; its own worked out again meanwhile, and waited for (two seconds at most)
+// only when a name after "&" isn't there yet (one made a moment ago). One working out at a time.
+let refreshingOwn = null;
+const refreshOwnShared = readEngine => (refreshingOwn ??= refreshOwn(readEngine).catch(() => {}).finally(() => { refreshingOwn = null; }));
 function namingHere(readEngine) {
-  return async (text, session) => {
-    await refreshOwn(readEngine).catch(() => {});
-    let everyone = null;
-    try { everyone = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8")); } catch {}
-    return nameAgents(text, { excluding: session, here: everyone?.machine ?? null, agents: Array.isArray(everyone?.agents) ? everyone.agents : [] });
+  const listed = () => {
+    try {
+      const read = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
+      return { machine: read?.machine ?? null, agents: Array.isArray(read?.agents) ? read.agents : [] };
+    } catch {
+      return { machine: null, agents: [] };
+    }
   };
+  return async (text, session) => {
+    let everyone = listed();
+    const working = refreshOwnShared(readEngine);
+    if (nameMissing(text, everyone.agents)) {
+      await Promise.race([working, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
+      everyone = listed();
+    }
+    return nameAgents(text, { excluding: session, here: everyone.machine, agents: everyone.agents });
+  };
+}
+
+// Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, followed by
+// none of their names.
+function nameMissing(text, agents) {
+  const names = agents.map(agent => foldName(String(agent.name ?? ""))).filter(Boolean);
+  for (const { index } of text.matchAll(/&/g)) {
+    if (index > 0 && wordCharacter.test(text[index - 1])) continue;
+    const after = foldName(text.slice(index + 1, index + 201));
+    if (!after || /^\s/u.test(after)) continue;
+    if (!names.some(name => after.startsWith(name))) return true;
+  }
+  return false;
 }
 
 // A prompt's body with the block at the end of its text, once; any other body as it is.
@@ -656,7 +683,7 @@ export function fromPhone(body) {
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
 // streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
 // what `allows` checks.
-async function* forward(target, path, request, signal, allows, naming = null) {
+async function* forward(target, path, request, signal, allows, naming = null, down = engineDown) {
   const method = request.method.toUpperCase();
   const sent = canonicalPath(path);
   if (sent === null || !allows(sent, method)) {
@@ -681,12 +708,21 @@ async function* forward(target, path, request, signal, allows, naming = null) {
       if (before.ok) wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(await namedIn(request.body, decodeURIComponent(prompt[1]), naming)) : request.body,
-    signal,
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(await namedIn(request.body, decodeURIComponent(prompt[1]), naming)) : request.body,
+      signal,
+    });
+  } catch (error) {
+    // Not answering (starting again, say): said so, unless the asker went.
+    if (signal?.aborted) throw error;
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
+    return;
+  }
   const out = {};
   for (const name of RESPONSE_HEADERS) {
     const value = response.headers.get(name);
@@ -2480,7 +2516,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
         yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
         return;
       }
-      return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine));
+      return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
     }
     // The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
     // signing out of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts").
@@ -2692,18 +2728,24 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     try {
       engine = readEngine();
     } catch {
-      return yield* text(503, "The engine isn't running.");
+      return yield* json(503, { message: engineDown() });
     }
     if (stop) {
       if (request.method.toUpperCase() !== "POST") return yield* text(405, "Stop it with POST.");
       const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
       const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
       for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
-      return yield* stopShell(decodeURIComponent(stop[1]), engine, headers, signal);
+      // The engine's, else a coding agent's, through their bridge.
+      const runners = [engine, bridge()].filter(Boolean);
+      return yield* stopShell(decodeURIComponent(stop[1]), runners, headers, signal);
     }
     return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
   };
 }
+
+// Why the engine can't be asked now: stopped on purpose (until it's started, from anywhere), or
+// starting (again).
+const engineDown = () => (fs.existsSync(path.join(RUN, "stopped")) ? "The engine isn't running." : `${IS_MAC ? "This Mac's" : "This machine's"} engine is starting. Try again in a moment.`);
 
 // The engine here started, or started over, by the box's own tool (`bin/kuvo-start`, as the Mac
 // has it do): `start` for one an older Mac's Stop left down (until it's started, from anywhere),
@@ -2768,18 +2810,25 @@ async function* loadSignInReturn(body, signal) {
   }
 }
 
-// Stops a command the engine runs for an agent: SIGTERM to its process group, here on the
-// machine, so the engine sees it end and tells the agent, with what it printed. The engine's own
-// remove deletes the output too, and the agent hears the command was never found, so it's only
-// for when the signal can't be sent.
-async function* stopShell(id, engine, headers, signal) {
+// Stops a command an agent runs (the engine's, or a coding agent's through their bridge: the first
+// of `runners` that has it): SIGTERM to its process group, here, so it sees it end and tells the
+// agent, with what it printed. Its own remove deletes the output too, and the agent hears the
+// command was never found, so it's only for when the signal can't be sent.
+async function* stopShell(id, runners, headers, signal) {
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
-  const url = `http://127.0.0.1:${engine.port}/api/shell/${encodeURIComponent(id)}`;
-  let job;
-  try {
-    const response = await fetch(url, { headers, signal });
-    if (response.ok) job = (await response.json()).data;
-  } catch {}
+  let job, url;
+  for (const runner of runners) {
+    url = `http://127.0.0.1:${runner.port}/api/shell/${encodeURIComponent(id)}`;
+    const asking = { ...headers, authorization: `Basic ${Buffer.from(`opencode:${runner.password}`).toString("base64")}` };
+    try {
+      const response = await fetch(url, { headers: asking, signal });
+      if (response.ok) job = (await response.json()).data;
+    } catch {}
+    if (job) {
+      headers = asking;
+      break;
+    }
+  }
   if (!job || job.status !== "running") return yield* json(404, {});
   if (Number.isInteger(job.pid) && job.pid > 1) {
     try {
@@ -3169,9 +3218,21 @@ async function* fileAt(requestPath, json) {
   if (!stat?.isFile()) return yield* json(404, { message: "That file isn’t there anymore." });
   if (stat.size > FILE_LIMIT) return yield* json(413, { message: "That file is too big to open here." });
   const type = TYPES[path.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
+  // Opened before it's answered: one that can't be read says so, with no path in it.
+  let handle;
+  try {
+    handle = await fs.promises.open(file, "r");
+  } catch (error) {
+    const refused = ["EACCES", "EPERM"].includes(error?.code);
+    return yield* json(refused ? 403 : 404, { message: refused ? "That file can’t be opened here." : "That file isn’t there anymore." });
+  }
   yield { head: { status: 200, headers: { "content-type": type, "content-length": String(stat.size) } } };
   // In pieces, as the engine's bodies go.
-  for await (const piece of fs.createReadStream(file, { highWaterMark: 32 * 1024 })) yield { body: piece };
+  try {
+    for await (const piece of handle.createReadStream({ highWaterMark: 32 * 1024 })) yield { body: piece };
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 // A bot that lives here, as its folder has it now: its description (as the app last wrote it, or
@@ -6838,33 +6899,40 @@ const NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [NAMING_HE
   "Agents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:"]);
 
 // A name as it's compared: case and accents aside.
-const foldName = text => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-const wordCharacter = /[\p{L}\p{N}]/u;
+// (A ligature as its letters, ß as "ss", a final sigma as any other, as Swift folds them.)
+const foldName = text => text.replace(/[\uFB00-\uFB06]/g, ligature => ligature.normalize("NFKD")).normalize("NFD").replace(/\p{M}/gu, "")
+  .toLowerCase().replace(/ς/g, "σ").replace(/ß/g, "ss");
+const wordCharacter = /^[\p{L}\p{N}]/u;
+// Its characters as people see them (a letter with its accents, an emoji with its joiners).
+const graphemes = text => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)];
 
 // Where each of `references` ({name, session}) is named with "&" in `text`, last first: longer names
 // win ("&Miranda" isn't "&Mira"), the "&" starts a word and the name ends where a word does.
 export function namesIn(text, references) {
   if (!text.includes("&")) return [];
-  // The text folded, with where each of its characters came from.
+  // The text folded a character at a time, with the character each folded unit came from: a name
+  // starts and ends where a character does, and what's around it is whole characters.
   let folded = "";
   const from = [];
-  let at = 0;
-  for (const character of text) {
-    const each = foldName(character);
-    for (let i = 0; i < each.length; i++) from.push(at);
+  const at = new Map(), ending = new Map();
+  for (const { segment, index } of graphemes(text)) {
+    at.set(index, segment);
+    ending.set(index + segment.length, segment);
+    const each = foldName(segment);
+    for (let i = 0; i < each.length; i++) from.push(index);
     folded += each;
-    at += character.length;
   }
-  from.push(at);
+  from.push(text.length);
   const found = [];
-  for (const reference of [...references].sort((a, b) => [...b.name].length - [...a.name].length)) {
+  const length = name => graphemes(foldName(name)).length;
+  for (const reference of [...references].sort((a, b) => length(b.name) - length(a.name))) {
     if (!reference.name) continue;
     const wanted = `&${foldName(reference.name)}`;
-    for (let start = folded.indexOf(wanted); start >= 0; start = folded.indexOf(wanted, start + wanted.length)) {
-      const lower = from[start], upper = from[start + wanted.length];
-      const previous = lower > 0 ? String.fromCodePoint(text.codePointAt(lower - 1 - (/[\uDC00-\uDFFF]/.test(text[lower - 1]) ? 1 : 0))) : "";
-      const next = upper < text.length ? String.fromCodePoint(text.codePointAt(upper)) : "";
-      if (wordCharacter.test(previous) || wordCharacter.test(next)) continue;
+    for (let start = folded.indexOf(wanted); start >= 0; start = folded.indexOf(wanted, start + 1)) {
+      const end = start + wanted.length;
+      if ((start > 0 && from[start - 1] === from[start]) || (end < folded.length && from[end - 1] === from[end])) continue;
+      const lower = from[start], upper = from[end];
+      if (wordCharacter.test(ending.get(lower) ?? "") || wordCharacter.test(at.get(upper) ?? "")) continue;
       if (found.some(each => lower < each.upper && each.lower < upper)) continue;
       found.push({ lower, upper, reference });
     }

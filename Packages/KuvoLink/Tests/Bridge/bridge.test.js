@@ -424,7 +424,34 @@ test("kuvo/file sends a file on the machine by its file:// address, with its typ
   fs.writeFileSync(big, "");
   fs.truncateSync(big, link.FILE_LIMIT + 1);
   assert.equal((await ask(pathToFileURL(big).href)).head.status, 413);
+  // One it can't read: said so, with no path in it.
+  const locked = path.join(folder, "secret.txt");
+  fs.writeFileSync(locked, "shh");
+  fs.chmodSync(locked, 0o000);
+  const refused = await ask(pathToFileURL(locked).href);
+  assert.equal(refused.head.status, 403);
+  assert.deepEqual(JSON.parse(refused.body), { message: "That file can’t be opened here." });
+  fs.chmodSync(locked, 0o600);
   fs.rmSync(folder, { recursive: true });
+});
+
+test("while the engine starts (again), a phone hears it's starting; stopped on purpose, that it isn't running", async () => {
+  const ask = async readEngine => {
+    const parts = [];
+    for await (const part of link.engineHandler(readEngine)({ method: "GET", path: "api/session", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
+    return { status: parts[0].head.status, json: JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()) };
+  };
+  // Not recorded yet, or recorded and not answering yet.
+  const starting = { status: 503, json: { message: "This machine's engine is starting. Try again in a moment." } };
+  assert.deepEqual(await ask(() => { throw new Error("no record"); }), starting);
+  assert.deepEqual(await ask(() => ({ port: 9, password: "p" })), starting);
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  fs.writeFileSync(path.join(home, "run", "stopped"), "");
+  try {
+    assert.deepEqual((await ask(() => { throw new Error("no record"); })).json, { message: "The engine isn't running." });
+  } finally {
+    fs.rmSync(path.join(home, "run", "stopped"), { force: true });
+  }
 });
 
 test("kuvo/info says when the engine running now came up, which a restart changes", async () => {

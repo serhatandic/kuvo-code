@@ -878,7 +878,6 @@ final class PhoneLink {
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         // The engine not up yet (the app's starting): its routes say so, as a machine's do.
         guard let endpoint else {
-            guard request.path.hasPrefix("kuvo/") else { return Self.engineStarting() }
             return Self.respond(to: request, link: self, engine: URL(string: "http://127.0.0.1:9/")!, password: nil, agents: agents?.address, asking: phone ?? Data())
         }
         let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
@@ -978,14 +977,6 @@ final class PhoneLink {
         configuration.httpMaximumConnectionsPerHost = 64
         return URLSession(configuration: configuration)
     }()
-
-    nonisolated private static func engineStarting() -> AsyncThrowingStream<LinkResponsePart, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-            continuation.yield(.body(Self.message("This Mac’s engine is starting. Try again in a moment.")))
-            continuation.finish()
-        }
-    }
 
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in

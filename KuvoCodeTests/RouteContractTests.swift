@@ -284,6 +284,9 @@ final class MacBox {
 
     struct Answer { var status: Int; var type: String; var body: Data }
 
+    /// The phone asking, by its key.
+    static let phone = Data(repeating: 7, count: 32)
+
     /// What this Mac answers a paired phone's request, whole: through its box, as the phone's link
     /// hands it over.
     private func ask(_ method: String, _ path: String, body: Any?) async throws -> Answer {
@@ -308,7 +311,9 @@ final class MacBox {
         let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: data)
         var answer = Answer(status: 0, type: "", body: Data())
         let link = app?.phoneLink
-        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: engine.url + "/")!, password: "test", agents: realBridge?.agents.address ?? link?.agents?.address) {
+        // As a phone asks it (one of its own, by its key), so this Mac's box takes it as a phone's.
+        for try await part in PhoneLink.respond(to: request, link: link, engine: URL(string: engine.url + "/")!, password: "test", agents: realBridge?.agents.address ?? link?.agents?.address,
+                                                asking: Self.phone) {
             switch part {
             case .head(let status, let headers):
                 answer.status = status
