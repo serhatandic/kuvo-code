@@ -741,6 +741,19 @@ const checkedKeyName = name => {
 /** The file one is kept in on a machine: a bot's own beside the others, the shared ones in `box/keys`. */
 const keyFile = name => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS : BOX_KEYS, name);
 
+/** What this Mac's box let go of (in its trash), moved on by its app to the Finder's Trash (`trash`);
+ * nothing without its app. */
+async function hostTrash(folder) {
+  if (!KEY_HOST) return;
+  const response = await fetch(`${KEY_HOST.url}/trash`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${KEY_HOST.password}`, "content-type": "application/json" },
+    body: JSON.stringify({ path: folder }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  await response.body?.cancel().catch(() => {});
+}
+
 /** One of the app's host calls (`keys/<what>`): its answer's JSON, or null for a 404 when `missing` is fine. */
 async function askHost(host, what, body, missing = false) {
   let response;
@@ -2147,7 +2160,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     if (route === "kuvo/bots/templates") {
       const kit = readKit();
-      if (!kit) return yield* json(409, { message: "Connect to this machine from your Mac once, then try again." });
+      if (!kit) return yield* json(409, { message: NO_KIT });
       return yield* json(200, botTemplates(kit, info.name));
     }
     if (request.method.toUpperCase() === "POST" && route === "kuvo/bots") {
@@ -2456,6 +2469,8 @@ const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
 // kit its app gives it and told they run on this Mac; it names no machine, keeps no notes for a
 // Mac to take in, and goes by the Mac's own clock.
 const ON_MAC = process.env.KUVO_BOX === "mac";
+// This box's computer, as what it says names it.
+const HERE = ON_MAC ? "this Mac" : "this machine";
 const SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
 const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
@@ -2794,6 +2809,11 @@ export function listBots(machine, { memory = false } = {}) {
         agents,
         personality: typeof described.personality === "string" ? described.personality : undefined,
         model: isModel(described.model) ? described.model : undefined,
+        // Its folder (its memory, wake-ups and workspace), and the project it works in, as this
+        // box names them; when it was made.
+        folder,
+        project: typeof described.project === "string" ? described.project : undefined,
+        created: typeof described.created === "string" ? described.created : undefined,
         // What a Mac of an earlier version reads a machine's bots' jobs by.
         memoryJob: memory && !ON_MAC ? { line: job.line, section: job.details } : undefined,
       },
@@ -2885,7 +2905,9 @@ function givenJob(given) {
 
 // ---- Bots and group chats made here ----
 
-// What New Bot needs here, which the Mac gives the machine as it connects (Bots.MachineKit).
+// What New Bot needs here, which the Mac gives the machine as it connects (Bots.MachineKit), and
+// what's said while there's none.
+const NO_KIT = ON_MAC ? "Kuvo Code is still setting up bots on this Mac. Try again in a moment." : "Connect to this machine from your Mac once, then try again.";
 const KIT_FILE = path.join(BOTS, "kit.json");
 // The coding agents' providers (the Mac's OutsideAgents): a bot on one of theirs runs with them.
 const AGENT_PROVIDERS = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"];
@@ -3085,7 +3107,7 @@ const fitsLook = (looks, look) => Boolean(look) && looks.colors.includes(look.co
 async function signInRefusal(model, engine, signal) {
   const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => undefined);
   const ids = Array.isArray(ready) ? ready.map(each => each?.id) : [];
-  return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on this machine: sign in to it in Settings › Accounts, or choose another model.` : null;
+  return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
 }
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
@@ -3093,7 +3115,7 @@ async function signInRefusal(model, engine, signal) {
 export async function makeBot(given, readEngine, readBridge, machine, signal) {
   const no = (status, message) => ({ status, value: { message } });
   const kit = readKit();
-  if (!kit) return no(409, "Connect to this machine from your Mac once, then try again.");
+  if (!kit) return no(409, NO_KIT);
   if (!given || typeof given !== "object") return no(400, "That isn’t a bot to make.");
   const name = plainName(given.name);
   if (!name) return no(400, "A bot needs a name.");
@@ -3119,13 +3141,13 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   const pick = list => list[crypto.randomInt(list.length)];
   const look = fitsLook(looks, given.look) ? given.look : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
   const model = isModel(given.model) ? given.model : kit.startingModel;
-  if (!model) return no(422, "There’s no model to start it on here: sign in to an account on this machine first.");
+  if (!model) return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
   let target;
   try {
     target = agents ? readBridge() : readEngine();
   } catch {}
-  if (!target) return no(503, agents ? "The coding agents aren’t running on this machine." : "The engine isn’t running.");
+  if (!target) return no(503, agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
   if (!agents) {
     const refused = await signInRefusal(model, target, signal);
     if (refused) return no(422, refused);
@@ -3268,7 +3290,7 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
   let engine;
   try { engine = readEngine(); } catch {}
   if (!engine) return no(503, "The engine isn’t running.");
-  if (!agents) return no(503, "The coding agents aren’t running on this machine.");
+  if (!agents) return no(503, `The coding agents aren’t running on ${HERE}.`);
   const route = `api/session/${encodeURIComponent(id)}`;
   let session;
   try { session = (await engineGet(engine, route))?.data; } catch {}
@@ -3284,8 +3306,8 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
   if (model.providerID !== "auto") {
     const integration = (await engineGet(agents, `api/integration/${encodeURIComponent(model.providerID)}`).catch(() => null))?.data;
     const name = integration?.name ?? model.providerID;
-    if (integration?.metadata?.installed === false) return no(422, `${name} isn’t installed on this machine: install it in Settings › Accounts, or choose another model.`);
-    if (!integration?.connections?.length) return no(422, `${name} needs a sign-in on this machine: sign in in Settings › Accounts, or choose another model.`);
+    if (integration?.metadata?.installed === false) return no(422, `${name} isn’t installed on ${HERE}: install it in Settings › Accounts, or choose another model.`);
+    if (!integration?.connections?.length) return no(422, `${name} needs a sign-in on ${HERE}: sign in in Settings › Accounts, or choose another model.`);
   }
   if (carrying.has(id)) return no(409, "It’s being carried on with the coding agents already.");
   carrying.add(id);
@@ -3364,7 +3386,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);
   const kit = readKit();
-  if (!kit) return no(409, "Connect to this machine from your Mac once, then try again.");
+  if (!kit) return no(409, NO_KIT);
   if (!isObject(given)) return no(400, "That isn’t a change to a bot.");
   const { described } = here;
   const changed = { ...described };
@@ -3418,7 +3440,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   try {
     target = here.agents ? readBridge() : readEngine();
   } catch {}
-  if (!target) return no(503, here.agents ? "The coding agents aren’t running on this machine." : "The engine isn’t running.");
+  if (!target) return no(503, here.agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
   const renamed = changed.name !== described.name;
   const was = jobOf(here);
   const newJob = job !== undefined && (job.line !== was.line || job.details !== was.details);
@@ -3474,6 +3496,7 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);
+  let trashed;
   try {
     // For a Mac to let go of it as it next connects (this Mac's own box needs no note).
     if (!ON_MAC) noteDeleted(id);
@@ -3483,10 +3506,13 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
     const when = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
     const trash = path.join(K, "trash", `${when}-${process.pid}`);
     fs.mkdirSync(trash, { recursive: true });
-    fs.renameSync(here.folder, path.join(trash, id));
+    trashed = path.join(trash, id);
+    fs.renameSync(here.folder, trashed);
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
+  // On this Mac, on to the Finder's Trash, where you look for what you deleted.
+  if (ON_MAC) await hostTrash(trashed).catch(() => {});
   // Its keys of its own (`KUVO_KEY_…__<ID>`). Where they can't be reached now (this Mac's app not
   // answering), the bot is deleted all the same.
   try {

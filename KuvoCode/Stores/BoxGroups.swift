@@ -474,8 +474,8 @@ final class BoxGroups {
     /// Where this Mac's bridge puts what it deletes and lets go of (`KUVO_TRASH`).
     static var macTrash: URL { BoxProcess.home.appending(path: "trash") }
 
-    /// A chat's folder this Mac's bridge put in its trash, moved on to the Finder's Trash; only one
-    /// in that trash folder.
+    /// A folder this Mac's box or bridge put in its trash (a chat's, a deleted bot's), moved on to
+    /// the Finder's Trash; only one in that trash folder.
     static func toFinderTrash(_ path: String) {
         let folder = URL(filePath: path).standardizedFileURL
         let trash = macTrash.standardizedFileURL.path + "/"
@@ -483,7 +483,7 @@ final class BoxGroups {
         do {
             try FileManager.default.moveToTrash(folder)
         } catch {
-            Logger(subsystem: "run.kuvo.code", category: "box-groups").error("A group chat's folder stayed in Kuvo Code's trash: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "run.kuvo.code", category: "box-groups").error("A folder stayed in Kuvo Code's trash: \(error.localizedDescription, privacy: .public)")
         }
     }
 

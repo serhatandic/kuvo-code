@@ -2,7 +2,7 @@ import Foundation
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
-/// files. It answers on a loopback port, to a password the box is given as it starts
+/// files; and what it lets go of, moved from its trash folder to the Finder's Trash. It answers on a loopback port, to a password the box is given as it starts
 /// (`environment`), and only for a name of Kuvo Code's own keys (`KUVO_KEY_…`), so the box can
 /// reach nothing else in your Keychain. A key saved or removed here goes to the engine's files too
 /// (`IntegrationKeys`); listing them reads no secret, so it never asks you.
@@ -55,6 +55,12 @@ final class HostInterface {
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
             return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
+        case "/trash":
+            // What the box let go of (a deleted bot's folder), from its own trash folder only, to
+            // the Finder's Trash, where you look for what you deleted.
+            guard let path = given["path"] as? String else { return .init(status: 400) }
+            BoxGroups.toFinderTrash(path)
+            return .json([:])
         default:
             return .init(status: 404)
         }

@@ -120,6 +120,7 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   assert.deepEqual(answer.json.bots[1], {
     id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout", look: { color: "sky", shape: "round", face: "calm" }, machine: "my-server",
     job: "Watches the build", jobDetails: "", paused: true, wakes: 1792000100, watching: 1, agents: true, model: { id: "big-pickle", providerID: "opencode" },
+    folder: scout, created: "2026-10-02T09:00:00Z",
   });
   assert.equal("personality" in answer.json.bots[1], false, "none: left out, as the Mac leaves it out");
   assert.equal("wakes" in answer.json.bots[0], false, "none waiting: left out, as the Mac leaves it out");
@@ -497,6 +498,7 @@ test("with the Mac closed, a bot here is changed from a phone as Edit Bot change
     assert.deepEqual({ ...changed.json.bot, wakes: undefined }, {
       id: "bot_scout00001", session: "ses_bot_scout00001", name: "Scout Prime", look: { color: "mint", shape: "round", face: "happy" }, machine: "my-server",
       job: "Watches the build", jobDetails: "Watches the build.\nTells you when it breaks.", paused: false, wakes: undefined, watching: 0, agents: false, personality: "preset.straight", model: { id: "opus", providerID: "anthropic", variant: "high" },
+      folder, created: before.created,
     });
     // Its description, for what runs here and for the Mac as it next connects: newer than before.
     const described = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
