@@ -305,19 +305,18 @@ import Testing
     }
 
     /// Before this Mac's engine is up, a phone asking it hears it's starting, not a connection
-    /// error.
+    /// error: from this Mac's box, which passes a phone's engine requests on.
     @Test func beforeTheEngineIsUpAPhoneHearsItsStarting() async throws {
-        let link = PhoneLink(file: file, identity: (mac, secret))
-        var status = 0
-        var body = Data()
-        for try await part in link.answerForBox(LinkRequest(method: "GET", path: "api/session", headers: [:], body: Data()), phone: mine.publicBytes) {
-            switch part {
-            case .head(let code, _): status = code
-            case .body(let data): body += data
-            }
-        }
-        #expect(status == 503)
-        #expect(String(decoding: body, as: UTF8.self).contains("starting"))
+        let box = try await SettingsBox(port: 47_939)
+        defer { box.stop() }
+        // The app starting, its engine not up yet.
+        BoxProcess.engineChanged(nil, version: nil, pid: nil)
+        let endpoint = try #require(box.box.process.endpoint)
+        var request = URLRequest(url: try #require(URL(string: "api/session", relativeTo: endpoint.url)))
+        if let password = endpoint.password { request.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
+        let (body, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 503)
+        #expect(String(decoding: body, as: UTF8.self).contains("engine is starting"))
     }
 
     @Test func settingsPhonesPairingLinkIsTheBoxsAsYourPhonesKnowThisMac() async throws {
