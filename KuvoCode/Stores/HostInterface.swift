@@ -1,26 +1,145 @@
+import AppKit
+import CryptoKit
 import Foundation
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
 /// files, and whether the panel's browser is signed in to the sites the agent uses there; and what it
 /// lets go of, moved from its trash folder to the Finder's Trash. It answers on a loopback port, to a
-/// password the box is given as it starts (`environment`), and only for a name of Kuvo Code's own
+/// password, both in the box's `run/host.json` (which the box reads for each call), and only for a name of Kuvo Code's own
 /// keys (`KUVO_KEY_…`), so the box can reach nothing else in your Keychain. A key saved or removed
 /// here goes to the engine's files too (`IntegrationKeys`); listing them reads no secret, so it never
 /// asks you.
 @MainActor
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-    private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
+    private lazy var server: LoopbackServer = {
+        let server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
+        // Gone by itself: started again, so the box's keys aren't out of reach until the app quits;
+        // one that keeps failing, less and less often.
+        server.failed = { [weak self] in self?.failedByItself() }
+        return server
+    }()
+    /// Trying again every so often, after it couldn't start or failed by itself.
+    private var retrying: Task<Void, Never>?
+    /// How long it waits before its next try after failing by itself, and when it last did.
+    private var failureWait = HostInterface.firstWait
+    private var lastFailure: Date?
+    private static let firstWait = 2.0
+    private static let longestWait = 60.0
 
-    /// Starts answering (once), and says what the box is to be given to reach it: where, and its
-    /// password. (Where the engine reads keys from, `KUVO_KEYS`, `BoxProcess` gives it.)
-    func start() async throws -> [String: String] {
-        let port = try await server.start()
-        return ["KUVO_HOST_URL": "http://127.0.0.1:\(port)", "KUVO_HOST_PASSWORD": password]
+    init() {
+        // Quitting, crashes aside: the box's record of where it answers goes with it, so nothing
+        // else that takes its port later is asked for your keys.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        }
     }
 
-    func stop() { server.stop() }
+    /// Where it tells this Mac's box it answers, and with what password: written each time it starts,
+    /// taken away when it stops, can't start, or the app quits; only you can read it.
+    static var file: URL { BoxProcess.run.appending(path: "host.json") }
+
+    /// Whether it's answering now.
+    var isAnswering: Bool { server.port != nil }
+
+    /// Starts answering (once), and tells the box where (`file`): where, and its password, which it
+    /// also says. (Where the engine reads keys from, `KUVO_KEYS`, `BoxProcess` gives it.) What the
+    /// box was told before goes first, so a start that fails leaves it nothing to follow.
+    @discardableResult
+    func start() async throws -> [String: String] {
+        if !isAnswering { Self.forget() }
+        let port = try await server.start()
+        let url = "http://127.0.0.1:\(port)"
+        try Self.write(["url": url, "password": password])
+        return ["KUVO_HOST_URL": url, "KUVO_HOST_PASSWORD": password]
+    }
+
+    /// Kept answering: started now if it isn't (never yet, stopped, or gone by itself), else tried
+    /// again every so often, sooner at first, until it starts. Whether it answers now.
+    @discardableResult
+    func keepUp() async -> Bool {
+        if isAnswering { return true }
+        if (try? await start()) != nil {
+            retrying?.cancel()
+            retrying = nil
+            return true
+        }
+        Self.forget()
+        retry(after: Self.firstWait)
+        return false
+    }
+
+    /// Stops answering, and tells the box so (its keys out of reach until it starts again).
+    func stop() {
+        retrying?.cancel()
+        retrying = nil
+        server.stop()
+        Self.forget()
+    }
+
+    /// Its listener failed by itself: tried again after a wait that doubles with each failure that
+    /// comes soon after the last one, up to a minute.
+    private func failedByItself() {
+        Self.forget()
+        if let lastFailure, Date.now.timeIntervalSince(lastFailure) < 5 * 60 {
+            failureWait = min(failureWait * 2, Self.longestWait)
+        } else {
+            failureWait = Self.firstWait
+        }
+        lastFailure = .now
+        retrying?.cancel()
+        retrying = nil
+        retry(after: failureWait)
+    }
+
+    /// Tries to start again after `first` seconds, then twice as long each time, up to a minute,
+    /// until it starts (one try at a time).
+    private func retry(after first: Double) {
+        guard retrying == nil else { return }
+        retrying = Task { [weak self] in
+            var wait = first
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(wait))
+                guard let self, !Task.isCancelled else { return }
+                if (try? await self.start()) != nil {
+                    self.retrying = nil
+                    return
+                }
+                Self.forget()
+                wait = min(wait * 2, Self.longestWait)
+            }
+        }
+    }
+
+    /// What the box was told, gone.
+    private static func forget() {
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// Written whole, readable only by you from the moment it exists: a new file made that way,
+    /// then moved over the old one.
+    private static func write(_ said: [String: String]) throws {
+        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let data = try JSONSerialization.data(withJSONObject: said)
+        let temporary = BoxProcess.run.appending(path: ".host-\(UUID().uuidString).json")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        let written = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+        let closed = close(descriptor)
+        guard written == data.count, closed == 0, rename(temporary.path, file.path) == 0 else {
+            unlink(temporary.path)
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    /// The box's nonce, with where it reached it (`127.0.0.1:<port>`), signed with the password
+    /// (HMAC-SHA256, hex), as it checks it: relayed from another port, it's wrong there.
+    nonisolated static func proof(of nonce: String, at address: String, password: String) -> String {
+        let signed = Data("kuvo-host-hello\u{0}\(nonce)\u{0}\(address)".utf8)
+        let code = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(password.utf8)))
+        return code.map { String(format: "%02x", $0) }.joined()
+    }
 
     /// The names it answers for: Kuvo Code's own keys.
     nonisolated static func isKey(_ name: String) -> Bool {
@@ -36,6 +155,16 @@ final class HostInterface {
     }
 
     private func respond(to request: HTTPRequest) async -> HTTPResponse {
+        // That it's this Mac's app the box reaches, not whatever has its port now: the box's nonce
+        // and this port, signed with the password, asked before anything else and without the
+        // password, so only the app that wrote `file`, here, can answer it.
+        if request.path == "/hello" {
+            guard request.method == "POST" else { return .init(status: 405, headers: ["Allow": "POST"]) }
+            let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
+            guard let nonce = given["nonce"] as? String, (16...256).contains(nonce.count) else { return .init(status: 400) }
+            guard let port = server.port else { return .init(status: 503) }
+            return .json(["proof": Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: password)])
+        }
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
               samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
         guard request.method == "POST" else { return .init(status: 405, headers: ["Allow": "POST"]) }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import KuvoCode
@@ -67,6 +68,48 @@ import Testing
         }
     }
 
+    /// It proves it's the app to the box, which asks without the password (so nothing that took a
+    /// left-behind port learns it): the box's nonce, signed with the password.
+    @Test func itProvesItsTheAppWithoutBeingGivenThePassword() async throws {
+        let environment = try await host.start()
+        defer { host.stop() }
+        let password = try #require(environment["KUVO_HOST_PASSWORD"])
+        let nonce = UUID().uuidString
+        let proof = try await ask("/hello", ["nonce": nonce], password: nil, at: environment).json?["proof"] as? String
+        let address = try #require(environment["KUVO_HOST_URL"]?.replacingOccurrences(of: "http://", with: ""))
+        #expect(proof == HostInterface.proof(of: nonce, at: address, password: password))
+        #expect(proof != HostInterface.proof(of: nonce, at: address, password: "another"))
+        #expect(proof != HostInterface.proof(of: nonce, at: "127.0.0.1:1", password: password), "for where the box reached it only")
+        #expect(try await ask("/keys/names", [:], password: nil, at: environment).status == 401, "nothing else without it")
+    }
+
+    /// Quitting takes away where it told the box it answers, so nothing that takes its port later
+    /// is asked for your keys.
+    @Test func quittingTakesAwayWhereItAnswers() async throws {
+        try await host.start()
+        defer { host.stop() }
+        #expect(FileManager.default.fileExists(atPath: HostInterface.file.path))
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+        #expect(!FileManager.default.fileExists(atPath: HostInterface.file.path), "gone as the app quits")
+        #expect(!host.isAnswering)
+    }
+
+    /// Try Again while it's starting (its retry, say) waits for that start: one listener, not a
+    /// second that would go on answering with the password after it stops.
+    @Test func twoStartsAtOnceAreOneListener() async throws {
+        defer { host.stop() }
+        async let first = host.start()
+        async let second = host.start()
+        let (a, b) = try await (first, second)
+        #expect(a["KUVO_HOST_URL"] == b["KUVO_HOST_URL"])
+        host.stop()
+        for url in Set([a["KUVO_HOST_URL"], b["KUVO_HOST_URL"]].compactMap { $0 }) {
+            await #expect(throws: (any Error).self, "nothing answers at \(url)") {
+                _ = try await ask("/hello", ["nonce": UUID().uuidString], password: nil, at: ["KUVO_HOST_URL": url])
+            }
+        }
+    }
+
     /// Whether the panel's browser is signed in to the sites the agent uses there, for Settings ›
     /// Integrations on a phone: each it can tell, as their cookies say; nothing without the password.
     @Test func whereThePanelsBrowserIsSignedIn() async throws {
@@ -81,7 +124,9 @@ import Testing
 
     /// The box the app starts (before its engine, or again after) can send this Mac's wake-ups,
     /// with the app's own kuvo-wake, and reach your Keychain through the app, which it's told is
-    /// where its keys are: without that, it would keep keys in files of its own.
+    /// where its keys are: without that, it would keep keys in files of its own. Where the app
+    /// answers is in the box's folder, only you can read it, never in its environment, and goes
+    /// once the app stops answering.
     @Test func thisMacsBoxIsStartedAbleToSendWakeUpsAndReachYourKeychain() async throws {
         let app = AppModel()
         let environment = await app.boxEnvironment(["PATH": "/usr/bin:/bin"])
@@ -90,8 +135,14 @@ import Testing
         #expect(environment["KUVO_WAKE_COMMAND"] == WakeUps.command.path)
         #expect(FileManager.default.isExecutableFile(atPath: WakeUps.command.path), "kuvo-wake, there")
         #expect(environment["KUVO_KEYS_ON_HOST"] == "1")
-        #expect(environment["KUVO_HOST_URL"]?.hasPrefix("http://127.0.0.1:") == true)
-        #expect(environment["KUVO_HOST_PASSWORD"]?.count == 64)
+        #expect(environment["KUVO_HOST_URL"] == nil && environment["KUVO_HOST_PASSWORD"] == nil, "nothing it runs has them")
+        let said = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: HostInterface.file)) as? [String: String])
+        #expect(said["url"]?.hasPrefix("http://127.0.0.1:") == true)
+        #expect(said["password"]?.count == 64)
+        let attributes = try FileManager.default.attributesOfItem(atPath: HostInterface.file.path)
+        #expect((attributes[.posixPermissions] as? Int) == 0o600, "only you can read it")
+        app.host.stop()
+        #expect(!FileManager.default.fileExists(atPath: HostInterface.file.path), "gone once it stops")
         #expect(FileManager.default.fileExists(atPath: BoxProcess.home.appending(path: "bin/integrations.json").path), "this Mac's catalog")
     }
 }

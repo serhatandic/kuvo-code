@@ -1354,10 +1354,24 @@ there.
 #### Host interface
 
 What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
-which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and passes the box
-`KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
-starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
-<KUVO_HOST_PASSWORD>` and `content-type: application/json`:
+which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to, and moving what it lets go of to the Finder's Trash. The app listens on `127.0.0.1` and, each time it
+starts listening, writes where and with what password to the box's `run/host.json` (`{"url",
+"password"}`, made `0600` and moved into place; bridge 0.9.60). It takes it away before each start,
+when it stops, when it can't start, and as it quits; one a crash left behind stays until the next
+start. The box reads it again for each call, so a host interface the app started again (it does,
+whenever it fails, and with Try Again in Settings) is reached at its new address without the box
+starting again, and every client's streams stay open. Before it sends anything else there, the box
+makes sure it's the app, not whatever took a left-behind file's port: `hello {"nonce"}` (a random
+nonce, asked without the password) → `{"proof"}`, the HMAC-SHA256 with the password, in hex, of
+`kuvo-host-hello\0<nonce>\0<host>:<port>`: where the box reached it, which the app answers with its
+own (`127.0.0.1:<port>`), so a proof relayed from the app at another port (by another user's
+process on this Mac, which can't read the file) is wrong there. Without that proof, its keys can't be reached (`503 {"message"}`); with it, nothing is asked
+again until the file changes or the app stops answering there. The box is started with `KUVO_KEYS_ON_HOST=1`: without the file, its
+keys can't be reached (`503 {"message"}`), never kept in files of its own. Before 0.9.60 the app
+passed `KUVO_HOST_URL` and `KUVO_HOST_PASSWORD` in the box's environment, which the box still uses
+while there's no file, taking the password out of its environment as it starts so nothing it runs
+has it. Each other call is a `POST` with `Authorization: Bearer <password>` and `content-type:
+application/json`:
 
 - `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
 - `keys/get {"name"}` → `{"value"}`, or `404` for none;

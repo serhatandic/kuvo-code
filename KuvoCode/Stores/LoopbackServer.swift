@@ -10,6 +10,10 @@ final class LoopbackServer {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPConnection] = [:]
     private(set) var port: UInt16?
+    /// Told when it stops listening by itself, once it was (not after `stop()`).
+    var failed: (() -> Void)?
+    /// The start under way: one listener at a time, whoever else asks meanwhile waits for it.
+    private var starting: Task<UInt16, Error>?
 
     init(respond: @escaping (HTTPRequest) async -> HTTPResponse) {
         self.respond = respond
@@ -18,6 +22,15 @@ final class LoopbackServer {
     /// Starts listening (once), and says where.
     func start() async throws -> UInt16 {
         if let port { return port }
+        if let starting { return try await starting.value }
+        let starting = Task { try await listen() }
+        self.starting = starting
+        defer { if self.starting == starting { self.starting = nil } }
+        return try await starting.value
+    }
+
+    /// A new listener, ready: its port.
+    private func listen() async throws -> UInt16 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
         let listener = try NWListener(using: parameters)
@@ -27,9 +40,13 @@ final class LoopbackServer {
         }
         let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
             var resumed = false
-            listener.stateUpdateHandler = { state in
+            listener.stateUpdateHandler = { [weak self] state in
                 MainActor.assumeIsolated {
-                    guard !resumed else { return }
+                    guard !resumed else {
+                        // Failed once it was listening: gone, said to whoever keeps it up.
+                        if case .failed = state { self?.lost(listener) }
+                        return
+                    }
                     switch state {
                     case .ready:
                         resumed = true
@@ -49,12 +66,22 @@ final class LoopbackServer {
             }
             listener.start(queue: .main)
         }
+        // Stopped meanwhile: not this one's to say.
+        guard self.listener === listener else { throw CancellationError() }
         self.port = port
         return port
     }
 
+    /// It stopped listening by itself: as if stopped, then said.
+    private func lost(_ gone: NWListener) {
+        guard listener === gone else { return }
+        stop()
+        failed?()
+    }
+
     /// Stops listening, and closes what's open.
     func stop() {
+        starting = nil
         listener?.cancel()
         listener = nil
         port = nil

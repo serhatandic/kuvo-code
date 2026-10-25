@@ -13,16 +13,16 @@ final class SettingsBox {
     /// This Mac's engine settings file, where its box keeps them.
     static var file: URL { AppModel.engineFolders.configFile }
 
-    /// `process` and `defaultsAdded` as `TestBox` has them. `settings`: the file's text before it
+    /// `process`, `host` and `defaultsAdded` as `TestBox` has them. `settings`: the file's text before it
     /// starts (none: no file).
-    init(port: Int, process: BoxProcess = BoxProcess(), defaultsAdded: Bool = true, settings: String? = nil) async throws {
+    init(port: Int, process: BoxProcess = BoxProcess(), host: HostInterface = HostInterface(), defaultsAdded: Bool = true, settings: String? = nil) async throws {
         try? FileManager.default.removeItem(at: Self.file)
         if let settings {
             try FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(settings.utf8).write(to: Self.file)
         }
         engine = StubEngine(port: port)
-        box = try await TestBox(engine: engine.url, process: process, defaultsAdded: defaultsAdded)
+        box = try await TestBox(engine: engine.url, process: process, host: host, defaultsAdded: defaultsAdded)
     }
 
     /// This Mac's link, for what it answers itself (its keys, in the Keychain).

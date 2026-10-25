@@ -212,6 +212,10 @@ struct IntegrationsSettings: View {
                         PlacesLine(places: places, waitsForCodeHelp: "Ask the agent to use \(entry.title): the first time, it gives you a code to enter on Microsoft's page.")
                             .padding(.top, 2)
                     }
+                    if let note = entry.keysNote(on: name) {
+                        KeysNote(text: note)
+                            .padding(.top, 2)
+                    }
                 }
             }
             .settingsText()
@@ -220,26 +224,27 @@ struct IntegrationsSettings: View {
                     Spinner(size: 14)
                         .frame(height: 22)
                         .accessibilityLabel("Working on \(entry.title)")
-                } else if entry.isBrowser {
-                    let service = Integrations.service(entry.id)
-                    Button(siteSignedIn(entry) == true ? "Open…" : "Sign In…") {
-                        if let service { withAnimation(.ui) { app.settingsTabs.open(service, on: box) } }
-                    }
-                    .disabled(service == nil)
-                    .help("Sign in to \(entry.title) in the browser the agent and your bots use on \(box.machine == nil ? "this Mac" : name)")
-                } else if !entry.added {
-                    if entry.isApp {
-                        Button("Add App…") { addingKey = entry }
-                    } else if entry.takesKeys {
-                        Button("Add Key…") { addingKey = entry }
-                    } else {
-                        Button("Connect") { add(entry) }
+                } else if let adding = entry.adding {
+                    switch adding {
+                    case .onSite:
+                        let service = Integrations.service(entry.id)
+                        Button(siteSignedIn(entry) == true ? "Open…" : "Sign In…") {
+                            if let service { withAnimation(.ui) { app.settingsTabs.open(service, on: box) } }
+                        }
+                        .disabled(service == nil)
+                        .help("Sign in to \(entry.title) in the browser the agent and your bots use on \(box.machine == nil ? "this Mac" : name)")
+                    case .app: Button("Add App…") { addingKey = entry }
+                    case .key: Button("Add Key…") { addingKey = entry }
+                    case .connect: Button("Connect") { add(entry) }
+                    case .keysUnreadable: readKeysAgainButton(entry)
                     }
                 } else {
                     let health = health(of: entry)
                     let isOff = health == .disabled
-                    // What needs you, first.
-                    if health == .needsSignIn, let signIn = entry.signIn {
+                    // What needs you, first: its keys read again, as its note asks.
+                    if entry.keysUnknown {
+                        readKeysAgainButton(entry)
+                    } else if health == .needsSignIn, let signIn = entry.signIn {
                         Button("Sign In…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
                     } else if health == .failed {
                         Button("Try Again") { reconnect(entry) }
@@ -260,11 +265,17 @@ struct IntegrationsSettings: View {
                             Button("Sign In Again…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
                         }
                         if entry.takesKeys {
+                            // Not while its keys can't be read there: they'd only be turned away.
                             Button(entry.isApp ? "Change App…" : "Change Key…") { addingKey = entry }
+                                .disabled(entry.keysUnknown)
+                                .accessibilityHint(entry.keysUnknown ? "Its keys can’t be read on \(name) right now." : "")
                         }
                         if !isOff { Button("Reconnect") { reconnect(entry) } }
                         Divider()
+                        // Its keys go with it, and can't be taken away while they can't be read.
                         Button("Remove…", role: .destructive) { removing = entry }
+                            .disabled(entry.keysUnknown)
+                            .accessibilityHint(entry.keysUnknown ? "Its keys can’t be read on \(name) right now." : "")
                     } label: {
                         Image(systemName: "ellipsis")
                     }
@@ -275,6 +286,14 @@ struct IntegrationsSettings: View {
                 }
             }
         }
+    }
+
+    /// Try Again for one whose keys can't be read now: not whether it has them, so they're read
+    /// again, rather than keys typed only to be turned away.
+    private func readKeysAgainButton(_ entry: Integrations.Entry) -> some View {
+        Button("Try Again") { readKeysAgain(entry) }
+            .help("Read \(entry.title)’s keys on \(name) again")
+            .accessibilityLabel("Read \(entry.title)’s keys again")
     }
 
     /// How it's doing, as its box says; one just turned on is starting until the box has it. Nil
@@ -308,12 +327,13 @@ struct IntegrationsSettings: View {
 
     // MARK: Through its box
 
-    /// What the box lists now.
-    private func read() async {
+    /// What the box lists now; `again`, as Try Again reads it (this Mac's host interface started
+    /// first, when it isn't answering).
+    private func read(again: Bool = false) async {
         reads += 1
         let read = reads
         do {
-            let found = try await app.integrations(on: box)
+            let found = try await again ? app.integrationsAgain(on: box) : app.integrations(on: box)
             guard read == reads else { return }
             listed = found
             Shown.last[box.id] = found
@@ -345,7 +365,22 @@ struct IntegrationsSettings: View {
     /// This Mac's box started again when it stopped for good; then read again.
     private func tryAgain() async {
         if box.machine == nil, app.box.endpoint == nil, app.box.canStartAgain { await app.box.startAgain() }
-        await read()
+        await read(again: true)
+    }
+
+    /// Its keys read again, as the whole page is: a spinner in its Try Again's place meanwhile, and
+    /// said plainly when they still can't be (the page says so itself when it couldn't be read).
+    private func readKeysAgain(_ entry: Integrations.Entry) {
+        busy.insert(entry.id)
+        Task {
+            await tryAgain()
+            busy.remove(entry.id)
+            if failure == nil, shown?.integrations.first(where: { $0.id == entry.id })?.keysUnknown == true {
+                trouble = ("\(entry.title)’s keys still can’t be read", box.machine == nil
+                    ? "Kuvo Code still can’t reach your Keychain for them. Try again in a moment, and if it keeps happening, quit and reopen Kuvo Code."
+                    : "\(name) still can’t reach them. Try again in a moment.")
+            }
+        }
     }
 
     private func add(_ entry: Integrations.Entry) {
@@ -486,6 +521,25 @@ private struct PlacesLine: View {
         .font(.subheadline)
         .foregroundStyle(.secondary)
         .help(places.contains { $0.state == .waitsForCode } ? waitsForCodeHelp : "")
+    }
+}
+
+/// Why an integration's keys aren't asked for: they can't be read on its computer right now. In
+/// the row's small print, with the page's mark for what can't be read.
+private struct KeysNote: View {
+    let text: String
+
+    var body: some View {
+        Label {
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
     }
 }
 

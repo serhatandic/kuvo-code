@@ -5,6 +5,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/bot-keys-left.test.js`.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,8 @@ const host = http.createServer((request, response) => {
   request.on("end", () => {
     const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     const given = body ? JSON.parse(body) : {};
+    // The app proving it's the app, answering or not for its keys.
+    if (request.url === "/hello") return reply(200, { proof: crypto.createHmac("sha256", "secret").update(`kuvo-host-hello\0${given.nonce}\u0000127.0.0.1:${host.address().port}`).digest("hex") });
     if (request.url === "/trash") { trashed.push(given.path); return reply(200, {}); }
     if (!answering) return reply(503, { message: "Not now." });
     if (request.url === "/keys/names") return reply(200, { names: [...kept.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? "")) });

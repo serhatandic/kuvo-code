@@ -258,6 +258,40 @@ nonisolated enum Integrations {
         var isBrowser: Bool { way == "browser" }
         var isApp: Bool { way == "app" }
         var takesKeys: Bool { !(keys ?? []).isEmpty }
+        /// Its computer can't reach its keys now (its box leaves `keysSaved` out exactly then, as
+        /// this Mac's does while its app doesn't answer for the Keychain): whether it has them
+        /// isn't known, which isn't "none", so none is asked for that would only be turned away.
+        var keysUnknown: Bool { takesKeys && keysSaved == nil }
+
+        /// How Settings offers to add one that isn't added yet.
+        enum Adding: Equatable, Sendable {
+            /// Signed in to on its site, in the computer's browser.
+            case onSite
+            /// With your app's client ID and secret: Add App…
+            case app
+            /// With the keys you bring: Add Key…
+            case key
+            /// Nothing to bring: Connect.
+            case connect
+            /// Its keys can't be read on its computer now: Try Again, which reads them again.
+            case keysUnreadable
+        }
+
+        /// How it's offered, not added yet (one used on its site never is); nil once it's added.
+        var adding: Adding? {
+            if isBrowser { return .onSite }
+            guard !added else { return nil }
+            if keysUnknown { return .keysUnreadable }
+            if isApp { return .app }
+            return takesKeys ? .key : .connect
+        }
+
+        /// What its row says while its keys can't be read on `computer` (by its name), as the
+        /// phone says it; nil while they can.
+        func keysNote(on computer: String) -> String? {
+            guard keysUnknown else { return nil }
+            return "Its keys can’t be read on \(computer) right now" + (added ? "." : ", so it can’t be added yet.") + " Try again in a moment."
+        }
     }
 
     /// Those a computer's box lists, and why its settings can't be changed, when they can't.
