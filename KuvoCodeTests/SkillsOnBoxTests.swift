@@ -158,7 +158,7 @@ import Testing
         let entry = try #require(deleted.entries?.first)
         #expect(deleted.entries?.count == 1)
         #expect(entry.name == "release-notes" && entry.description == "Writes the release notes. From the commits.")
-        #expect(entry.when() == "Deleted today · goes in 30 days")
+        #expect(entry.when(calendar: Self.utc) == "Deleted today · goes in 30 days")
 
         #expect(await deleted.restore(entry))
         #expect(deleted.entries == [] && deleted.refusals.isEmpty)
@@ -185,31 +185,68 @@ import Testing
     /// it has left; past that, it's gone as the list is read.
     @Test func recentlyDeletedKeepsASkill30Days() async throws {
         defer { done() }
-        for name in ["kept", "gone"] {
-            try write("---\nname: \(name)\n---\n", to: name)
-            try await routes.remove(name)
-        }
+        // Put away at times of the test's choosing: the box names an entry by when it was deleted.
         let trash = BoxProcess.home.appending(path: "trash/skills")
-        let entries = try FileManager.default.contentsOfDirectory(atPath: trash.path)
-        // Deleted at a time of the test's choosing: the box dates an entry by when it was deleted.
-        func deleted(_ name: String, daysAgo days: Double) throws {
-            let entry = try #require(entries.first { $0.hasPrefix(name + "-") })
-            try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-days * 86_400)], ofItemAtPath: trash.appending(path: entry).path)
+        let now = Int(Date.now.timeIntervalSince1970)
+        for (name, days) in [("kept", 3), ("gone", 31)] {
+            let entry = trash.appending(path: "\(name)-\(now - days * 86_400)")
+            try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
+            try Data("---\nname: \(name)\n---\n".utf8).write(to: entry.appending(path: "SKILL.md"))
         }
-        try deleted("kept", daysAgo: 3)
-        try deleted("gone", daysAgo: 31)
 
         let page = RecentlyDeletedSkills(routes: routes)
         await page.load()
         #expect(page.entries?.map(\.folder) == ["kept"])
         let kept = try #require(page.entries?.first)
-        #expect(kept.when() == "Deleted 3 days ago · goes in 27 days")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: trash.path).allSatisfy { $0.hasPrefix("kept-") }, "gone for good")
-        // How it reads as the days go by, from the box's dates.
-        let day = 86_400.0
-        #expect(kept.when(now: Date(timeIntervalSince1970: kept.deleted + day + 60)) == "Deleted yesterday · goes in 29 days")
-        #expect(kept.when(now: Date(timeIntervalSince1970: kept.goes - 60)) == "Deleted 29 days ago · goes in 1 day")
+        #expect(kept.when(calendar: Self.utc) == "Deleted 3 days ago · goes in 27 days")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: trash.path) == ["kept-\(now - 3 * 86_400)"], "gone for good")
     }
+
+    /// How long ago, and how long it has left, in calendar days: one deleted late last night was
+    /// deleted yesterday, and one that goes early tomorrow goes tomorrow.
+    @Test func recentlyDeletedCountsCalendarDays() {
+        defer { done() }
+        func at(_ text: String) -> Double { ISO8601DateFormatter().date(from: text)!.timeIntervalSince1970 }
+        let late = at("2026-10-20T23:30:00Z")
+        let entry = DeletedSkill(id: "pdf-\(Int(late))", folder: "pdf", name: "pdf", deleted: late, goes: late + 30 * 86_400)
+        let when = { (now: String) in entry.when(now: Date(timeIntervalSince1970: at(now)), calendar: Self.utc) }
+        #expect(when("2026-10-20T23:45:00Z") == "Deleted today · goes in 30 days")
+        #expect(when("2026-10-21T00:15:00Z") == "Deleted yesterday · goes in 29 days", "an hour later, but another day")
+        #expect(when("2026-10-23T12:00:00Z") == "Deleted 3 days ago · goes in 27 days")
+        #expect(when("2026-11-18T08:00:00Z") == "Deleted 29 days ago · goes tomorrow")
+        #expect(when("2026-11-19T08:00:00Z") == "Deleted 30 days ago · goes today")
+    }
+
+    /// A machine's box from before Recently Deleted (bridge 0.9.43 to 0.9.47) keeps a deleted skill
+    /// in its trash but offers none back: the page shows no Recently Deleted for it, and deleting
+    /// says what that box does.
+    @Test func aBoxWithoutRecentlyDeletedShowsNone() async throws {
+        defer { done() }
+        let older = BoxClient(box: "older", transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                // As 0.9.47 answers: its features, without skills.trash; anything else it hasn't got.
+                let info = request.path == "kuvo/info"
+                continuation.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((info ? #"{"kind":"machine","features":["skills","config"]}"# : "{}").utf8)))
+                continuation.finish()
+            }
+        })
+        let page = RecentlyDeletedSkills(routes: BoxSkills(box: older, library: older))
+        await page.load()
+        #expect(page.isOffered == false && page.entries == [] && page.failure == nil)
+        #expect(RecentlyDeletedSkills.deletionNote(recentlyDeleted: page.isOffered == true) == "Its folder, with anything else in it, is put away in Kuvo Code’s trash for 30 days.")
+        // This Mac's box has it.
+        let here = RecentlyDeletedSkills(routes: routes)
+        await here.load()
+        #expect(here.isOffered == true)
+        #expect(RecentlyDeletedSkills.deletionNote(recentlyDeleted: here.isOffered == true) == "Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it.")
+    }
+
+    private static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
 
     /// Many reads of a big collection at once (a phone asking for each skill's description), with
     /// the streams that follow this Mac's box open, never hold up adding a skill.

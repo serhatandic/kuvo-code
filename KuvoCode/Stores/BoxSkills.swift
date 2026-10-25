@@ -43,6 +43,12 @@ struct BoxSkills {
         _ = try await box.value(Empty.self, "DELETE", "kuvo/skills/" + Self.part(name))
     }
 
+    /// Whether the box has Recently Deleted, as its `kuvo/info` says (`skills.trash`).
+    func offersRecentlyDeleted() async throws -> Bool {
+        struct Info: Decodable { var features: [String]? }
+        return try await box.value(Info.self, "GET", "kuvo/info").features?.contains("skills.trash") == true
+    }
+
     /// The box's Recently Deleted, newest first.
     func deleted() async throws -> [DeletedSkill] {
         struct Listed: Decodable { var entries: [DeletedSkill] }
@@ -103,17 +109,24 @@ struct DeletedSkill: Decodable, Hashable, Identifiable {
     var deleted: Double
     var goes: Double
 
-    /// "Deleted 3 days ago · goes in 27 days", as of `now`.
-    func when(now: Date = .now) -> String {
-        let day = 86_400.0
-        let ago = max(0, Int((now.timeIntervalSince1970 - deleted) / day))
-        let left = max(1, Int(((goes - now.timeIntervalSince1970) / day).rounded(.up)))
-        let since = switch ago {
-        case 0: "Deleted today"
-        case 1: "Deleted yesterday"
-        default: "Deleted \(ago) days ago"
+    /// "Deleted 3 days ago · goes in 27 days", as of `now`, in calendar days: one deleted last
+    /// night was deleted yesterday.
+    func when(now: Date = .now, calendar: Calendar = .current) -> String {
+        let today = calendar.startOfDay(for: now)
+        let days = { (date: Double) in
+            calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: Date(timeIntervalSince1970: date))).day ?? 0
         }
-        return "\(since) · goes in \(left.counting("day"))"
+        let since = switch -days(deleted) {
+        case ...0: "Deleted today"
+        case 1: "Deleted yesterday"
+        case let ago: "Deleted \(ago) days ago"
+        }
+        let until = switch days(goes) {
+        case ...0: "goes today"
+        case 1: "goes tomorrow"
+        case let left: "goes in \(left) days"
+        }
+        return "\(since) · \(until)"
     }
 }
 
@@ -130,6 +143,15 @@ final class RecentlyDeletedSkills {
     private(set) var refusals: [String: String] = [:]
     /// The entry being restored.
     private(set) var restoring: String?
+    /// Whether the box has Recently Deleted (`skills.trash`); nil until it's said.
+    private(set) var isOffered: Bool?
+
+    /// What deleting a skill says becomes of it, on a box with Recently Deleted or one without.
+    static func deletionNote(recentlyDeleted: Bool) -> String {
+        recentlyDeleted
+            ? "Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it."
+            : "Its folder, with anything else in it, is put away in Kuvo Code’s trash for 30 days."
+    }
 
     init(routes: BoxSkills) {
         self.routes = routes
@@ -138,6 +160,14 @@ final class RecentlyDeletedSkills {
     /// Lists them again, as the box has them now.
     func load() async {
         do {
+            // A box from before Recently Deleted (bridge 0.9.43 to 0.9.47) keeps a deleted skill in
+            // its trash without offering it back: it has none to show.
+            if isOffered == nil { isOffered = try await routes.offersRecentlyDeleted() }
+            guard isOffered == true else {
+                entries = []
+                failure = nil
+                return
+            }
             let listed = try await routes.deleted()
             entries = listed
             failure = nil

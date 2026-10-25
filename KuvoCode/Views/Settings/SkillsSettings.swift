@@ -227,7 +227,8 @@ struct SkillsSettings: View {
         }
         #endif
         .settingsDetail(item: $writing, title: { $0.name ?? "New Skill" }) { draft in
-            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? [])) {
+            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? []),
+                        recentlyDeleted: deleted?.isOffered == true) {
                 writing = nil
                 Task { await refresh() }
             }
@@ -415,7 +416,12 @@ private struct RecentlyDeletedPage: View {
                         DeletedSkillRow(entry: entry, isRestoring: deleted.restoring == entry.id, canRestore: deleted.restoring == nil,
                                         refusal: deleted.refusals[entry.id]) {
                             Task {
-                                if await deleted.restore(entry) { changed() }
+                                if await deleted.restore(entry) {
+                                    changed()
+                                } else if let refusal = deleted.refusals[entry.id] {
+                                    // Said where it shows, and to VoiceOver, which wouldn't hear it otherwise.
+                                    AccessibilityNotification.Announcement("Couldn’t restore \(entry.name). \(refusal)").post()
+                                }
                             }
                         }
                     }
@@ -444,6 +450,12 @@ private struct DeletedSkillRow: View {
         SettingsRowLayout {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
+                if entry.name != entry.folder {
+                    // The name it comes back under, which a refusal names.
+                    Text("Restores as \(entry.folder)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 if let description = entry.description {
                     Text(SkillsSettings.summary(description))
                         .font(.callout)
@@ -466,6 +478,7 @@ private struct DeletedSkillRow: View {
             HStack {
                 if isRestoring {
                     Spinner(size: 16)
+                        .accessibilityLabel("Restoring \(entry.name)")
                 }
                 Button("Restore", action: restore)
                     .disabled(!canRestore)
@@ -492,6 +505,8 @@ private struct SkillEditor: View {
     let folder: String?
     /// Names other skills have.
     let taken: Set<String>
+    /// Its box has Recently Deleted (`skills.trash`), where a deleted skill goes.
+    let recentlyDeleted: Bool
     let done: () -> Void
 
     @State private var newName = ""
@@ -576,7 +591,7 @@ private struct SkillEditor: View {
         .confirmationDialog("Delete \(id)?", isPresented: $confirmsRemoval) {
             Button("Delete", role: .destructive, action: delete)
         } message: {
-            Text("Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it.")
+            Text(RecentlyDeletedSkills.deletionNote(recentlyDeleted: recentlyDeleted))
         }
     }
 
