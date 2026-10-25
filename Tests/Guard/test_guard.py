@@ -81,7 +81,7 @@ class TheRule(Case):
     def test_the_real_apps_bundle_id_folder_engine_and_app_are_refused(self):
         for value in ["run.kuvo.code", "Run.Kuvo.Code", self.box.real, self.box.real + "/", self.box.real_engine,
                       self.box.real + "/../run.kuvo.code/engine", "/Applications/Kuvo Code.app",
-                      "/Applications/Kuvo Code.app/Contents/MacOS/Kuvo Code"]:
+                      "/Applications/Kuvo Code.app/Contents/MacOS/Kuvo Code", ".kuvo-code", "~/.kuvo-code", "/home/someone/.kuvo-code"]:
             with self.subTest(value=value):
                 self.assertRefused(self.check("run.kuvo.code.perf", value), "the caller")
 
@@ -93,7 +93,7 @@ class TheRule(Case):
     def test_copies_of_their_own_go_on(self):
         for value in ["run.kuvo.code.demo", "run.kuvo.code.tests", "run.kuvo.code.perf", "run.kuvo.code.e2e",
                       "run.kuvo.code.shots", self.box.copy_engine, os.path.dirname(self.box.real) + "/run.kuvo.code.perf",
-                      "", "1", "/Applications/Kuvo Code Beta.app"]:
+                      "", "1", "/Applications/Kuvo Code Beta.app", ".kuvo-code-perf", ".kuvo-code-demo"]:
             with self.subTest(value=value):
                 done = self.check(value)
                 self.assertEqual(done.returncode, 0, done.stderr)
@@ -110,6 +110,28 @@ class TheScripts(Case):
         done = self.run_script(["sh", "scripts/test-app.sh"], KUVO_TEST_BUN=self.box.copy_engine)
         self.assertNotIn("refusing", done.stderr)
         self.assertIn("xcodebuild test", self.box.what_ran(), "it went on to build (a stand-in here)")
+
+    def test_the_bun_the_scripts_fall_back_to_is_a_copys_newest_engine(self):
+        support = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(self.box.copy_engine))))
+        for copy, version in [("run.kuvo.code.demo", "2.0.9"), ("run.kuvo.code.e2e", "2.0.10")]:
+            engine = os.path.join(support, copy, "engine", version, "opencode")
+            os.makedirs(os.path.dirname(engine))
+            open(engine, "w").close()
+        # The real app's is newer still, and never chosen.
+        newer = os.path.join(self.box.real, "engine", "9.9.9", "opencode")
+        os.makedirs(os.path.dirname(newer))
+        open(newer, "w").close()
+        done = self.run_script(["sh", "-c", ". scripts/real-app-guard.sh; newest_copy_engine"])
+        self.assertEqual(done.stdout.strip(), self.box.copy_engine, "2.0.32 after 2.0.10 and 2.0.9, and not the real app's")
+
+    def test_the_perf_copy_reuses_its_newest_engine(self):
+        perf = self.load("Tests/Perf/kuvo_perf.py")
+        perf.ENGINES = os.path.join(self.box.root, "kept")
+        for version in ["2.0.9", "2.0.32", "2.0.10"]:
+            os.makedirs(os.path.join(perf.ENGINES, version))
+            open(os.path.join(perf.ENGINES, version, "opencode"), "w").close()
+        os.environ.pop("KUVO_PERF_ENGINE", None)
+        self.assertEqual(perf.engine(), os.path.join(perf.ENGINES, "2.0.32", "opencode"))
 
     def test_the_agents_bridge_is_never_built_with_the_real_engine(self):
         done = self.run_script(["sh", "scripts/build-agents.sh"], BUN=self.box.real_engine)

@@ -22,15 +22,15 @@ if [ "${1:-}" = "--check" ]; then
   exit 1
 fi
 
+. scripts/real-app-guard.sh
 if [ -z "${BUN:-}" ]; then
   if command -v bun >/dev/null 2>&1; then
     BUN=bun
   else
-    BUN=$(ls -d "$HOME/Library/Application Support/run.kuvo.code."*/engine/*/opencode 2>/dev/null | tail -n 1)
+    BUN=$(newest_copy_engine)
     [ -n "$BUN" ] || { echo "No Bun: install it, or launch a demo copy of Kuvo Code once so it downloads its engine." >&2; exit 1; }
   fi
 fi
-. scripts/real-app-guard.sh
 real_app_guard "scripts/build-agents.sh" "$BUN"
 
 BUN_BE_BUN=1 "$BUN" build Agents/src/main.ts --target=bun --outfile KuvoCode/Resources/kuvo-agents.js

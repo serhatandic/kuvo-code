@@ -29,6 +29,16 @@ import Testing
                                        realSupport: realSupport) != nil)
     }
 
+    @Test func aCopyInTheRealFolderOnMachinesIsRefused() {
+        for root in [".kuvo-code", ".kuvo-code/", "~/.kuvo-code", "/home/someone/.kuvo-code"] {
+            let refusal = AppInfo.realAppRefusal(bundleID: "run.kuvo.code.demo", environment: ["KUVO_DEMO_MACHINE_ROOT": root], realSupport: realSupport)
+            #expect(refusal?.contains("machines") == true, "\(root)")
+        }
+        for root in [".kuvo-code-demo", ".kuvo-code-perf", ".kuvo-code-e2e"] {
+            #expect(AppInfo.realAppRefusal(bundleID: "run.kuvo.code.demo", environment: ["KUVO_DEMO_MACHINE_ROOT": root], realSupport: realSupport) == nil, "\(root)")
+        }
+    }
+
     @Test func copiesOfTheirOwnStart() {
         let ownEngine = realSupport.deletingLastPathComponent().appending(path: "run.kuvo.code.perf/engine/2.0.32/opencode").path(percentEncoded: false)
         for bundleID in ["run.kuvo.code.demo", "run.kuvo.code.perf", "run.kuvo.code.e2e", "run.kuvo.code.shots", "run.kuvo.code.tests"] {

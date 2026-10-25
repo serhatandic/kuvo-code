@@ -83,16 +83,27 @@ def project(name):
 
 def quit_app(app=None):
     """Asks the perf copy to quit (for a few seconds at most: a busy main thread never answers),
-    then stops what's left of it by its process number."""
+    then stops what's left of it by its process number: told to stop first, so its engine and
+    bridge stop with it, and made to after a few seconds more."""
     try:
         subprocess.run(["osascript", "-e", 'tell application id "%s" to quit' % BUNDLE], capture_output=True, timeout=15)
     except subprocess.TimeoutExpired:
         pass
     time.sleep(2)
-    running = sh(["pgrep", "-f", (app or APP) + "/Contents/MacOS/"], check=False)
-    for pid in running.split():
-        if int(pid) != os.getpid():
-            sh(["kill", "-KILL", pid], check=False)
+
+    def running():
+        found = sh(["pgrep", "-f", (app or APP) + "/Contents/MacOS/"], check=False)
+        return [pid for pid in found.split() if int(pid) != os.getpid()]
+    for signal in ["-TERM", "-KILL"]:
+        left = running()
+        if not left:
+            break
+        for pid in left:
+            sh(["kill", signal, pid], check=False)
+        for _ in range(10):
+            if not running():
+                break
+            time.sleep(0.5)
     time.sleep(1)
 
 
@@ -189,7 +200,10 @@ def engine():
     if os.environ.get("KUVO_PERF_ENGINE"):
         return os.environ["KUVO_PERF_ENGINE"]
     import glob
-    kept = sorted(glob.glob(os.path.join(ENGINES, "*", "opencode")))
+    # By version: 2.0.32 after 2.0.9.
+    def version(path):
+        return [int(part) if part.isdigit() else -1 for part in os.path.basename(os.path.dirname(path)).split(".")]
+    kept = sorted(glob.glob(os.path.join(ENGINES, "*", "opencode")), key=version)
     return kept[-1] if kept else None
 
 

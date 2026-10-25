@@ -204,6 +204,13 @@ import Testing
         #expect(!heard.has("list"), "nor does the list of chats: nothing it shows changed")
         #expect(groups.messages(in: quiet.id).isEmpty && groups.speaker(in: quiet.id) == nil)
         #expect(groups.group(talking.id)?.seats.keys.sorted() == ["bot_ada", "bot_ben"], "its bookkeeping is kept all the same")
+
+        // What the list shows of a chat still reaches it: a rename.
+        let renamed = Heard()
+        withObservationTracking { _ = groups.groups } onChange: { renamed.note("list") }
+        try await groups.update(quiet.id, name: "Quiet room", purpose: nil, members: ["bot_ada", "bot_ben"], meeting: nil)
+        try await until { groups.groups.contains { $0.name == "Quiet room" } }
+        #expect(renamed.has("list"), "the list of chats hears of a rename")
     }
 
     /// A meeting set up in Edit Group Chat is worked out on the chat's computer, on its clock: a

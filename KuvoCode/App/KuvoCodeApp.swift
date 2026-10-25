@@ -136,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.startUsage()
         #if DEBUG
         // KUVO_DEMO_USAGE=dashboard|customize|settings opens the usage panel, for screenshots.
-        if let screen = ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"] {
+        // (Asked for by name, it starts in a copy that never prompts too: see `AppInfo.demoUsageScreen`.)
+        if let screen = AppInfo.demoUsageScreen(ProcessInfo.processInfo.environment) {
             Task {
                 while !UsageMenuBar.shared.isRunning { try? await Task.sleep(for: .milliseconds(250)) }
                 try? await Task.sleep(for: .seconds(3))

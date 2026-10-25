@@ -32,6 +32,18 @@ nonisolated enum AppInfo {
         #endif
     }
 
+    /// The usage panel's screen a demo copy opens for screenshots (`KUVO_DEMO_USAGE`, any value but
+    /// `off` and `sample`), or nil. Asked for by name, the panel starts in a copy that never prompts
+    /// too: its Keychain reads fail at once there rather than ask.
+    static func demoUsageScreen(_ environment: [String: String]) -> String? {
+        #if DEBUG
+        guard let screen = environment["KUVO_DEMO_USAGE"], !["off", "sample"].contains(screen) else { return nil }
+        return screen
+        #else
+        return nil
+        #endif
+    }
+
     /// For what shows you a macOS prompt (Touch ID, a login item, the usage panel's Keychain reads):
     /// whether it may go ahead. A test reaching it stops the run at once, saying what and from
     /// where (the tests use stand-ins for these: see `Keychain`, `Notifier`); a demo copy that
@@ -61,6 +73,12 @@ nonisolated enum AppInfo {
         let because = "launched for a demo, test or measurement (\(asked.joined(separator: ", ")))"
         if bundleID.lowercased() == realBundleID {
             return "Refusing to start: \(because) as the real Kuvo Code (\(realBundleID)). Build a copy of its own, with APP_BUNDLE_ID=run.kuvo.code.demo (or .perf, .e2e, .shots)."
+        }
+        // Its folder on machines, where your own copy's engine, sessions and keys are there.
+        if let root = environment["KUVO_DEMO_MACHINE_ROOT"],
+           [".kuvo-code", "./.kuvo-code", "~/.kuvo-code"].contains(root.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased())
+            || root.lowercased().hasSuffix("/.kuvo-code") || root.lowercased().hasSuffix("/.kuvo-code/") {
+            return "Refusing to start: \(because) in the real Kuvo Code's folder on machines (KUVO_DEMO_MACHINE_ROOT=\(root)). Give it one of its own, like .kuvo-code-demo."
         }
         if let engine = environment["KUVO_OPENCODE_BINARY"] {
             let real = realSupport.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false).lowercased()

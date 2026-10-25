@@ -5,6 +5,11 @@ the code is laid out. Each runs in the e2e copy of the app (see README.md) with 
 real open-source projects cloned into the run's folder. Status: ✅ passes, ⚠️ works with friction
 (noted), ❌ broken (noted, then fixed), ⏳ not run yet, ⛔ can't run here (why).
 
+The e2e copy launches in the background, so it asks macOS nothing (CONTRIBUTING.md,
+`KUVO_DEMO_NO_PROMPTS`). Its notifications (K3, L41) show once macOS has allowed them for
+`run.kuvo.code.e2e`; Touch ID before a saved password goes to an agent or shows in Settings (K6)
+needs `kuvo_e2e.py launch KUVO_DEMO_NO_PROMPTS=0` and someone at the Mac to answer it.
+
 ## A. First launch and setup
 
 | ID | Case | Status |
