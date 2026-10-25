@@ -54,13 +54,18 @@ final class SettingsBox {
 @MainActor
 final class MachineTestBox {
     let folder: URL
+    /// Its machine's id, as this Mac names it.
+    let name: String
     private let server: ServerProcess
     /// Where it answers.
     var endpoint: ServerEndpoint { server.endpoint }
 
-    init(name: String = "lab", settings: [String: Any] = [:]) async throws {
+    /// `folder`: its `~/.kuvo-code`, when a test gives one (a machine its moves reach as files).
+    init(name: String = "lab", settings: [String: Any] = [:], folder: URL? = nil) async throws {
         guard let node = TestBox.node else { throw TestFailure("Node runs the boxes in the tests, and there's none.") }
-        folder = AppInfo.testRoot.appending(path: "Machines/\(name)-\(UUID().uuidString.prefix(8))")
+        let folder = folder ?? AppInfo.testRoot.appending(path: "Machines/\(name)-\(UUID().uuidString.prefix(8))")
+        self.folder = folder
+        self.name = name
         let manager = FileManager.default
         try manager.createDirectory(at: folder.appending(path: "box/keys"), withIntermediateDirectories: true)
         try manager.createDirectory(at: folder.appending(path: "bin"), withIntermediateDirectories: true)
@@ -75,7 +80,7 @@ final class MachineTestBox {
     var client: BoxClient {
         let endpoint = server.endpoint
         let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
-        return BoxClient(box: "lab", transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) })
+        return BoxClient(box: name, transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) })
     }
 
     /// Its settings file, as it is now.

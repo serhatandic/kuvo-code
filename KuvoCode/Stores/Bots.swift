@@ -564,77 +564,31 @@ final class Bots {
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
     }
 
-    // MARK: Moving (until moves go through the boxes)
+    // MARK: Moving
 
     /// A bot that moved to another computer (`Moves`): it lives on `machine` (nil: this Mac) from
-    /// now on, in `folder`, with its conversation carried there (`session`, the same ID, on `api`).
-    /// Its session there gets its rules for its folder there, and what it's told there; its folder,
-    /// what kuvo-wake reads there.
-    func moved(_ id: String, to machine: String?, folder: String, session: Session, api: OpenCodeAPI) async {
+    /// now on, in `folder`, with its conversation carried there (`session`, the same ID). Its box
+    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is, its
+    /// rules for its folder there, and what it's told there. One that can't be asked now does so at
+    /// the bot's next run there.
+    func moved(_ id: String, to machine: String?, folder: String, session: Session) async {
         guard let index = known.firstIndex(where: { $0.id == id }) else { return }
-        let old = known[index]
-        var bot = old
-        bot.machine = machine
-        bot.folder = folder
-        known[index] = bot
+        known[index].machine = machine
+        known[index].folder = folder
         save()
         show()
         app?.workspace.add(session)
-        let rules = (session.permissions ?? []).filter { !Self.isOwnRule($0, of: old) && !Self.isOwnRule($0, of: bot) }
-        _ = try? await api.setPermissions(session: bot.sessionID, rules: ToolApproval.refreshed(rules, settings: EngineConfig.rules(on: bot.machine)) + Self.ownRules(for: bot))
-        _ = try? await api.setInstruction(session: bot.sessionID, key: Self.instructionKey, text: Self.instructions(for: bot))
-        try? await writeSession(of: bot)
-        if let machine, let engine = app?.machines.engine(machine) { try? await Wakes.install(on: engine.machine.connection) }
-        if let machine { await refresh(machine) }
-    }
-
-    /// Writes the bot's session in its folder, and the folder it works in, where `kuvo-wake fire`
-    /// reads them; on a machine, your time zone, which its wake-ups' times are in.
-    private func writeSession(of bot: Bot) async throws {
-        let file = (bot.folder as NSString).appendingPathComponent("session")
-        let via = (bot.folder as NSString).appendingPathComponent("via")
-        if let machine = bot.machine {
-            let directory = (bot.folder as NSString).appendingPathComponent("directory")
-            let timezone = (bot.folder as NSString).appendingPathComponent("timezone")
-            let path = RemoteFolder.parse(bot.directory)?.path ?? bot.directory
-            var script = "printf '%s' \(SSHConnection.quoted(bot.sessionID)) >\(SSHConnection.quoted(file)) && printf '%s' \(SSHConnection.quoted(path)) >\(SSHConnection.quoted(directory)) && printf '%s' \(SSHConnection.quoted(TimeZone.current.identifier)) >\(SSHConnection.quoted(timezone))"
-            script += bot.agents == true ? " && printf bridge >\(SSHConnection.quoted(via))" : " && rm -f \(SSHConnection.quoted(via))"
-            // What its box lists it by, for one that came without it.
-            if let data = Self.descriptorData(bot) {
-                let described = SSHConnection.quoted((bot.folder as NSString).appendingPathComponent(Bot.Descriptor.file))
-                script += " && { [ -f \(described) ] || printf '%s' \(SSHConnection.quoted(data.base64EncodedString())) | base64 -d >\(described); }"
-            }
-            if let rules = WakeUps.zoneRules(TimeZone.current.identifier) {
-                let zoneFile = (bot.folder as NSString).appendingPathComponent("zoneinfo")
-                script += " && { printf '%s' \(SSHConnection.quoted(rules.base64EncodedString())) | base64 -d >\(SSHConnection.quoted(zoneFile)) 2>/dev/null || rm -f \(SSHConnection.quoted(zoneFile)); }"
-            }
-            guard await Task.detached(operation: { RemoteShell.run(script, on: machine) }).value != nil else { throw CancellationError() }
-        } else {
-            try Data(bot.sessionID.utf8).write(to: URL(filePath: file))
-            try Data(bot.directory.utf8).write(to: URL(filePath: (bot.folder as NSString).appendingPathComponent("directory")))
-            // What its box lists it by, for one that came without it.
-            let described = URL(filePath: bot.folder).appending(path: Bot.Descriptor.file)
-            if !FileManager.default.fileExists(atPath: described.path), let data = Self.descriptorData(bot) { try data.write(to: described, options: .atomic) }
-            // This Mac's go by its own clock.
-            for name in ["timezone", "zoneinfo"] { try? FileManager.default.removeItem(atPath: (bot.folder as NSString).appendingPathComponent(name)) }
-            if bot.agents == true { try Data("bridge".utf8).write(to: URL(filePath: via)) } else { try? FileManager.default.removeItem(atPath: via) }
+        let box = machine ?? BoxClient.mac
+        guard let client = client(box) else { return }
+        struct Answer: Decodable { var bot: ListedBot }
+        struct Given: Encodable { var timeZone: String }
+        let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id) + "/arrived"
+        do {
+            let answer = try await client.value(Answer.self, "POST", path, body: Given(timeZone: TimeZone.current.identifier))
+            take(one: answer.bot, from: box)
+        } catch {
+            log.error("A moved bot wasn't made its box's yet: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    /// A bot's own rules: its folder is its to read and write, wherever it works. Its wake-ups
-    /// never ask (they're Kuvo Code's tools); its watches go by the conversation's approval.
-    static func ownRules(for bot: Bot) -> [PermissionRule] {
-        // Its wake-ups are tools of Kuvo Code's (schedule_wake_up…), which need no rule of their
-        // own; an earlier version allowed its kuvo-wake commands, which let one that also wrote
-        // a file (a redirect) through (see `isOwnRule`).
-        [PermissionRule(action: "external_directory", resource: (bot.folder as NSString).appendingPathComponent("*"), effect: .allow)]
-    }
-
-    /// Whether a rule is one of a bot's own, as made now or by an earlier version.
-    private static func isOwnRule(_ rule: PermissionRule, of bot: Bot) -> Bool {
-        let full = bot.machine == nil ? command.path : machineCommand
-        if rule.action == "external_directory" { return rule.resource == (bot.folder as NSString).appendingPathComponent("*") }
-        return rule.action == "shell" && (rule.resource.hasPrefix("kuvo-wake \(bot.id) ") || rule.resource.hasPrefix("\"\(full)\" \(bot.id) "))
     }
 
     // MARK: Words
