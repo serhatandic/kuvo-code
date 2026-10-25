@@ -42,12 +42,38 @@ import Testing
         let boxAPI = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: box.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: "box"))
         app.workspace.machineAPI = { $0 == "box" ? boxAPI : nil }
         app.moves.transport = FolderMachine(root: boxRoot)
+        // No box answers unless a test starts them (`boxes`).
+        app.bots.boxes = { box in BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: CancellationError()) } }) }
         for engine in [mac, box] {
             engine.on("PATCH", "/api/session/*", json: [:])
             engine.on("PUT", "/api/experimental/session/*", json: [:])
             engine.on("DELETE", "/api/session/*", json: [:])
         }
         return app
+    }
+
+    /// This Mac's box and the machine's (the real `kuvo-link.js serve`, the machine's keeping its
+    /// folder where the moves reach it), each reaching its engine, the stand-ins: what makes a bot
+    /// that moved there its own.
+    private func boxes(for app: AppModel) async throws -> (mac: TestBox, machine: MachineTestBox) {
+        let macBox = try await TestBox(engine: mac.url)
+        let machine = try await MachineTestBox(name: "box", folder: boxRoot)
+        try FileManager.default.createDirectory(at: boxRoot.appending(path: "run"), withIntermediateDirectories: true)
+        try Data(#"{"port": 47978, "password": "test"}"#.utf8).write(to: boxRoot.appending(path: "run/engine.json"))
+        try FileManager.default.createDirectory(at: boxRoot.appending(path: "bots"), withIntermediateDirectories: true)
+        try JSONEncoder().encode(app.bots.kit(for: "box")).write(to: boxRoot.appending(path: "bots/kit.json"))
+        try await StubWeb.listen(port: 47978)
+        app.bots.writeMacKit()
+        let macClient = macBox.client(engine: mac.url), machineClient = machine.client
+        app.bots.boxes = { $0 == "box" ? machineClient : macClient }
+        app.bots.reachable = { $0 == "box" }
+        return (macBox, machine)
+    }
+
+    private func stop(_ boxes: (mac: TestBox, machine: MachineTestBox)) {
+        boxes.mac.stop()
+        StubWeb.stopListening(port: 47978)
+        boxes.machine.stop()
     }
 
     /// Imports into `engine` answered as the engine does: the session, where it's put.
@@ -73,6 +99,9 @@ import Testing
         try Data("notes".utf8).write(to: folder.appending(path: "workspace/notes.txt"))
         try Data("check the build".utf8).write(to: folder.appending(path: "wakes/1792000500-AbC123"))
         try Data(session.utf8).write(to: folder.appending(path: "session"))
+        // Its description, which its box knows it by.
+        try Data(#"{"kuvo": 1, "id": "\#(id)", "name": "Scout", "job": "Watches the build", "look": {"color": "sky", "shape": "round", "face": "calm"}, "created": "2026-10-01T09:00:00Z", "updated": "2026-10-01T09:00:00Z"}"#.utf8)
+            .write(to: folder.appending(path: Bot.Descriptor.file))
         return folder
     }
 
@@ -117,8 +146,13 @@ import Testing
         mac.on("GET", "/api/session/\(session)/inbox", json: ["data": []])
         mac.on("GET", "/api/experimental/session/\(session)/export", json: Self.exported(session, directory: original.appending(path: "workspace").path, bot: id))
         takesImports(box)
-        Drafts.shared[session] = Drafts.Draft(text: "half a thought")
+        let boxes = try await boxes(for: app)
+        defer { stop(boxes) }
         let there = boxRoot.appending(path: "bots/\(id)")
+        // Its conversation there, with the rules it came with: its folder where it was.
+        box.on("GET", "/api/session/\(session)", json: ["data": StubEngine.session(session, title: "Scout", directory: there.appending(path: "workspace").path,
+                                                                                    extra: ["permissions": [["action": "external_directory", "resource": original.path + "/*", "effect": "allow"]]])])
+        Drafts.shared[session] = Drafts.Draft(text: "half a thought")
 
         try await app.moves.move(bot: id, to: "box")
 
@@ -131,12 +165,16 @@ import Testing
         #expect((imported.body["location"] as? [String: Any])?["directory"] as? String == there.appending(path: "workspace").path)
         #expect((imported.body["info"] as? [String: Any])?["id"] as? String == session)
         #expect((imported.body["messages"] as? [Any])?.count == 1)
-        // Its rules there, for its folder there, not where it was.
+        // Its box there made it its own: its rules for its folder there, not where it was; told it
+        // runs there; your time zone, which its wake-ups go by.
         let rules = box.requests("PATCH", "/api/session/\(session)").compactMap { $0.body["permissions"] as? [[String: Any]] }.last ?? []
         #expect(rules.contains { $0["resource"] as? String == there.path + "/*" })
-        #expect(!rules.contains { ($0["resource"] as? String)?.hasPrefix("/old/place") == true })
+        #expect(!rules.contains { ($0["resource"] as? String)?.hasPrefix(original.path) == true })
         let told = box.requests("PUT", "/api/experimental/session/\(session)/instructions/entries/\(Bots.instructionKey)").last?.body["value"] as? String
-        #expect(told?.contains("the Linux machine \"box\"") == true)
+        #expect(told?.contains("the Linux machine") == true)
+        #expect(try String(contentsOf: there.appending(path: "directory"), encoding: .utf8) == there.appending(path: "workspace").path)
+        #expect(try String(contentsOf: there.appending(path: "timezone"), encoding: .utf8) == TimeZone.current.identifier)
+        #expect(FileManager.default.fileExists(atPath: there.appending(path: "zoneinfo").path), "and its rules, for a machine without zone files")
         // It lives there now, and the app goes there for it, its draft as it was.
         let moved = try #require(app.bots.bot(id))
         #expect(moved.machine == "box" && moved.folder == there.path && moved.sessionID == session)
@@ -166,20 +204,34 @@ import Testing
         defer { Self.clean(); mac.stop() }
         let id = "bot_scout00002", session = "ses_scout2"
         let original = try botFolder(boxRoot.appending(path: "bots"), id: id, session: session)
+        // The clock it went by there.
+        try Data("Europe/Istanbul".utf8).write(to: original.appending(path: "timezone"))
+        try Data("TZif".utf8).write(to: original.appending(path: "zoneinfo"))
         try saveBots([bot(id, folder: original, session: session, machine: "box")])
         let app = app()
         box.on("GET", "/api/session/\(session)/inbox", json: ["data": []])
         box.on("GET", "/api/experimental/session/\(session)/export", json: Self.exported(session, directory: original.appending(path: "workspace").path, bot: id))
         takesImports(mac)
+        let boxes = try await boxes(for: app)
+        defer { stop(boxes) }
+        mac.on("GET", "/api/session/\(session)", json: ["data": StubEngine.session(session, title: "Scout", directory: Bots.root.appending(path: "\(id)/workspace").path,
+                                                                                    extra: ["permissions": [["action": "external_directory", "resource": original.path + "/*", "effect": "allow"]]])])
 
         try await app.moves.move(bot: id, to: nil)
 
         let here = Bots.root.appending(path: id)
         #expect(FileManager.default.fileExists(atPath: here.appending(path: "workspace/notes.txt").path))
         #expect(app.bots.bot(id)?.machine == nil && app.bots.bot(id)?.folder == here.path)
-        // Described where it lives now, and its folder says its session and where it works.
+        // This Mac's box made it its own: its folder says where it works here, it goes by this
+        // Mac's clock, its rules are for its folder here, and it's told it runs on this Mac.
         #expect(FileManager.default.fileExists(atPath: here.appending(path: Bot.Descriptor.file).path))
         #expect(try String(contentsOf: here.appending(path: "directory"), encoding: .utf8) == here.appending(path: "workspace").path)
+        #expect(!FileManager.default.fileExists(atPath: here.appending(path: "timezone").path))
+        #expect(!FileManager.default.fileExists(atPath: here.appending(path: "zoneinfo").path))
+        let rules = mac.requests("PATCH", "/api/session/\(session)").compactMap { $0.body["permissions"] as? [[String: Any]] }.last ?? []
+        #expect(rules.contains { $0["resource"] as? String == here.path + "/*" })
+        let told = mac.requests("PUT", "/api/experimental/session/\(session)/instructions/entries/\(Bots.instructionKey)").last?.body["value"] as? String
+        #expect(told?.contains("You run on this Mac.") == true)
         #expect(box.requests("DELETE", "/api/session/\(session)").count == 1)
         // The original in Kuvo Code's trash on the machine, with its conversation.
         #expect(!FileManager.default.fileExists(atPath: original.path))

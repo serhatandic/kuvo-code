@@ -1,7 +1,8 @@
 #!/bin/sh
 # Writes Packages/KuvoLink/Vectors/routes/box: what a Mac leaves on a machine that the machine's
-# routes read (the integrations it offers, the popular MCP servers, what it makes bots with), and
-# the kit this Mac's app gives its own box, from
+# routes read (the integrations it offers, the popular MCP servers), and what's this Mac's own that
+# its app gives its own box to make bots with (its kit), and how a conversation's rules are made
+# again from its approval and Settings › Permissions, from
 # the Mac's own code (KuvoCodeTests/RouteContractTests). The machine's runner of the route scenarios
 # (Packages/KuvoLink/Tests/Bridge/contract.test.js) sets its box up with them, and the Mac's checks
 # they're still what it writes. Run it after changing one of those, then both runners.
@@ -13,7 +14,7 @@ OUT="${TEMP%/}/kuvo-route-vectors"
 rm -rf "$OUT"
 # Passed to the test as KUVO_WRITE_ROUTE_VECTORS (xcodebuild hands TEST_RUNNER_ variables on).
 TEST_RUNNER_KUVO_WRITE_ROUTE_VECTORS="$OUT" ONLY="KuvoCodeTests/RouteContractTests/theMachinesRunnerHasWhatAMacLeavesThere()" ./scripts/test-app.sh >/dev/null
-for file in integrations.json mcp-catalog.json bot-kit.json mac-bot-kit.json; do
+for file in integrations.json mcp-catalog.json mac-bot-kit.json approval.json; do
     [ -s "$OUT/$file" ] || { echo "The test didn't write $file." >&2; exit 1; }
 done
 mkdir -p Packages/KuvoLink/Vectors/routes/box

@@ -20,32 +20,44 @@ Object.assign(process.env, {
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),
   KUVO_WAKE_COMMAND: path.join(support, "bin", "kuvo-wake"),
+  // The engine's settings folder, where this Mac's settings are (Settings › Permissions among them).
+  KUVO_ENGINE_CONFIG: path.join(support, "engine"),
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
+const settingsFile = path.join(process.env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
 
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
 
-// What the app gives its own box to make bots with: the words for a bot on this Mac.
-const kit = {
+// What a box makes bots with and tells them (`bin/bot-words.json`, which the app puts beside this
+// Mac's box), shortened.
+const words = {
   kuvo: 1,
-  version: "0.8.0",
   templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false }],
-  personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Your personality: Straight Shooter. Direct." }],
-  looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
-  startingModel: { id: "big-pickle", providerID: "opencode" },
-  projects: [],
-  instructions: "You are ⟦name⟧, one of the user's bots. You run on this Mac.\n\n⟦personality⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
-  jobInstructions: "You are ⟦name⟧, one of the user's bots: ⟦job⟧. You run on this Mac.\n\n⟦personality⟧\n\nYour job:\n⟦jobDetails⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
+  personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", symbol: "bolt" }],
   personalityWords: "Your personality: ⟦name⟧. ⟦description⟧",
+  looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
+  instructions: ["You are ⟦name⟧, one of the user's bots⟦jobLine⟧. You run on ⟦place⟧.", "⟦personality⟧", "⟦jobPart⟧", "Memory: the file \"⟦folder⟧/MEMORY.md\" is yours.", "Who sets what."],
+  here: { mac: { place: "this Mac" }, machine: { place: "the machine \"⟦machine⟧\"" } },
+  job: { none: "", line: ": ⟦job⟧", details: "Your job:\n⟦jobDetails⟧" },
   projectNote: "You work in one of the user's projects.",
   identityNote: "Who sets what.",
   memory: "# ⟦name⟧'s memory\n",
   greeting: "<system-reminder>Write first.</system-reminder>",
+};
+const wordsFile = path.join(home, "bin", "bot-words.json");
+
+// What's this Mac's own that the app gives its box (its kit): the model a bot starts on, the rules
+// a new conversation gets.
+const kit = {
+  kuvo: 1,
+  personalities: [],
+  startingModel: { id: "big-pickle", providerID: "opencode" },
+  projects: [],
   rules: [{ action: "edit", resource: "*", effect: "ask" }],
   timeZone: "Europe/Istanbul",
 };
@@ -67,8 +79,9 @@ function bot(id, { name = "Scout", session = `ses_${id}`, personality } = {}) {
 }
 
 beforeEach(() => {
-  for (const folder of [bots, home]) fs.rmSync(folder, { recursive: true, force: true });
+  for (const folder of [bots, home, process.env.KUVO_ENGINE_CONFIG]) fs.rmSync(folder, { recursive: true, force: true });
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  write(wordsFile, JSON.stringify(words));
 });
 
 // The engine: conversations made and read (each with the rules it was given), what each was told,
@@ -165,9 +178,50 @@ test("this Mac's bots are its own: listed without a machine, made here with this
   assert.equal(fs.existsSync(path.join(bots, "deleted.json")), false);
 });
 
-test("this Mac's box makes bots with its app's kit, never a release's words", async () => {
-  write(path.join(home, "bin", "bot-kit.json"), JSON.stringify({ ...kit, version: "9.9.9", instructions: "On ⟦machine⟧, in ⟦timeZone⟧." }));
-  assert.equal(link.readKit().instructions, kit.instructions);
+test("a bot on this Mac is told, in Kuvo Code's own words, that it runs on this Mac, by its clock, with tabs of its own in your browser", () => {
+  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), wordsFile);
+  const told = link.botInstructions(link.readKit(), "Scout", path.join(bots, "bot_scout00001"), undefined, undefined);
+  assert.match(told, /^You are Scout, one of the user's bots in Kuvo Code\. .* You run on this Mac\.\n\nYour job is what the user gives you/);
+  assert.match(told, /a time like 2026-10-16T09:00 on this Mac's clock,/);
+  assert.match(told, /tabs of your own in the user's browser on this Mac, signed in where they are/);
+  // Its wake-ups come back as Kuvo Code sends them (Wakes.swift).
+  const marker = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8").match(/static let marker = "([^"]*)"/)[1];
+  assert.ok(told.includes(`a new message starting with "${marker.trim()}"`));
+  assert.doesNotMatch(told, /⟦|Linux machine|time zone,/, "nothing left to fill in, nothing of a machine's");
+});
+
+test("a bot asked to be told twice at once (its run starting as the box finds its engine) is told once", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  bot("bot_scout00001");
+  fake.entries.ses_bot_scout00001 = { "kuvo.bot": "You are Scout. Keep your job under ## Job in your memory." };
+  await Promise.all([link.freshenBot(fake.read(), "ses_bot_scout00001"), link.freshenBot(fake.read(), "ses_bot_scout00001")]);
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
+});
+
+test("a bot made this box's as it arrives while its run starts (one that was paused, so its move didn't hold it) is told once", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  bot("bot_scout00001");
+  fake.entries.ses_bot_scout00001 = { "kuvo.bot": "You are Scout. You run on the Linux machine \"lab\"." };
+  // Its run's telling has read what its conversation has, and is about to tell it.
+  const freshening = link.freshenBot(fake.read(), "ses_bot_scout00001");
+  await fake.request(each => each.method === "GET" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries");
+  await Promise.all([freshening, link.settleBot("bot_scout00001", fake.read, () => null)]);
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
+});
+
+test("a bot that came here already told what it is here is noted as told, so it isn't told again where its conversation can't be read", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  const folder = bot("bot_scout00001");
+  assert.equal((await link.settleBot("bot_scout00001", fake.read, () => null)).status, 200);
+  const toldHere = JSON.parse(fs.readFileSync(path.join(folder, "told.json"), "utf8"));
+  // As it came back from another computer that had told it the same (a move there and back).
+  write(path.join(folder, "told.json"), JSON.stringify({ ...toldHere, instructions: "elsewhere" }));
+  assert.equal((await link.settleBot("bot_scout00001", fake.read, () => null)).status, 200);
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1, "told already");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "told.json"), "utf8")).instructions, toldHere.instructions);
 });
 
 test("a bot is told what it is now as the box finds its engine and as its runs start, once each time it changed", async t => {
@@ -185,10 +239,17 @@ test("a bot is told what it is now as the box finds its engine and as its runs s
   const quiet = await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_quiet00001/instructions"));
   assert.match(quiet.body.value, /You are Quiet, one of the user's bots\. You run on this Mac\./);
   // Its next run: told already, so not again (the engine opens a bot's folder each time it is).
+  // Each looked at (what its conversation has now is read) before the words change.
+  const looked = session => {
+    const mark = fake.asked.length;
+    return fake.request(each => fake.asked.indexOf(each) >= mark && each.method === "GET" && each.url === `/api/experimental/session/${session}/instructions/entries`);
+  };
+  const lookedAt = [looked("ses_bot_scout00001"), looked("ses_bot_quiet00001")];
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_scout00001" } });
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_quiet00001" } });
+  await Promise.all(lookedAt);
   // New words (an update, a personality's): told at its next run, and at once when its app asks.
-  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, instructions: kit.instructions.replace("You run on this Mac.", "You run on this Mac, now.") }));
+  write(wordsFile, JSON.stringify({ ...words, here: { ...words.here, mac: { place: "this Mac, now" } } }));
   fake.send({ type: "session.execution.started", data: { sessionID: "ses_bot_scout00001" } });
   await fake.request(each => each.method === "PUT" && each.url.includes("ses_bot_scout00001/instructions") && each.body.value.includes("now."));
   assert.equal(told(fake.asked, "ses_bot_scout00001").length, 2);
@@ -228,8 +289,10 @@ test("a bot told other words behind the box's back (by a Mac of an earlier versi
 test("a bot's own rules are put right at its next run: its folder its own, an old version's kuvo-wake rules gone", async t => {
   const folder = bot("bot_scout00001");
   const wake = process.env.KUVO_WAKE_COMMAND;
+  // Settings › Permissions here: never rm -rf.
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }] }));
   const fake = await engine({ rules: { ses_bot_scout00001: [
-    { action: "shell", resource: "*", effect: "allow" },
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "shell", resource: `"${wake}" bot_scout00001 add *`, effect: "allow" },
     { action: "shell", resource: "kuvo-wake bot_scout00001 list", effect: "allow" },
   ] } });
@@ -237,7 +300,7 @@ test("a bot's own rules are put right at its next run: its folder its own, an ol
   fs.rmSync(path.join(folder, "MEMORY.md"));
   await link.freshenBot(fake.read(), "ses_bot_scout00001");
   assert.deepEqual(fake.rules.ses_bot_scout00001, [
-    { action: "shell", resource: "*", effect: "allow" },
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   // Its memory, for one made before it was made with it.
@@ -322,13 +385,44 @@ test("a template's or a shared bot's job as the first message says its job once,
   assert.equal(link.firstMessageOf("Keeps CI green", "Keeps CI green. Watch main; when it fails, fix it on a branch.\n\nTell me what broke."), `Your job, in a few words: Keeps CI green.\n\nWatch main; when it fails, fix it on a branch.\n\nTell me what broke.\n\n${start}`);
   assert.equal(link.firstMessageOf("Keeps CI green. Fast", "Keeps CI green. Fast.\n\nWatch main.").split("Keeps CI green").length, 2);
   assert.equal(link.firstMessageOf("", ""), "");
-  // Each of New Bot's templates, as this Mac's kit has them.
-  const macKit = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/mac-bot-kit.json", import.meta.url), "utf8"));
-  assert.ok(macKit.templates.length > 1);
-  for (const template of macKit.templates) {
+  // Each of New Bot's templates, as Kuvo Code words them.
+  const shipped = JSON.parse(fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"));
+  assert.ok(shipped.templates.length > 1);
+  for (const template of shipped.templates) {
     const message = link.firstMessageOf(template.job, template.instructions);
     assert.ok(message.startsWith(`Your job, in a few words: ${template.job}.`), template.name);
     assert.equal(message.split(template.job).length, 2, `${template.name}: its job said once`);
     assert.ok(message.endsWith("set that up."), template.name);
   }
+});
+
+test("a bot brought here from another computer is made this Mac's: its folder says where it is, its rules are for its folder here, and it's told it runs here", async t => {
+  const folder = bot("bot_moved00001", { name: "Mover" });
+  // As it came from a machine: its folder there, your time zone there, and what it was told there.
+  write(path.join(folder, "directory"), "/home/me/.kuvo-code/bots/bot_moved00001/workspace");
+  write(path.join(folder, "timezone"), "Europe/Istanbul");
+  write(path.join(folder, "zoneinfo"), "TZif");
+  write(path.join(folder, "paused"), "moving");
+  write(path.join(folder, "told.json"), JSON.stringify({ session: "ses_bot_moved00001", instructions: "elsewhere", rules: "/home/me/.kuvo-code/bots/bot_moved00001" }));
+  // It ran without asking there, where nothing asked first; here, Settings › Permissions asks
+  // before a push, which Approve All lets through.
+  write(settingsFile, JSON.stringify({ permissions: [{ action: "shell", resource: "git push *", effect: "ask" }] }));
+  const fake = await engine({ rules: { ses_bot_moved00001: [
+    { action: "external_directory", resource: "/home/me/.kuvo-code/bots/bot_moved00001/*", effect: "allow" },
+  ] } });
+  t.after(fake.close);
+  const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
+  const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived");
+  assert.equal(arrived.status, 200, arrived.text);
+  assert.equal(arrived.json.bot.id, "bot_moved00001");
+  assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
+  assert.equal(fs.existsSync(path.join(folder, "timezone")), false, "this Mac's bots go by its own clock");
+  assert.equal(fs.existsSync(path.join(folder, "zoneinfo")), false);
+  assert.deepEqual(fake.rules.ses_bot_moved00001, [
+    { action: "shell", resource: "git push *", effect: "allow" },
+    { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+  ]);
+  assert.match(told(fake.asked, "ses_bot_moved00001").at(-1).body.value, /You run on this Mac\./);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "moving", "still held: its move lets it go");
+  assert.equal((await ask(handle, "POST", "kuvo/bots/bot_nobody01/arrived")).status, 404);
 });

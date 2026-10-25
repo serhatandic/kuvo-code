@@ -151,7 +151,9 @@ import Testing
         #expect(Bots().list.first?.name == "Ada Prime", "kept")
         #expect(engine.requests("PATCH", "/api/session/\(ada.sessionID)").contains { $0.body["title"] as? String == "Ada Prime" })
         let told = try #require(engine.requests("PUT", "/api/experimental/session/\(ada.sessionID)/instructions/entries/kuvo.bot").last?.body["value"] as? String)
-        #expect(told == Bots.instructions(for: bot) && told.contains("Straight Shooter"), "what this Mac's words tell a bot")
+        #expect(told.hasPrefix("You are Ada Prime, one of the user's bots in Kuvo Code: Keeps CI green.") && told.contains("You run on this Mac."), "told as a bot on this Mac, with its job")
+        let straight = try #require(Personalities.presets.first { $0.id == "preset.straight" })
+        #expect(told.contains("\n\nYour job:\nWatch main.\n\n") && told.contains(straight.instruction))
         // On its way to another computer: not changed or deleted until it's there.
         try Data("moving".utf8).write(to: URL(filePath: bot.folder).appending(path: "paused"))
         let moving = try await ask("kuvo/bots/\(ada.id)", method: "PATCH", body: ["name": "X"])

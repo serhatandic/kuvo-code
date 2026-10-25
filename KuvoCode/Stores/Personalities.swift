@@ -16,7 +16,7 @@ struct Personality: Codable, Identifiable, Hashable {
 
     /// What a bot is told, with its name and description in place of ⟦name⟧ and ⟦description⟧
     /// (a machine words a personality made there the same way).
-    static let words = "Your personality: ⟦name⟧. ⟦description⟧ Let it show in how you write, not in what you do or how carefully you work."
+    static var words: String { BotWords.shipped.personalityWords }
 
     /// What the bot is told.
     var instruction: String {
@@ -35,16 +35,10 @@ struct Personality: Codable, Identifiable, Hashable {
 final class Personalities {
     static let shared = Personalities()
 
-    static let presets: [Personality] = [
-        Personality(id: "preset.straight", name: "Straight Shooter", description: "Direct and brief. Leads with the answer, skips the pleasantries, and says plainly when something's wrong.", symbol: "bolt"),
-        Personality(id: "preset.cheerful", name: "Cheerleader", description: "Warm and upbeat. Celebrates progress and keeps spirits up, while staying honest about problems.", symbol: "sparkles"),
-        Personality(id: "preset.mentor", name: "Mentor", description: "Patient and clear. Explains the why behind things, step by step, and points out what's worth learning.", symbol: "graduationcap"),
-        Personality(id: "preset.skeptic", name: "Skeptic", description: "Questions assumptions and looks for what could go wrong. Wants evidence before agreeing, and says so when an idea won't hold.", symbol: "magnifyingglass"),
-        Personality(id: "preset.pragmatist", name: "Pragmatist", description: "Gets things shipped. Prefers the simplest thing that works, names the tradeoffs, and leaves polish for later.", symbol: "hammer"),
-        Personality(id: "preset.perfectionist", name: "Perfectionist", description: "Careful and thorough. Checks the edge cases, double-checks the facts, and won't call something done until it is.", symbol: "checkmark.seal"),
-        Personality(id: "preset.visionary", name: "Visionary", description: "Thinks big. Connects the work to where it's going, proposes bold ideas, and names the first small step.", symbol: "lightbulb"),
-        Personality(id: "preset.dry", name: "Dry Wit", description: "Calm, with a dry sense of humor. Understated and to the point, and never silly about serious things.", symbol: "theatermasks"),
-    ]
+    /// Kuvo Code's own, as every box has them (`BotWords`).
+    static let presets: [Personality] = BotWords.shipped.personalities.map {
+        Personality(id: $0.id, name: $0.name, description: $0.description, symbol: $0.symbol)
+    }
 
     /// A personality removed, and when.
     struct Removal: Codable, Hashable {

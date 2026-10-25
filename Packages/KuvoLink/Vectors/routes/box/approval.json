@@ -1,0 +1,733 @@
+[
+  {
+    "current" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "asks first; no settings",
+    "refreshed" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "asks first; asks before a push, never touches secrets",
+    "refreshed" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "asks first; allows every folder and npm test",
+    "refreshed" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "npm test *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "npm test *"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "asks first; a folder of its own, asks before fetching",
+    "refreshed" : [
+      {
+        "action" : "edit",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "write",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "patch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_save_pdf",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_browser_upload",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "kuvo-browser_watch_for_change",
+        "effect" : "ask",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/srv/data/*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all; no settings",
+    "refreshed" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all; asks before a push, never touches secrets",
+    "refreshed" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all; allows every folder and npm test",
+    "refreshed" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "npm test *"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all; a folder of its own, asks before fetching",
+    "refreshed" : [
+      {
+        "action" : "webfetch",
+        "effect" : "allow",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/srv/data/*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "kuvo-wake bot_scout00001 list"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all, with an earlier version's rules; no settings",
+    "refreshed" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "kuvo-wake bot_scout00001 list"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all, with an earlier version's rules; asks before a push, never touches secrets",
+    "refreshed" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "shell",
+        "effect" : "ask",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "edit",
+        "effect" : "deny",
+        "resource" : "secrets/*"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "kuvo-wake bot_scout00001 list"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all, with an earlier version's rules; allows every folder and npm test",
+    "refreshed" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "*"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "npm test *"
+      }
+    ]
+  },
+  {
+    "current" : [
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "kuvo-wake bot_scout00001 list"
+      },
+      {
+        "action" : "shell",
+        "effect" : "allow",
+        "resource" : "git push *"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "name" : "approves all, with an earlier version's rules; a folder of its own, asks before fetching",
+    "refreshed" : [
+      {
+        "action" : "webfetch",
+        "effect" : "allow",
+        "resource" : "*"
+      },
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/Users/me/notes/*"
+      }
+    ],
+    "settings" : [
+      {
+        "action" : "external_directory",
+        "effect" : "allow",
+        "resource" : "/srv/data/*"
+      },
+      {
+        "action" : "webfetch",
+        "effect" : "ask",
+        "resource" : "*"
+      }
+    ]
+  }
+]

@@ -124,12 +124,6 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   });
   assert.equal("personality" in answer.json.bots[1], false, "none: left out, as the Mac leaves it out");
   assert.equal("wakes" in answer.json.bots[0], false, "none waiting: left out, as the Mac leaves it out");
-  // Before the Mac ever gave it what New Bot needs, it says so.
-  for (const [method, route] of [["POST", "kuvo/bots"], ["GET", "kuvo/bots/templates"]]) {
-    const refused = await ask(handle, method, route);
-    assert.equal(refused.status, 409, route);
-    assert.equal(refused.json.message, "Connect to this machine from your Mac once, then try again.");
-  }
   assert.equal((await ask(handle, "PUT", "kuvo/bots")).status, 405);
 });
 
@@ -290,29 +284,39 @@ test("a bot on its way to another computer isn't woken or changed from a phone u
   assert.equal((await ask(handle, "POST", "kuvo/wakes/ses_bot_scout00001/now", { wake: "AbC123" })).status, 200);
 });
 
-// What New Bot needs, as the Mac leaves it on the machine as it connects (Bots.MachineKit).
-const kit = {
+// What a box makes bots with and tells them (`bin/bot-words.json`, as a client puts it beside the
+// bridge), shortened: what a bot is told, with its job and personality in their places.
+const words = {
   kuvo: 1,
   templates: [{ id: "news", name: "Herald", job: "Sends you a morning news digest", instructions: "Every morning…", look: { color: "sky", shape: "round", face: "happy" }, personality: "preset.straight", wantsProject: false }],
-  personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Your personality: Straight Shooter. Direct." }],
-  looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
-  startingModel: { id: "big-pickle", providerID: "opencode" },
-  projects: [{ directory: "/home/me/app", name: "app" }],
-  instructions: "You are ⟦name⟧, one of the user's bots.\n\n⟦personality⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
-  // What a bot with a job is told (Bots.MachineKit.jobInstructions), and of a personality you made.
-  jobInstructions: "You are ⟦name⟧, one of the user's bots: ⟦job⟧.\n\n⟦personality⟧\n\nYour job, as your memory has it:\n⟦jobDetails⟧\n\nMemory: the file \"⟦folder⟧/MEMORY.md\" is yours.\n\nWho sets what.",
+  personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", symbol: "bolt" }],
   personalityWords: "Your personality: ⟦name⟧. ⟦description⟧",
+  looks: { colors: ["mint", "sky"], shapes: ["round"], faces: ["calm", "happy"] },
+  instructions: ["You are ⟦name⟧, one of the user's bots⟦jobLine⟧.", "⟦personality⟧", "⟦jobPart⟧", "Memory: the file \"⟦folder⟧/MEMORY.md\" is yours.", "Who sets what."],
+  here: { mac: { place: "this Mac" }, machine: { place: "the machine \"⟦machine⟧\"" } },
+  // A bot with no job yet is told nothing of one here.
+  job: { none: "", line: ": ⟦job⟧", details: "Your job, as your memory has it:\n⟦jobDetails⟧" },
   projectNote: "You work in one of the user's projects.",
   identityNote: "Who sets what.",
   memory: "# ⟦name⟧'s memory\n",
   greeting: "<system-reminder>Write first.</system-reminder>",
+};
+write(path.join(home, "bin", "bot-words.json"), JSON.stringify(words));
+
+// What's the machine's own that its Mac gives it as it connects (Bots.MachineKit): the model a
+// bot starts on there, its projects, the rules a new conversation gets, and your time zone.
+const kit = {
+  kuvo: 1,
+  personalities: [],
+  startingModel: { id: "big-pickle", providerID: "opencode" },
+  projects: [{ directory: "/home/me/app", name: "app" }],
   rules: [{ action: "edit", resource: "*", effect: "ask" }],
   timeZone: "Europe/Istanbul",
 };
 
 // An engine and the agents' bridge as a new bot needs them: conversations made, what each was told,
 // its greeting; the providers ready; group chats there (`chats`), listed and changed.
-async function makingEngine(ready = ["opencode"]) {
+async function makingEngine(ready = ["opencode"], rules = {}) {
   const asked = [];
   const chats = new Map();
   let next = 1;
@@ -325,6 +329,9 @@ async function makingEngine(ready = ["opencode"]) {
       const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
+      const one = request.url.match(/^\/api\/session\/([^/]+)$/);
+      if (one && request.method === "GET") return reply({ data: { id: one[1], permissions: rules[one[1]] ?? [] } });
+      if (one && request.method === "PATCH" && given?.permissions) rules[one[1]] = given.permissions;
       if (request.method === "GET" && request.url === "/api/kuvo/groups") return reply({ data: [...chats.values()].map(chat => ({ group: chat.group, status: chat.status, state: {} })) });
       if (request.method === "PATCH" && request.url.startsWith("/api/kuvo/groups/")) {
         const chat = chats.get(request.url.split("/").pop());
@@ -389,7 +396,7 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     const told = engine.asked.find(each => each.url === "/api/experimental/session/ses_made1/instructions/entries/kuvo.bot").body.value;
     assert.equal(told, `You are Inbox Helper, one of the user's bots.\n\nYour personality: Straight Shooter. Direct.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nYou work in one of the user's projects.\n\nWho sets what.`);
     assert.deepEqual(engine.asked.find(each => each.method === "PATCH").body, { metadata: { kuvo: { bot: listed.id } } });
-    assert.equal(engine.asked.find(each => each.url === "/api/session/ses_made1/synthetic").body.text, kit.greeting, "it writes first");
+    assert.equal(engine.asked.find(each => each.url === "/api/session/ses_made1/synthetic").body.text, words.greeting, "it writes first");
     assert.ok((await ask(handle, "GET", "kuvo/bots")).json.bots.some(each => each.id === listed.id), "listed at once");
 
     // From a template: its look and personality, and its job for your composer; it waits for you.
@@ -397,7 +404,7 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     assert.equal(herald.status, 201);
     assert.equal(herald.json.firstMessage, "Your job, in a few words: Sends you a morning news digest.\n\nEvery morning…\n\nStart now: ask me for anything you need first, do the first round, and if it repeats or keeps an eye on something, set that up.");
     assert.equal(engine.asked.some(each => each.url === `/api/session/${herald.json.bot.session}/synthetic`), false);
-    assert.deepEqual(herald.json.bot.look, kit.templates[0].look);
+    assert.deepEqual(herald.json.bot.look, words.templates[0].look);
     const plain = engine.asked.find(each => each.url === `/api/experimental/session/${herald.json.bot.session}/instructions/entries/kuvo.bot`).body.value;
     assert.ok(plain.includes("Straight Shooter") && !plain.includes("⟦") && !plain.includes("projects"));
   } finally {
@@ -622,32 +629,174 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
   }
 });
 
-test("a machine makes bots with its release's words where they're newer than a Mac's kit, or no Mac gave it one, with what's its own", async () => {
-  const releaseKit = path.join(home, "bin", "bot-kit.json");
-  const words = { ...kit, version: "0.9.0", startingModel: null, projects: [], rules: [], timeZone: "⟦timeZone⟧", instructions: "You are ⟦name⟧, on ⟦machine⟧, in ⟦timeZone⟧." };
-  delete words.zoneinfo;
-  write(releaseKit, JSON.stringify(words));
+test("a machine makes bots with its own words, whatever a Mac's kit says, filled in for where it runs, with what's its own from its Mac", async () => {
+  // Its own name and clock, with no Mac's kit.
+  const own = await makingEngine();
   try {
-    // No Mac's kit: its own name and clock.
-    const own = link.readKit();
-    assert.equal(own.instructions, `You are ⟦name⟧, on ${os.hostname()}, in ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`);
-    assert.deepEqual([own.startingModel, own.projects, own.rules], [null, [], []]);
-    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
+    const handle = link.engineHandler(() => ({ port: own.port, password: "p" }), { name: "my-server" }, () => null);
     assert.equal((await ask(handle, "GET", "kuvo/bots/templates")).status, 200, "New Bot works there");
-
-    // An older Mac's kit: the release's words, the Mac's time zone, projects and personalities you made.
-    const custom = { id: "custom.calm", name: "Calm", description: "Calm.", custom: true, instruction: "Your personality: Calm." };
-    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.8.0", personalities: [...kit.personalities, custom], instructions: "Older words." }));
-    const newer = link.readKit();
-    assert.match(newer.instructions, /^You are ⟦name⟧, on .+, in Europe\/Istanbul\.$/);
-    assert.deepEqual(newer.projects, kit.projects);
-    assert.deepEqual(newer.rules, kit.rules);
-    assert.deepEqual(newer.personalities.map(each => each.id), ["preset.straight", "custom.calm"]);
-
-    // A newer Mac's kit: the Mac's, as it gave it.
-    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.9.1", instructions: "Newer words." }));
-    assert.equal(link.readKit().instructions, "Newer words.");
+    const made = await ask(handle, "POST", "kuvo/bots", { name: "Scout", model: { id: "big-pickle", providerID: "opencode" } });
+    assert.equal(made.status, 201, made.text);
+    const told = own.asked.find(each => each.method === "PUT" && each.url.endsWith("/instructions/entries/kuvo.bot")).body.value;
+    assert.match(told, new RegExp(`^You are Scout, one of the user's bots\\.`));
+    assert.equal(fs.readFileSync(path.join(bots, made.json.bot.id, "timezone"), "utf8"), Intl.DateTimeFormat().resolvedOptions().timeZone);
   } finally {
-    fs.rmSync(releaseKit, { force: true });
+    own.close();
+  }
+
+  // An older Mac's kit, with its own words: the machine's words still, filled in with the name the
+  // Mac calls it, and the Mac's time zone, projects, rules and the personalities you made.
+  const custom = { id: "custom.calm", name: "Calm", description: "Calm.", custom: true, instruction: "Your personality: Calm." };
+  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.8.0", machine: "lab", personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Older." }, custom],
+    instructions: "Older words.", jobInstructions: "Older words: ⟦job⟧.", personalityWords: "Older." }));
+  const kitNow = link.readKit();
+  assert.equal(link.botInstructions(kitNow, "Scout", "/f", undefined, undefined), "You are Scout, one of the user's bots.\n\nMemory: the file \"/f/MEMORY.md\" is yours.\n\nWho sets what.");
+  assert.equal(kitNow.timeZone, "Europe/Istanbul");
+  assert.deepEqual([kitNow.projects, kitNow.rules], [kit.projects, kit.rules]);
+  assert.deepEqual(link.botPersonalities(kitNow).map(each => [each.id, each.instruction]), [["preset.straight", "Your personality: Straight Shooter. Direct."], ["custom.calm", "Your personality: Calm."]]);
+
+  // Without its words (a box that's lost them), New Bot says what to do.
+  const file = path.join(home, "bin", "bot-words.json");
+  fs.renameSync(file, file + ".kept");
+  try {
+    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
+    for (const [method, route] of [["POST", "kuvo/bots"], ["GET", "kuvo/bots/templates"]]) {
+      const refused = await ask(handle, method, route);
+      assert.equal(refused.status, 409, route);
+      assert.equal(refused.json.message, "Connect to this machine from your Mac once, then try again.");
+    }
+  } finally {
+    fs.renameSync(file + ".kept", file);
+  }
+});
+
+test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that machine, in your time zone, with a browser there that keeps working with your Mac off", () => {
+  const file = path.join(home, "bin", "bot-words.json");
+  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), file);
+  try {
+    write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, machine: "lab" }));
+    const kitNow = link.readKit();
+    const told = link.botInstructions(kitNow, "Scout", "/home/me/.kuvo-code/bots/bot_scout00001", "Your personality: Calm.", undefined);
+    assert.match(told, /^You are Scout, one of the user's bots in Kuvo Code\. .* You run on the Linux machine "lab"\./);
+    assert.match(told, /a time like 2026-10-16T09:00 in the user's time zone, Europe\/Istanbul,/);
+    assert.match(told, /keeps working while the user's Mac is off/);
+    assert.match(told, /\n\nYour personality: Calm\.\n\n/);
+    assert.match(told, /You don't have a job yet/);
+    assert.match(told, /the file "\/home\/me\/\.kuvo-code\/bots\/bot_scout00001\/MEMORY\.md" is yours/);
+    assert.doesNotMatch(told, /⟦|this Mac's clock/, "nothing left to fill in, nothing of a Mac's");
+    // With its job: in a few words beside its name, and whole.
+    const working = link.botInstructions(kitNow, "Scout", "/f", undefined, undefined, { line: "Keeps CI green", section: "Watch main." });
+    assert.match(working, /^You are Scout, one of the user's bots in Kuvo Code: Keeps CI green\. /);
+    assert.match(working, /\n\nYour job:\nWatch main\.\n\n/);
+    assert.doesNotMatch(working, /You don't have a job yet/);
+  } finally {
+    write(file, JSON.stringify(words));
+  }
+});
+
+// How the Mac makes a conversation's rules again from its approval and Settings › Permissions
+// (ToolApproval.refreshed, written by RouteContractTests: scripts/route-vectors.sh), which a box does
+// the same way for a bot that moves to it.
+const approval = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/approval.json", import.meta.url), "utf8"));
+// What Ask First asks about, before Settings' own rules, as the Mac has it.
+const askFirst = approval.find(each => each.name === "asks first; no settings").current.filter(rule => rule.action !== "external_directory");
+
+test("a bot's rules are made again from its approval and a computer's Settings › Permissions as the Mac makes them", () => {
+  assert.ok(approval.length >= 12);
+  for (const each of approval) assert.deepEqual(link.refreshedRules(each.current, each.settings), each.refreshed, each.name);
+});
+const macFolder = "/Users/me/Library/Application Support/run.kuvo.code/bots/bot_moved00001";
+
+test("a bot brought here from your Mac is made this machine's: its folder there, your time zone and its rules, its rules from this machine's Settings › Permissions, and told it runs on the machine", async () => {
+  // Your time zone and its rules, as your Mac gave them, for a machine without zone files.
+  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, zoneinfo: Buffer.from("TZif Istanbul").toString("base64") }));
+  // This machine asks before a push, and never touches secrets.
+  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "git push *", effect: "ask" }, { action: "edit", resource: "secrets/*", effect: "deny" }] }));
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  // It asked first on your Mac, which let pushes through, with a folder of its own and its folder there.
+  const engine = await makingEngine(["opencode"], { ses_bot_moved00001: [
+    ...askFirst,
+    { action: "shell", resource: "git push *", effect: "allow" },
+    { action: "external_directory", resource: "/Users/me/notes/*", effect: "allow" },
+    { action: "external_directory", resource: `${macFolder}/*`, effect: "allow" },
+  ] });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    // As your Mac says it, which the machine's own kit has anyway.
+    const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "Europe/Istanbul" });
+    assert.equal(arrived.status, 200, arrived.text);
+    assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
+    assert.equal(fs.readFileSync(path.join(folder, "timezone"), "utf8"), "Europe/Istanbul", "your time zone, which its wake-ups go by");
+    assert.equal(fs.readFileSync(path.join(folder, "zoneinfo"), "utf8"), "TZif Istanbul", "and its rules, for a machine without zone files");
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
+      ...askFirst,
+      { action: "shell", resource: "git push *", effect: "ask" },
+      { action: "edit", resource: "secrets/*", effect: "deny" },
+      { action: "external_directory", resource: "/Users/me/notes/*", effect: "allow" },
+      { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+    ]);
+    assert.ok(engine.asked.some(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_bot_moved00001/instructions/entries/kuvo.bot"));
+  } finally {
+    engine.close();
+    fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });
+  }
+});
+
+test("a bot brought here before this machine's settings are its own keeps the rules it runs with, its folder made this machine's", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  fs.rmSync(path.join(home, "box", "opencode.json"), { force: true });
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  const engine = await makingEngine(["opencode"], { ses_bot_moved00001: [
+    ...askFirst,
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
+    { action: "external_directory", resource: `${macFolder}/*`, effect: "allow" },
+  ] });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived")).status, 200);
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [
+      ...askFirst,
+      { action: "shell", resource: "rm -rf *", effect: "deny" },
+      { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
+    ]);
+  } finally {
+    engine.close();
+  }
+});
+
+test("a bot brought here while this machine has no words yet works in its folder here, by your clock, and is told the rest once it can be", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  const file = path.join(home, "bin", "bot-words.json");
+  fs.renameSync(file, file + ".kept");
+  try {
+    const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" }, () => null);
+    assert.equal((await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived")).status, 409);
+    assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"), "its wake-ups start in its folder here");
+    assert.equal(fs.readFileSync(path.join(folder, "timezone"), "utf8"), "Europe/Istanbul");
+  } finally {
+    fs.renameSync(file + ".kept", file);
+  }
+});
+
+test("a bot brought here while the engine isn't running is made this machine's at its next run", async () => {
+  write(path.join(bots, "kit.json"), JSON.stringify(kit));
+  const folder = bot("bot_moved00001");
+  write(path.join(folder, "directory"), `${macFolder}/workspace`);
+  write(path.join(folder, "told.json"), JSON.stringify({ session: "ses_bot_moved00001", instructions: "on the Mac", rules: macFolder }));
+  const down = link.engineHandler(() => { throw new Error("not running"); }, { name: "my-server" }, () => null);
+  const arrived = await ask(down, "POST", "kuvo/bots/bot_moved00001/arrived");
+  assert.equal(arrived.status, 503);
+  assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
+  const engine = await makingEngine(["opencode"], { ses_bot_moved00001: [{ action: "external_directory", resource: `${macFolder}/*`, effect: "allow" }] });
+  try {
+    await link.freshenBot({ port: engine.port, password: "p" }, "ses_bot_moved00001");
+    assert.match(engine.asked.find(each => each.method === "PUT" && each.url.endsWith("/instructions/entries/kuvo.bot"))?.body.value ?? "", /^You are Scout/);
+    assert.deepEqual(engine.asked.filter(each => each.method === "PATCH" && each.body?.permissions).at(-1)?.body.permissions, [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
+  } finally {
+    engine.close();
   }
 });

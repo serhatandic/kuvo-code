@@ -94,19 +94,15 @@ nonisolated enum RouteScenarios {
         return (scenarios, problems)
     }
 
-    /// What a Mac leaves on a machine that the machine's routes read: the integrations it offers,
-    /// the popular MCP servers, and what a box makes bots with (its release's, without the version,
-    /// which a box uses only to choose between a Mac's and its own); and the kit this Mac's app
-    /// gives its own box.
+    /// What a Mac leaves on a machine that the machine's routes read: the integrations it offers
+    /// and the popular MCP servers; and what's this Mac's own that its app gives its own box to make
+    /// bots with (its kit, with nothing of this Mac's in it: no starting model, projects or rules),
+    /// as the Mac's runner of the bridge's scenarios sets it up (contract-mac.test.js). The words a
+    /// box makes bots with are KuvoLink's own file, which the runner reads as it is.
     @MainActor static func boxFiles() -> [String: Data] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        var kit = (try? JSONSerialization.jsonObject(with: encoder.encode(Bots.releaseKit()))) as? [String: Any] ?? [:]
-        kit["version"] = nil
-        // And what this Mac's app gives its own box to make its bots with, as the Mac's runner of
-        // the bridge's scenarios sets it up (contract-mac.test.js).
-        var macKit = (try? JSONSerialization.jsonObject(with: encoder.encode(Bots.macKitWords()))) as? [String: Any] ?? [:]
-        macKit["version"] = nil
+        let macKit = Bots.MachineKit(machine: nil, personalities: [], startingModel: nil, projects: [], rules: [], timeZone: "UTC", zoneinfo: nil)
         let pretty = { (data: Data) -> Data in
             let value = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
             return ((try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()) + Data("\n".utf8)
@@ -114,9 +110,40 @@ nonisolated enum RouteScenarios {
         return [
             "integrations.json": pretty(MachineBox.integrationsJSON()),
             "mcp-catalog.json": pretty(MachineBox.catalogJSON()),
-            "bot-kit.json": pretty((try? JSONSerialization.data(withJSONObject: kit)) ?? Data()),
-            "mac-bot-kit.json": pretty((try? JSONSerialization.data(withJSONObject: macKit)) ?? Data()),
+            "mac-bot-kit.json": pretty((try? encoder.encode(macKit)) ?? Data()),
+            "approval.json": pretty((try? encoder.encode(approvalCases())) ?? Data()),
         ]
+    }
+
+    /// A conversation's rules made again from its approval and a computer's Settings ›
+    /// Permissions, as this Mac makes them (`ToolApproval.refreshed`), which a box does the same
+    /// way for a bot that moved there (the bridge's `refreshedRules`, bots.test.js): each case's
+    /// rules and Settings, and the rules made from them.
+    struct ApprovalCase: Encodable {
+        var name: String
+        var current: [PermissionRule]
+        var settings: [PermissionRule]
+        var refreshed: [PermissionRule]
+    }
+
+    @MainActor static func approvalCases() -> [ApprovalCase] {
+        let folder = PermissionRule(action: "external_directory", resource: "/Users/me/notes/*", effect: .allow)
+        let settings: [(String, [PermissionRule])] = [
+            ("no settings", []),
+            ("asks before a push, never touches secrets", [PermissionRule(action: "shell", resource: "git push *", effect: .ask), PermissionRule(action: "edit", resource: "secrets/*", effect: .deny)]),
+            ("allows every folder and npm test", [PermissionRule(action: "external_directory", effect: .allow), PermissionRule(action: "shell", resource: "npm test *", effect: .allow)]),
+            ("a folder of its own, asks before fetching", [PermissionRule(action: "external_directory", resource: "/srv/data/*", effect: .allow), PermissionRule(action: "webfetch", effect: .ask)]),
+        ]
+        let currents: [(String, [PermissionRule])] = [
+            ("asks first", ToolApproval.askFirst.rules(settings: []) + [folder]),
+            ("approves all", [folder]),
+            ("approves all, with an earlier version's rules", [PermissionRule(action: "shell", resource: "kuvo-wake bot_scout00001 list", effect: .allow), PermissionRule(action: "shell", resource: "git push *", effect: .allow), folder]),
+        ]
+        return currents.flatMap { current in
+            settings.map { setting in
+                ApprovalCase(name: "\(current.0); \(setting.0)", current: current.1, settings: setting.1, refreshed: ToolApproval.refreshed(current.1, settings: setting.1))
+            }
+        }
     }
 }
 

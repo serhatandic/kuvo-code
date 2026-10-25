@@ -50,10 +50,11 @@ const folder = path.join(home, "bots", "bot_scout00001");
 write(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z", updated: "2026-10-01T09:00:00Z" }));
 write(path.join(folder, "session"), "ses_scout");
 write(path.join(folder, "MEMORY.md"), "# Scout's memory\n");
-write(path.join(home, "bots", "kit.json"), JSON.stringify({
+write(path.join(home, "bin", "bot-words.json"), JSON.stringify({
   kuvo: 1, templates: [], personalities: [], looks: { colors: ["sky"], shapes: ["round"], faces: ["calm"] },
-  instructions: "You are ⟦name⟧.\n\n⟦personality⟧\n\nWho sets what.", jobInstructions: "You are ⟦name⟧: ⟦job⟧.\n\n⟦personality⟧\n\nYour job:\n⟦jobDetails⟧\n\nWho sets what.",
-  personalityWords: "⟦name⟧", projectNote: "Project.", identityNote: "Who sets what.", memory: "# ⟦name⟧'s memory\n", greeting: "Hi.", rules: [], timeZone: "UTC",
+  instructions: ["You are ⟦name⟧⟦jobLine⟧.", "⟦personality⟧", "⟦jobPart⟧", "Who sets what."], here: { mac: {}, machine: {} },
+  job: { none: "", line: ": ⟦job⟧", details: "Your job:\n⟦jobDetails⟧" },
+  personalityWords: "⟦name⟧", projectNote: "Project.", identityNote: "Who sets what.", memory: "# ⟦name⟧'s memory\n", greeting: "Hi.",
 }));
 
 // The tool, as the engine starts it, and its calls, as the engine makes them.

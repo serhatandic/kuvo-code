@@ -190,8 +190,12 @@ test("a bot here with a personality another computer changed is told what it is 
   fresh();
   await take({ personalities: [entry("custom.kind", "Kind", 5)] });
   const bots = path.join(support, "bots");
-  fs.writeFileSync(path.join(bots, "kit.json"), JSON.stringify({ kuvo: 1, templates: [], personalities: [], looks: {}, projects: [], rules: [],
-    instructions: "You are ⟦name⟧.\n⟦personality⟧\nMemory: ⟦folder⟧.", jobInstructions: "You are ⟦name⟧: ⟦job⟧.\n⟦personality⟧\n⟦jobDetails⟧\nMemory: ⟦folder⟧.", personalityWords: "Your personality: ⟦name⟧. ⟦description⟧", projectNote: "", identityNote: "", memory: "", greeting: "", timeZone: "UTC" }));
+  const words = path.join(support, "box", "bin", "bot-words.json");
+  fs.mkdirSync(path.dirname(words), { recursive: true });
+  fs.writeFileSync(words, JSON.stringify({ kuvo: 1, templates: [], personalities: [], looks: {}, here: { mac: {}, machine: {} },
+    instructions: ["You are ⟦name⟧⟦jobLine⟧.", "⟦personality⟧", "⟦jobPart⟧", "Memory: ⟦folder⟧."], job: { none: "", line: ": ⟦job⟧", details: "⟦jobDetails⟧" },
+    personalityWords: "Your personality: ⟦name⟧. ⟦description⟧", projectNote: "", identityNote: "", memory: "", greeting: "" }));
+  fs.writeFileSync(path.join(bots, "kit.json"), JSON.stringify({ kuvo: 1, personalities: [], projects: [], rules: [], timeZone: "UTC" }));
   const folder = path.join(bots, "bot_scout00001");
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: {}, personality: "custom.kind", created: "2026-10-01T09:00:00Z" }));
@@ -206,6 +210,7 @@ test("a bot here with a personality another computer changed is told what it is 
   } finally {
     fs.rmSync(folder, { recursive: true, force: true });
     fs.rmSync(path.join(bots, "kit.json"), { force: true });
+    fs.rmSync(words, { force: true });
   }
 });
 

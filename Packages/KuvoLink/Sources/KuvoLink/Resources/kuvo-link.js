@@ -2467,6 +2467,15 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       return yield* forwardGroups(target, route, request, signal);
     }
+    // A bot brought here from another computer, made this box's (Move to Computer).
+    const arrived = route.match(/^kuvo\/bots\/([^/]+)\/arrived$/);
+    if (arrived) {
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      let id;
+      try { id = decodeURIComponent(arrived[1]); } catch { return yield* json(404, { message: "That bot isn’t there any more." }); }
+      const { status, value } = await settleBot(id, readEngine, bridge, info.name);
+      return yield* json(status, value);
+    }
     // Its bots told what they are now where that changed, as its app asks after a change to its kit
     // (your personalities, on a Mac).
     if (route === "kuvo/bots/retell") {
@@ -3164,38 +3173,88 @@ const KIT_FILE = path.join(BOTS, "kit.json");
 const AGENT_PROVIDERS = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"];
 const runsWithAgents = model => model?.providerID === "auto" || AGENT_PROVIDERS.includes(String(model?.providerID ?? "").split("@")[0]);
 
-// What this box's release brought to make bots with (BoxRelease): its words, with ⟦machine⟧ and
-// ⟦timeZone⟧ to fill in, and nothing that's a machine's own.
-const RELEASE_KIT_FILE = path.join(K, "bin", "bot-kit.json");
+// What a box makes its bots with and tells them, as Kuvo Code words it (KuvoLink's
+// `Resources/bot-words.json`, which a client puts beside the bridge and a release brings): New
+// Bot's templates, Kuvo Code's own personalities and the looks a bot can have, and what a bot is
+// told, paragraph by paragraph, with ⟦place⟧, ⟦clock⟧ and ⟦browser⟧ for where it runs (`here`:
+// this Mac, or a machine, by ⟦machine⟧ and ⟦timeZone⟧), ⟦jobLine⟧ and ⟦jobPart⟧ for its job
+// (`job`), and ⟦name⟧, ⟦folder⟧ and ⟦personality⟧ for its own. Every box tells its bots its own
+// release's words, whichever Mac connects.
+const WORDS_FILE = path.join(K, "bin", "bot-words.json");
 
-// What this machine makes bots with: what a Mac last gave it, or its release's words where those
-// are newer (it updated itself since) or no Mac gave it any, with what's a machine's own from the
-// Mac's (its name, your time zone, the starting model, projects and rules), or else its own.
+export function readWords(file = WORDS_FILE) {
+  try {
+    const words = JSON.parse(textOf(file) ?? "");
+    return words?.kuvo === 1 && Array.isArray(words.templates) && Array.isArray(words.personalities) && Array.isArray(words.instructions)
+      && isObject(words.looks) && isObject(words.here?.mac) && isObject(words.here?.machine) && isObject(words.job)
+      && ["personalityWords", "projectNote", "identityNote", "memory", "greeting"].every(key => typeof words[key] === "string") ? words : null;
+  } catch {
+    return null;
+  }
+}
+
+// What this box makes bots with: its own words, filled in for where it runs, with what's its own
+// from the kit its Mac gave it (the name the Mac calls it, your time zone, the model a bot starts
+// on, its projects, the rules a new conversation gets, and the personalities you made, until its
+// library has them), or else its own. This Mac's box needs its app's kit; a machine makes bots
+// without one. An older Mac's kit has its own words too, which aren't used: the box is never older
+// than a Mac that connects.
 export function readKit() {
-  const read = file => {
-    try {
-      const kit = JSON.parse(textOf(file) ?? "");
-      return kit?.kuvo === 1 && Array.isArray(kit.templates) && Array.isArray(kit.personalities)
-        && ["instructions", "jobInstructions", "personalityWords"].every(words => typeof kit[words] === "string") ? kit : null;
-    } catch {
-      return null;
-    }
-  };
-  const mac = read(KIT_FILE), release = ON_MAC ? null : read(RELEASE_KIT_FILE);
-  if (!release || (mac && !newerVersion(release.version, mac.version))) return mac;
-  const machine = readLink()?.id || os.hostname();
-  let timeZone = mac?.timeZone;
-  if (!timeZone) try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
-  const filled = JSON.parse(JSON.stringify(release)
-    .replaceAll("⟦machine⟧", JSON.stringify(machine).slice(1, -1))
-    .replaceAll("⟦timeZone⟧", JSON.stringify(timeZone || "UTC").slice(1, -1)));
+  const words = readWords();
+  const mac = readMacKit();
+  if (!words || (ON_MAC && !mac)) return null;
+  const timeZone = zoneOf(mac);
+  const machine = (typeof mac?.machine === "string" && mac.machine) || readLink()?.id || os.hostname();
+  const here = ON_MAC ? words.here.mac : words.here.machine;
+  const fill = text => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? ""))
+    .replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
+  const told = each => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
-    ...filled,
-    // The release's presets, and the ones you made that a Mac's kit has.
-    personalities: [...filled.personalities, ...(mac?.personalities ?? []).filter(each => each.custom)],
-    startingModel: mac?.startingModel ?? null, projects: mac?.projects ?? [], rules: mac?.rules ?? [], timeZone: timeZone || "UTC",
-    ...(mac?.zoneinfo ? { zoneinfo: mac.zoneinfo } : {}),
+    kuvo: 1,
+    templates: words.templates,
+    // Kuvo Code's own, then the ones you made that a Mac's kit has.
+    personalities: [
+      ...words.personalities.map(each => ({ id: each.id, name: each.name, description: each.description, custom: false, instruction: told(each) })),
+      ...(Array.isArray(mac?.personalities) ? mac.personalities.filter(each => each?.custom) : []),
+    ],
+    personalityWords: words.personalityWords,
+    looks: words.looks,
+    instructions: fill(words.instructions.join("\n\n")),
+    job: { none: String(words.job.none ?? ""), line: String(words.job.line ?? ""), details: String(words.job.details ?? "") },
+    projectNote: words.projectNote, identityNote: words.identityNote, memory: words.memory, greeting: words.greeting,
+    startingModel: mac?.startingModel ?? null, projects: Array.isArray(mac?.projects) ? mac.projects : [], rules: Array.isArray(mac?.rules) ? mac.rules : [],
+    timeZone: timeZone || "UTC",
+    ...(typeof mac?.zoneinfo === "string" ? { zoneinfo: mac.zoneinfo } : {}),
   };
+}
+
+// What a Mac gave this box of what's its own (`bots/kit.json`), or null.
+function readMacKit() {
+  try {
+    const kit = JSON.parse(textOf(KIT_FILE) ?? "");
+    return kit?.kuvo === 1 ? kit : null;
+  } catch {
+    return null;
+  }
+}
+
+// The time zone a machine's bots go by: yours, as a Mac's kit has it, or else the machine's own
+// ("" on a Mac, whose bots go by its own clock).
+function zoneOf(mac) {
+  if (ON_MAC) return "";
+  if (typeof mac?.timeZone === "string" && mac.timeZone) return mac.timeZone;
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+
+// A release's kit from before boxes had their words of their own (`bin/bot-kit.json`), gone once no
+// release this box installed lists it (so its own files still look as it installed them).
+function forgetOldKit() {
+  const file = path.join(K, "bin", "bot-kit.json");
+  try {
+    const installed = JSON.parse(textOf(path.join(UPDATES, "installed.json")) ?? "{}");
+    if (isObject(installed?.files) && "bin/bot-kit.json" in installed.files) return;
+  } catch {}
+  fs.rmSync(file, { force: true });
 }
 
 const parsed = body => {
@@ -3245,11 +3304,12 @@ async function call(target, method, route, body, signal, folder) {
 // and its job (`{line, section}`), for one that has one.
 export function botInstructions(kit, name, folder, personality, project, job) {
   const working = Boolean(job?.section || job?.line);
-  let text = (working ? kit.jobInstructions : kit.instructions).replaceAll("⟦name⟧", () => name).replaceAll("⟦folder⟧", () => folder);
+  let text = kit.instructions.replaceAll("⟦name⟧", () => name).replaceAll("⟦folder⟧", () => folder);
   text = personality ? text.replace("⟦personality⟧", () => personality) : text.replace("\n⟦personality⟧\n", "");
   if (project) text = text.replace(`\n\n${kit.identityNote}`, () => `\n\n${kit.projectNote}\n\n${kit.identityNote}`);
-  if (working) text = text.replace(": ⟦job⟧", () => (job.line ? `: ${job.line}` : "")).replace("⟦jobDetails⟧", () => job.section || job.line);
-  return text;
+  text = text.replace("⟦jobLine⟧", () => (job?.line ? kit.job.line.replace("⟦job⟧", () => job.line) : ""));
+  const part = working ? kit.job.details.replace("⟦jobDetails⟧", () => job.section || job.line) : kit.job.none;
+  return part ? text.replace("⟦jobPart⟧", () => part) : text.replace(/(\n\n)?⟦jobPart⟧/, "");
 }
 
 // A bot's job as its memory kept it before bots kept it in a record (Bots.job(inMemory:), held to
@@ -3489,12 +3549,27 @@ async function tellBot(target, here, session, text, signal) {
 // words in an update, a personality changed), once, at its run rather than every bot at once as the
 // box starts, since telling one opens its folder on the engine; its own rules put right for the
 // folder it's in; and its memory file made, for one made before it was made with it.
-export async function freshenBot(target, sessionID) {
+// One bot at a time: asked again while it's being told (its run starting as the box finds its
+// engine, or as its app asks), it's looked at again once that's done, so it's never told twice.
+const freshening = new Map();
+function oneAtATime(sessionID, work) {
+  const now = (freshening.get(sessionID) ?? Promise.resolve()).catch(() => {}).then(work);
+  freshening.set(sessionID, now);
+  const done = () => { if (freshening.get(sessionID) === now) freshening.delete(sessionID); };
+  now.then(done, done);
+  return now;
+}
+
+export function freshenBot(target, sessionID) {
+  return oneAtATime(sessionID, () => freshenOne(target, sessionID));
+}
+
+async function freshenOne(target, sessionID) {
   const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
+  if (!here || isMoving(here.folder)) return;
   const kit = readKit();
-  if (!here || !kit || isMoving(here.folder)) return;
-  const memory = path.join(here.folder, "MEMORY.md");
-  if (!fs.existsSync(memory)) try { fs.writeFileSync(memory, kit.memory.replaceAll("⟦name⟧", () => here.described.name)); } catch {}
+  settleFolder(here, kit);
+  if (!kit) return;
   const told = toldOf(here.folder);
   const text = toldNow(kit, here);
   // What its conversation has now, where that can be read: one that told it something else (a Mac
@@ -3503,6 +3578,62 @@ export async function freshenBot(target, sessionID) {
   const stale = there === undefined ? told.session !== sessionID || told.instructions !== toldDigest(text) : there !== text;
   if (stale) await tellBot(target, here, sessionID, text);
   if (told.rules !== here.folder && await repairRules(target, here, sessionID)) noteTold(here.folder, { rules: here.folder });
+}
+
+// What a bot's folder says of where it is, as this box has it: the folder it works in, the time zone
+// its wake-ups go by and that zone's rules, for a machine without zone files of its own (a
+// machine's: yours, as its kit has it; this Mac's go by its own clock), and its memory file (for
+// one made before it was made with it), which needs this box's words (`kit`, null without them).
+// For one that came from another computer (Move to Computer), those are this one's from now on.
+function settleFolder(here, kit) {
+  const write = (name, data) => {
+    const file = path.join(here.folder, name);
+    let now = null;
+    try { now = fs.readFileSync(file); } catch {}
+    if (!now || !now.equals(Buffer.from(data))) fs.writeFileSync(file, data);
+  };
+  try {
+    write("directory", typeof here.described.project === "string" ? here.described.project : path.join(here.folder, "workspace"));
+    if (ON_MAC) {
+      for (const name of ["timezone", "zoneinfo"]) fs.rmSync(path.join(here.folder, name), { force: true });
+    } else {
+      const mac = readMacKit(), zone = zoneOf(mac);
+      if (zone) write("timezone", zone);
+      if (typeof mac?.zoneinfo === "string" && mac.zoneinfo) write("zoneinfo", Buffer.from(mac.zoneinfo, "base64"));
+    }
+    if (kit && !fs.existsSync(path.join(here.folder, "MEMORY.md"))) write("MEMORY.md", kit.memory.replaceAll("⟦name⟧", () => here.described.name));
+  } catch {}
+}
+
+// `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation were just brought here from
+// another computer (Move to Computer), made this box's: what its folder says of where it is, its
+// rules here (for its folder here, and from this box's Settings › Permissions), and what it's told
+// here (where it runs, now). Done while its move still holds it, before its wake-ups go on, and
+// one at a time with its other tellings. `{status, value}`: 200 `{bot}`.
+export async function settleBot(id, readEngine, readBridge, machine) {
+  const no = (status, message) => ({ status, value: { message } });
+  const here = botHere(id);
+  if (!here) return no(404, "That bot isn’t there any more.");
+  return oneAtATime(here.session, async () => {
+    const kit = readKit();
+    // Where it works and the clock it goes by, whatever else can't be done yet.
+    settleFolder(here, kit);
+    noteBotsChanged();
+    if (!kit) return no(409, NO_KIT);
+    let target;
+    try { target = here.agents ? readBridge() : readEngine(); } catch {}
+    if (!target) return no(503, here.agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
+    const text = toldNow(kit, here);
+    const there = await toldThere(target, here.session);
+    // Told already (by its box before, or here): noted as told here, so what was noted where it came
+    // from doesn't have it told again.
+    if (there === text) noteTold(here.folder, { session: here.session, instructions: toldDigest(text) });
+    const told = there === text || await tellBot(target, here, here.session, text);
+    const ruled = await repairRules(target, here, here.session);
+    if (ruled) noteTold(here.folder, { rules: here.folder });
+    if (!told || !ruled) return no(503, "Its conversation here didn’t take what it is now. It’s tried again as its next run starts.");
+    return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } };
+  });
 }
 
 // What a conversation on `target` is told as a bot (its `kuvo.bot` entry): its words, null for
@@ -3531,9 +3662,48 @@ export async function freshenBots(target) {
   }
 }
 
-// A bot's own rules as they're made now (`external_directory` for its folder), after the rest of
-// its conversation's: an earlier version allowed its kuvo-wake commands (which let one that also
-// wrote a file through), and a move left the folder it had. Whether they're right now.
+// What "Ask First" asks about (the Mac's ToolApproval.askFirst): a conversation that asks before
+// running commands asks first.
+const ASK_FIRST = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
+const isRule = rule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && ["allow", "deny", "ask"].includes(rule.effect);
+// A folder a conversation may work in, of its own (the Mac's ToolApproval.isParticular).
+const isParticular = rule => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
+
+// This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
+// or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
+function permissionsHere() {
+  if (!ownsSettings()) return null;
+  const { settings } = readSettings();
+  if (!settings) return null;
+  const rules = Array.isArray(settings.permissions) ? settings.permissions : [];
+  return rules.every(isRule) ? rules : [];
+}
+
+// A conversation's rules made again from its approval (it asks first when it asks before commands)
+// and Settings › Permissions (`settings`) as they are now, with its own folders after, as the Mac
+// makes them (ToolApproval.refreshed): Approve All runs what Settings asks first about, Ask First
+// still lets through what Settings allows, and both keep what Settings doesn't allow.
+export function refreshedRules(current, settings) {
+  const asks = current.some(rule => rule.action === "shell" && rule.effect === "ask");
+  const denied = settings.filter(rule => rule.effect === "deny");
+  let made;
+  if (asks) {
+    const everywhere = settings.findLast(rule => rule.action === "external_directory" && rule.resource === "*")?.effect === "allow";
+    made = [
+      ...ASK_FIRST.filter(action => everywhere || action !== "external_directory").map(action => ({ action, resource: "*", effect: "ask" })),
+      ...settings.filter(rule => rule.effect !== "deny" && rule.resource !== "*" && rule.action !== "external_directory"),
+      ...denied,
+    ];
+  } else {
+    made = [...settings.filter(rule => rule.effect === "ask").map(rule => ({ action: rule.action, resource: rule.resource, effect: "allow" })), ...denied];
+  }
+  return [...made, ...current.filter(isParticular)];
+}
+
+// A bot's own rules as they're made now: its approval with this box's Settings › Permissions, then
+// `external_directory` for its folder here. An earlier version allowed its kuvo-wake commands
+// (which let one that also wrote a file through), a move left the folder it had, and the computer
+// it came from had Settings of its own. Whether they're right now.
 async function repairRules(target, here, sessionID) {
   const id = here.described.id;
   let rules;
@@ -3547,7 +3717,9 @@ async function repairRules(target, here, sessionID) {
   const commands = [`kuvo-wake ${id} `, `"${WAKE_COMMAND}" ${id} `, `"$HOME/.kuvo-code/bin/kuvo-wake" ${id} `];
   const old = rule => (rule?.action === "shell" && commands.some(command => String(rule.resource ?? "").startsWith(command)))
     || (rule?.action === "external_directory" && String(rule.resource ?? "").endsWith(`/bots/${id}/*`));
-  const repaired = [...rules.filter(rule => !old(rule)), own];
+  const kept = rules.filter(rule => !old(rule));
+  const settings = kept.every(isRule) ? permissionsHere() : null;
+  const repaired = [...(settings ? refreshedRules(kept, settings) : kept), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
 }
@@ -7538,6 +7710,7 @@ async function run() {
   for (const folder of ["present", "connected"]) fs.rmSync(path.join(RUN, folder), { recursive: true, force: true });
   // Its bots' jobs kept in their folders, taken once from where they were before.
   try { keepJobs(); } catch {}
+  forgetOldKit();
   // Its bots' folders' settings, as its integrations are now (after an update, say).
   await refreshBotsKeys().catch(() => {});
   // A link from an earlier bridge: its signing key made, and kept as this one keeps it.

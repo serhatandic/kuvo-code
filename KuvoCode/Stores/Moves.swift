@@ -253,7 +253,7 @@ final class Moves {
         guard let app, let folder = record.copy, let session = sessions.first else { return }
         let keys = await BotKeys.carried(bot, app: app) ?? [:]
         app.workspace.moved(sessions, api: target)
-        await app.bots.moved(bot.id, to: record.to, folder: folder, session: session, api: target)
+        await app.bots.moved(bot.id, to: record.to, folder: folder, session: session)
         if let now = app.bots.bot(bot.id) { await BotKeys.give(keys, to: now, app: app) }
         if bot.machine == nil { app.utilities.closeTabs(of: bot.id) }
     }

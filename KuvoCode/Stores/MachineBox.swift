@@ -37,9 +37,11 @@ enum MachineBox {
     }
 
     /// Puts the box's tool on the machine, in `~/.kuvo-code/bin`, unless it has this one, with
-    /// Settings › MCP Servers' popular servers beside it, for a phone to add there as here.
+    /// what it makes its bots with and tells them, and Settings › MCP Servers' popular servers
+    /// beside it, for a phone to add there as here.
     static func install(on connection: SSHConnection) async throws {
         try await installTool(on: connection)
+        try await writeCatalog(try BotWords.data, named: BotWords.fileName, on: connection)
         try await writeCatalog(on: connection)
         try await writeCatalog(await integrationsJSON(), named: "integrations.json", on: connection)
     }
