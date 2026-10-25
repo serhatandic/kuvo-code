@@ -72,8 +72,8 @@ final class MachineEngine {
     /// files are left as they are.
     private(set) var boxIsNewer = false
     let catalog = Catalog()
-    /// Its engine's settings, its own (`MachineBox`): read as it's started, and again as they
-    /// change there.
+    /// Its engine's settings, its own, through its box (`BoxSettings`): read as it's started, and
+    /// again as they change there.
     let config: EngineConfig
     /// The coding agents there: the agents bridge beside its engine, through the same tunnel.
     let agents: OutsideAgents
@@ -108,7 +108,7 @@ final class MachineEngine {
         agents = OutsideAgents(machine: machine.id)
         catalog.outsideAgents = agents
         catalog.machine = machine.id
-        config = EngineConfig(remote: MachineBox.Store(connection: machine.connection))
+        config = EngineConfig(remote: BoxSettings(client: BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))))
     }
 
     /// The machine as it's kept now: another address, or what it calls itself, learned.

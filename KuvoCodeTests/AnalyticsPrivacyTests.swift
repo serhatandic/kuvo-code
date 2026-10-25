@@ -13,9 +13,7 @@ import Testing
 
     init() async throws {
         TestEnvironment.prepare()
-        let folder = AppInfo.testRoot.appending(path: "Analytics/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        config = EngineConfig(file: folder.appending(path: "opencode.json"))
+        config = EngineConfig.inMemory()
         // The engine's models, as it lists them: a public one, and one of yours on a public provider.
         StubWeb.start(hosts: ["127.0.0.1", "models.opencode.ai"])
         let engine = "http://127.0.0.1:47996"

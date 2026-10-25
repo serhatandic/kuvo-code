@@ -4,9 +4,10 @@ import KuvoLink
 import OpenCodeKit
 
 /// A machine's own settings and keys, a box of its own (KuvoLink's PROTOCOL.md, "Settings per
-/// box"): in `~/.kuvo-code/box` there, which its engine reads and reloads, changed from any Mac
-/// or phone through the box's own tool (`kuvo-link.js box`, the phone link's script, which
-/// answers phones the same way). Nothing copies them between computers but you.
+/// box"): in `~/.kuvo-code/box` there, which its engine reads and reloads, made its own and its
+/// keys set through the box's own tool (`kuvo-link.js box`, the phone link's script), and read and
+/// changed through its routes as any box's are (`BoxSettings`). Nothing copies them between
+/// computers but you.
 enum MachineBox {
     /// What a machine with no settings yet starts with: this Mac's, as its start sent them before
     /// boxes had their own, and its integrations' keys, by their variables.
@@ -20,7 +21,6 @@ enum MachineBox {
         var status: JSONValue?
         var seeded: Bool?
         var settings: [String: JSONValue]?
-        var own: Bool?
         var personalities: [Personality]?
         var removed: [Personalities.Removal]?
         var message: String?
@@ -28,13 +28,10 @@ enum MachineBox {
 
     enum Failure: LocalizedError {
         case refused(String)
-        /// It hasn't been started by a Kuvo Code with boxes yet: what it runs with isn't its own.
-        case notOwnYet
 
         var errorDescription: String? {
             switch self {
             case .refused(let message): message
-            case .notOwnYet: "Its settings become its own the next time Kuvo Code starts it."
             }
         }
     }
@@ -63,7 +60,8 @@ enum MachineBox {
         return (try? JSONSerialization.data(withJSONObject: ["integrations": entries], options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
     }
 
-    /// The popular servers as the tool reads them (`mcp-catalog.json`), written when they change.
+    /// The popular servers as the tool reads them (`mcp-catalog.json`), written when they change,
+    /// with every server that uses a Mac's own apps (integrations' too), which stay on Macs.
     @MainActor static func catalogJSON() -> Data {
         struct Listed: Encodable {
             struct Server: Encodable {
@@ -72,6 +70,7 @@ enum MachineBox {
                 var settings: JSONValue
             }
             var servers: [Server]
+            var macOnly: [String]
         }
         let servers = MCPCatalog.servers.map { server in
             let access = switch server.access {
@@ -84,7 +83,7 @@ enum MachineBox {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(Listed(servers: servers))) ?? Data("{}".utf8)
+        return (try? encoder.encode(Listed(servers: servers, macOnly: (Integrations.macOnly + MCPCatalog.macOnly).sorted()))) ?? Data("{}".utf8)
     }
 
     private static func writeCatalog(on connection: SSHConnection) async throws {
@@ -126,22 +125,6 @@ enum MachineBox {
         return (answer.settings ?? [:], answer.seeded == true)
     }
 
-    /// The machine's settings, as its file has them now.
-    static func read(on connection: SSHConnection) async throws -> [String: JSONValue] {
-        let answer = try await run("read", input: nil, on: connection)
-        guard answer.own != false else { throw Failure.notOwnYet }
-        return answer.settings ?? [:]
-    }
-
-    /// Changes some of the machine's settings, key by key (the phone's `PATCH kuvo/config`):
-    /// another computer's changes to other keys stay. Its settings after.
-    static func change(_ changes: [(path: [String], value: JSONValue?)], on connection: SSHConnection) async throws -> [String: JSONValue] {
-        struct Change: Encodable { var path: [String]; var value: JSONValue }
-        struct Changes: Encodable { var changes: [Change] }
-        let body = Changes(changes: changes.map { Change(path: $0.path, value: $0.value ?? .null) })
-        return try await run("change", input: try JSONEncoder().encode(body), on: connection).settings ?? [:]
-    }
-
     /// This Mac's copy of your personalities met with the machine's (the tool's
     /// `mergePersonalities`): both, as one, which the machine keeps too.
     static func personalities(_ library: Personalities.Library, on connection: SSHConnection) async throws -> Personalities.Library {
@@ -152,19 +135,6 @@ enum MachineBox {
     /// Sets one of the machine's own keys (an integration's), or removes it (nil).
     static func setKey(_ name: String, _ value: String?, on connection: SSHConnection) async throws {
         _ = try await run("key \(SSHConnection.quoted(name))", input: Data((value ?? "").utf8), on: connection)
-    }
-
-    /// A machine's settings for its Settings tab and its sessions' rules (`EngineConfig`).
-    struct Store: RemoteSettings {
-        let connection: SSHConnection
-
-        func read() async throws -> [String: JSONValue] {
-            try await MachineBox.read(on: connection)
-        }
-
-        func change(_ changes: [(path: [String], value: JSONValue?)]) async throws -> [String: JSONValue] {
-            try await MachineBox.change(changes, on: connection)
-        }
     }
 
     /// `kuvo-link.js box <arguments>` there, with `input` on its standard input, with whichever

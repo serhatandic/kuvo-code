@@ -76,8 +76,9 @@ final class AppModel {
     @ObservationIgnored private var agentsActivation: (any NSObjectProtocol)?
     /// Your time zone and how you write dates, followed for this Mac's group chats.
     @ObservationIgnored private var clockObservers: [any NSObjectProtocol] = []
-    /// The engine's settings file, for Settings.
-    @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(file: engineFolders.configFile)
+    /// This Mac's engine settings, for Settings, as its box keeps them (in the engine's settings
+    /// file, where they've always been).
+    @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(remote: BoxSettings(client: box(BoxClient.mac)), file: engineFolders.configFile)
     /// Machines taking settings changed here, a moment after the last change (`settingsSaved`).
     @ObservationIgnored var settingsSync: Task<Void, Never>?
     /// Engines to start again with new settings once nothing's at work in them: "" for this Mac's,
@@ -190,9 +191,11 @@ final class AppModel {
     @ObservationIgnored var restartedStuckEngine = false
     private let log = Logger(subsystem: "run.kuvo.code", category: "engine")
 
-    private var engineFolders: EngineFolders {
+    /// This Mac's engine's folders (its box keeps its settings there too: `BoxProcess`).
+    nonisolated static var engineFolders: EngineFolders {
         EngineFolders(root: AppInfo.supportDirectory.appending(path: "opencode"))
     }
+    private var engineFolders: EngineFolders { Self.engineFolders }
 
     /// The stores told of each other, and of the machines' engines, once this Mac's engine is up.
     /// Also what the route scenarios run with (RouteContractTests).
@@ -235,7 +238,6 @@ final class AppModel {
             return true
         }
         phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
-        phoneLink.engineConfig = engineConfig
         phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
     }
@@ -340,12 +342,20 @@ final class AppModel {
             let integrations = AppInfo.supportDirectory.appending(path: "integrations")
             try? FileManager.default.createDirectory(at: integrations, withIntermediateDirectories: true)
             shell["KUVO_INTEGRATIONS"] = integrations.path
-            // The settings file as it is now (it can change while the engine is down), with web
-            // search that works unless it chose otherwise.
-            engineConfig.addDefaults()
+            // This Mac's box, before the engine: it keeps the engine's settings (and the other
+            // areas that have moved onto it), and goes on through the engine's restarts.
+            await box.start(engine: binary, environment: shell)
+            guard launch == self.launch else { return }
+            // The settings as they are now (they can change while the engine is down), with web
+            // search that works unless they chose otherwise, brought up to date before the engine
+            // reads them.
+            await engineConfig.refresh()
+            await engineConfig.addDefaults()
             Integrations.upgrade(engineConfig)
             MCPCatalog.upgrade(engineConfig)
             MCPSettings.upgrade(engineConfig)
+            _ = await engineConfig.settled()
+            guard launch == self.launch else { return }
             // What some providers need until opencode handles it (see ProviderCompatibility).
             let compatibility = ProviderCompatibility.config
             if !compatibility.isEmpty { shell["OPENCODE_CONFIG_CONTENT"] = Self.merged(compatibility, into: shell["OPENCODE_CONFIG_CONTENT"]) }
@@ -407,7 +417,8 @@ final class AppModel {
             #endif
             wirePhoneLink()
             phoneLink.start(endpoint: server.endpoint)
-            // This Mac's box finds the engine as a machine's does, and starts once.
+            // This Mac's box finds the engine as a machine's does (started above, once; tried again
+            // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             let boxEnvironment = shell
             Task {

@@ -75,10 +75,12 @@ import Testing
 @Suite(.serialized) struct MachineSettingsTests {
     @Test func aModeAddedHereIsThisMacsAndANewMachinesStart() async throws {
         TestEnvironment.prepare()
+        // This Mac's box, which keeps its settings.
+        let box = try await SettingsBox(port: 47_929)
+        defer { box.stop() }
         let app = AppModel()
         let config = app.engineConfig
         #expect((await app.machineSeed()).settings["agents"]?["security-audit"] == nil)
-        defer { config.set(nil, at: ["agents", "security-audit"]) }
 
         config.set(.object(["description": .string("Audits the code for security problems"), "mode": .string("primary"),
                             "prompt": .string("Look for security problems.")]), at: ["agents", "security-audit"])

@@ -563,8 +563,9 @@ private struct SettingsPageHeader: View {
 }
 
 /// A page of one computer's settings: with its settings, models, engine and coding agents in
-/// the environment. A machine's are read from it as its page opens; until then, or while it
-/// can't be reached, the page says so, with the way to connect it or start its engine.
+/// the environment. Its settings are read from its box (this Mac's as it starts, a machine's as
+/// its page opens); until then, or while they can't be read, the page says so, with the way to
+/// try again (and to connect a machine or start its engine).
 private struct BoxPage: View {
     let page: SettingsPage
     let box: SidebarBox
@@ -582,8 +583,10 @@ private struct BoxPage: View {
                 } else {
                     ContentUnavailableView("This Machine Was Removed", systemImage: "server.rack")
                 }
-            } else {
+            } else if app.engineConfig.isLoaded {
                 content
+            } else {
+                Unread(engine: nil)
             }
         }
     }
@@ -600,18 +603,22 @@ private struct BoxPage: View {
             }
     }
 
-    /// A machine's settings, not read yet: read now, or why they can't be.
+    /// A computer's settings, not read yet: read now, or why they can't be. `engine`: a
+    /// machine's; nil for this Mac's, whose box keeps them.
     private struct Unread: View {
-        let engine: MachineEngine
+        let engine: MachineEngine?
         @Environment(AppModel.self) private var app
+
+        private var config: EngineConfig { engine?.config ?? app.engineConfig }
+        private var name: String { engine?.machine.name ?? PhoneLink.computerName }
 
         var body: some View {
             VStack(spacing: 14) {
-                if let problem = engine.config.problem {
-                    Image(systemName: "server.rack")
+                if let problem = config.problem {
+                    Image(systemName: engine == nil ? "laptopcomputer" : "server.rack")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
-                    Text("\(engine.machine.name)’s settings can’t be read")
+                    Text("\(name)’s settings can’t be read")
                         .font(.system(size: 15, weight: .semibold))
                     Text(problem)
                         .settingsText()
@@ -620,23 +627,30 @@ private struct BoxPage: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
                     HStack(spacing: 10) {
-                        Button("Try Again") { engine.config.reload() }
-                        if !engine.isReady, !engine.connection.isUnderWay {
+                        Button("Try Again") {
+                            Task {
+                                // This Mac's box, started again if it stopped.
+                                if engine == nil, app.box.endpoint == nil { await app.box.startAgain() }
+                                await config.refresh()
+                            }
+                        }
+                        if let engine, !engine.isReady, !engine.connection.isUnderWay {
                             Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
                         }
                     }
                 } else {
                     Spinner()
-                    Text("Reading \(engine.machine.name)’s settings…")
+                    Text("Reading \(name)’s settings…")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 60)
-            // Read as the page opens, and again once it's reached.
-            .task(id: engine.isReady) {
-                if !engine.config.isLoaded, engine.config.problem == nil || engine.isReady { engine.config.reload() }
+            // Read as the page opens, and again once it's reached (this Mac's box, once it runs).
+            .task(id: engine?.isReady ?? (app.box.endpoint != nil)) {
+                let ready = engine?.isReady ?? (app.box.endpoint != nil)
+                if !config.isLoaded, config.problem == nil || ready { config.reload() }
             }
         }
     }
@@ -800,6 +814,8 @@ private struct AlsoApplyBar: View {
             var notes: [String] = []
             var failures: [(name: String, error: any Error)] = []
             var missed: [SidebarBox] = []
+            var own: [String] = []
+            var macOnly: [String] = []
             for target in targets {
                 let name = app.name(of: target)
                 applying = name
@@ -810,6 +826,8 @@ private struct AlsoApplyBar: View {
                         let what = outcome.leftOut.formatted(.list(type: .or))
                         notes.append("\(name) doesn’t have \(what), so \(outcome.leftOut.count == 1 ? "that change" : "those changes") stayed here.")
                     }
+                    own += outcome.kept.filter { !own.contains($0) }
+                    macOnly += outcome.macOnly.filter { !macOnly.contains($0) }
                 } catch {
                     failures.append((name, error))
                     missed.append(target)
@@ -818,12 +836,9 @@ private struct AlsoApplyBar: View {
             applying = nil
             Analytics.shared.track("settings_also_applied", ["computers": done.count])
             // What stays with every computer, said once.
-            let net = AlsoApply.net(changes)
-            let own = AlsoApply.keptOwn(net)
             if !own.isEmpty {
                 notes.append("Each computer keeps its own \(own.formatted(.list(type: .and))), so \(own.count == 1 ? "that" : "those") stayed here.")
             }
-            let macOnly = targets.contains { $0.machine != nil } ? AlsoApply.macOnly(net) : []
             if !macOnly.isEmpty {
                 notes.append("\(macOnly.formatted(.list(type: .and))) \(macOnly.count == 1 ? "stays on Macs: it uses" : "stay on Macs: they use") a Mac’s own apps.")
             }

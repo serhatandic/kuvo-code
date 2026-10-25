@@ -66,6 +66,15 @@ final class BoxProcess {
         }
         var env = environment
         env["KUVO_HOME"] = Self.home.path
+        // The engine's settings folder, where it reads its settings (a machine's box finds its
+        // engine's in its own folder): this Mac's settings stay where they've always been. And
+        // where the engine reads the keys you keep in the Keychain, which its settings name.
+        env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
+        env["KUVO_KEYS"] = IntegrationKeys.folder.path
+        // Settings › MCP Servers' popular servers, as a machine's box has them from its Mac.
+        let bin = Self.home.appending(path: "bin")
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try? MachineBox.catalogJSON().write(to: bin.appending(path: "mcp-catalog.json"), options: .atomic)
         // Its temporary files, in the app's own temporary folder.
         let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
         env["TMPDIR"] = temporary.path + "/"

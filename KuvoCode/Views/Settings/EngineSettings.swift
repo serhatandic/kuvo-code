@@ -181,13 +181,13 @@ struct EngineSettings: View {
                 if let machine {
                     LabeledContent("Settings file", value: "~/\(RemoteEngineInstaller.root)/box/opencode.json on \(machine.machine.name)")
                         .textSelection(.enabled)
-                } else {
+                } else if let file = config.file {
                     LabeledContent("Settings file") {
                         HStack {
-                            Button("Open") { NSWorkspace.shared.open(config.file) }
-                                .disabled(!FileManager.default.fileExists(atPath: config.file.path))
-                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([config.file]) }
-                                .disabled(!FileManager.default.fileExists(atPath: config.file.path))
+                            Button("Open") { NSWorkspace.shared.open(file) }
+                                .disabled(!FileManager.default.fileExists(atPath: file.path))
+                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                                .disabled(!FileManager.default.fileExists(atPath: file.path))
                         }
                     }
                 }

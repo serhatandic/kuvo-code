@@ -71,20 +71,23 @@ struct BoxClient: Sendable {
 }
 
 /// What a box said when it said no: its status, and its words (`{"message"}`) or, without them,
-/// that it said no.
+/// that it said no. `problem`: why a file it keeps can't be used, alone (`kuvo/config`'s, with
+/// comments in it), for a page that names the file already.
 struct BoxRefusal: LocalizedError {
     var status: Int
     var message: String
+    var problem: String?
     var errorDescription: String? { message }
 
-    init(status: Int, message: String) {
+    init(status: Int, message: String, problem: String? = nil) {
         self.status = status
         self.message = message
+        self.problem = problem
     }
 
     init(status: Int, data: Data) {
-        let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-        self.init(status: status, message: said ?? "It said no (\(status)).")
+        let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String)
     }
 }
 
