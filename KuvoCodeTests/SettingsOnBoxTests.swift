@@ -81,8 +81,9 @@ import Testing
         try Data(original.utf8).write(to: SettingsBox.file)
         let config = AppModel().engineConfig
         await config.refresh()
-        // The file's problem alone, under Settings' own words for it.
+        // The file's problem alone, under Settings' own words for it, on its pages (read, as it is).
         #expect(config.problem == "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)")
+        #expect(config.isLoaded, "its pages show, with why it can't be changed")
         config.set(.string("openai/luna"), at: ["model"])
         #expect(await config.settled() != nil)
         #expect(try String(contentsOf: SettingsBox.file, encoding: .utf8) == original)

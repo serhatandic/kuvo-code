@@ -86,6 +86,10 @@ final class BoxProcess {
                 arguments: arguments(script),
                 environment: env,
                 directory: Self.home,
+                // Up in well under a second: the engine's start waits for it (its settings first),
+                // so one that's held up (macOS asking about a folder its script is in) doesn't
+                // hold the engine up for long. It's tried again once the engine is up.
+                timeout: .seconds(15),
                 onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
             )
             self.server = server

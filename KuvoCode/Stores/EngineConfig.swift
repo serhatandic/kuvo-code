@@ -207,8 +207,13 @@ final class EngineConfig {
             guard read == reads else { return }
             if let refusal = error as? BoxRefusal, let unusable = refusal.problem {
                 // Its box read the file, and it can't be used (comments in it): left alone until
-                // it's fixed, and said.
+                // it's fixed, and said on its pages, which show what was read before, if anything.
                 problem = unusable
+                if !isLoaded {
+                    isLoaded = true
+                    rules = settings["permissions"]
+                    onRulesChanged()
+                }
             } else if !isLoaded {
                 problem = "Its settings couldn't be read: \(error.localizedDescription)"
             }
