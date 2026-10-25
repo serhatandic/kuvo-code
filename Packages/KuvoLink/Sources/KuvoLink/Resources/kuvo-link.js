@@ -1388,10 +1388,13 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
         }
       }
       if (signal?.aborted) break;
+      let timer;
       await new Promise(done => {
         wake = done;
-        setTimeout(done, watching.whole ? 30_000 : 1000);
+        timer = setTimeout(done, watching.whole ? 30_000 : 1000);
       });
+      // Woken sooner (a change, or its client gone): the look it was waiting for goes too.
+      clearTimeout(timer);
       wake = null;
       queue.push(JSON.stringify(read()));
     }
