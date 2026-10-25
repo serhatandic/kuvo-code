@@ -95,6 +95,9 @@ struct HTTPResponse {
     var status: Int
     var headers: [String: String] = [:]
     var body = Data()
+    /// A body that comes as it's made (a route that follows something), sent as it comes; the
+    /// connection closes when it ends, which is how the client knows it has.
+    var stream: AsyncThrowingStream<Data, Error>?
 
     static func json(_ object: Any) -> HTTPResponse {
         // Sorted, so the tools' list reads the same at every launch, and a conversation picked up
@@ -209,23 +212,50 @@ final class HTTPConnection {
         })
     }
 
+    /// A body that comes as it's made: each piece as it comes, then the connection closed. One the
+    /// client leaves stops (`close`, cancelling `answering`).
+    private func send(head: Data, stream: AsyncThrowingStream<Data, Error>) {
+        connection.send(content: head, completion: .contentProcessed { _ in })
+        answering = Task { [weak self] in
+            do {
+                for try await piece in stream {
+                    guard let self, !self.closing else { return }
+                    self.connection.send(content: piece, completion: .contentProcessed { _ in })
+                }
+            } catch {}
+            guard let self, !self.closing else { return }
+            self.closing = true
+            self.connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
+                MainActor.assumeIsolated { self?.connection.cancel() }
+            })
+        }
+    }
+
     private func send(_ response: HTTPResponse) {
         let reason: String = switch response.status {
         case 200: "OK"
         case 202: "Accepted"
         case 400: "Bad Request"
         case 401: "Unauthorized"
+        case 403: "Forbidden"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
+        case 413: "Content Too Large"
+        case 503: "Service Unavailable"
         default: "Error"
         }
         var head = "HTTP/1.1 \(response.status) \(reason)\r\n"
         var headers = response.headers
-        headers["Content-Length"] = String(response.body.count)
-        headers["Connection"] = "keep-alive"
+        if response.stream == nil {
+            headers["Content-Length"] = String(response.body.count)
+            headers["Connection"] = "keep-alive"
+        } else {
+            headers["Connection"] = "close"
+        }
         for (name, value) in headers { head += "\(name): \(value)\r\n" }
         head += "\r\n"
         guard !closing else { return }
+        if let stream = response.stream { return send(head: Data(head.utf8), stream: stream) }
         connection.send(content: Data(head.utf8) + response.body, completion: .contentProcessed { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.closing else { return }

@@ -8,6 +8,8 @@ import SwiftUI
 struct PhoneSettings: View {
     @Environment(AppModel.self) private var app
     @State private var removing: PhoneLink.Phone?
+    /// Making a pairing link (this Mac's box makes it).
+    @State private var isPairing = false
 
     private var link: PhoneLink { app.phoneLink }
 
@@ -26,8 +28,24 @@ struct PhoneSettings: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                 } else {
-                    Button("Pair a Phone…") { link.beginPairing() }
-                        .disabled(link.status != .connected)
+                    HStack(spacing: 8) {
+                        Button("Pair a Phone…") {
+                            isPairing = true
+                            Task {
+                                await link.beginPairing()
+                                isPairing = false
+                            }
+                        }
+                        .disabled(isPairing)
+                        if isPairing { Spinner(size: 16) }
+                    }
+                    if let problem = link.pairingProblem {
+                        Text(problem)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                 }
             } header: {
                 Text("Pair")
@@ -76,7 +94,8 @@ struct PhoneSettings: View {
 
     private var statusText: String {
         switch link.status {
-        case .off: "Starts once the engine is running."
+        // Nothing needs the relay yet: a pairing connects it.
+        case .off: link.phones.isEmpty ? "Pair a phone to reach this Mac from it." : "Connects to the relay when a phone needs it."
         case .connecting: "Connecting to the relay…"
         case .connected: "Ready for your phones."
         case .failed(let message): message

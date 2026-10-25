@@ -107,13 +107,13 @@ final class PhoneLink {
             documents = try container.decodeIfPresent(MacDocuments.self, forKey: .documents) ?? MacDocuments()
         }
     }
+    /// How this Mac's link stands, as its box says (`kuvo/link/status`).
     private(set) var status = Status.off
     /// The link a phone pairs with, while Settings › Phone shows it: good for ten minutes, once.
+    /// This Mac's box makes it, and lets the phone in.
     private(set) var pairing: PairingLink?
-    @ObservationIgnored private var pairingEnds = ContinuousClock.now
-    /// A link a paired phone asked for, for another phone (`kuvo/phones/pair`): apart from the one
-    /// Settings › Phone shows, so neither ends the other. Good for as long, once.
-    @ObservationIgnored private var askedPairing: (link: PairingLink, ends: ContinuousClock.Instant)?
+    /// Why a pairing link couldn't be made just now, shown where it would be.
+    private(set) var pairingProblem: String?
 
     var relay: URL {
         UserDefaults.standard.string(forKey: "phoneLink.relay").flatMap(URL.init(string:)) ?? Self.defaultRelay
@@ -124,7 +124,11 @@ final class PhoneLink {
     @ObservationIgnored private lazy var identity: (key: LinkKey, secret: RelaySecret) = Self.loadIdentity()
     private var key: LinkKey { identity.key }
     private var secret: RelaySecret { identity.secret }
-    @ObservationIgnored private var server: LinkServer?
+    /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
+    @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// Its connection, for what the app still sends on it (`BoxRelay`).
+    @ObservationIgnored private var server: BoxRelay?
+    /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
     private let log = Logger(subsystem: "run.kuvo.code", category: "phone")
@@ -207,131 +211,185 @@ final class PhoneLink {
     /// said. Set by the app (AgentMail).
     @ObservationIgnored var onMail: (_ machine: String, _ payload: [String: Any]) -> Void = { _, _ in }
 
-    /// Starts answering phones and your machines, through this Mac's engine at `endpoint`, once
-    /// it's ready.
+    /// This Mac's link, held by its box (KuvoLink's PROTOCOL.md, "This Mac's box: the relay"): told
+    /// whether it's wanted, and followed (how it stands, and the phones it keeps), from now on.
+    /// `endpoint`: this Mac's engine, for what a phone asks of it through the app.
     func start(endpoint: ServerEndpoint) {
         self.endpoint = endpoint
-        guard relayWanted, running == nil, hasIdentity else { return }
-        server = makeServer(endpoint: endpoint)
-        running = Task { await run() }
+        guard running == nil else { return }
+        running = Task { [weak self] in await self?.follow() }
         #if DEBUG
         pairForDemo()
         #endif
     }
 
     #if DEBUG
-    /// KUVO_DEMO_PHONE_PAIR=<file>: once the relay answers, a pairing code, its link written to
-    /// that file, for pairing a simulator (or a test) without a camera or the window.
+    /// KUVO_DEMO_PHONE_PAIR=<file>: once the box is on the relay, a pairing code, its link written
+    /// to that file, for pairing a simulator (or a test) without a camera or the window.
     private func pairForDemo() {
         guard let file = ProcessInfo.processInfo.environment["KUVO_DEMO_PHONE_PAIR"] else { return }
         Task { [weak self] in
-            for _ in 0..<60 where self?.status != .connected { try? await Task.sleep(for: .milliseconds(500)) }
+            for _ in 0..<60 where self?.status == .off || self?.status == .connecting { try? await Task.sleep(for: .milliseconds(500)) }
             guard let self, pairing == nil else { return }
-            beginPairing()
+            await beginPairing()
             try? pairing?.url.absoluteString.write(toFile: file, atomically: true, encoding: .utf8)
         }
     }
     #endif
 
+    /// No longer followed (the app quitting). The box holds its link on until it stops too.
     func stop() {
-        let server = server, running = running
-        self.running = nil
-        self.server = nil
-        status = .off
-        // Phones hear their sessions end (see `LinkServer.closeAll`); the relay connection goes
-        // once that's on its way.
-        Task {
-            await server?.closeAll()
-            try? await Task.sleep(for: .milliseconds(300))
-            running?.cancel()
+        running?.cancel()
+        running = nil
+        server = nil
+    }
+
+    /// What this Mac's box is told of its link: whether the phone link is on, whether there are
+    /// machines to meet, the relay, and how it's named to your phones.
+    private var linkConfig: Data {
+        let config: [String: Any] = ["phones": Self.isEnabled, "machines": hasMachines(), "relay": relay.absoluteString,
+                                     "name": Self.computerName, "app": AppInfo.version]
+        return (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
+    }
+
+    /// Follows this Mac's box: tells it what's wanted of its link, takes what an older Kuvo Code
+    /// kept of your phones (once, or again after going back to one), and follows how its link
+    /// stands and its phones. Each time the box comes back (started again, it knows nothing of what
+    /// it was told), it's told again.
+    private func follow() async {
+        while !Task.isCancelled {
+            if hasIdentity, let client = box(),
+               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200 {
+                server = BoxRelay(key: key, box: client)
+                await takePhonesFromFile(client)
+                let phones = Task { [weak self] in
+                    do {
+                        for try await line in client.follow("kuvo/link/phones/events") { self?.followed(phones: line) }
+                    } catch {}
+                }
+                do {
+                    for try await line in client.follow("kuvo/link/status/events") { followed(status: line) }
+                } catch {}
+                phones.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            status = hasIdentity ? .failed("Kuvo Code’s background service on this Mac isn’t running. It starts again in a moment.")
+                : .failed("Kuvo Code couldn’t read this Mac’s link from your Keychain. Quit and open Kuvo Code again to try again.")
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 
-    private func restart() {
-        guard let endpoint else { return }
-        stop()
-        start(endpoint: endpoint)
+    private func followed(status line: Data) {
+        struct Said: Decodable { var state: String; var reason: String? }
+        guard let said = try? JSONDecoder().decode(Said.self, from: line) else { return }
+        let was = status
+        status = switch said.state {
+        case "connected": .connected
+        case "connecting": .connecting
+        case "failed": .failed(said.reason ?? "This Mac’s link stopped.")
+        default: .off
+        }
+        // On the relay again: your machines hear who's here, and tell their agents again (what they
+        // said meanwhile didn't come).
+        if status == .connected, was != .connected { Task { await tellMachines(ask: true) } }
     }
 
-    /// A machine added or removed: with the first, this Mac meets it at the relay; with the last
-    /// gone (and no phone link), it stops. The others hear who their peers are now.
+    /// The phones as the box keeps them, kept here too (what your machines are told, and what an
+    /// older Kuvo Code finds if you go back to one); a change here goes to your machines.
+    private func followed(phones line: Data) {
+        struct Kept: Decodable {
+            struct Phone: Decodable { var key: String; var name: String?; var added: Double?; var address: String?; var pairing: String? }
+            var phones: [Phone]
+            var removed: [PairedPhones.Removal]
+            var pairing: Bool?
+        }
+        guard let kept = try? JSONDecoder().decode(Kept.self, from: line) else { return }
+        let now = PairedPhones(phones: kept.phones.map {
+            Phone(key: $0.key, name: $0.name ?? "", added: Date(timeIntervalSince1970: $0.added ?? 0), address: $0.address, pairing: $0.pairing ?? "")
+        }, removed: kept.removed)
+        // The link shown was used, or ran out: it's done.
+        if kept.pairing == false { pairing = nil }
+        guard now != paired else { return }
+        paired = now
+        save()
+        syncMachines()
+        Task { await tellMachines() }
+    }
+
+    /// What an older Kuvo Code kept of your phones (phone-link.json), met with the box's, where
+    /// it's changed since this one last wrote it: the first time, and after going back to one.
+    private func takePhonesFromFile(_ client: BoxClient) async {
+        let written = UserDefaults.standard.double(forKey: Self.writtenKey)
+        guard let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date,
+              changed.timeIntervalSince1970 > written + 0.5 else { return }
+        let older = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
+        let given: [String: Any] = [
+            "phones": older.phones.map { phone -> [String: Any] in
+                var entry: [String: Any] = ["key": phone.key, "name": phone.name, "added": phone.added.timeIntervalSince1970.rounded(), "pairing": phone.pairing]
+                if let address = phone.address { entry["address"] = address }
+                return entry
+            },
+            "removed": older.removed.map { ["key": $0.key, "pairing": $0.pairing] },
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: given),
+              (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return }
+        UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey)
+    }
+
+    /// When this Kuvo Code last wrote phone-link.json (its file's date then): one newer was an
+    /// older Kuvo Code's.
+    private static let writtenKey = "phoneLink.written"
+
+    /// A machine added or removed: with the first, this Mac's box meets your machines at the relay
+    /// (and they each other); with the last gone (and no phone link), it stops. The others hear who
+    /// their peers are now.
     func machinesChanged() {
-        if relayWanted, running == nil, let endpoint {
-            start(endpoint: endpoint)
-        } else if !relayWanted, running != nil {
-            stop()
+        if let client = box() {
+            let config = linkConfig
+            Task { _ = try? await client.send("PUT", "kuvo/link/config", body: config) }
         }
         syncMachines()
         Task { await tellMachines() }
     }
 
-    /// Shows a pairing link (as a QR code) for a phone to scan.
-    func beginPairing() {
-        pairing = PairingLink(relay: relay, host: secret.address, key: key.publicBytes, name: Self.computerName)
-        pairingEnds = .now + Self.pairingTime
+    /// Shows a pairing link (as a QR code) for a phone to scan, made by this Mac's box: one of its
+    /// own, apart from one a phone asks for, so neither ends the other.
+    func beginPairing() async {
+        pairingProblem = nil
+        struct Made: Decodable { var link: String }
+        guard let client = box() else {
+            pairingProblem = "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
+            return
+        }
+        do {
+            let made = try await client.value(Made.self, "POST", "kuvo/phones/pair")
+            pairing = URL(string: made.link).flatMap(PairingLink.init)
+            if pairing == nil { pairingProblem = "This Mac’s link made a pairing code this version can’t show." }
+        } catch {
+            pairingProblem = error.localizedDescription
+        }
     }
 
     func endPairing() {
+        pairingProblem = nil
+        guard pairing != nil else { return }
         pairing = nil
+        guard let client = box() else { return }
+        Task { _ = try? await client.send("DELETE", "kuvo/phones/pair") }
     }
 
     /// Removes a phone you've paired (Settings › Phone): here and on your machines, for good, until
-    /// it's paired again.
+    /// it's paired again. This Mac's box takes it off, and ends what it has open.
     func remove(_ phone: Phone) {
-        let mac = key.publicBytes.base64URL
-        removePhones([.init(key: phone.key, pairing: phone.pairing)], by: mac)
+        removePhones([.init(key: phone.key, pairing: phone.pairing)])
     }
 
-    /// `entries` removed by `sender`, this Mac or a phone paired with it: as `PairedPhones` has it
-    /// (never this Mac, and for good). Their sessions end, and your machines hear of it. False,
-    /// changing nothing, when that isn't allowed.
-    @discardableResult
-    private func removePhones(_ entries: [PairedPhones.Entry], by sender: String) -> Bool {
-        let before = Set(paired.phones.map(\.key))
-        guard paired.remove(entries, by: sender, macs: [key.publicBytes.base64URL]) else { return false }
-        save()
-        // Once the answer's on its way: a phone that removed itself gets it too.
-        let gone = before.subtracting(paired.phones.map(\.key)).compactMap { Data(base64URL: $0) }
-        Task { [server] in
-            try? await Task.sleep(for: .milliseconds(200))
-            for key in gone { await server?.forget(phone: key) }
-        }
-        syncMachines()
-        Task { await tellMachines() }
-        return true
-    }
-
-    /// `kuvo/phones`: the phones paired with this Mac (`you`, the one asking); `kuvo/phones/remove`
-    /// (POST, `{"phones": [{key, pairing}]}`): a phone removes others (a lost one, say) or itself;
-    /// `kuvo/phones/pair`: POST, a link for another phone to pair with, as Settings › Phone shows
-    /// one; DELETE ends it, as Done does there.
-    func answerPhones(_ request: LinkRequest, asking: Data?) -> (Int, Data) {
-        let encoder = JSONEncoder()
-        let me = asking?.base64URL
-        if request.path == "kuvo/phones/pair" {
-            if request.method.uppercased() == "DELETE" {
-                askedPairing = nil
-                return (200, Data("{}".utf8))
-            }
-            guard request.method.uppercased() == "POST" else { return (405, Data("{}".utf8)) }
-            // (Its keys are made only once the link is on.)
-            guard Self.isEnabled, hasIdentity else { return (409, Self.message("The phone link is off on this Mac.")) }
-            let asked = PairingLink(relay: relay, host: secret.address, key: key.publicBytes, name: Self.computerName)
-            askedPairing = (asked, .now + Self.pairingTime)
-            let ends = Date.now.addingTimeInterval(Double(Self.pairingTime.components.seconds))
-            return (200, Self.json(["link": asked.url.absoluteString, "ends": ends.timeIntervalSince1970]))
-        }
-        if request.path == "kuvo/phones" {
-            struct Listed: Encodable { var key: String; var name: String; var added: Double; var pairing: String; var you: Bool }
-            let listed = paired.phones.map { Listed(key: $0.key, name: $0.name, added: $0.added.timeIntervalSince1970, pairing: $0.pairing, you: $0.key == me) }
-            return (200, (try? encoder.encode(["phones": listed])) ?? Data())
-        }
-        guard request.method.uppercased() == "POST" else { return (405, Data("{}".utf8)) }
-        struct Given: Decodable { var phones: [PairedPhones.Entry] }
-        guard let me, let given = try? JSONDecoder().decode(Given.self, from: request.body), removePhones(given.phones, by: me) else {
-            return (400, (try? encoder.encode(["message": "Only phones paired here can be removed, and never your Mac."])) ?? Data())
-        }
-        return (200, Data("{}".utf8))
+    /// `entries` taken off this Mac's phones, as the Mac takes them off (Settings › Phone, or a
+    /// removal one of your machines' documents brought).
+    private func removePhones(_ entries: [PairedPhones.Entry]) {
+        guard !entries.isEmpty, let client = box(),
+              let body = try? JSONSerialization.data(withJSONObject: ["phones": entries.map { ["key": $0.key, "pairing": $0.pairing as Any] }]) else { return }
+        Task { _ = try? await client.send("POST", "kuvo/phones/remove", body: body) }
     }
 
     // MARK: Machines
@@ -489,8 +547,9 @@ final class PhoneLink {
         status == .connected && machineHosts[machine]?.peers == true && machineHosts[machine]?.anotherMac != true
     }
 
-    /// A mail frame from the relay: opened with the key of one of your machines, or dropped.
-    private func mailed(_ frame: Data) {
+    /// A mail frame from the relay (this Mac's box hands it over): opened with the key of one of
+    /// your machines, or dropped.
+    func mailed(_ frame: Data) {
         for (machine, host) in machineHosts where host.anotherMac != true {
             guard let remote = Data(base64URL: host.key), let opened = try? Mail.open(frame, to: key, from: remote) else { continue }
             guard let payload = try? JSONSerialization.jsonObject(with: opened) as? [String: Any] else { return }
@@ -591,7 +650,7 @@ final class PhoneLink {
     }
 
     /// Mails `payload` (with `extra` beside it) to a machine.
-    private func send(_ payload: [String: Any], extra: [String: Any] = [:], to host: MachineHost, server: LinkServer) async {
+    private func send(_ payload: [String: Any], extra: [String: Any] = [:], to host: MachineHost, server: BoxRelay) async {
         var mail = payload.merging(extra) { $1 }
         mail["at"] = Int64(Date.now.timeIntervalSince1970 * 1000)
         guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
@@ -610,15 +669,17 @@ final class PhoneLink {
         guard hasIdentity, let sender = machineHosts[machine] else { return nil }
         let origin = Documents.origin(of: signing)
         let machines = machineSigns
-        let phonesBefore = Set(paired.phones.map(\.key))
         var given = (docs["give"] as? [Any] ?? []).prefix(64).compactMap(Documents.Envelope.init)
         if let part = docs["part"] as? [String: Any], let whole = assembler.take(part, from: sender.key) { given.append(whole) }
         var passOn: [Documents.Document] = []
         var libraries: [(origin: String, library: Personalities.Library)] = []
         for envelope in given {
             guard let (doc, mine) = documents.take(envelope, machines: machines, origin: origin) else { continue }
-            if doc.kind == "phones", let removals = doc.decoded(PhonesRemovals.self)?.removed {
+            if doc.kind == "phones", let removals = doc.decoded(PhonesRemovals.self)?.removed, !removals.isEmpty {
+                // Here at once (this Mac's own phones document says so), and where this Mac's box
+                // lets phones in, which ends what they have open.
                 paired.takeRemovals(removals, macs: [key.publicBytes.base64URL])
+                removePhones(removals.prefix(PairedPhones.mostKept).map { .init(key: $0.key, pairing: $0.pairing) })
             }
             if doc.kind == "personalities", let library = doc.decoded(Personalities.Library.self) {
                 libraries.append((doc.origin, library))
@@ -661,9 +722,6 @@ final class PhoneLink {
         }
         documents.prune(machines: machineSigns)
         changed += refreshDocuments().changed
-        // A phone removed elsewhere loses its sessions here too.
-        let gone = phonesBefore.subtracting(paired.phones.map(\.key)).compactMap { Data(base64URL: $0) }
-        if !gone.isEmpty { Task { [server] in for phone in gone { await server?.forget(phone: phone) } } }
         save()
         // Met with this Mac's where its box keeps them: what changed is told (`Personalities.onChange`).
         let meeting = libraries.isEmpty ? nil : Task { [weak self] in
@@ -695,60 +753,6 @@ final class PhoneLink {
     private struct PhonesRemovals: Decodable { var removed: [PairedPhones.Removal] }
 
     // MARK: Answering
-
-    private func run() async {
-        var attempt = 0
-        while !Task.isCancelled, let server {
-            status = .connecting
-            do {
-                let connection = try await WebSocketRelay.connect(to: relay, secret: secret)
-                status = .connected
-                attempt = 0
-                // Your machines hear who's here, as soon as there's a way to tell them, and tell
-                // their agents again (what they said meanwhile didn't come).
-                Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    await self?.tellMachines(ask: true)
-                }
-                await server.serve(connection)
-                // Gone: nothing goes by mail until it's back (unless this was stopped, or another
-                // connection took over meanwhile).
-                if !Task.isCancelled, self.server === server { status = .connecting }
-            } catch {
-                status = .failed("Can’t reach the relay at \(relay.host() ?? relay.absoluteString).")
-            }
-            attempt += 1
-            try? await Task.sleep(for: .seconds(min(60, 1 << min(attempt, 6))))
-        }
-    }
-
-    private func makeServer(endpoint: ServerEndpoint) -> LinkServer {
-        let hello = HostHello(kind: .mac, name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version)
-        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
-        let password = endpoint.password
-        let log = log
-        let agents = agents?.address
-        return LinkServer(key: key, hello: hello) { [weak self] key, address, hello in
-            await self?.authorize(key, address, hello) ?? false
-        } handle: { [weak self] request, phone in
-            Self.respond(to: request, link: self, engine: base, password: password, agents: agents, asking: phone.key)
-        } connect: { request, _, input in
-            // Terminals: the engine's, in a project's folder.
-            EngineRoutes.connect(request, to: base, password: password, input: input)
-        } pushed: { _, status in
-            switch status {
-            case .sent: break
-            // Until the phone has registered for notifications, and asked for this Mac's.
-            case .noPhone: log.info("A push had no phone registered for it")
-            case .notAllowed: log.info("A push wasn't from one of the phone's hosts")
-            case .refused: log.error("Apple refused a push")
-            }
-        } confirmed: { [weak self] phone in
-            Task { @MainActor in self?.confirmed(phone) }
-        } mailed: { [weak self] frame, _ in
-            Task { @MainActor in self?.mailed(frame) }
-        }
-    }
 
     /// What this Mac answers a paired phone's request with: Kuvo's own routes (`kuvo/…`), the
     /// coding agents' bridge's (`kuvo/agents/…`, at `agents`) and the engine's (at `base`).
@@ -817,17 +821,6 @@ final class PhoneLink {
         var routed = request
         routed.path = route
         if route == "kuvo/file" { return Self.file(request.path) }
-        // The phones paired with this Mac, removing some, and pairing another, from any of them.
-        if ["kuvo/phones", "kuvo/phones/remove", "kuvo/phones/pair"].contains(route) {
-            return AsyncThrowingStream { [routed] continuation in
-                Task { @MainActor in
-                    let (status, body) = link?.answerPhones(routed, asking: asking) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
         // A client in use here: notices for your phones wait a little while one is.
         if route == "kuvo/attention" {
             return AsyncThrowingStream { [routed] continuation in
@@ -924,41 +917,22 @@ final class PhoneLink {
         }
     }
 
-    /// A phone's session proved its own: its notifications go where it is now, for machines'
-    /// bridges too.
-    private func confirmed(_ phone: LinkServer.Phone) {
-        let encoded = phone.key.base64URL
-        guard let index = paired.phones.firstIndex(where: { $0.key == encoded }), paired.phones[index].address != phone.address.text else { return }
-        paired.phones[index].address = phone.address.text
-        save()
-        syncMachines()
+    // MARK: This Mac's box's link
+
+    /// This Mac's keys, for its box's link (asked through the host interface): its link key, relay
+    /// secret and signing key, as your phones and machines know this Mac. None while the link isn't
+    /// wanted (nothing's made for it then), or the Keychain won't give them out.
+    func boxIdentity() -> [String: String]? {
+        guard relayWanted, hasIdentity else { return nil }
+        return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": signing.rawRepresentation.base64URL]
     }
 
-    /// Lets in a phone you've paired, or one showing a pairing link's token (once, in time): the
-    /// one Settings › Phone shows, or one a paired phone asked for.
-    func authorize(_ key: Data, _ address: LinkAddress, _ hello: PhoneHello) -> Bool {
-        // Met at the relay only for your machines: no phone comes in.
-        guard Self.isEnabled else { return false }
-        let encoded = key.base64URL
-        // Where a paired one's notifications go changes once its session proves its own (see
-        // `confirmed`): the first handshake message can be replayed from another address.
-        let isPaired = phones.contains(where: { $0.key == encoded })
-        // Showing the token: a pairing of its own, paired before or not (one removed on your
-        // machines comes back there too).
-        let shows = { (link: PairingLink?, ends: ContinuousClock.Instant) -> Bool in
-            guard let link, ContinuousClock.now < ends, let token = hello.pair.flatMap({ Data(base64URL: $0) }) else { return false }
-            return token.count == link.token.count && zip(token, link.token).reduce(0, { $0 | ($1.0 ^ $1.1) }) == 0
-        }
-        let onPage = shows(pairing, pairingEnds)
-        guard onPage || shows(askedPairing?.link, askedPairing?.ends ?? .now) else { return isPaired }
-        // A pairing of its own: in, whatever removed it before.
-        paired.pair(Phone(key: encoded, name: String(hello.name.prefix(100)), added: .now, address: address.text, pairing: PairedPhones.newPairing()))
-        save()
-        Task { await tellMachines() }
-        if onPage { self.pairing = nil } else { askedPairing = nil }
-        syncMachines()
-        log.info("Paired a phone")
-        return true
+    /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
+    /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
+    func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        let endpoint = endpoint ?? ServerEndpoint(url: URL(string: "http://127.0.0.1:9/")!, password: nil)
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        return Self.respond(to: request, link: self, engine: base, password: endpoint.password, agents: agents?.address, asking: phone ?? Data())
     }
 
     // MARK: Notifications
@@ -1014,11 +988,11 @@ final class PhoneLink {
     /// waited for a moment so it's out before the relay connection goes.
     func flushBeforeQuit() {
         attend(nil)
-        let server = server, delivering = delivering
+        let delivering = delivering
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             for _ in 0..<30 {
-                if delivering.withLock({ $0 == 0 }), await server?.isSending != true { break }
+                if delivering.withLock({ $0 == 0 }) { break }
                 try? await Task.sleep(for: .milliseconds(50))
             }
             done.signal()
@@ -1068,16 +1042,13 @@ final class PhoneLink {
     /// connection), for `hold` to try again.
     func deliver(_ notice: Notice) -> Bool {
         guard Self.isEnabled, let data = try? notice.encoded() else { return true }
-        let phones = phones.compactMap { phone -> (key: Data, address: LinkAddress)? in
-            guard let key = Data(base64URL: phone.key), let address = phone.address.flatMap(LinkAddress.init(text:)) else { return nil }
-            return (key, address)
-        }
-        guard !phones.isEmpty else { return true }
+        guard phones.contains(where: { $0.address != nil }) else { return true }
         guard let server, status == .connected else { return false }
         let delivering = delivering
         delivering.withLock { $0 += 1 }
         Task.detached {
-            await server.push(data, to: phones)
+            // This Mac's box seals it for each phone, and sends it on its connection.
+            _ = await server.push(data)
             delivering.withLock { $0 -= 1 }
         }
         return true
@@ -1117,7 +1088,8 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
+                                                  "kuvo/phones", "kuvo/link"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1650,8 +1622,12 @@ final class PhoneLink {
         }
     }
 
+    /// Kept in phone-link.json, as an older Kuvo Code reads it too (going back to one finds your
+    /// phones), with when this one wrote it.
     private func save() {
-        try? JSONEncoder().encode(Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents)).write(to: savedFile, options: .atomic)
+        guard (try? JSONEncoder().encode(Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents)).write(to: savedFile, options: .atomic)) != nil,
+              let written = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date else { return }
+        UserDefaults.standard.set(written.timeIntervalSince1970, forKey: Self.writtenKey)
     }
 
     // MARK: Keychain

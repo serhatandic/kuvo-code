@@ -7779,10 +7779,12 @@ export function takePhones(link, given) {
   return link;
 }
 
-// The phones as the app keeps a copy of them (all of each, with where it is, and every removal).
+// The phones as the app keeps a copy of them (all of each, with where it is, and every removal),
+// and whether Settings › Phone's pairing link is still waiting (a phone came in with it, or it ran
+// out: it's done).
 const macPhones = () => {
   const link = readLink();
-  return { phones: link?.phones ?? [], removed: link?.removed ?? [] };
+  return { phones: link?.phones ?? [], removed: link?.removed ?? [], pairing: Boolean(link?.appPairing && Date.now() < link.appPairing.expires) };
 };
 
 const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;
@@ -7979,6 +7981,8 @@ export function connectOnce(relay, secret, host, onWelcome = machineWelcomed) {
     };
     const opening = setTimeout(() => { if (!welcomed) finish(); }, 15_000);
     host.disconnect = finish;
+    // What's queued for the relay and not sent yet (a push, as the app quits).
+    host.unsent = () => (finished ? 0 : socket.bufferedAmount ?? 0);
     socket.onopen = () => socket.send(relayHello(secret));
     socket.onmessage = event => {
       lastHeard = Date.now();
@@ -8391,9 +8395,14 @@ async function serve() {
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents.
   watchEvents(readEngineFile, () => true, undefined, () => {}, { bots: true });
   watchEvents(readBridgeFile, () => true, undefined, () => {}, { bots: true });
-  // Its app gone (its stdin closed): so is it.
-  process.stdin.on("end", () => process.exit(0));
-  process.stdin.on("close", () => process.exit(0));
+  // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
+  // (a notice sent as the app quit), a moment at most.
+  const leave = async () => {
+    for (let tries = 0; tries < 30 && (macLink.host?.unsent?.() ?? 0) > 0; tries++) await sleep(50);
+    process.exit(0);
+  };
+  process.stdin.on("end", leave);
+  process.stdin.on("close", leave);
   process.stdin.resume();
 }
 

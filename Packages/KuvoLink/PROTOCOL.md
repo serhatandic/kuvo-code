@@ -1337,7 +1337,9 @@ chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client'
 on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the
 phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the
 bridge who your machines and their bots are, carries what it sends by the same rules, and the
-Mac's agents mail carries its bots' `id` and `look` and its `features`.
+Mac's agents mail carries its bots' `id` and `look` and its `features`. (Since bridge 0.9.59 that
+connection is the box's: the app's mail goes out on it, `kuvo/link/send`, "The relay, on this
+Mac's box".)
 
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
@@ -1368,12 +1370,64 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
   those it can tell. The app reads the cookies again only once they've changed (or after 30
   seconds);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
-  Finder's Trash (bridge 0.9.52); one anywhere else stays where it is.
+  Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
+- for its link (bridge 0.9.59, "The relay, on this Mac's box"):
+  - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
+    key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
+    Keychain won't give them;
+  - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
+    phone's key, base64url) → that request's answer as the app gives it: its status and
+    `content-type`, and its body as it comes, the connection closed at its end (a followed route
+    streams);
+  - `link/mailed {"from", "frame"}` (the sender's relay address, base64url; the mail frame whole,
+    base64) → `{}`.
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
 changes them. Anything else it answers is an error the box's route answers `503 {"message"}`
 with. Without these, as on a machine, the box keeps its keys in files only you can read.
+
+#### The relay, on this Mac's box
+
+Since bridge 0.9.59 this Mac's box holds its relay connection, as a machine's bridge does (`run`),
+in `serve`'s process: your phones pair with it and open their sessions there. Its keys (link key,
+relay secret, signing key) stay in the Mac's Keychain: the box asks the app for them
+(`link/identity`) once its link is on, keeps them in memory only, and never makes keys of its own;
+without them its link stays off and says why. What it keeps of its phones is in `box/run/link.json`,
+as on a machine, without the keys, the relay or its name. Nothing its link meets (the relay gone, a
+frame that isn't one, the app away) stops the box's own routes.
+
+What a phone asks, it answers itself for the areas that have moved onto it and its phones
+(`kuvo/phones…`); the rest (the Mac's own routes, and those not on the box yet) it hands the app
+(`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
+machines send it, it hands the app (`link/mailed`) until what that mail carries moves onto the box.
+
+For the app only (anyone else gets `403`):
+
+- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app"}`: whether the phone link is
+  on, whether there are machines to meet, the relay (`ws:` or `wss:`), and the Mac's name and
+  version as phones are told them. The link is up while the phone link's on with a phone paired or a
+  pairing waiting, or there are machines. Its keys are asked for before this answers, so a pairing
+  link can be made right after. The box keeps none of it: the app says it again each time the box
+  starts. Answers the link's state.
+- `GET kuvo/link/status` → `{"state": "off" | "connecting" | "connected" | "failed", "reason"?}`;
+  `GET kuvo/link/status/events` follows it (ndjson).
+- `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
+  every removal, and whether Settings › Phone's pairing link is still waiting;
+  `GET kuvo/link/phones/events` follows them.
+- `POST kuvo/link/phones/take {"phones", "removed"}`: phones an older Kuvo Code kept
+  (`phone-link.json`), met with the box's: each in unless its pairing was removed, each removal
+  taking off what it removes. The app keeps `phone-link.json` in step with the box, so going back
+  to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
+- `POST kuvo/link/send {"to", "frame"}`: a mail frame the app sealed itself (base64), to a relay
+  address (base64url): `200`, `503` while not on the relay, `413` for one too big for it.
+- `POST kuvo/link/push {"notice"}`: a notice (`Notice`'s JSON) for every paired phone that's said
+  where it is, sealed here for each: `200 {"phones"}`, `503` while not on the relay.
+
+The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
+phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone
+link is off on this Mac."}`. The app's `kuvo/phones/remove` removes as the Mac does (any phone,
+and the removals a machine's phones document brings).
 
 Areas move onto it one at a time. A moved area's routes are answered there for every client: a
 phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's

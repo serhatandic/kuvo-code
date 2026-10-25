@@ -1,9 +1,12 @@
 import Foundation
+import KuvoLink
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
-/// files, and whether the panel's browser is signed in to the sites the agent uses there; and what it
-/// lets go of, moved from its trash folder to the Finder's Trash. It answers on a loopback port, to a
+/// files, and whether the panel's browser is signed in to the sites the agent uses there; what it
+/// lets go of, moved from its trash folder to the Finder's Trash; and for its link to your phones and
+/// machines, this Mac's keys (from your Keychain too), what a phone asks of the Mac's own routes, and
+/// mail from your machines, for what the app still does. It answers on a loopback port, to a
 /// password the box is given as it starts (`environment`), and only for a name of Kuvo Code's own
 /// keys (`KUVO_KEY_…`), so the box can reach nothing else in your Keychain. A key saved or removed
 /// here goes to the engine's files too (`IntegrationKeys`); listing them reads no secret, so it never
@@ -12,6 +15,8 @@ import Foundation
 final class HostInterface {
     private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
+    /// This Mac's link, for what its box's link asks of the app; set by AppModel.
+    weak var phoneLink: PhoneLink?
 
     /// Starts answering (once), and says what the box is to be given to reach it: where, and its
     /// password. (Where the engine reads keys from, `KUVO_KEYS`, `BoxProcess` gives it.)
@@ -26,6 +31,34 @@ final class HostInterface {
     nonisolated static func isKey(_ name: String) -> Bool {
         name.hasPrefix("KUVO_KEY_") && name.count > "KUVO_KEY_".count
             && name.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
+    }
+
+    /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), which
+    /// stops when the box goes.
+    private static func answer(_ parts: AsyncThrowingStream<LinkResponsePart, Error>) async -> HTTPResponse {
+        let (body, sending) = AsyncThrowingStream<Data, Error>.makeStream()
+        let head: (status: Int, type: String) = await withCheckedContinuation { said in
+            let reading = Task {
+                var told = false
+                do {
+                    for try await part in parts {
+                        switch part {
+                        case .head(let status, let headers):
+                            if !told { said.resume(returning: (status, headers["content-type"] ?? headers["Content-Type"] ?? "application/json")) }
+                            told = true
+                        case .body(let data):
+                            if !told { said.resume(returning: (200, "application/json")) }
+                            told = true
+                            sending.yield(data)
+                        }
+                    }
+                } catch {}
+                if !told { said.resume(returning: (502, "application/json")) }
+                sending.finish()
+            }
+            sending.onTermination = { _ in reading.cancel() }
+        }
+        return HTTPResponse(status: head.status, headers: ["Content-Type": head.type], stream: body)
     }
 
     /// What the Keychain didn't do, said as Edit Bot says it.
@@ -61,6 +94,22 @@ final class HostInterface {
             // Whether the panel's browser is signed in to the sites the agent uses there, as their
             // cookies say (read again once they've changed): only those it can tell.
             return .json(["sites": await SiteSignIns.shared.mac()])
+        case "/link/identity":
+            // This Mac's keys, for its box's link: in memory there, never in a file.
+            guard let identity = phoneLink?.boxIdentity() else { return .init(status: 503) }
+            return .json(identity)
+        case "/link/route":
+            // What a phone asked of the Mac's own routes, answered as it comes.
+            guard let phoneLink, let method = given["method"] as? String, let path = given["path"] as? String else { return .init(status: 400) }
+            let body = (given["body"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data()
+            let headers = (given["headers"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
+            let phone = (given["phone"] as? String).flatMap { Data(base64URL: $0) }
+            return await Self.answer(phoneLink.answerForBox(LinkRequest(method: method, path: path, headers: headers, body: body), phone: phone))
+        case "/link/mailed":
+            // Mail one of your machines sent this Mac, for what the app still does with it.
+            guard let frame = (given["frame"] as? String).flatMap({ Data(base64Encoded: $0) }) else { return .init(status: 400) }
+            phoneLink?.mailed(frame)
+            return .json([:])
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.

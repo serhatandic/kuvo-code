@@ -4,8 +4,8 @@ import Testing
 @testable import KuvoCode
 
 /// Settings › General's While Agents Work from a phone (keeping this Mac awake; Open at Login is
-/// read but never changed here, which would add the test copy to your login items), and a link
-/// for another phone to pair with, only while the phone link is on.
+/// read but never changed here, which would add the test copy to your login items). (A link for
+/// another phone to pair with is this Mac's box's: PhoneLinkBoxTests.)
 @MainActor
 @Suite(.serialized) struct PhoneMacSettingsTests {
     let link = PhoneLink()
@@ -41,12 +41,5 @@ import Testing
         #expect(changed.json["keepsAwake"] as? Bool == false)
         #expect(!Awake.isOn)
         #expect(try await ask("kuvo/mac", method: "POST").status == 405)
-    }
-
-    @Test func noPairingLinkWhileTheLinkIsOff() async throws {
-        let answer = try await ask("kuvo/phones/pair", method: "POST")
-        #expect(answer.status == 409)
-        #expect(link.pairing == nil)
-        #expect(try await ask("kuvo/phones/pair").status == 405)
     }
 }

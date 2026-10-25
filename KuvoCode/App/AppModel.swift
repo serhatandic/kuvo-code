@@ -240,6 +240,9 @@ final class AppModel {
         phoneLink.workspace = workspace
         phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
         phoneLink.agents = agents
+        // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
+        phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
+        host.phoneLink = phoneLink
         phoneLink.endedSignIns = { [weak self] in self?.catalog.endedProviders ?? [] }
         phoneLink.forgetSignIn = { [weak self] provider in
             // One of your plans, as Settings › Accounts lists them; never an integration's server.
