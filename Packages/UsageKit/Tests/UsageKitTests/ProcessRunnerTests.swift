@@ -26,18 +26,6 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "hello")
     }
 
-    /// Queue ownership is checked directly rather than depending on a machine's worker-pool size.
-    func testEveryPipeGetsItsOwnPrivateDrainQueue() {
-        let queues = [true, false, true, false].map { SystemProcessRunner.makeDrainQueue(isStdout: $0) }
-        let utilityPool = DispatchQueue.global(qos: .utility)
-        for (index, queue) in queues.enumerated() {
-            XCTAssertFalse(queue === utilityPool, "A drain must not use the shared utility pool")
-            for other in queues.dropFirst(index + 1) {
-                XCTAssertFalse(queue === other, "Each pipe, including across runs, needs its own queue")
-            }
-        }
-    }
-
     /// Re-run only this test in a fresh process. A broken drain can otherwise hang in drained.wait()
     /// even after the command's own timeout; the outer watchdog must not use SystemProcessRunner.
     func testOutputAndTimeoutInIsolatedProcess() throws {
@@ -48,7 +36,7 @@ final class ProcessRunnerTests: XCTestCase {
                 XCTFail("Could not isolate the process fixture: errno \(errno)")
                 return
             }
-            try checkOutputAndTimeout()
+            try checkOutputAndTimeout(in: URL(fileURLWithPath: directory))
             try Data("completed".utf8).write(to: URL(fileURLWithPath: directory).appendingPathComponent("completed"))
             return
         }
@@ -98,8 +86,27 @@ final class ProcessRunnerTests: XCTestCase {
         )
     }
 
-    private func checkOutputAndTimeout() throws {
+    private func checkOutputAndTimeout(in directory: URL) throws {
         let runner = SystemProcessRunner()
+        // A command that exits but leaves something running in the background with its output (a
+        // daemon a login shell's profile starts) gives what it said, without waiting for that to
+        // end. Reading each pipe to its end used to wait the whole 600s, past the watchdog.
+        let pidFile = directory.appendingPathComponent("background.pid")
+        defer {
+            if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) {
+                kill(pid, SIGKILL)
+            }
+        }
+        let leftover = try runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 600 & echo $! > '\(pidFile.path)'; echo said; echo complained >&2"],
+            environment: [:],
+            timeout: 5
+        )
+        XCTAssertEqual(leftover.exitCode, 0)
+        XCTAssertEqual(leftover.stdout, "said\n")
+        XCTAssertEqual(leftover.stderr, "complained\n")
+
         // Keep stdout open while writing more than a pipe buffer to stderr first. A shared serial
         // drain queue blocks waiting for stdout EOF and cannot start the stderr read.
         let result = try runner.run(
