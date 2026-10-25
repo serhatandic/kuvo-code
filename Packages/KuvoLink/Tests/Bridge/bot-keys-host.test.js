@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { botKeyScenarios, own, script, served, standInHost } from "./bot-keys-scenarios.js";
+import { botKeyScenarios, fixtures, own, script, served, standInHost } from "./bot-keys-scenarios.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bot-keys-host-"));
 process.env.HOME = root;
@@ -83,4 +83,34 @@ test("it starts while its app isn't answering yet, and says so", async () => {
   const box = await served({ ...process.env, ...hostEnv, KUVO_HOST_URL: "http://127.0.0.1:1" });
   assert.deepEqual(await box.route("GET", "kuvo/bots/bot_scout/keys"), { status: 503, value: { message: "Kuvo Code isn't answering for this Mac's keys. Try again in a moment." } });
   await box.stop();
+});
+
+test("a key saved while the box refreshes waits for it, so neither undoes the other", async () => {
+  const { settings } = fixtures(home);
+  host.keys.delete(own);
+  await link.refreshBotsKeys();
+  // The refresh, held with the names it read before the save.
+  let release;
+  host.hold = new Promise(resolve => { release = resolve; });
+  const asking = new Promise(resolve => { host.held = resolve; });
+  const refreshing = link.refreshBotsKeys();
+  await asking;
+  host.held = null;
+  const from = host.asked.length;
+  const saving = link.answerBotKeys("PUT", "kuvo/bots/bot_scout/keys/todoist", { keys: { API_KEY: "tk_during" } }, null, undefined, () => {});
+  host.asked.push({ call: "released" });
+  release();
+  await refreshing;
+  assert.equal((await saving).status, 200);
+  assert.equal(host.asked[from].call, "released", `the save asked nothing while the refresh was under way: ${JSON.stringify(host.asked.slice(from))}`);
+  assert.ok(settings().mcp?.servers?.todoist, "its server is named, after both");
+  host.keys.delete(own);
+  await link.refreshBotsKeys();
+});
+
+test("this Mac's box without its app refuses its keys rather than keep them in files", async () => {
+  const box = await served({ ...process.env, KUVO_KEYS_ON_HOST: "1", KUVO_HOST_URL: "", KUVO_HOST_PASSWORD: "" });
+  assert.equal((await box.route("PUT", "kuvo/bots/bot_scout/keys/todoist", { keys: { API_KEY: "tk_nowhere" } })).status, 503);
+  await box.stop();
+  assert.equal(fs.existsSync(path.join(home, "box", "bot-keys")), false, "no key file of its own");
 });

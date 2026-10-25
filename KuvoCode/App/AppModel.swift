@@ -413,7 +413,12 @@ final class AppModel {
             var boxEnvironment = shell
             // It keeps bots' keys in your Keychain through the app, and reads Settings ›
             // Integrations' catalog with this Mac's own paths.
-            if let hosting = try? await host.start() { boxEnvironment.merge(hosting) { _, new in new } }
+            // Without it, the box can't reach them, and says so, rather than keep them elsewhere.
+            boxEnvironment["KUVO_KEYS_ON_HOST"] = "1"
+            // A listener that couldn't start once gets a second try.
+            var hosting = try? await host.start()
+            if hosting == nil { hosting = try? await host.start() }
+            if let hosting { boxEnvironment.merge(hosting) { _, new in new } }
             MachineBox.writeMacCatalog()
             boxEnvironment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
             Task {

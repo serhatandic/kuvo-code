@@ -26,6 +26,13 @@ final class HostInterface {
             && name.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
     }
 
+    /// What the Keychain didn't do, said as Edit Bot says it.
+    private static var failed: HTTPResponse {
+        var answer = HTTPResponse.json(["message": "Your Keychain didn’t take it. Try again, or check Keychain Access."])
+        answer.status = 503
+        return answer
+    }
+
     private func respond(to request: HTTPRequest) async -> HTTPResponse {
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
               samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
@@ -35,7 +42,8 @@ final class HostInterface {
         switch request.path {
         case "/keys/names":
             let prefix = given["prefix"] as? String ?? "", suffix = given["suffix"] as? String ?? ""
-            let names = await Task.detached { IntegrationKeys.names }.value
+            // One the Keychain couldn't list isn't "no keys": the box would take bots' servers away.
+            guard let names = await Task.detached(operation: { IntegrationKeys.listed }).value else { return Self.failed }
             return .json(["names": names.filter { Self.isKey($0) && $0.hasPrefix(prefix) && $0.hasSuffix(suffix) }.sorted()])
         case "/keys/get":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
@@ -43,10 +51,10 @@ final class HostInterface {
             return .json(["value": value])
         case "/keys/set":
             guard let name, Self.isKey(name), let value = given["value"] as? String, !value.isEmpty else { return .init(status: 400) }
-            return await Task.detached(operation: { IntegrationKeys.set(value, for: name) }).value ? .json([:]) : .init(status: 503)
+            return await Task.detached(operation: { IntegrationKeys.set(value, for: name) }).value ? .json([:]) : Self.failed
         case "/keys/delete":
             guard let name, Self.isKey(name) else { return .init(status: 400) }
-            return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : .init(status: 503)
+            return await Task.detached(operation: { IntegrationKeys.set(nil, for: name) }).value ? .json([:]) : Self.failed
         default:
             return .init(status: 404)
         }

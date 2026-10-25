@@ -82,6 +82,7 @@ import Testing
     /// for next time. The machine is a stand-in (its own side has the bridge's tests).
     @Test func keysThisMacKeptForAMachinesBotGoToIt() async throws {
         TestEnvironment.prepare()
+        defer { engine.stop() }
         app.bots.app = app
         defer { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "bots.json")) }
         let encoder = JSONEncoder()
@@ -125,12 +126,16 @@ import Testing
         let project = AppInfo.testRoot.appending(path: "BotKeysProject-\(UUID().uuidString.prefix(6))").path(percentEncoded: false)
         try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let helper = try bot("bot_helper", project: project)
+        let box = try await TestBox(engine: engine.url)
         defer {
+            box.stop()
+            engine.stop()
             for name in names { _ = IntegrationKeys.set(nil, for: IntegrationKeys.variable(service.id, name, bot: helper.id)) }
             try? FileManager.default.removeItem(atPath: project)
             try? FileManager.default.removeItem(at: root.appending(path: helper.id))
         }
-        _ = await BotKeys.save(Dictionary(uniqueKeysWithValues: names.map { ($0, "helper-secret") }), for: service, bot: helper, app: app)
+        let refused = await BotKeys.save(Dictionary(uniqueKeysWithValues: names.map { ($0, "helper-secret") }), for: service, bot: helper, app: app)
+        #expect(refused?.contains("works in a project") == true, "its box says why: \(refused ?? "nil")")
         #expect(!FileManager.default.fileExists(atPath: project + "/.opencode"), "nothing written into your project")
     }
 }

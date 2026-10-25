@@ -37,6 +37,7 @@ final class TestBox {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
+        environment["KUVO_KEYS_ON_HOST"] = "1"
         environment.merge(try await host.start()) { _, new in new }
         MachineBox.writeMacCatalog()
         await process.start(node: node, environment: environment)

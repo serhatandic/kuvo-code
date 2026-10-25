@@ -712,7 +712,26 @@ class KeysUnavailable extends Error {}
 // kuvo-wake) has it.
 const KEY_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
   ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
+// A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
+// keys can't be reached, rather than kept in files of its own instead of your Keychain.
+const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
 delete process.env.KUVO_HOST_PASSWORD;
+
+/** The app that keeps this box's keys, or null for its files; this Mac's box without its app says so. */
+function keyHost() {
+  if (KEYS_ON_HOST && !KEY_HOST) throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
+  return KEY_HOST;
+}
+
+// Key work, one change at a time: on this Mac each key is a round trip to the app, and two changes
+// (a phone's and Edit Bot's, or a save during the refresh at start) would each write a bot's
+// settings from the names they read before the other's.
+let keyQueue = Promise.resolve();
+function keyWork(work) {
+  const run = keyQueue.then(work, work);
+  keyQueue = run.catch(() => {});
+  return run;
+}
 
 const checkedKeyName = name => {
   if (typeof name !== "string" || !STORED_KEY.test(name)) throw new KeysUnavailable("That isn't a key's name.");
@@ -730,7 +749,8 @@ async function askHost(host, what, body, missing = false) {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
+      signal: AbortSignal.timeout(what === "get" || what === "set" ? 120_000 : 15_000),
     });
   } catch {
     throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
@@ -753,11 +773,13 @@ async function keyNames({ prefix = "", suffix = "" } = {}) {
   if (typeof prefix !== "string" || typeof suffix !== "string" || (prefix && !/^KUVO_KEY_[A-Z0-9_]*$/.test(prefix)) || (suffix && !/^[A-Z0-9_]+$/.test(suffix))) {
     throw new KeysUnavailable("That isn't a part of a key's name.");
   }
-  const host = KEY_HOST;
+  const host = keyHost();
   let names;
   if (host) {
     const answer = await askHost(host, "names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
-    names = Array.isArray(answer.names) ? answer.names : [];
+    // An answer without its list isn't "no keys" (a refresh would take every bot's servers away).
+    if (!Array.isArray(answer.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
+    names = answer.names;
   } else {
     names = [...listOf(BOX_KEYS).filter(name => !name.includes("__")), ...listOf(BOT_KEYS).filter(name => name.includes("__"))];
   }
@@ -767,7 +789,7 @@ async function keyNames({ prefix = "", suffix = "" } = {}) {
 /** One key's value as it's kept; null for one there isn't. */
 async function readKey(name) {
   checkedKeyName(name);
-  const host = KEY_HOST;
+  const host = keyHost();
   if (!host) return textOf(keyFile(name));
   const answer = await askHost(host, "get", { name }, true);
   return typeof answer?.value === "string" ? answer.value : null;
@@ -777,7 +799,7 @@ async function readKey(name) {
 async function writeKey(name, value) {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
-  const host = KEY_HOST;
+  const host = keyHost();
   if (host) return void await askHost(host, "set", { name, value });
   writePrivate(keyFile(name), value);
 }
@@ -785,7 +807,7 @@ async function writeKey(name, value) {
 /** One key gone (nothing for one there wasn't). */
 async function deleteKey(name) {
   checkedKeyName(name);
-  const host = KEY_HOST;
+  const host = keyHost();
   if (host) return void await askHost(host, "delete", { name });
   fs.rmSync(keyFile(name), { force: true });
 }
@@ -826,9 +848,15 @@ async function integrationEntries(catalog, engine, signal) {
 }
 
 /** Its bots' own keys for it (`KUVO_KEY_<ID>_<NAME>__<BOT>`) and their folders' settings naming its server, gone. */
-async function dropBotsIntegration(entry) {
+function dropBotsIntegration(entry) {
+  return keyWork(() => droppingBotsIntegration(entry));
+}
+
+async function droppingBotsIntegration(entry) {
   const own = Object.values(entry.variables ?? {}).filter(variable => STORED_KEY.test(variable));
-  for (const variable of own) for (const name of await keyNames({ prefix: `${variable}__` })) await deleteKey(name);
+  // Their settings first, so none names a key that's gone if one can't be taken away.
+  const named = [];
+  for (const variable of own) named.push(...await keyNames({ prefix: `${variable}__` }));
   for (const bot of listOf(BOTS)) {
     const folder = path.join(BOTS, bot, "workspace", ".opencode");
     const file = path.join(folder, "opencode.json");
@@ -847,6 +875,7 @@ async function dropBotsIntegration(entry) {
       try { fs.rmdirSync(folder); } catch {}
     }
   }
+  for (const name of named) await deleteKey(name);
 }
 
 /** Runs `run` in `ms`, without keeping the bridge up for it. */
@@ -1004,7 +1033,11 @@ function writeBotSettings(bot, catalog, names) {
 /** Each bot here: its folder's settings as its keys and this box's integrations are now (a
  * server's newer version, say, or settings that came with it from another computer naming its
  * keys there). As the box starts, and from a client (`POST kuvo/bots/keys/refresh`). */
-export async function refreshBotsKeys(file = INTEGRATIONS_FILE) {
+export function refreshBotsKeys(file = INTEGRATIONS_FILE) {
+  return keyWork(() => refreshingBotsKeys(file));
+}
+
+async function refreshingBotsKeys(file) {
   const bots = listOf(BOTS).filter(bot => {
     const here = botHere(bot);
     return here && !here.described.project;
@@ -1029,7 +1062,7 @@ function reconnectForBot(engine, id, bot, later) {
  * test's own). Where its keys are kept can't be reached (this Mac's app not answering): `503 {"message"}`. */
 export async function answerBotKeys(method, requestPath, body, engine, file = INTEGRATIONS_FILE, later = soon) {
   try {
-    return await botKeysAnswer(method, requestPath, body, engine, file, later);
+    return await keyWork(() => botKeysAnswer(method, requestPath, body, engine, file, later));
   } catch (error) {
     if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
     throw error;
@@ -1041,7 +1074,7 @@ async function botKeysAnswer(method, requestPath, body, engine, file, later) {
   const message = text => ({ message: text });
   const bot = parts[2];
   const here = botHere(bot);
-  if (!here) return { status: 404, value: message("That bot isn't on this machine.") };
+  if (!here) return { status: 404, value: message("That bot isn’t on this computer.") };
   if (here.described.project) return { status: 409, value: message(`${here.described.name} works in a project, so it uses the keys that project's sessions use.`) };
   const catalog = integrationCatalog(file);
   const keyed = botKeyed(catalog);
@@ -1059,8 +1092,9 @@ async function botKeysAnswer(method, requestPath, body, engine, file, later) {
     // integrations no longer here.
     const had = keyed.filter(entry => hasOwnKeys(bot, entry, names));
     const own = names.filter(name => name.endsWith(botVariable("", bot)));
-    for (const name of own) await deleteKey(name);
+    // Its settings without them first, so none names a key that's gone if one can't be taken away.
     const written = writeBotSettings(bot, catalog, without(own));
+    for (const name of own) await deleteKey(name);
     for (const entry of had) reconnectForBot(engine, entry.id, bot, later);
     return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
   }
@@ -1096,8 +1130,8 @@ async function botKeysAnswer(method, requestPath, body, engine, file, later) {
       const { problem } = botSettings(bot);
       if (problem) return { status: 409, value: message(problem) };
       const own = fields.map(variableOf);
-      for (const name of own) await deleteKey(name);
       const written = writeBotSettings(bot, catalog, without(own));
+      for (const name of own) await deleteKey(name);
       reconnectForBot(engine, entry.id, bot, later);
       return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
     }

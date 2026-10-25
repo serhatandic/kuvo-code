@@ -177,6 +177,11 @@ enum MachineBox {
 
     /// `kuvo-link.js box <arguments>` there, with `input` on its standard input, with whichever
     /// engine runtime the machine has (this version's, or the one at work there).
+    /// Its bots' folders' settings made right, as a bridge older than `kuvo/bots/keys/refresh` does it.
+    static func refreshBotKeys(on connection: SSHConnection) async throws {
+        _ = try await run("bot-keys-refresh", input: nil, on: connection)
+    }
+
     private static func run(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Answer {
         try JSONDecoder().decode(Answer.self, from: try await answer(arguments, input: input, on: connection))
     }

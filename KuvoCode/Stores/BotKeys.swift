@@ -137,7 +137,11 @@ enum BotKeys {
     /// are now (after Settings › Integrations changed, or a bot moved there).
     static func refresh(on machine: String?, app: AppModel) async {
         if let machine, app.machines.engine(machine)?.isReady != true { return }
-        _ = try? await app.box(machine ?? BoxClient.mac).send("POST", "kuvo/bots/keys/refresh")
+        let answer = try? await app.box(machine ?? BoxClient.mac).send("POST", "kuvo/bots/keys/refresh")
+        // A machine's bridge from before the route: as it did it then.
+        if answer?.status == 404, let machine, let engine = app.machines.engine(machine) {
+            try? await MachineBox.refreshBotKeys(on: engine.machine.connection)
+        }
     }
 
     /// A request to a machine's box: method, path and body in, status and body out.

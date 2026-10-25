@@ -72,7 +72,15 @@ export async function standInHost(password) {
     if (host.down) return answer(500, { message: "The Keychain is locked." });
     switch (request.url) {
       case "/keys/names": {
-        answer(200, { names: [...host.keys.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? "")) });
+        const names = [...host.keys.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? ""));
+        // Held, as read now, until the test lets it go (`hold`): what the box asked meanwhile is seen.
+        if (host.hold) {
+          const hold = host.hold;
+          host.hold = null;
+          host.held?.();
+          await hold;
+        }
+        answer(200, { names });
         return host.onNames?.();
       }
       case "/keys/get":
