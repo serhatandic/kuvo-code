@@ -285,6 +285,8 @@ final class MacBox {
             try manager.createDirectory(at: folder.appending(path: "wakes"), withIntermediateDirectories: true)
             try manager.createDirectory(at: folder.appending(path: "workspace"), withIntermediateDirectories: true)
             try Data("# \(string("name"))'s memory\n".utf8).write(to: folder.appending(path: "MEMORY.md"))
+            // Its conversation, as the app notes it in its folder: what its box finds it by.
+            try Data(string("session").utf8).write(to: folder.appending(path: "session"))
             let look = (given["look"] as? [String: String]).flatMap { try? JSONDecoder().decode(BotLook.self, from: JSONSerialization.data(withJSONObject: $0)) }
                 ?? BotLook(color: .mint, shape: .round, face: .calm)
             let model = (given["model"] as? [String: String]).flatMap { try? JSONDecoder().decode(ModelRef.self, from: JSONSerialization.data(withJSONObject: $0)) }

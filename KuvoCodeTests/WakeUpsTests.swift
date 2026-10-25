@@ -5,8 +5,9 @@ import Testing
 @testable import KuvoCode
 
 /// A session's wake-ups follow the conversation: they move with it when it carries on with the
-/// coding agents, and one made while it's archived waits, as those it had when archived do. The
-/// engine and the agents' bridge are stubbed; the wake-ups' folders and kuvo-wake are real.
+/// coding agents, and one made while it's archived waits, as those it had when archived do. This
+/// Mac's box keeps and sends them, as the app runs it. The engine and the agents' bridge are
+/// stubbed; the box, the wake-ups' folders and kuvo-wake are real.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct WakeUpsTests {
     static let engine = "http://127.0.0.1:47996"
@@ -26,7 +27,10 @@ import Testing
         ]
     }
 
-    private func start(archived: Bool = false) async {
+    /// The app, its stand-in engine and this Mac's box (`boxing` false: the test starts it, with
+    /// `startBox`).
+    @discardableResult
+    private func start(archived: Bool = false, boxing: Bool = true) async throws -> TestBox? {
         TestEnvironment.prepare()
         try? FileManager.default.removeItem(at: WakeUps.root)
         StubWeb.start(hosts: ["127.0.0.1"])
@@ -40,9 +44,15 @@ import Testing
         app.wakeUps.app = app
         app.workspace.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: Self.engine)!, password: "test"))
         await app.workspace.refresh()
+        return boxing ? try await startBox() : nil
     }
 
-    private func done() {
+    private func startBox() async throws -> TestBox {
+        try await TestBox(engine: Self.engine)
+    }
+
+    private func done(_ box: TestBox?) {
+        box?.stop()
         StubWeb.stop()
         app.workspace.agents?.disconnect()
         try? FileManager.default.removeItem(at: WakeUps.root)
@@ -55,8 +65,8 @@ import Testing
     /// A session with a wake-up for tomorrow moves to Claude Code: the wake-up is the new
     /// session's, waiting, not left behind with the old one in Archived.
     @Test func wakeUpsMoveWithTheConversation() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let moved = "ses_onagents"
         let imported = StubWeb.json(["data": Self.session(moved, agent: true)])
         StubWeb.route(Self.bridge + "/api/session/import") { _ in imported }
@@ -80,8 +90,8 @@ import Testing
     /// An archived session's agent schedules a wake-up (it was still working): it waits with the
     /// session, and comes when you bring the session back.
     @Test func aWakeUpMadeWhileArchivedWaits() async throws {
-        await start(archived: true)
-        defer { done() }
+        let box = try await start(archived: true)
+        defer { done(box) }
         let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: id)
         #expect(!made.isError, "\(made.text)")
         #expect(FileManager.default.fileExists(atPath: folder(id, "paused")))
@@ -96,12 +106,11 @@ import Testing
     /// A phone lists every session that waits at once, for the marks beside them in its list: the
     /// soonest wake-up, and whether it watches.
     @Test func aPhoneSeesWhichSessionsWait() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: id)
         #expect(!made.isError, "\(made.text)")
         let link = PhoneLink()
-        link.wakeUps = app.wakeUps
         var listed = Data()
         for try await part in PhoneLink.respond(to: LinkRequest(path: "kuvo/wakes"), link: link, engine: URL(string: Self.engine + "/")!, password: nil, agents: nil) {
             if case .body(let data) = part { listed += data }
@@ -116,11 +125,10 @@ import Testing
     /// From a phone, as the bar over the composer does: a session's wake-ups read, one sent now (a
     /// repeating one keeps its time), one canceled; one that isn't there says so.
     @Test func aPhoneSendsOneNowAndCancelsOne() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let prompts = recordPrompts()
         let link = PhoneLink()
-        link.wakeUps = app.wakeUps
         // The app, as it is once it's running.
         let before = AgentMail.shared.app
         AgentMail.shared.app = app
@@ -156,10 +164,9 @@ import Testing
     /// From a phone: a wake-up added to a session, as the bar over the composer adds one, which
     /// repeats; its wake-ups paused and let go; what can't be is said, and nothing's added.
     @Test func aPhoneAddsOneAndPausesThem() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let link = PhoneLink()
-        link.wakeUps = app.wakeUps
         let before = AgentMail.shared.app
         AgentMail.shared.app = app
         defer { AgentMail.shared.app = before }
@@ -191,7 +198,11 @@ import Testing
         #expect(try await ask("kuvo/wakes/\(id)", ["due": due, "every": "08h", "note": "A bad repeat"]).status == 400)
         #expect(try await ask("kuvo/wakes/\(id)", ["due": due, "note": "  "]).status == 400)
         #expect(try await ask("kuvo/wakes/ses_nobody", ["due": due, "note": "Hi"]).status == 404)
-        #expect(app.wakeUps.wakes[WakeUps.owner(of: try #require(app.workspace.session(id))).key]?.count == 1)
+        // The app shows the one the phone added, as its box says.
+        let following = Task { await app.wakeUps.follow() }
+        defer { following.cancel() }
+        let key = WakeUps.owner(of: try #require(app.workspace.session(id))).key
+        try await until { app.wakeUps.wakes[key]?.count == 1 }
     }
 
     /// The prompts the engine was sent for the session, each a wake-up's.
@@ -220,8 +231,8 @@ import Testing
     /// its time.
     @Test(arguments: [false, true])
     func wakeUpNowSendsOnce(repeating: Bool) async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let gate = Gate()
         defer { gate.open() }
         let prompts = recordPrompts(holding: gate)
@@ -244,8 +255,8 @@ import Testing
         gate.open()
         try await first.value
         try await second.value
-        // And once more after it went: a one-off isn't there to send again.
-        if !repeating { try await app.wakeUps.wakeNow(wake, of: owner) }
+        // And once more after it went: a one-off isn't there to send again, and says so.
+        if !repeating { await #expect(throws: WakeUps.Failure.self) { try await app.wakeUps.wakeNow(wake, of: owner) } }
 
         #expect(prompts.all == [Wakes.marker + "Check the nightly build"], "sent \(prompts.all.count) times")
         let left = (try? FileManager.default.contentsOfDirectory(atPath: folder(id, "wakes"))) ?? []
@@ -255,8 +266,8 @@ import Testing
     /// A session archived from a phone (its metadata changed on the engine, which tells the Mac):
     /// its wake-ups wait, as with Archive here, and come back when the phone brings it back.
     @Test func archivingFromAPhoneHoldsItsWakeUps() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         // As the app has it (`startMachines`), each change's work handed to the test to wait for.
         var work: [Task<Void, Never>] = []
         app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
@@ -284,8 +295,8 @@ import Testing
     /// Archived from a phone while this Mac didn't hear it (its feed was down): once the list is
     /// read again, its wake-ups wait all the same.
     @Test func archivedUnheardHoldsItsWakeUpsOnceTheListIsRead() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         var work: [Task<Void, Never>] = []
         app.workspace.onArchived = { [app] session, _ in work.append(app.archivedChanged(session)) }
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
@@ -301,8 +312,8 @@ import Testing
     /// Wake-ups you paused stay paused when the session is archived and brought back; ones paused
     /// only by archiving come back with it.
     @Test func aPauseYouSetOutlastsArchiving() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         let session = try #require(app.workspace.session(id))
         let owner = WakeUps.owner(of: session)
         try await app.wakeUps.add(to: owner, at: .now.addingTimeInterval(86_400), every: nil, note: "Check the nightly build")
@@ -330,8 +341,8 @@ import Testing
     /// Archiving that the engine didn't take (it couldn't be reached): the session stays where it
     /// was, not archived, and nothing is told it was (which would hold its wake-ups). Taken, it is.
     @Test func anArchiveTheEngineDidntTakeHoldsNothing() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         var told: [Bool] = []
         app.workspace.onArchived = { _, isArchived in told.append(isArchived) }
         let answer = StubWeb.json(["data": Self.session(id)])
@@ -350,8 +361,8 @@ import Testing
     /// Pinned while archiving it was on its way, and the engine then not taking the archive: it's
     /// back where it was, and still pinned.
     @Test func aPinMadeWhileAnArchiveWasRefusedStays() async throws {
-        await start()
-        defer { done() }
+        let box = try await start()
+        defer { done(box) }
         // The archive's request (no pin in it yet) refused; the pin's taken.
         let answer = StubWeb.json(["data": Self.session(id)])
         StubWeb.route(Self.engine + "/api/session/\(id)", sent: { _, body in
@@ -368,11 +379,13 @@ import Testing
         #expect(Workspace.isPinned(session), "the pin made meanwhile stays")
     }
 
-    /// Wake-ups that came due while Kuvo Code was closed (L19): each goes once as it opens, a daily
-    /// one once however many days it missed, then waits for its next time; a one-off is done.
+    /// Wake-ups that came due while Kuvo Code was closed (L19): each goes once as this Mac's box
+    /// starts, a daily one once however many days it missed, then waits for its next time; a
+    /// one-off is done. The app shows what's left as the box says.
     @Test func wakeUpsMissedWhileClosedGoOnceAsItOpens() async throws {
-        await start()
-        defer { done() }
+        var box: TestBox?
+        defer { done(box) }
+        try await start(boxing: false)
         let prompts = recordPrompts()
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
         let wakes = folder(id, "wakes")
@@ -384,9 +397,10 @@ import Testing
         try Data("Check the nightly build".utf8).write(to: URL(filePath: wakes + "/" + daily))
         try Data("Stand up and stretch".utf8).write(to: URL(filePath: wakes + "/" + once))
 
-        app.wakeUps.start()
-        // Its round's over once it lists what's left.
-        try await until { app.wakeUps.wakes[owner.key]?.count == 1 }
+        box = try await startBox()
+        let following = Task { await app.wakeUps.follow() }
+        defer { following.cancel() }
+        try await until { prompts.all.count == 2 && app.wakeUps.wakes[owner.key]?.count == 1 }
         #expect(prompts.all.sorted() == [Wakes.marker + "Check the nightly build", Wakes.marker + "Stand up and stretch"])
         let left = try FileManager.default.contentsOfDirectory(atPath: wakes)
         #expect(left.count == 1, "the one-off is done: \(left)")
