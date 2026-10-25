@@ -195,6 +195,18 @@ test("a bot asked to be told twice at once (its run starting as the box finds it
   assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
 });
 
+test("a bot made this box's as it arrives while its run starts (one that was paused, so its move didn't hold it) is told once", async t => {
+  const fake = await engine();
+  t.after(fake.close);
+  bot("bot_scout00001");
+  fake.entries.ses_bot_scout00001 = { "kuvo.bot": "You are Scout. You run on the Linux machine \"lab\"." };
+  // Its run's telling has read what its conversation has, and is about to tell it.
+  const freshening = link.freshenBot(fake.read(), "ses_bot_scout00001");
+  await fake.request(each => each.method === "GET" && each.url === "/api/experimental/session/ses_bot_scout00001/instructions/entries");
+  await Promise.all([freshening, link.settleBot("bot_scout00001", {}, fake.read, () => null)]);
+  assert.equal(told(fake.asked, "ses_bot_scout00001").length, 1);
+});
+
 test("a bot is told what it is now as the box finds its engine and as its runs start, once each time it changed", async t => {
   const fake = await engine();
   t.after(fake.close);
@@ -245,8 +257,10 @@ test("a bot told other words behind the box's back (by a Mac of an earlier versi
 test("a bot's own rules are put right at its next run: its folder its own, an old version's kuvo-wake rules gone", async t => {
   const folder = bot("bot_scout00001");
   const wake = process.env.KUVO_WAKE_COMMAND;
+  // Settings › Permissions here: never rm -rf.
+  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "rm -rf *", effect: "deny" }] }));
   const fake = await engine({ rules: { ses_bot_scout00001: [
-    { action: "shell", resource: "*", effect: "allow" },
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "shell", resource: `"${wake}" bot_scout00001 add *`, effect: "allow" },
     { action: "shell", resource: "kuvo-wake bot_scout00001 list", effect: "allow" },
   ] } });
@@ -254,7 +268,7 @@ test("a bot's own rules are put right at its next run: its folder its own, an ol
   fs.rmSync(path.join(folder, "MEMORY.md"));
   await link.freshenBot(fake.read(), "ses_bot_scout00001");
   assert.deepEqual(fake.rules.ses_bot_scout00001, [
-    { action: "shell", resource: "*", effect: "allow" },
+    { action: "shell", resource: "rm -rf *", effect: "deny" },
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   // Its memory, for one made before it was made with it.
@@ -355,21 +369,25 @@ test("a bot brought here from another computer is made this Mac's: its folder sa
   // As it came from a machine: its folder there, your time zone there, and what it was told there.
   write(path.join(folder, "directory"), "/home/me/.kuvo-code/bots/bot_moved00001/workspace");
   write(path.join(folder, "timezone"), "Europe/Istanbul");
+  write(path.join(folder, "zoneinfo"), "TZif");
   write(path.join(folder, "paused"), "moving");
   write(path.join(folder, "told.json"), JSON.stringify({ session: "ses_bot_moved00001", instructions: "elsewhere", rules: "/home/me/.kuvo-code/bots/bot_moved00001" }));
+  // It ran without asking there, where nothing asked first; here, Settings › Permissions asks
+  // before a push, which Approve All lets through.
+  write(path.join(home, "box", "opencode.json"), JSON.stringify({ permissions: [{ action: "shell", resource: "git push *", effect: "ask" }] }));
   const fake = await engine({ rules: { ses_bot_moved00001: [
-    { action: "shell", resource: "*", effect: "allow" },
     { action: "external_directory", resource: "/home/me/.kuvo-code/bots/bot_moved00001/*", effect: "allow" },
   ] } });
   t.after(fake.close);
   const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
-  const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived", { timeZone: "Europe/Istanbul" });
+  const arrived = await ask(handle, "POST", "kuvo/bots/bot_moved00001/arrived");
   assert.equal(arrived.status, 200, arrived.text);
   assert.equal(arrived.json.bot.id, "bot_moved00001");
   assert.equal(fs.readFileSync(path.join(folder, "directory"), "utf8"), path.join(folder, "workspace"));
   assert.equal(fs.existsSync(path.join(folder, "timezone")), false, "this Mac's bots go by its own clock");
+  assert.equal(fs.existsSync(path.join(folder, "zoneinfo")), false);
   assert.deepEqual(fake.rules.ses_bot_moved00001, [
-    { action: "shell", resource: "*", effect: "allow" },
+    { action: "shell", resource: "git push *", effect: "allow" },
     { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" },
   ]);
   assert.match(told(fake.asked, "ses_bot_moved00001").at(-1).body.value, /You run on this Mac\./);

@@ -560,9 +560,9 @@ final class Bots {
 
     /// A bot that moved to another computer (`Moves`): it lives on `machine` (nil: this Mac) from
     /// now on, in `folder`, with its conversation carried there (`session`, the same ID). Its box
-    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is, its
-    /// rules for its folder there, and what it's told there. One that can't be asked now does so at
-    /// the bot's next run there.
+    /// there makes it its own (`kuvo/bots/<id>/arrived`): what its folder says of where it is and
+    /// the clock it goes by, its rules there (its folder, that computer's Settings › Permissions),
+    /// and what it's told there. One that can't be asked now does so at the bot's next run there.
     func moved(_ id: String, to machine: String?, folder: String, session: Session) async {
         guard let index = known.firstIndex(where: { $0.id == id }) else { return }
         known[index].machine = machine
@@ -573,10 +573,9 @@ final class Bots {
         let box = machine ?? BoxClient.mac
         guard let client = client(box) else { return }
         struct Answer: Decodable { var bot: ListedBot }
-        struct Given: Encodable { var timeZone: String }
         let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id) + "/arrived"
         do {
-            let answer = try await client.value(Answer.self, "POST", path, body: Given(timeZone: TimeZone.current.identifier))
+            let answer = try await client.value(Answer.self, "POST", path)
             take(one: answer.bot, from: box)
         } catch {
             log.error("A moved bot wasn't made its box's yet: \(error.localizedDescription, privacy: .public)")

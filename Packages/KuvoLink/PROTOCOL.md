@@ -1034,14 +1034,17 @@ host serves:
   there too. `200 {}`, 404, or 409 `{"message"}` while it moves. Keys of its own that can't be
   reached as it's deleted (this Mac's app not answering) go the next time they can be. A machine's box notes a deleted
   bot in `~/.kuvo-code/bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier.
-- `POST kuvo/bots/<id>/arrived` with `{timeZone?}`: a bot whose folder and conversation a client
-  just brought to this box from another computer (Move to Computer: the client holds it where it
-  was, copies its folder and carries its conversation over, under the same id) is made this box's:
-  what its folder says of where it works, the time zone its wake-ups go by (yours, on a machine;
-  this Mac's own clock on a Mac), its rules for its folder here, and what it's told here. `200
-  {"bot"}`; 404 for no such bot here; 409 without a kit; 503 when its conversation here didn't
-  take it, which the box does again as the bot's next run starts. Its keys of its own go with it
-  through `kuvo/bots/<id>/keys…` on both computers.
+- `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation a client just brought to this
+  box from another computer (Move to Computer: the client holds it where it was, copies its folder
+  and carries its conversation over, under the same id) is made this box's: what its folder says
+  of where it works, the time zone its wake-ups go by and its rules (yours, from the machine's kit;
+  this Mac's own clock on a Mac), its rules here (its approval with this box's Settings ›
+  Permissions, and its folder here), and what it's told here, one at a time with its other
+  tellings. `200 {"bot"}`; 404 for no such bot here; 409 without the box's words, and 503 when its
+  conversation here didn't take it, both of which the box puts right as the bot's next run starts
+  (its folder and clock are set either way). Its keys of its own go with it through
+  `kuvo/bots/<id>/keys…` on both computers. (An earlier client sends `{timeZone}`, which is
+  ignored.)
 - What a box makes and tells its bots with: its words, the same file on every box of a version
   (`bin/bot-words.json`, KuvoLink's `Resources/bot-words.json`), which a client puts beside the
   bridge as it connects and a release brings: New Bot's templates, Kuvo Code's own personalities,

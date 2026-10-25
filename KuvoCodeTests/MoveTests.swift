@@ -174,6 +174,7 @@ import Testing
         #expect(told?.contains("the Linux machine") == true)
         #expect(try String(contentsOf: there.appending(path: "directory"), encoding: .utf8) == there.appending(path: "workspace").path)
         #expect(try String(contentsOf: there.appending(path: "timezone"), encoding: .utf8) == TimeZone.current.identifier)
+        #expect(FileManager.default.fileExists(atPath: there.appending(path: "zoneinfo").path), "and its rules, for a machine without zone files")
         // It lives there now, and the app goes there for it, its draft as it was.
         let moved = try #require(app.bots.bot(id))
         #expect(moved.machine == "box" && moved.folder == there.path && moved.sessionID == session)
@@ -203,6 +204,9 @@ import Testing
         defer { Self.clean(); mac.stop() }
         let id = "bot_scout00002", session = "ses_scout2"
         let original = try botFolder(boxRoot.appending(path: "bots"), id: id, session: session)
+        // The clock it went by there.
+        try Data("Europe/Istanbul".utf8).write(to: original.appending(path: "timezone"))
+        try Data("TZif".utf8).write(to: original.appending(path: "zoneinfo"))
         try saveBots([bot(id, folder: original, session: session, machine: "box")])
         let app = app()
         box.on("GET", "/api/session/\(session)/inbox", json: ["data": []])
@@ -223,6 +227,7 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: here.appending(path: Bot.Descriptor.file).path))
         #expect(try String(contentsOf: here.appending(path: "directory"), encoding: .utf8) == here.appending(path: "workspace").path)
         #expect(!FileManager.default.fileExists(atPath: here.appending(path: "timezone").path))
+        #expect(!FileManager.default.fileExists(atPath: here.appending(path: "zoneinfo").path))
         let rules = mac.requests("PATCH", "/api/session/\(session)").compactMap { $0.body["permissions"] as? [[String: Any]] }.last ?? []
         #expect(rules.contains { $0["resource"] as? String == here.path + "/*" })
         let told = mac.requests("PUT", "/api/experimental/session/\(session)/instructions/entries/\(Bots.instructionKey)").last?.body["value"] as? String
