@@ -209,6 +209,40 @@ import Testing
         try await until { here.actions.contains("POST grp_mac0000001/send") }
     }
 
+    /// What you write in a chat goes after what you wrote there before, in order; a chat whose
+    /// computer is slow to take it doesn't hold up another chat's.
+    @Test func aSlowChatDoesntHoldUpAnothersAndEachGoesInOrder() async throws {
+        defer { Self.clean(); mac.stop() }
+        try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box"), ("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
+        here.add(Self.group("grp_mac0000001", members: ["bot_ada", "bot_ben"]))
+        there.add(Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"]))
+        let app = app()
+        // The machine's bridge at a real address, slow to take what's sent to its chat until the
+        // test lets it (holding only that address's answers).
+        let slow = Gate()
+        let listener = try await machineBridge.listen()
+        StubWeb.letThrough(port: Int(listener.port))
+        defer { slow.open(); listener.stop() }
+        machineBridge.on("POST", "/api/kuvo/groups/grp_box0000001/send") { [there] request in
+            slow.wait()
+            return there.answer(request)
+        }
+        let macAPI = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: macBridge.url)!, password: "test"))
+        let machineAPI = OpenCodeAPI(endpoint: listener.endpoint, folderPrefix: RemoteFolder.prefix(for: "box"))
+        app.boxGroups.bridge = { $0 == nil ? macAPI : $0 == "box" ? machineAPI : nil }
+        await app.boxGroups.connected(nil)
+        await app.boxGroups.connected("box")
+
+        #expect(app.chats.send("First", to: "grp_box0000001"))
+        #expect(app.chats.send("Second", to: "grp_box0000001"))
+        #expect(app.chats.send("Meanwhile", to: "grp_mac0000001"))
+        try await until { here.messages("grp_mac0000001").map { $0["text"] as? String } == ["Meanwhile"] }
+        #expect(there.messages("grp_box0000001").isEmpty, "still on its way")
+        slow.open()
+        try await until { there.messages("grp_box0000001").count == 2 }
+        #expect(there.messages("grp_box0000001").map { $0["text"] as? String } == ["First", "Second"])
+    }
+
     /// What this Mac's bridge lets go of goes to the Finder's Trash; nothing outside its own
     /// trash folder is touched, whatever an event says.
     @Test func whatThisMacsBridgeLetsGoOfGoesToTheTrash() async throws {

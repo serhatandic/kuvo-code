@@ -738,10 +738,10 @@ final class PhoneLink {
         #endif
         if anotherMac {
             return ("Another Mac runs it: its agents are reached from there.",
-                    "Another Mac started its engine and runs it, so agents on that Mac and its machines can write to its agents, and that Mac’s group chats can name them; from this Mac’s computers they can’t.")
+                    "Agents on that Mac and its machines can write to them, and that Mac’s group chats can name them. Agents on this Mac’s computers can’t.")
         }
         return ("Its agents can’t be reached from your other computers.",
-                "Its bridge is out of date, so agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them. Setting it up again updates it.")
+                "Its bridge is out of date, so this Mac’s group chats can’t name them either. Setting it up again updates it.")
     }
 
     /// Whether `machine`'s bridge talks to your other computers itself, and this Mac meets it at

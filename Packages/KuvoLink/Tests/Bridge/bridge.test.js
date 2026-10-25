@@ -435,7 +435,7 @@ test("kuvo/file sends a file on the machine by its file:// address, with its typ
   fs.rmSync(folder, { recursive: true });
 });
 
-test("while the engine starts (again), a phone hears it's starting; stopped on purpose, that it isn't running", async () => {
+test("while the engine starts (again), a phone hears it's starting; stopped on purpose, that it isn't running; stopping again and again, when it's started again", async () => {
   const ask = async readEngine => {
     const parts = [];
     for await (const part of link.engineHandler(readEngine)({ method: "GET", path: "api/session", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
@@ -451,6 +451,17 @@ test("while the engine starts (again), a phone hears it's starting; stopped on p
     assert.deepEqual((await ask(() => { throw new Error("no record"); })).json, { message: "The engine isn't running." });
   } finally {
     fs.rmSync(path.join(home, "run", "stopped"), { force: true });
+  }
+  // Stopping again and again: its keeper starts it again in five minutes, so it isn't starting;
+  // with a start due in a few seconds, it is.
+  const retry = path.join(home, "run", "engine.retry");
+  try {
+    fs.writeFileSync(retry, `${Math.floor(Date.now() / 1000) + 300}\n`);
+    assert.deepEqual((await ask(() => { throw new Error("no record"); })).json, { message: "This machine's engine keeps stopping. It's started again in about 5 minutes." });
+    fs.writeFileSync(retry, `${Math.floor(Date.now() / 1000) + 5}\n`);
+    assert.deepEqual(await ask(() => { throw new Error("no record"); }), starting);
+  } finally {
+    fs.rmSync(retry, { force: true });
   }
 });
 

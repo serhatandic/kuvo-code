@@ -491,9 +491,15 @@ final class AppModel {
             stop()
             automaticRestarts.removeAll { $0 < .now.addingTimeInterval(-300) }
             engineStoppedWhileRunning = !automaticRestarts.isEmpty
-            engine = .failed(reason)
-            workspace.macEngineStopped()
+            gaveUp(reason)
         }
+    }
+
+    /// The engine isn't started again until you say: why, here and for whoever asks this Mac's box.
+    private func gaveUp(_ reason: String) {
+        engine = .failed(reason)
+        BoxProcess.engineGaveUp(reason)
+        workspace.macEngineStopped()
     }
 
     /// This Mac's settings read from its box and brought up to date (integrations' and servers'
@@ -729,8 +735,7 @@ final class AppModel {
             return
         }
         engineStoppedWhileRunning = true
-        engine = .failed("It stopped unexpectedly (exit code \(status)), and again after starting over.\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
-        workspace.macEngineStopped()
+        gaveUp("It stopped unexpectedly (exit code \(status)), and again after starting over.\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
     }
 }
 

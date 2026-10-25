@@ -9,15 +9,18 @@ struct MachinesSettings: View {
     /// Two machines you said were one computer, which said they're two.
     @State private var notSame: (String, String)?
 
-    /// What keeps a machine from being reached, in a line, and why on hover.
+    /// What keeps a machine from being reached, in a line, and why below it.
     /// `again`: it can be set up again now (it's connected), with Set Up Again.
     private func problem(_ line: String, why: String, again engine: MachineEngine? = nil) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 4) {
-                Text(line)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(why)
-                    .accessibilityHint(why)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line)
+                    Text(why)
+                        .font(.caption)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
                 if let engine, engine.isReady {
                     if app.phoneLink.settingUpNow.contains(engine.machine.id) {
                         Spinner(size: 12)
@@ -104,7 +107,7 @@ struct MachinesSettings: View {
                     }
                     MachineStatus(engine: engine)
                     // Set up for your phones and other computers: one that couldn't finish says so.
-                    // A line, the reason behind it on hover, and Set Up Again while it's connected
+                    // A line, the reason behind it below, and Set Up Again while it’s connected
                     // (connecting sets it up too).
                     if app.phoneLink.setupFailed.contains(engine.machine.id) {
                         problem("Your phones and other computers can’t reach it yet.",

@@ -766,6 +766,12 @@ public final class RemoteServer: @unchecked Sendable {
               case $fails in 0) wait=0 ;; 1) wait=15 ;; 2) wait=30 ;; 3) wait=60 ;; 4) wait=120 ;; 5) wait=300 ;; *) wait=600 ;; esac
               next=$((now + wait))
             fi
+            # Down and waiting for its next start: when, for the box to tell whoever asks.
+            if ! up && [ ! -f "$R/stopped" ] && [ "$next" -gt "$now" ]; then
+              [ "$(cat "$R/engine.retry" 2>/dev/null)" = "$next" ] || { echo "$next" >"$R/engine.retry.new" && mv -f "$R/engine.retry.new" "$R/engine.retry"; }
+            else
+              rm -f "$R/engine.retry"
+            fi
             # An update whose new link never said it's well (it doesn't start, the machine went
             # down halfway): after twenty minutes, back to what was there (PROTOCOL.md, "Updates").
             # Five minutes between tries; after six, it gives up and starts what's there.

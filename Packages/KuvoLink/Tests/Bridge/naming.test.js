@@ -13,8 +13,13 @@ import { after, test } from "node:test";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-naming-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+// (Once the list a message started working out is written: it would write it again in a folder
+// just removed.)
+after(async () => {
+  await link.ownRefreshed();
+  fs.rmSync(home, { recursive: true, force: true });
+});
 const vector = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/names/agent-naming.json", import.meta.url), "utf8"));
 
 for (const each of vector.cases) {
@@ -115,4 +120,28 @@ test("a phone's message is named at once from the list as it is; one naming some
   // Listed already: named at once, whatever the engine is doing (it doesn't answer now).
   engine.hang = true;
   assert.match(await send("Ask &Newbie again"), /- &Newbie \(ses_new\): session, here/);
+});
+
+// A name that starts with one listed isn't it: "&Miranda" made a moment ago, with "Mira" listed.
+test("a phone's message naming someone whose name starts with a listed one's waits for them too", { timeout: 5000 }, async t => {
+  // (Not the one the test before left working out, against its engine.)
+  await link.ownRefreshed();
+  const engine = { sessions: [], got: [] };
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => body += chunk);
+    request.on("end", () => {
+      if (request.url.startsWith("/api/session?")) return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: engine.sessions }));
+      engine.got.push(JSON.parse(body).text);
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  link.writeLink({ key: link.newKey().toString("base64url"), secret: "c2VjcmV0", relay: "ws://127.0.0.1:9", id: "lab", phones: [] });
+  fs.writeFileSync(path.join(home, "run", "agents.json"), JSON.stringify({ machine: "lab", agents: [{ session: "ses_mira", name: "Mira", kind: "session", machine: "lab" }] }));
+  engine.sessions = [{ id: "ses_mira", title: "Mira", time: { updated: 1 } }, { id: "ses_miranda", title: "Miranda", time: { updated: 2 } }];
+  const handle = link.engineHandler(() => ({ port: server.address().port, password: "pw" }));
+  for await (const _ of handle({ method: "POST", path: "api/session/ses_here/prompt", headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ text: "Ask &Miranda" })) }, {}, undefined)) {}
+  assert.match(engine.got.at(-1), /- &Miranda \(ses_miranda\): session, here/);
 });

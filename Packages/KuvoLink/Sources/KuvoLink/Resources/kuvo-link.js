@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.65";
+export const BRIDGE_VERSION = "0.9.66";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -635,6 +635,8 @@ async function namedIn(body, session, naming) {
 // only when a name after "&" isn't there yet (one made a moment ago). One working out at a time.
 let refreshingOwn = null;
 const refreshOwnShared = readEngine => (refreshingOwn ??= refreshOwn(readEngine).catch(() => {}).finally(() => { refreshingOwn = null; }));
+// That working out, done (what a test waits for before it removes its folders).
+export const ownRefreshed = () => refreshingOwn ?? Promise.resolve();
 function namingHere(readEngine) {
   const listed = () => {
     try {
@@ -655,15 +657,15 @@ function namingHere(readEngine) {
   };
 }
 
-// Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, followed by
-// none of their names.
+// Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, with none of
+// their names after it, whole ("&Miranda" isn't "&Mira").
 function nameMissing(text, agents) {
-  const names = agents.map(agent => foldName(String(agent.name ?? ""))).filter(Boolean);
+  const references = agents.map(agent => ({ name: String(agent.name ?? ""), session: agent.session }));
+  const named = new Set(namesIn(text, references).map(each => each.lower));
   for (const { index } of text.matchAll(/&/g)) {
     if (index > 0 && wordCharacter.test(text[index - 1])) continue;
-    const after = foldName(text.slice(index + 1, index + 201));
-    if (!after || /^\s/u.test(after)) continue;
-    if (!names.some(name => after.startsWith(name))) return true;
+    if (index + 1 >= text.length || /^\s/u.test(text.slice(index + 1)) || named.has(index)) continue;
+    return true;
   }
   return false;
 }
@@ -2729,15 +2731,16 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
     if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
-    let engine;
+    let engine = null;
     try {
       engine = readEngine();
     } catch {
-      return yield* json(503, { message: engineDown() });
+      // A coding agent's command stops without the engine.
+      if (!stop || !bridge()) return yield* json(503, { message: engineDown() });
     }
     if (stop) {
       if (request.method.toUpperCase() !== "POST") return yield* text(405, "Stop it with POST.");
-      const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
+      const headers = {};
       const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
       for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
       // The engine's, else a coding agent's, through their bridge.
@@ -2748,9 +2751,26 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
   };
 }
 
-// Why the engine can't be asked now: stopped on purpose (until it's started, from anywhere), or
-// starting (again).
-const engineDown = () => (fs.existsSync(path.join(RUN, "stopped")) ? "The engine isn't running." : `${IS_MAC ? "This Mac's" : "This machine's"} engine is starting. Try again in a moment.`);
+// Why the engine can't be asked now: stopped on purpose (until it's started, from anywhere); on a
+// Mac, given up on, with why (the app's `run/engine-stopped`, until it starts it again); on a
+// machine, stopping again and again, with its keeper's next start a while away (`run/engine.retry`,
+// when, in seconds since 1970); or starting (again).
+const engineDown = () => {
+  if (fs.existsSync(path.join(RUN, "stopped"))) return "The engine isn't running.";
+  if (IS_MAC) {
+    let why = "";
+    try { why = fs.readFileSync(path.join(RUN, "engine-stopped"), "utf8").trim(); } catch {}
+    if (why) return `This Mac's engine isn't running. ${why} Try Again in Kuvo Code on the Mac starts it.`;
+    return "This Mac's engine is starting. Try again in a moment.";
+  }
+  const retry = Number(fs.existsSync(path.join(RUN, "engine.retry")) ? fs.readFileSync(path.join(RUN, "engine.retry"), "utf8").trim() : NaN);
+  // (The keeper looks every fifteen seconds, and a start takes a few more.)
+  const minutes = Math.ceil((retry - Date.now() / 1000) / 60);
+  if (Number.isFinite(retry) && retry - Date.now() / 1000 > 30) {
+    return `This machine's engine keeps stopping. It's started again in ${minutes === 1 ? "about a minute" : `about ${minutes} minutes`}.`;
+  }
+  return "This machine's engine is starting. Try again in a moment.";
+};
 
 // The engine here started, or started over, by the box's own tool (`bin/kuvo-start`, as the Mac
 // has it do): `start` for one an older Mac's Stop left down (until it's started, from anywhere),

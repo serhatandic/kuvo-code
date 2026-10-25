@@ -53,3 +53,20 @@ test("a command a coding agent left running stops, as one the engine runs does; 
   assert.deepEqual(bridge.removed, ["shl_agent1"]);
   assert.equal((await stop("sh_nobody")).status, 404);
 });
+
+test("a coding agent's command stops while the engine is down; with neither there, the engine's said to be starting", async t => {
+  const bridge = await runner(["shl_agent2"]);
+  const process_ = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)", "kuvo-agents"], { stdio: "ignore" });
+  t.after(() => process_.kill());
+  let running = true;
+  const handle = link.engineHandler(() => { throw new Error("no record"); }, {}, () => (running ? { ...bridge.target, pid: process_.pid } : null));
+  const stop = async id => {
+    const parts = [];
+    for await (const part of handle({ method: "POST", path: `kuvo/shell/${id}/stop`, headers: {}, body: Buffer.from("{}") }, {}, undefined)) parts.push(part);
+    return { status: parts[0].head.status, json: JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString() || "{}") };
+  };
+  assert.deepEqual(await stop("shl_agent2"), { status: 200, json: { stopped: "removed" } });
+  assert.deepEqual(bridge.removed, ["shl_agent2"]);
+  running = false;
+  assert.deepEqual(await stop("shl_agent2"), { status: 503, json: { message: "This machine's engine is starting. Try again in a moment." } });
+});

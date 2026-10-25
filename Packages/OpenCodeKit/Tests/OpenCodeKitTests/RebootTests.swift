@@ -227,6 +227,27 @@ import Testing
         #expect(again.pid != first.pid && again.password != first.password)
     }
 
+    /// An engine that won't start is started again a while later, and the keeper notes when
+    /// (`run/engine.retry`), for the box to tell whoever asks; once it runs, the note's gone.
+    @Test func anEngineThatWontStartIsTriedAgainLaterAndSaysWhen() throws {
+        defer { cleanUp() }
+        let engine = root.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
+        let working = try String(contentsOf: engine, encoding: .utf8)
+        try write(engine, "#!/bin/sh\necho 'Error: the database disk image is malformed' >&2\nexit 1\n", executable: true)
+        let before = Int(Date.now.timeIntervalSince1970)
+        try start()
+        until { pid("engine.retry") != nil }
+        let retry = try #require(pid("engine.retry"), "it says when it tries again")
+        #expect(retry > before, "a start that's still to come")
+        #expect(running() == nil)
+        // Working again, and started (as from the Mac): the note goes.
+        try write(engine, working, executable: true)
+        #expect(try start("start") == 0)
+        until { running() != nil && pid("engine.retry") == nil }
+        #expect(running() != nil)
+        #expect(pid("engine.retry") == nil)
+    }
+
     /// No Mac, no phone, for a day, and nothing waiting: it carries on.
     @Test func aDayWithoutTheAppLeavesItRunning() throws {
         defer { cleanUp() }

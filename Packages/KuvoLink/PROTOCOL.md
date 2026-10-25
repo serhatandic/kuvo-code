@@ -619,7 +619,8 @@ host serves:
   engine's own remove (which deletes the output, and the agent hears the command wasn't found).
   Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, or `404 {}` when no such
   command runs. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
-  0.9.64). Every box does it for its own, a machine's with the Mac closed too.
+  0.9.64; while the engine is down too, from 0.9.66). Every box does it for its own, a machine's
+  with the Mac closed too.
 - `kuvo/info`: what the host is and runs: `kind` (`mac` or `machine`), `name`, `engine` (its
   version), a Mac's `app` and a machine's `bridge` version (to show, never to compare: check
   `features`), `features` (below), whether its coding agents' bridge is up (`agents`), and
@@ -1464,7 +1465,12 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
 and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine starts, or starts
 again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
-moment."}` (a machine's say "This machine's"). The rest, the Mac's own routes (`kuvo/info`,
+moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (it kept
+stopping, or couldn't start; the app's `run/engine-stopped`, why, until it starts or stops it again),
+they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it; and a
+machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
+in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
+minutes." The rest, the Mac's own routes (`kuvo/info`,
 usage, machines, hosts, `kuvo/mac`, `kuvo/claude-code`, asks, the engine starting over), it hands
 the app (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from

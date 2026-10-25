@@ -88,6 +88,51 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: crashFile))
     }
 
+    /// One that keeps stopping, which the app gives up on: a phone asking this Mac's box hears it
+    /// stopped and why, not that it's starting, until it's started again.
+    @Test func aPhoneHearsThisMacsEngineStoppedOnceTheAppGivesUp() async throws {
+        let binary = try fakeEngine(box: try #require(TestBox.node, "Node runs this Mac's box in the tests"))
+        setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
+        let app = AppModel()
+        // The engine at its address for the box too, which reaches it itself.
+        try await StubWeb.listen(port: 47998)
+        defer {
+            app.stop()
+            app.host.stop()
+            unsetenv("KUVO_OPENCODE_BINARY")
+            try? FileManager.default.removeItem(at: folder)
+            StubWeb.stopListening(port: 47998)
+            engine.stop()
+        }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([])
+        await app.start()
+        #expect(app.engine == .ready)
+        var failed = false
+        for _ in 0..<5 where !failed {
+            let before = starts
+            crash()
+            try await until { starts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
+            if case .failed = app.engine { failed = true }
+        }
+        #expect(failed, "it never stopped trying")
+        let box = try #require(app.box.endpoint, "this Mac's box runs on")
+        let ask = { () async throws -> (Int?, String) in
+            var request = URLRequest(url: try #require(URL(string: "api/session", relativeTo: box.url)))
+            if let password = box.password { request.setValue("Basic " + Data("opencode:\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
+            let (body, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode, String(decoding: body, as: UTF8.self))
+        }
+        let (status, said) = try await ask()
+        #expect(status == 503)
+        #expect(said.contains("This Mac's engine isn't running. It stopped unexpectedly (exit code 7), and again after starting over. Try Again in Kuvo Code on the Mac starts it."), "\(said)")
+        // Try Again: started, it's asked again.
+        await app.restart()
+        #expect(app.engine == .ready)
+        let (again, _) = try await ask()
+        #expect(again == 200)
+    }
+
     /// You restart the engine while it's still starting (it hasn't answered yet): it starts
     /// again and is ready, not left stopped with nothing said. (An engine that stops while its
     /// start is finishing is started again the same way.)

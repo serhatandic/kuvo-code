@@ -180,8 +180,22 @@ final class BoxProcess {
     // MARK: What the box finds beside it
 
     /// The engine, as a machine's launch records it (`run/engine.json`): nil once it's stopped.
+    /// Started or stopped again, it isn't given up on.
     static func engineChanged(_ endpoint: ServerEndpoint?, version: String?, pid: Int32?) {
         write(endpoint.map { Record(pid: pid, port: $0.url.port, password: $0.password, version: version) }, to: "engine.json")
+        try? FileManager.default.removeItem(at: run.appending(path: "engine-stopped"))
+    }
+
+    /// The engine stopped and isn't started again until you say (`run/engine-stopped`): why, in
+    /// the words the window shows (their first paragraph), for the box to tell whoever asks it.
+    static func engineGaveUp(_ reason: String) {
+        let why = reason.components(separatedBy: "\n\n").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        do {
+            try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try Data(why.utf8).write(to: run.appending(path: "engine-stopped"), options: .atomic)
+        } catch {
+            log.error("Couldn't tell this Mac's box its engine stopped: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// The coding agents' bridge, as it records itself on a machine (`run/bridge.json`).
