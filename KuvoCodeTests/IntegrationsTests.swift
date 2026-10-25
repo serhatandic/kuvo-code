@@ -13,9 +13,7 @@ import Testing
 
     init() throws {
         TestEnvironment.prepare()
-        let folder = AppInfo.testRoot.appending(path: "Integrations/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        config = EngineConfig(file: folder.appending(path: "opencode.json"))
+        config = EngineConfig.inMemory()
     }
 
     private var withKeys: [Integrations.Service] { Integrations.all.filter { !Integrations.keys(of: $0.way).isEmpty } }

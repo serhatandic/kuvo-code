@@ -89,9 +89,11 @@ import Testing
         #expect(command["path"] as? [String] == ["commands", "review-claude"])
         #expect(command["settings"] as? [String: String] == ["template": "Review #$ARGUMENTS.", "description": "Review a pull request"])
 
-        // Imported as the phone does it (its settings at its path): said to be there.
+        // Imported as the phone does it (its settings at its path, on this Mac's box): said to be there.
+        let box = try await SettingsBox(port: 47_928)
+        defer { box.stop() }
         let config = app.config(for: .mac)
-        defer { config.set(nil, at: ["agents", "code-reviewer"]) }
+        await config.refresh()
         config.set(try #require(ClaudeAgents.load(from: claude.appending(path: "agents")).first).settings, at: ["agents", "code-reviewer"])
         let again = try #require(try JSONSerialization.jsonObject(with: await link.claudeCodeJSON(folder: claude).1) as? [String: Any])
         #expect((again["agents"] as? [[String: Any]])?.first?["imported"] as? Bool == true)

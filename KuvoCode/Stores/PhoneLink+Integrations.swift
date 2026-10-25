@@ -14,7 +14,7 @@ extension PhoneLink {
         if parts.count == 2 {
             guard method == "GET" else { return (405, Data("{}".utf8)) }
             let config = app.config(for: .mac)
-            config.reload()
+            await config.refresh()
             var answer: [String: Any] = ["integrations": await Self.entries(Integrations.all, app: app)]
             if let problem = config.problem { answer["problem"] = problem }
             return (200, Self.json(answer))
@@ -24,7 +24,7 @@ extension PhoneLink {
         case "POST": return await add(service, request.body, app: app)
         case "DELETE":
             let config = app.config(for: .mac)
-            config.reload()
+            await config.refresh()
             if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
             guard config.value(at: MCPSettings.path + [service.id]) != nil else { return (404, Data("{}".utf8)) }
             if let why = await app.removeIntegration(service, on: .mac) { return (409, Self.message(why)) }
@@ -40,7 +40,7 @@ extension PhoneLink {
             return (409, Self.message("The agent uses \(service.title) on its site: sign in to it in the browser on this Mac."))
         }
         let config = app.config(for: .mac)
-        config.reload()
+        await config.refresh()
         if let problem = config.problem { return (409, Self.message("The engine's settings file can't be changed from here: \(problem)")) }
         let keys = Integrations.keys(of: service.way)
         let given = ((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["keys"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
@@ -57,6 +57,8 @@ extension PhoneLink {
             }
         }
         guard app.addIntegration(service, on: .mac) else { return (409, Self.message(config.problem ?? "It couldn't be added.")) }
+        // Saved where this Mac's box keeps its settings, or why not.
+        if let failure = await config.settled() { return (500, Self.message(failure)) }
         if !keys.isEmpty { Task { await app.reconnectAfterKeys(service, on: .mac) } }
         let entry = await Self.entries([service], app: app).first ?? [:]
         return (200, Self.json(["integration": entry]))

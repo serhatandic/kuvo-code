@@ -31,7 +31,7 @@ export const BRIDGE_VERSION = "0.9.47";
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
-  "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config",
+  "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events",
@@ -1784,14 +1784,21 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
       if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
       const method = request.method.toUpperCase();
-      const answered = ({ status, settings, message }) => json(status, message ? { message } : settings ?? {});
+      // A file that can't be used says why twice: in words to show (`message`), and the file's
+      // problem alone (`problem`), for a page that names the file already.
+      const answered = ({ status, settings, message, problem }) => json(status, message ? (problem ? { message, problem } : { message }) : settings ?? {});
       if (route === "kuvo/config") {
         if (method === "GET") {
           const { settings, problem } = readSettings();
-          return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}` }) : json(200, settings));
+          return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings));
         }
         if (method === "PATCH") return yield* answered(changeSettings(parsed(request.body)?.changes));
         return yield* json(405, {});
+      }
+      if (route === "kuvo/config/apply") {
+        if (method !== "POST") return yield* json(405, {});
+        const { status, ...answer } = applySettings(parsed(request.body));
+        return yield* json(status, answer);
       }
       if (route === "kuvo/mcp/catalog") {
         if (method !== "GET") return yield* json(405, {});
@@ -4193,19 +4200,25 @@ export function botPersonalities(kit, library = readPersonalities()) {
   return [...presets, ...fromKit, ...library.personalities.map(each => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
 }
 
-// ---- This machine's own settings (PROTOCOL.md, "kuvo/config") ----
-// The engine's settings file here, which the engine reloads when it changes: this machine's own,
-// once Kuvo Code has made it so (`.kuvo-own` beside it), changed from a phone or a Mac by the
-// rules the Mac's own follows (`PhoneLink.answerConfig`). Each computer keeps its own; nothing
-// copies them between computers but you. Writes take `run/.config.lock`, as the Mac's do here.
+// ---- This box's own settings (PROTOCOL.md, "kuvo/config") ----
+// The engine's settings file, which the engine reloads when it changes: this box's own, changed
+// from any client (the Mac app, a phone) by the same rules. Each computer keeps its own; nothing
+// copies them between computers but you ("Also Apply to…", `applySettings`). Writes take
+// `run/.config.lock`.
 
-// The box's own settings and keys, in a folder of their own (`box`), which no older Kuvo Code
+// A machine's own settings and keys, in a folder of their own (`box`), which no older Kuvo Code
 // writes: the engine reads the file (`OPENCODE_CONFIG`, over the global one) and reloads it when it
 // changes. Before a Mac made them the machine's own (`adoptBox`), its Mac's.
 const BOX = path.join(K, "box");
-const CONFIG_FILE = path.join(BOX, "opencode.json");
+// This Mac's box: its settings are the app's engine's, where they've always been (KUVO_ENGINE_CONFIG,
+// the engine's XDG_CONFIG_HOME), its own from the start; its keys are in the Mac's Keychain, which
+// the engine reads from the files the app writes them to (KUVO_KEYS); and the servers that use a
+// Mac's own apps run here.
+const ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
+export const IS_MAC = Boolean(ENGINE_CONFIG);
+const CONFIG_FILE = IS_MAC ? path.join(ENGINE_CONFIG, "opencode", "opencode.json") : path.join(BOX, "opencode.json");
 const BOX_KEYS = path.join(BOX, "keys");
-const OWN_MARK = CONFIG_FILE;
+const OWN_MARK = IS_MAC ? null : CONFIG_FILE;
 const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // What a Mac's start used to write: its settings in the global file, the rest beside its keys.
 const GLOBAL_FILE = path.join(K, "config", "opencode", "opencode.json");
@@ -4216,19 +4229,26 @@ const LAUNCH_LOCK = path.join(RUN, ".launching");
 const CATALOG_FILE = path.join(K, "bin", "mcp-catalog.json");
 const SERVERS = ["mcp", "servers"];
 
-export const ownsSettings = (mark = OWN_MARK) => fs.existsSync(mark);
+export const ownsSettings = (mark = OWN_MARK) => mark === null || fs.existsSync(mark);
 
 const isObject = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const sortedKeys = value => Array.isArray(value) ? value.map(sortedKeys)
   : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedKeys(value[key])])) : value;
 
-// The file's settings: {settings}, or {problem} for one that isn't plain JSON (left alone).
+// The file's settings: {settings}, none for a file that isn't there yet, or {problem} for one that
+// can't be read (not plain JSON, a link to a file that isn't there, no permission), left alone:
+// a write would put something else in its place.
 export function readSettings(file = CONFIG_FILE) {
   let text;
   try {
     text = fs.readFileSync(file, "utf8");
-  } catch {
-    return { settings: {} };
+  } catch (error) {
+    let link = false;
+    try { link = fs.lstatSync(file).isSymbolicLink(); } catch {}
+    if (error?.code === "ENOENT" && !link) return { settings: {} };
+    return { problem: link && error?.code === "ENOENT"
+      ? "It's a link to a file that isn't there, so Kuvo Code leaves it alone."
+      : `It couldn't be read, so Kuvo Code leaves it alone (${error?.code ?? error?.message}).` };
   }
   try {
     const parsed = text.trim() ? JSON.parse(text) : {};
@@ -4263,7 +4283,7 @@ export function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) 
   if (!fits) return { status: 400, message: "Send {\"changes\": [{\"path\": [keys…], \"value\": …}]}." };
   return locked(lock, () => {
     const { settings, problem } = readSettings(file);
-    if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
+    if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
     // Keys go through objects only: one through a list or a plain value would replace it whole.
     if (changes.some(change => change.path.slice(0, -1).some((_, at) => {
       const above = valueAt(settings, change.path.slice(0, at + 1));
@@ -4272,18 +4292,39 @@ export function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) 
     if (changes.some(change => "was" in change && sortedJSON(valueAt(settings, change.path) ?? null) !== sortedJSON(change.was))) {
       return { status: 409, message: "It changed since you read it." };
     }
-    let next = settings;
-    for (const change of changes) next = settingAt(next, change.path, keysNamedHere(change.value));
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      const temporary = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify(sortedKeys(next), null, 2) + "\n", { mode: 0o600 });
-      fs.renameSync(temporary, file);
-    } catch (error) {
-      return { status: 500, message: `It couldn't be saved: ${error.message}` };
-    }
-    return { status: 200, settings: next };
+    return writeSettings(settings, changes, file);
   });
+}
+
+// `changes` ({path, value}) made to `settings` and written, under the settings' lock: {status,
+// settings}, or {status, message}.
+function writeSettings(settings, changes, file) {
+  let next = settings;
+  for (const change of changes) next = settingAt(next, change.path, keysNamedHere(change.value));
+  // Through a link (to a dotfiles folder, say) to the file it names, so the link stays a link.
+  const target = linkTarget(file);
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, JSON.stringify(sortedKeys(next), null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(temporary, target);
+  } catch (error) {
+    // Nothing half written left beside it.
+    fs.rmSync(temporary, { force: true });
+    return { status: 500, message: `It couldn't be saved: ${error.message}` };
+  }
+  return { status: 200, settings: next };
+}
+
+// The file a link names, link after link; `file` itself when it isn't a link.
+function linkTarget(file) {
+  let target = file;
+  for (let i = 0; i < 8; i++) {
+    let destination;
+    try { destination = fs.readlinkSync(target); } catch { break; }
+    target = path.resolve(path.dirname(target), destination);
+  }
+  return target;
 }
 
 // Objects merged key by key, `over` winning; a list or a plain value is replaced whole.
@@ -4311,10 +4352,14 @@ function boxKeyPaths(value) {
 
 const KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
 
+// Where this box's settings name its keys: its own keys' folder, or on a Mac the files the app
+// writes its Keychain's keys to (KUVO_KEYS).
+const KEYS_NAMED = IS_MAC && process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : `${shownRoot}/box/keys`;
+
 // A key named where another computer keeps its keys (`{file:<its folder>/KUVO_KEY_…}`, from Also
-// Apply on a phone), named where this box keeps them, as a Mac's AlsoApply.keysNamed does.
+// Apply), named where this box keeps them.
 export function keysNamedHere(value) {
-  if (typeof value === "string") return value.replace(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g, (_, name) => `{file:${shownRoot}/box/keys/${name}}`);
+  if (typeof value === "string") return value.replace(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
   if (Array.isArray(value)) return value.map(keysNamedHere);
   if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, keysNamedHere(inner)]));
   return value;
@@ -4381,19 +4426,45 @@ export function adoptBox(seed) {
   }, { stale: 300_000, wait: 120_000 }));
 }
 
-// Bots' memory, theirs to write in any mode (Plan changes no files), as on a Mac: a rule in
-// Settings › Permissions you see and can take out. Once (`defaults-added` says so), so one you
-// took out stays out. Under the settings' lock.
+// What a box starts its engine with, unless its settings set it, each once (`defaults-added` names
+// those done), so one you take out stays out:
+// - bots' memory, theirs to write in any mode (Plan changes no files): a rule in Settings ›
+//   Permissions you see and can take out (`bot-memory`);
+// - on a Mac, web search through Exa, which needs no key (the engine has none chosen, and every
+//   search fails): in settings that are new or empty, or never given it (`websearch`); and once,
+//   Exa in place of "random", as Kuvo Code chose it before (`search-exa`). (A machine's came with
+//   the Mac's settings it started from.)
+// Under the settings' lock.
 export const BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
-function addDefaultRules() {
-  const added = path.join(BOX, "defaults-added");
-  if (fs.existsSync(added)) return;
-  const { settings, problem } = readSettings();
+const DEFAULTS_ADDED = path.join(BOX, "defaults-added");
+function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  let done = [];
+  try { done = fs.readFileSync(marks, "utf8").split("\n").filter(Boolean); } catch {}
+  const wanted = mac ? ["bot-memory", "websearch", "search-exa"] : ["bot-memory"];
+  if (wanted.every(mark => done.includes(mark))) return;
+  const { settings, problem } = readSettings(file);
   if (problem) return;
-  const rules = Array.isArray(settings?.permissions) ? settings.permissions : [];
-  const has = rules.some(rule => rule?.action === BOT_MEMORY_RULE.action && rule?.resource === BOT_MEMORY_RULE.resource && rule?.effect === BOT_MEMORY_RULE.effect);
-  if (!has) writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys({ ...(settings ?? {}), permissions: [...rules, BOT_MEMORY_RULE] }), null, 2) + "\n");
-  writePrivate(added, "bot-memory\n");
+  const changes = [];
+  const exa = { provider: "exa" };
+  if (mac && (!Object.keys(settings).length || !done.includes("websearch"))) {
+    if (settings.websearch === undefined) changes.push({ path: ["websearch"], value: exa });
+    done.push("websearch", "search-exa");
+  } else if (mac && !done.includes("search-exa")) {
+    if (sameJSON(settings.websearch, { provider: "random" })) changes.push({ path: ["websearch"], value: exa });
+    done.push("search-exa");
+  }
+  if (!done.includes("bot-memory")) {
+    const rules = Array.isArray(settings.permissions) ? settings.permissions : [];
+    if (!rules.some(rule => sameJSON(rule, BOT_MEMORY_RULE))) changes.push({ path: ["permissions"], value: [...rules, BOT_MEMORY_RULE] });
+    done.push("bot-memory");
+  }
+  if (changes.length && writeSettings(settings, changes, file).status !== 200) return;
+  writePrivate(marks, [...new Set(done)].join("\n") + "\n");
+}
+
+// This Mac's box, as it starts: its defaults, before any client reads its settings.
+export function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
 }
 
 // The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).
@@ -4419,29 +4490,158 @@ export function setBoxKey(name, value) {
   });
 }
 
-// The popular servers, as this machine has them: those that use the Mac's own apps left out.
-export function mcpCatalog(settings, file = CATALOG_FILE) {
+// The popular servers, as this box has them: on a machine, those that use the Mac's own apps left out.
+export function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
   let servers = [];
   try { servers = JSON.parse(fs.readFileSync(file, "utf8")).servers ?? []; } catch {}
   return {
-    servers: servers.filter(server => typeof server?.id === "string" && !server.macOnly).map(server => {
+    servers: servers.filter(server => typeof server?.id === "string" && (mac || !server.macOnly)).map(server => {
       const added = valueAt(settings, [...SERVERS, server.id]) !== undefined;
       return { id: server.id, title: String(server.title ?? ""), summary: String(server.summary ?? ""), access: String(server.access ?? "open"),
-        added, integration: added && Boolean(server.integration), macOnly: false };
+        added, integration: added && Boolean(server.integration), macOnly: mac && Boolean(server.macOnly) };
     }),
   };
 }
 
-// One of them added, as its Add button does on the Mac; one already there stays as it is.
-export function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = CONFIG_LOCK) {
+// One of them added, as its Add button does; one already there stays as it is.
+export function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = CONFIG_LOCK, mac = IS_MAC) {
   let servers = [];
   try { servers = JSON.parse(fs.readFileSync(catalog, "utf8")).servers ?? []; } catch {}
-  const server = servers.find(each => each?.id === id && !each.macOnly);
+  const server = servers.find(each => each?.id === id && (mac || !each.macOnly));
   if (!server || !isObject(server.settings)) return { status: 404 };
   const { settings, problem } = readSettings(file);
-  if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
+  if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
   if (valueAt(settings, [...SERVERS, id]) !== undefined) return { status: 200, settings };
   return changeSettings([{ path: [...SERVERS, id], value: { codemode: false, ...server.settings } }], file, lock);
+}
+
+// ---- Also Apply (PROTOCOL.md, "kuvo/config/apply") ----
+// Changes made to another computer's settings, made to this box's too, when you ask ("Also Apply
+// to…"): each as it was made there, {path, before, after} (absent or null: nothing). A list of
+// rules (Settings › Permissions' rules and blocks, an agent's) gets what was added there and loses
+// what was taken out, keeping the rest of this box's own; anything else (another list, like a
+// server's command, too) is set as it is there. What each computer keeps its own (its shell, a
+// worktrees folder on its disk) stays as it is; a server that uses a Mac's own apps stays off
+// machines; and a field of a server, agent, command or provider this box doesn't have isn't made.
+
+// The engine's own agents, on every computer whether its settings name them or not.
+const BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
+const sameJSON = (a, b) => sortedJSON(a ?? null) === sortedJSON(b ?? null);
+const isRules = keys => ["permissions", "policies"].includes(keys[keys.length - 1]);
+
+// Something each computer keeps its own: its shell (each picks from its own), and a worktrees
+// folder on its disk (one relative to each project goes).
+function keptOwn(change) {
+  if (sameJSON(change.path, ["shell"])) return true;
+  if (!sameJSON(change.path, ["worktree", "directory"])) return false;
+  const folder = typeof change.after === "string" ? change.after : typeof change.before === "string" ? change.before : null;
+  return folder !== null && (folder.startsWith("/") || folder.startsWith("~"));
+}
+
+// The named entry (an MCP server, an agent, a command, a provider) `keys` is a field of, when it's
+// one a computer may not have (the engine's own agents it always has).
+function entryOf(keys) {
+  if (keys[0] === "mcp" && keys.length >= 4 && keys[1] === "servers") return keys.slice(0, 3);
+  if (keys[0] === "agents" && keys.length >= 3 && BUILT_IN_AGENTS.includes(keys[1])) return null;
+  if (["agents", "commands", "providers"].includes(keys[0]) && keys.length >= 3) return keys.slice(0, 2);
+  return null;
+}
+
+// What a computer needs to have for `change` to be made there: the entry it's a field of, or the
+// agent `default_agent` names.
+function neededFor(change) {
+  if (sameJSON(change.path, ["default_agent"]) && typeof change.after === "string" && !BUILT_IN_AGENTS.includes(change.after)) return ["agents", change.after];
+  return entryOf(change.path);
+}
+
+// The servers that use a Mac's own apps, as a Mac's catalog names them (its `macOnly`, and the
+// servers it marks so).
+function macOnlyServers(file = CATALOG_FILE) {
+  try {
+    const catalog = JSON.parse(fs.readFileSync(file, "utf8"));
+    const named = [...(Array.isArray(catalog.macOnly) ? catalog.macOnly : []), ...(catalog.servers ?? []).filter(server => server?.macOnly).map(server => server.id)];
+    return new Set(named.filter(id => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+// The keys `value` names: integrations' shared keys, not a bot's own.
+function keyNamesIn(value, names = new Set()) {
+  if (typeof value === "string") for (const [name] of value.matchAll(/KUVO_KEY_[A-Z0-9_]+/g)) { if (!name.includes("__")) names.add(name); }
+  else if (Array.isArray(value)) value.forEach(each => keyNamesIn(each, names));
+  else if (isObject(value)) Object.values(value).forEach(each => keyNamesIn(each, names));
+  return names;
+}
+
+// What `changes` make of `settings`, here: {made: [{path, value}], leftOut: [entry], kept: [path],
+// macOnly: [server]}: what's made; the entries it doesn't have that some were to; what it keeps its
+// own; and the servers that stay on Macs.
+export function translateSettings(changes, settings, { mac = IS_MAC, macOnly = macOnlyServers() } = {}) {
+  let here = settings;
+  const made = [], leftOut = [], kept = [], stayed = [];
+  const has = (list, item) => list.some(each => sameJSON(each, item));
+  for (const change of changes) {
+    const keys = change.path;
+    if (!mac && keys.length >= 3 && keys[0] === "mcp" && keys[1] === "servers" && macOnly.has(keys[2])) {
+      if (!stayed.includes(keys[2])) stayed.push(keys[2]);
+      continue;
+    }
+    if (keptOwn(change)) {
+      if (!has(kept, keys)) kept.push(keys);
+      continue;
+    }
+    // A field of something this box doesn't have, or the mode new sessions start in when it's an
+    // agent it doesn't have: none made with only that (adding or removing a whole one still goes).
+    const entry = neededFor(change);
+    if (entry && valueAt(here, entry) === undefined) {
+      if (!has(leftOut, entry)) leftOut.push(entry);
+      continue;
+    }
+    const before = change.before ?? null, after = change.after ?? null;
+    let value = keysNamedHere(after);
+    // Rules: none is an empty list, so the first one added (or the last taken out) joins (or
+    // leaves) this box's own, rather than standing in for them.
+    if (isRules(keys) && (Array.isArray(before) || Array.isArray(after)) && (before === null || Array.isArray(before)) && (after === null || Array.isArray(after))) {
+      const was = (before ?? []).map(keysNamedHere), now = (after ?? []).map(keysNamedHere);
+      const current = Array.isArray(valueAt(here, keys)) ? valueAt(here, keys) : [];
+      const removed = was.filter(item => !has(now, item));
+      const added = now.filter(item => !has(was, item));
+      const staying = current.filter(item => !has(removed, item));
+      const merged = [...staying, ...added.filter(item => !has(staying, item))];
+      value = merged.length ? merged : null;
+    }
+    made.push({ path: keys, value });
+    here = settingAt(here, keys, value);
+  }
+  return { made, leftOut, kept, macOnly: stayed };
+}
+
+// `POST kuvo/config/apply` with {changes: [{path, before?, after?}], dry?}: the changes made here
+// as `translateSettings` makes them, in one write (none with `dry`). {status, made, leftOut, kept,
+// macOnly, keys, applied, settings}: `keys`, those `made` names, for a client to bring along first
+// where this box hasn't its own; `applied`, something was made, or every change was already so.
+export function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, options = {}) {
+  const changes = body?.changes;
+  const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every(change =>
+    Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16
+    && change.path.every(key => typeof key === "string" && key.length >= 1 && key.length <= 200));
+  if (!fits) return { status: 400, message: "Send {\"changes\": [{\"path\": [keys…], \"before\": …, \"after\": …}]}." };
+  return locked(lock, () => {
+    const { settings, problem } = readSettings(file);
+    if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
+    const result = translateSettings(changes, settings, options);
+    if (result.made.some(change => change.path.slice(0, -1).some((_, at) => {
+      const above = valueAt(settings, change.path.slice(0, at + 1));
+      return above !== undefined && !isObject(above);
+    }))) return { status: 400, message: "A path goes through objects only; send a list whole, at its own path." };
+    const keys = [...keyNamesIn(result.made.map(change => change.value))].sort();
+    const applied = result.made.length > 0 || (!result.leftOut.length && !result.kept.length && !result.macOnly.length);
+    if (body.dry === true || !result.made.length) return { status: 200, ...result, keys, applied, settings };
+    const written = writeSettings(settings, result.made, file);
+    if (written.status !== 200) return written;
+    return { status: 200, ...result, keys, applied, settings: written.settings };
+  });
 }
 
 // ---- State ----
@@ -6963,6 +7163,8 @@ async function serve() {
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  // This Mac's settings with what its engine starts with, before a client reads them.
+  if (IS_MAC) addMacDefaults();
   const server = serveBox(password);
   await new Promise((resolve, reject) => {
     server.once("error", reject);

@@ -705,26 +705,57 @@ host serves:
   bridge for the machine's, the engine's and the coding agents'. The same check on
   both (`Vectors/link.json`, `signInReturns`).
 - `kuvo/config`: the computer's own engine settings as Settings has them, the whole document
-  (the same that its `opencode.json` holds). Each computer keeps its own ("Settings per box"):
-  change a machine's on the machine's bridge, never through the Mac. `PATCH kuvo/config` with `{"changes":
+  (the same that its `opencode.json` holds). Each computer keeps its own ("Settings per box"),
+  and its box answers for them, a Mac's as a machine's: change a machine's on the machine's box,
+  never through the Mac. `PATCH kuvo/config` with `{"changes":
   [{"path": ["mcp", "servers", "linear", "disabled"], "value": true}, …]}` changes some, as
   Settings does (a `null` value removes the key, and a level that isn't there is made; a path
   goes through objects only, so a list is sent whole, at its own path: 400 otherwise), and
-  answers with the whole document; the computer's engine takes it at once, and on a Mac a change
-  to the rules reaches open sessions. A key a value names where another computer keeps its keys
+  answers with the whole document; the computer's engine takes it at once (and says
+  `config.updated`, which is when the Mac app reads it again, so a change to the rules reaches
+  open sessions). A key a value names where another computer keeps its keys
   (`{file:<its folder>/KUVO_KEY_…}`, from Also Apply) is written as this computer names its own,
   so send it as the other computer has it. A change can say what it read at its path (`"was"`, `null` for
   nothing): changed since, nothing is changed and it answers `409 {"message"}`, so read again.
-  `409 {"message"}` too while the file can't be read (it has comments, say): it's changed by
-  hand then. Settings › Permissions keeps its choices and rules under `permissions` (a list of
+  `409 {"message", "problem"}` too while the file can't be read (it has comments, it's a link to
+  a file that isn't there, it may not be read): it's left alone then, never taken for an empty one,
+  and `problem` says why alone, for a page that names the file already. A box adds what its engine
+  starts with to its settings once each, noted in `box/defaults-added` (a name a line), so one you
+  take out stays out: bots' memory rule (`bot-memory`, in `permissions`), and on a Mac, as its box
+  starts, web search through Exa (`websearch`, for settings that are new, empty or never given it;
+  `search-exa`, Exa once in place of the `random` an older version chose).
+  Settings › Permissions keeps its choices and rules under `permissions` (a list of
   `{action, resource, effect}`, effect `allow`, `ask` or `deny`) and its blocks under `policies`.
-  A machine's bridge answers `kuvo/config` and `kuvo/mcp/catalog` for the machine's own, and
-  `409 {"message"}` until a Mac has made its settings its own ("Settings per box").
-- On a Mac, `kuvo/mcp/catalog`: Settings › MCP Servers' popular servers, `{"servers": [{id,
-  title, summary, access, added, integration, macOnly}]}` (a machine's bridge for the machine,
+  Settings › Agents keeps its agents under `agents.<id>` (the engine's own, `build`, `plan`,
+  `general`, `explore`, `title`, `summary` and `compaction`, whether named there or not), with
+  `default_agent` the one new sessions start in; Settings › Commands, `commands.<name>`;
+  Settings › MCP Servers, `mcp.servers.<name>`. A machine's box answers `409 {"message"}` until a
+  Mac has made its settings its own ("Settings per box").
+- `POST kuvo/config/apply` (`config.apply` in `features`): "Also Apply to…", changes made to
+  another computer's settings made to this one's too, as its own settings have room for them.
+  `{"changes": [{"path": [keys…], "before": …, "after": …}], "dry"?: true}`: each as it was made
+  there (`before` and `after` left out or `null` for nothing), at most 100. A list of rules (a
+  path ending in `permissions` or `policies`, an agent's own too) gets what was added there and
+  loses what was taken out, keeping the rest of this box's own; anything else (another list, like
+  a server's command, too) is set as it is there, with its keys named as this box names its own.
+  What each computer keeps its own (`shell`, and a `worktree.directory` that's a whole path)
+  stays; on a machine, a server that uses a Mac's own apps (the catalog's `macOnly`) stays off;
+  and a field of an agent, command, provider or MCP server this box doesn't have isn't made (nor
+  `default_agent` naming an agent it doesn't have), though adding or removing a whole one is.
+  Answers `200 {made: [{path, value}], leftOut: [entry path], kept: [path], macOnly: [server],
+  keys: [name], applied, settings}`, in one write: `keys`, those `made` names, which a client sets
+  first (`kuvo/keys`) where this box hasn't its own, so ask with `dry` first, which changes
+  nothing (and takes away a key it brought that the change didn't name after all, or one brought
+  for a change that wasn't made); `applied`, something was made, or every change was already so (not when all of them
+  stayed). 400 for changes that aren't these; `409 {"message", "problem"}` while the file can't
+  be read, as `kuvo/config`.
+- `kuvo/mcp/catalog`: Settings › MCP Servers' popular servers, `{"servers": [{id,
+  title, summary, access, added, integration, macOnly}]}` (a machine's box for the machine,
   without `macOnly` ones): `access` is `signIn`, `open` or `local`; `integration` when Integrations added it (it's kept there, with its sign-in: don't turn
   it off or remove it); `macOnly` for one that uses the Mac's own apps (Chrome DevTools), which
-  never reaches your machines, so leave it out of a machine's list. `POST kuvo/mcp/catalog/<id>`
+  never reaches your machines, so leave it out of a machine's list. A box reads the list from its
+  `bin/mcp-catalog.json`, which a Mac writes (on a machine as it connects, and in its own box as
+  it starts it), with `macOnly`, every server that uses a Mac's own apps, integrations' too. `POST kuvo/mcp/catalog/<id>`
   adds one as its Add button does and answers with the settings, as `kuvo/config`; turn one off
   or remove it through `kuvo/config` (`mcp.servers.<name>`). The rest is the engine's: each
   server's status from `GET api/mcp`, connecting again with `POST
@@ -740,8 +771,8 @@ host serves:
   The engine reads one as it next reads its settings, so set the key before adding what names it
   (`kuvo/config`). An integration added on a machine names its keys
   `{file:~/.kuvo-code/box/keys/<name>}` there; on a Mac, `{file:<its keys' folder>/<name>}`.
-  "Also Apply to…" on a phone is the same changes (`kuvo/config`) and keys made on each computer
-  you pick: a list gets what was added and loses what was taken out, keeping the other's own.
+  "Also Apply to…", from any client, is the same changes sent to each computer you pick
+  (`kuvo/config/apply`), with the keys it names brought first from where you made them.
 - Integrations, as Settings › Integrations has them, each computer its own (a Mac for its own,
   keys in its Keychain; a machine's bridge for the machine's, keys in
   `~/.kuvo-code/box/keys`, from the catalog its Mac leaves in `bin/integrations.json`, with the
@@ -1116,7 +1147,7 @@ host serves:
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
 (`app`, `bridge`), before it shows what needs a route. A route it names can still refuse for now,
 with a message to show: `503` while the engine or the coding agents' bridge is down, and on a
-machine `409` for `config`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
+machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
 the route scenarios (`Vectors/routes/routing.json`).
@@ -1133,6 +1164,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `config` | `kuvo/config` |
+| `config.apply` | `POST kuvo/config/apply` |
 | `keys` | `kuvo/keys…` |
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `engine.restart` | `POST kuvo/engine/restart` |
@@ -1232,6 +1264,15 @@ phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`):
 bridge who your machines and their bots are, carries what it sends by the same rules, and the
 Mac's agents mail carries its bots' `id` and `look` and its `features`.
 
+Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
+engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
+app gives the box the engine's settings folder (`KUVO_ENGINE_CONFIG`, the engine's
+`XDG_CONFIG_HOME`), so nothing moves. They're its own from the start (never `409`). Its keys are
+in the Mac's Keychain, which the app answers for (`kuvo/keys`); the box names them where the app
+writes them for the engine to read (`KUVO_KEYS`). The app puts the popular servers in its
+`bin/mcp-catalog.json` as it starts it, and those that use a Mac's own apps are listed and added
+there.
+
 Areas move onto it one at a time. A moved area's routes are answered there for every client: a
 phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
 own, which reach every box's routes the same way (`BoxClient`: this Mac's through the link's
@@ -1274,10 +1315,12 @@ which its settings name as `{file:~/.kuvo-code/box/keys/…}`), which its engine
 the machine's own the first time it connects: what the machine runs with then (the settings an
 older Mac's start left, "For released Macs") goes in its box, or, on a machine with none, the
 Mac's. From then on a Mac's start sends none of its own, and a machine's settings are changed through its
-bridge's script, the same way from a Mac (`kuvo-link.js box read | change | key`, over SSH) and
-from a phone (`kuvo/config`), one change at a time under `run/.config.lock`. A Mac reaches any of
-a machine's routes that answer once (never a stream) the same way: `kuvo-link.js box route` takes
-`{method, path, body?}` on stdin and prints `{status, body}`, answered as a phone's request is.
+box's routes, the same way from a Mac and from a phone (`kuvo/config`), one change at a time under
+`run/.config.lock`. A Mac reaches any of a machine's routes that answer once (never a stream) over
+SSH: `kuvo-link.js box route` takes `{method, path, body?}` on stdin and prints `{status, body}`,
+answered as a phone's request is. (`kuvo-link.js box read | change` are the same, for Kuvo Code
+0.8.0-beta.1, which uses them; `key` sets one of its keys.) This Mac's own settings are its box's too
+("This Mac's box").
 
 ### Personalities
 

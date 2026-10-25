@@ -68,6 +68,8 @@ extension AppModel {
         var signIn = listed
         if signIn == nil, let api { signIn = (try? await api.mcpServers())?.first { $0.name == service.id }?.integrationID }
         config.set(nil, at: MCPSettings.path + [service.id])
+        // Taken out of the settings where this Mac's box keeps them, or its keys and sign-in stay.
+        if let failure = await config.settled() { return failure }
         if let signIn { forgetSignIn(signIn, on: box) }
         // Bots here with keys of their own for it stop using it too: their keys go, and their
         // folders' settings stop naming its server.

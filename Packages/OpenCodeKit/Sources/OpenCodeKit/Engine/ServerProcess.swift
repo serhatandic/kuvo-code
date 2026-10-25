@@ -24,10 +24,13 @@ public struct EngineFolders: Sendable {
     /// `skills` folder beside it holds skills every project can use.
     public var configFile: URL { root.appending(path: "config/opencode/opencode.json") }
 
+    /// Its `XDG_CONFIG_HOME`: the folder its settings file and skills are under (`opencode/…`).
+    public var configHome: URL { root.appending(path: "config") }
+
     var environment: [String: String] {
         [
             "XDG_DATA_HOME": root.appending(path: "data").path,
-            "XDG_CONFIG_HOME": root.appending(path: "config").path,
+            "XDG_CONFIG_HOME": configHome.path,
             "XDG_STATE_HOME": root.appending(path: "state").path,
             "XDG_CACHE_HOME": root.appending(path: "cache").path,
             // What MCP servers it runs with npx or bunx download, in its own cache too (npm's

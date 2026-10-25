@@ -162,6 +162,8 @@ struct GeneralSettings: View {
     private func bringOver(_ plan: OpencodeImport.Plan) async {
         guard let api = app.api else { return }
         let count = await OpencodeImport.apply(plan, to: app.engineConfig, api: api)
+        // Saved where this Mac's box keeps them before the engine starts again to read them.
+        _ = await app.engineConfig.settled()
         importNote = count == 1 ? "Brought over 1 thing from opencode." : "Brought over \(count) things from opencode."
         // Accounts and servers take effect as this Mac's engine starts again, once it's not at work.
         app.renewEngines(mac: true)
