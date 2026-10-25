@@ -1554,16 +1554,19 @@ function watchFolders(folders, changed, { recursive = true } = {}) {
 /** What `read` says, a line now and one for each change after, in order: each change this process
  * makes as it's made (`followers` are told), and what another made, looked for each second; or,
  * given `folders` to watch, as the system says they change, looked for again every half minute
- * only for a change it missed. */
-async function* followed(read, followers, signal, { folders = [], recursive = true } = {}) {
-  const queue = [JSON.stringify(read())];
+ * only for a change it missed. A watch starts a moment after it's asked for (a change in that
+ * moment isn't told), so it's looked at once more just after. `watch`: the system's (a test's own). */
+export async function* followed(read, followers, signal, { folders = [], recursive = true, watch = watchFolders } = {}) {
   let wake = null;
+  const queue = [];
   const told = () => {
     queue.push(JSON.stringify(read()));
     wake?.();
   };
   followers.add(told);
-  const watching = watchFolders(folders, told, { recursive });
+  const watching = watch(folders, told, { recursive });
+  queue.push(JSON.stringify(read()));
+  const settled = setTimeout(told, WATCH_SETTLES);
   // Its client gone: it stops now, not at the next look.
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   try {
@@ -1586,10 +1589,14 @@ async function* followed(read, followers, signal, { folders = [], recursive = tr
       queue.push(JSON.stringify(read()));
     }
   } finally {
+    clearTimeout(settled);
     followers.delete(told);
     watching.close();
   }
 }
+
+// How long a watch on folders may take to start telling changes.
+const WATCH_SETTLES = 250;
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
 function freeBranch(folder, name) {
