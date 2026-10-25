@@ -10,17 +10,30 @@ struct MachinesSettings: View {
     @State private var notSame: (String, String)?
 
     /// What keeps a machine from being reached, in a line, and why on hover.
-    private func problem(_ line: String, why: String) -> some View {
-        Label {
-            Text(line)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: "exclamationmark.triangle")
+    /// `again`: it can be set up again now (it's connected), with Set Up Again.
+    private func problem(_ line: String, why: String, again engine: MachineEngine? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Label {
+                Text(line)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle")
+            }
+            .foregroundStyle(.secondary)
+            .help(why)
+            .accessibilityHint(why)
+            if let engine, engine.isReady {
+                if app.phoneLink.settingUpNow.contains(engine.machine.id) {
+                    Spinner(size: 12)
+                        .accessibilityLabel("Setting it up")
+                } else {
+                    Button("Set Up Again") { Task { await app.phoneLink.sync(engine) } }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .fixedSize()
+                }
+            }
         }
         .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .help(why)
-        .accessibilityHint(why)
     }
 
     var body: some View {
@@ -91,12 +104,13 @@ struct MachinesSettings: View {
                     }
                     MachineStatus(engine: engine)
                     // Set up for your phones and other computers: one that couldn't finish says so.
-                    // A line, the reason behind it on hover; connecting sets it up again.
+                    // A line, the reason behind it on hover, and Set Up Again while it's connected
+                    // (connecting sets it up too).
                     if app.phoneLink.setupFailed.contains(engine.machine.id) {
                         problem("Your phones and other computers can’t reach it yet.",
-                                why: "Kuvo Code couldn’t set it up for them. It tries again when it next connects.")
+                                why: "Kuvo Code couldn’t set it up for them. It tries again when it next connects.", again: engine)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
-                        problem(line, why: why)
+                        problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)
                     }
                 }
             }

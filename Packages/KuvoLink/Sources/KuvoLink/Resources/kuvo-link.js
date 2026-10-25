@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.64";
+export const BRIDGE_VERSION = "0.9.65";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2660,7 +2660,12 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     // The group chats that live here (`kuvo/groups`), from the coding agents' bridge, which runs them.
     if (GROUP_ROUTE.test(route)) {
       const target = bridge();
-      if (!target) return yield* groupJSON(503, { message: "Group chats run with the coding agents' bridge, which isn't running on this machine." });
+      if (!target) return yield* groupJSON(503, { message: IS_MAC ? "Group chats on this Mac are starting. Try again in a moment." : "Group chats run with the coding agents' bridge, which isn't running on this machine." });
+      // Who a message names with "&" is worked out there, from the list as it is now: worked out
+      // again first (two seconds at most) for one that names someone.
+      if (request.method.toUpperCase() === "POST" && route.split("/").length === 3 && Buffer.from(request.body ?? []).includes("&")) {
+        await Promise.race([refreshOwnShared(readEngine), new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
+      }
       return yield* forwardGroups(target, route, request, signal);
     }
     // A bot brought here from another computer, made this box's (Move to Computer).
@@ -3173,17 +3178,19 @@ async function* forwardGroups(target, route, request, signal) {
     });
   } catch {
     if (signal?.aborted) return;
-    return yield* groupJSON(503, { message: "The coding agents’ bridge here isn’t answering. Try again in a moment." });
+    return yield* groupJSON(503, { message: groupsNotAnswering() });
   }
   if (response.status >= 500) {
     await response.body?.cancel().catch(() => {});
-    return yield* groupJSON(503, { message: "The coding agents’ bridge here isn’t answering. Try again in a moment." });
+    return yield* groupJSON(503, { message: groupsNotAnswering() });
   }
   yield { head: { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } } };
   try {
     for await (const chunk of response.body ?? []) yield { body: Buffer.from(chunk) };
   } catch {}
 }
+
+const groupsNotAnswering = () => (IS_MAC ? "Group chats on this Mac aren’t answering. Try again in a moment." : "The coding agents’ bridge here isn’t answering. Try again in a moment.");
 
 function* groupJSON(status, value) {
   yield { head: { status, headers: { "content-type": "application/json" } } };
@@ -8418,7 +8425,7 @@ export function startUpdate(options = {}) {
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
-  "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return"];
+  "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
 // `kuvo/shell/<id>/stop`: the box's too.)
 const macAnswersAlso = route => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route);
@@ -9588,8 +9595,11 @@ async function serve() {
   sendWakes();
   // This Mac's link to your phones and machines, once its app says it's wanted.
   if (IS_MAC) runMacLink().catch(() => {});
-  // Its agents and their letters, and its group chats' mail, for your other computers.
-  if (IS_MAC) runMacPeers();
+  // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
+  // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)
+  // Never the real app's box (`run.kuvo.code/box`).
+  const testsAlone = process.env.KUVO_TEST_NO_PEERS && path.basename(path.dirname(path.resolve(K))) !== "run.kuvo.code";
+  if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app

@@ -255,6 +255,10 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   // And the engine's API and the coding agents', which it passes on itself (none run in this test).
   assert.equal((await it.request("GET", "api/session")).status, 503);
   assert.equal((await it.request("GET", "kuvo/agents/api/session")).status, 503);
+  // Who "&" can name, and its group chats (whose bridge isn't running in this test).
+  assert.equal((await it.request("GET", "kuvo/named")).status, 200);
+  const groups = await it.request("GET", "kuvo/groups");
+  assert.deepEqual([groups.status, JSON.parse(groups.body).message], [503, "Group chats on this Mac are starting. Try again in a moment."]);
   assert.equal(app.asked.length, asked, "none went to the app");
   // The Mac's own: the app's, with which phone asked.
   const usage = await it.request("GET", "kuvo/usage");

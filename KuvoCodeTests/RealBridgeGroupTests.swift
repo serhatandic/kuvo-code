@@ -123,7 +123,7 @@ import Testing
         }
     }
 
-    /// A phone's request to this Mac, as PhoneLink answers it, with this Mac's bridge.
+    /// A phone's request to this Mac, as PhoneLink answers it: this Mac's box, with its bridge.
     private func ask(_ bridge: RealBridge, _ method: String, _ path: String, _ body: [String: Any]? = nil) async throws -> (status: Int, json: [String: Any]?) {
         let request = LinkRequest(method: method, path: path, headers: ["content-type": "application/json"], body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
         var status = 0
@@ -277,6 +277,11 @@ import Testing
         serve(seats)
         let bridge = try await start(root: folder)
         defer { bridge.stop() }
+        // This Mac's box, which passes a phone's group chat routes on to the bridge (not telling it
+        // who your other computers are: this test does).
+        let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
+        defer { box.stop() }
+        bridge.agents.recordForBox()
         let api = try #require(bridge.api)
         let peers: JSONValue = .object([
             "boxes": .array([.object(["key": .string("key_spare"), "name": .string("spare.invalid"), "seats": .bool(true)])]),
@@ -316,8 +321,8 @@ import Testing
         #expect((read["messages"] as? [[String: Any]])?.first?["text"] as? String == "&Ada, look at &Fix login")
         #expect((read["messages"] as? [[String: Any]])?.first?["named"] == nil, "the block is the box's")
 
-        // Routes it doesn't have: 404, as on a machine.
-        #expect(try await ask(bridge, "GET", "kuvo/groups/../bots").status == 404)
+        // A path that isn't what it seems: refused, as every box refuses it.
+        #expect(try await ask(bridge, "GET", "kuvo/groups/../bots").status == 403)
         #expect(try await ask(bridge, "DELETE", "kuvo/groups/\(id)").status == 200)
         #expect(try await ask(bridge, "DELETE", "kuvo/groups/\(id)").status == 200, "gone already is as good as deleted")
         #expect(try #require(try await ask(bridge, "GET", "kuvo/groups").json?["groups"] as? [Any]).isEmpty)
@@ -326,6 +331,9 @@ import Testing
     /// With this Mac's bridge not running, a phone's group chat routes say so: try again.
     @Test func aPhoneHearsWhenThisMacsGroupChatsArentRunning() async throws {
         defer { clean() }
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop() }
+        BoxProcess.agentsChanged(nil, pid: nil)
         var status = 0
         var answer = Data()
         for try await part in PhoneLink.respond(to: LinkRequest(path: "kuvo/groups"), link: PhoneLink(), engine: URL(string: engine.url + "/")!, password: nil, agents: OutsideAgents.Address()) {

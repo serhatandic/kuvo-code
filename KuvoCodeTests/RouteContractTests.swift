@@ -256,7 +256,10 @@ final class MacBox {
     private func start() async {
         // This Mac's box, for the areas that have moved onto it, reaching the stand-in engine at
         // its port as it reaches the engine.
-        do { box = try await TestBox(engine: engine.url) } catch { Issue.record("\(error)") }
+        // (Not telling its coding agents' bridge who your other computers are: a scenario's `peers` does.)
+        do { box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"]) } catch { Issue.record("\(error)") }
+        // (Its folder started afresh: where this Mac's coding agents' bridge is, again.)
+        realBridge?.agents.recordForBox()
         let app = AppModel()
         app.workspace.api = engine.api
         app.wireStores()

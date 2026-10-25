@@ -552,11 +552,17 @@ final class PhoneLink {
             await self?.setUp(engine)
         }
         settingUp[id] = mine
+        settingUpNow.insert(id)
         await mine.value
-        if settingUp[id] == mine { settingUp[id] = nil }
+        if settingUp[id] == mine {
+            settingUp[id] = nil
+            settingUpNow.remove(id)
+        }
     }
 
     @ObservationIgnored private var settingUp: [String: Task<Void, Never>] = [:]
+    /// The machines being set up for your phones and other computers now (Settings › Machines).
+    private(set) var settingUpNow: Set<String> = []
 
     private func setUp(_ engine: MachineEngine) async {
         let machine = engine.machine
@@ -704,6 +710,16 @@ final class PhoneLink {
         machineHosts[machine]?.peers == true && machineHosts[machine]?.anotherMac != true
     }
 
+    /// Whether another Mac runs `machine`'s engine (this Mac leaves it to that Mac).
+    func machineIsAnotherMacs(_ machine: String) -> Bool {
+        #if DEBUG
+        if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MACHINE_NOT_PEER"]?.split(separator: "|").map(String.init), demo.first == machine {
+            return demo.last == "another"
+        }
+        #endif
+        return machineHosts[machine]?.anotherMac == true
+    }
+
     /// Why agents on your other computers can't reach `machine`'s, nor this Mac's group chats name
     /// them, for Settings › Machines: a line, and the reason behind it; nil when they can, or it's
     /// not set up yet, or it couldn't be (`setupFailed` says so).
@@ -720,10 +736,12 @@ final class PhoneLink {
         #else
         guard relayWanted, machineHosts[machine] != nil, !talksToPeers(machine), !setupFailed.contains(machine) else { return nil }
         #endif
-        let line = "Its agents can’t be reached from your other computers."
-        let cant = "agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them."
-        if anotherMac { return (line, "Another Mac runs its engine, so " + cant) }
-        return (line, "Its bridge is out of date, so " + cant + " Kuvo Code updates it when it next connects.")
+        if anotherMac {
+            return ("Another Mac runs it: its agents are reached from there.",
+                    "Another Mac started its engine and runs it, so agents on that Mac and its machines can write to its agents, and that Mac’s group chats can name them; from this Mac’s computers they can’t.")
+        }
+        return ("Its agents can’t be reached from your other computers.",
+                "Its bridge is out of date, so agents on your other computers can’t write to its agents, and this Mac’s group chats can’t name them. Setting it up again updates it.")
     }
 
     /// Whether `machine`'s bridge talks to your other computers itself, and this Mac meets it at
@@ -765,11 +783,6 @@ final class PhoneLink {
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
-        // This Mac's group chats: its coding agents' bridge runs them, and answers for them as a
-        // machine's does (`kuvo-link.js`, `forwardGroups`), with every rule of what can be.
-        if route == "kuvo/groups" || route.hasPrefix("kuvo/groups/") {
-            return Self.forwardGroups(request, route: route, agents: agents)
-        }
         // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
         if Self.movedToBox(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
@@ -966,7 +979,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -989,52 +1002,6 @@ final class PhoneLink {
     /// The routes of a computer's group chats a client takes (PROTOCOL.md, `kuvo/groups`), as a
     /// machine's link checks them.
     nonisolated private static let groupRoute = #"\Akuvo/groups(?:/(?:events|joinable|grp_[a-z0-9]+(?:/(?:events|stop|keep-going|viewed|undo|start))?))?\z"#
-
-    /// A client's group chat route, to this Mac's coding agents' bridge (at
-    /// `api/kuvo/link/groups…`) and back as it answers, a followed one line by line, as a
-    /// machine's link passes them on. Not answering now: 503, to ask again, never taken as none.
-    nonisolated static func forwardGroups(_ request: LinkRequest, route: String, agents: OutsideAgents.Address?) -> AsyncThrowingStream<LinkResponsePart, Error> {
-        func refused(_ status: Int, _ message: String) -> AsyncThrowingStream<LinkResponsePart, Error> {
-            AsyncThrowingStream { continuation in
-                continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(Self.message(message)))
-                continuation.finish()
-            }
-        }
-        guard route.range(of: groupRoute, options: .regularExpression) != nil else { return refused(404, "Not found") }
-        guard let bridge = agents?.endpoint else { return refused(503, "Group chats on this Mac are starting. Try again in a moment.") }
-        let base = bridge.url.absoluteString.hasSuffix("/") ? bridge.url : URL(string: bridge.url.absoluteString + "/")!
-        var copy = request
-        copy.path = "api/kuvo/link/" + request.path.dropFirst("kuvo/".count)
-        let forwarded = copy
-        let writes = request.method.uppercased() == "POST" && route.split(separator: "/").count == 3
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                // Who a message names with & is worked out there, from the list as it is now.
-                if writes, String(decoding: request.body, as: UTF8.self).contains(AgentReferences.trigger) { await AgentMail.shared.refreshBoxDirectory() }
-                var answered = false
-                do {
-                    for try await part in EngineRoutes.forward(forwarded, to: base, password: bridge.password, allowing: { path, _ in path.hasPrefix("api/kuvo/link/groups") }) {
-                        if case .head(let status, _) = part, !answered, status >= 500 {
-                            continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-                            continuation.yield(.body(Self.message("Group chats on this Mac aren’t answering. Try again in a moment.")))
-                            break
-                        }
-                        answered = true
-                        continuation.yield(part)
-                    }
-                    continuation.finish()
-                } catch {
-                    if !Task.isCancelled, !answered {
-                        continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-                        continuation.yield(.body(Self.message("Group chats on this Mac aren’t answering. Try again in a moment.")))
-                    }
-                    continuation.finish()
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
 
     /// What this Mac answers, one name per route or group of routes a client might check
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
@@ -1075,7 +1042,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/named", "kuvo/asks"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if request.path == "kuvo/asks", !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
@@ -1085,16 +1052,6 @@ final class PhoneLink {
             info.agents = agents?.api != nil
             info.started = engineStarted()?.timeIntervalSince1970
             return (200, (try? encoder.encode(info)) ?? Data())
-        case "kuvo/named":
-            // Who "&" can name in a message: every bot, and the recent sessions with a name.
-            struct Named: Encodable {
-                struct Entry: Encodable { var session: String, name: String, kind: String, machine: String?, project: String?, about: String? }
-                var agents: [Entry]
-            }
-            let entries = AgentReferences.candidates(excluding: nil).map {
-                Named.Entry(session: $0.session, name: $0.name, kind: $0.kind, machine: $0.machine, project: $0.project, about: $0.about)
-            }
-            return (200, (try? encoder.encode(Named(agents: entries))) ?? Data())
         case "kuvo/hosts":
             let hosts = machineHosts.sorted { $0.value.name < $1.value.name }.map { id, host in
                 Hosts.Host(name: host.name, address: host.address, key: host.key, relay: relay.absoluteString, machine: id, anotherMac: host.anotherMac ?? false,

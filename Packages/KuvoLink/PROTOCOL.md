@@ -1378,8 +1378,9 @@ it to the Finder's Trash), and who can be named with `&` in `box/run/agents.json
 it's a Mac's: its bots are the Mac's own (`machine` left out), made with the words the app puts in its
 `bin` and the kit it gives it in their folder (`bots/kit.json`, what's this Mac's own), with no time zone of
 their own (they go by the Mac's clock). Its bots remember its
-chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client's `kuvo/groups…`
-on to that bridge as `kuvo-link.js` does. The box carries its group chats' mail (`seat`, "Peers")
+chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). The box passes a client's `kuvo/groups…`
+on to that bridge, as a machine's does (bridge 0.9.65; the app did before), saying "Group chats on
+this Mac are starting" or "aren't answering" when it can't. The box carries its group chats' mail (`seat`, "Peers")
 on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
 their bots are (bridge 0.9.63). Before, the app's phone link did (`SeatRelay`); the box takes the
 letters it kept (`run/seat-letters.json`) into its outbox as it starts.
@@ -1459,12 +1460,13 @@ frame that isn't one, the app away) stops the box's own routes.
 
 What a phone asks, it answers itself for the areas that have moved onto it and its phones
 (`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
-`kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, and the engine's API and the coding agents'
-(`api/…`, `kuvo/agents/…`, telling who a message names with `&`) (bridge 0.9.64; the app did
-before; while its engine starts, or starts again, those answer `503 {"message": "This Mac's engine
-is starting. Try again in a moment."}`, as a machine's say "This machine's"); the
-rest (the Mac's own routes, and those not on the box yet) it hands the app
-(`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
+`kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
+(`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
+and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine starts, or starts
+again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
+moment."}` (a machine's say "This machine's"). The rest, the Mac's own routes (`kuvo/info`,
+usage, machines, hosts, `kuvo/mac`, `kuvo/claude-code`, asks, the engine starting over), it hands
+the app (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
 0.9.62), and their agents, letters and group chats' mail (from 0.9.63).
 What it asks the app goes through the app's `hello` proof first (the host interface, above), and

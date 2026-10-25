@@ -41,6 +41,12 @@ final class OutsideAgents {
     private(set) var failure: String?
 
     @ObservationIgnored private var server: ServerProcess?
+
+    /// Tells this Mac's box where it is again (a box whose folder started afresh, a test's).
+    func recordForBox() {
+        guard let server, server.exitStatus == nil else { return }
+        BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
+    }
     /// Starting: a second start meanwhile (the engine restarted) waits for this one.
     @ObservationIgnored private var isStarting = false
     @ObservationIgnored private var eventTask: Task<Void, Never>?
