@@ -5,11 +5,13 @@
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/accounts.test.js`.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-accounts-"));
 process.env.KUVO_HOME = home;
@@ -33,9 +35,10 @@ async function engineWith() {
     inUse: { openai: { credentialID: "crd_1", method: "oauth" }, anthropic: { credentialID: "crd_3", method: "key" } },
     removed: [],
     followers: [],
+    // Those waiting for the next to follow its events.
+    awaitingFollower: [],
   };
-  let followed;
-  engine.following = new Promise(resolve => { followed = resolve; });
+  engine.nextFollower = () => new Promise(resolve => engine.awaitingFollower.push(resolve));
   // Its events, to whoever follows them.
   engine.send = event => { for (const follower of engine.followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); };
   const server = http.createServer((request, response) => {
@@ -44,7 +47,7 @@ async function engineWith() {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(": hello\n\n");
       engine.followers.push(response);
-      followed();
+      for (const resolve of engine.awaitingFollower.splice(0)) resolve();
       return;
     }
     const send = (status, body) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
@@ -79,13 +82,20 @@ async function ask(method, route) {
   return { status: parts[0].head.status, json };
 }
 const ended = async () => (await ask("GET", "kuvo/accounts/ended")).json.providers;
-// What comes to be, looked for as it comes (another part of the box notes it), for five seconds at most.
-async function until(found, why) {
-  for (const end = Date.now() + 5000; Date.now() < end;) {
-    if (await found()) return;
-    await new Promise(done => setTimeout(done, 10));
-  }
-  throw new Error(why);
+// The box's record of the sign-ins that ended, once it holds `provider`: waited for as it's written.
+function noted(provider) {
+  const file = path.join(home, "run", "ended-sign-ins.json");
+  const has = () => {
+    try { return provider in JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
+  };
+  return new Promise(resolve => {
+    if (has()) return resolve();
+    const watcher = fs.watch(path.dirname(file), () => {
+      if (!has()) return;
+      watcher.close();
+      resolve();
+    });
+  });
 }
 
 // A run on the engine, as its events say it ended.
@@ -138,23 +148,33 @@ test("a provider named in any language can be disconnected from a phone: by its 
   assert.deepEqual(engine.removed, ["crd_4", "crd_5"]);
 });
 
-test("a plan whose sign-in ran out is noted as the box watches its engine, whichever part of it watches: a machine's link, or this Mac's box", async () => {
+test("a plan whose sign-in ran out is noted as the box watches its engine, whichever part of it watches (a machine's link, or this Mac's box), and every part of the box says so", async t => {
   // Where the box finds its engine.
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
-  engine.inUse.openai = { credentialID: "crd_1", method: "oauth" };
-  engine.credentials.push({ id: "crd_1", integrationID: "openai", label: "me" });
+  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   // A machine's link (`run`), then this Mac's box (`serve`), as each starts watching.
   for (const watching of [{}, { bots: true, notices: false }]) {
     await ask("POST", "kuvo/accounts/openai/forget");
+    engine.inUse.openai = { credentialID: "crd_1", method: "oauth" };
     engine.credentials.push({ id: "crd_1", integrationID: "openai", label: "me" });
     assert.deepEqual(await ended(), []);
     const stop = new AbortController();
-    const followers = engine.followers.length;
+    t.after(() => stop.abort());
+    const following = engine.nextFollower();
     link.watchBox({ ...watching, signal: stop.signal });
-    await until(() => engine.followers.length > followers, "the box never followed its engine's events");
+    await following;
     engine.send({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "provider.auth", message: "Request failed with status 401" } } });
-    await until(async () => (await ended()).includes("openai"), `not noted: ${JSON.stringify(watching)}`);
+    await noted("openai");
     stop.abort();
+    assert.deepEqual(await ended(), ["openai"], JSON.stringify(watching));
+    // What a Mac asks a machine's box over SSH (`box route`), a process of its own: the same.
+    const child = spawn(process.execPath, [script, "box", "route"], { env: { ...process.env, KUVO_HOME: home }, stdio: ["pipe", "pipe", "inherit"] });
+    child.stdin.end(JSON.stringify({ method: "GET", path: "kuvo/accounts/ended" }));
+    let out = "";
+    child.stdout.setEncoding("utf8");
+    for await (const chunk of child.stdout) out += chunk;
+    const answer = JSON.parse(out.trim().split("\n").at(-1));
+    assert.deepEqual(JSON.parse(answer.body), { providers: ["openai"] });
   }
 });

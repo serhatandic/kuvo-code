@@ -16,20 +16,27 @@ import { relayStandIn } from "./relay-stand-in.js";
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-link-")));
 after(() => fs.rmSync(support, { recursive: true, force: true }));
 
+// Each time a stand-in (the app, the relay) records something: what a test waits on looks again.
+const waitingForChange = [];
+const changed = () => new Promise(resolve => waitingForChange.push(resolve));
+const poke = () => { for (const resolve of waitingForChange.splice(0)) resolve(); };
+
 // The app, as its host interface answers this Mac's box: its keys (your Keychain), the Mac's own
 // routes, and mail from your machines.
-const app = { keys: null, away: false, turnedAway: 0, mailed: [], asked: [], streams: new Set() };
+const app = { keys: null, hellos: 0, away: false, turnedAway: 0, mailed: [], asked: [], streams: new Set() };
 const appHost = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
   request.on("end", () => {
     if (app.away) {
       app.turnedAway += 1;
+      poke();
       return request.socket.destroy();
     }
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     // That it's this Mac's app: the box's nonce and where it reached it, signed with the password.
     if (request.url === "/hello") {
+      app.hellos += 1;
       const proof = crypto.createHmac("sha256", "host-password").update(`kuvo-host-hello\u0000${given.nonce}\u0000127.0.0.1:${appHost.address().port}`).digest("hex");
       return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ proof }));
     }
@@ -40,6 +47,7 @@ const appHost = http.createServer((request, response) => {
     }
     if (request.url === "/link/mailed") {
       app.mailed.push(given);
+      poke();
       return response.writeHead(200, { "content-type": "application/json" }).end("{}");
     }
     if (request.url === "/link/route") {
@@ -78,7 +86,7 @@ Object.assign(process.env, {
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
-const relay = await relayStandIn(link);
+const relay = await relayStandIn(link, { changed: poke });
 after(() => relay.close());
 
 // This Mac's keys, as your Keychain keeps them.
@@ -103,7 +111,6 @@ async function ask(method, p, body, { fromApp = true } = {}) {
 async function untilStatus(state) {
   const wanted = [state].flat();
   const stop = new AbortController();
-  const timer = setTimeout(() => stop.abort(), 10_000);
   try {
     for await (const part of handle({ method: "GET", path: "kuvo/link/status/events", headers: {}, body: Buffer.alloc(0), fromApp: true }, {}, stop.signal)) {
       if (!part.body) continue;
@@ -113,25 +120,19 @@ async function untilStatus(state) {
       }
     }
   } finally {
-    clearTimeout(timer);
     stop.abort();
   }
   throw new Error(`the link never got ${state}: ${JSON.stringify(link.macLink.status)}`);
 }
 
-// What another process gets (the relay, the app) once it's there: looked for as it comes, for five
-// seconds at most.
-function arrived(found, why) {
-  return new Promise((resolve, reject) => {
-    const check = setInterval(() => {
-      const value = found();
-      if (value) {
-        clearInterval(check);
-        resolve(value);
-      }
-    }, 5);
-    setTimeout(() => { clearInterval(check); reject(new Error(why)); }, 5000).unref();
-  });
+// What another process gets (the relay, the app) once it's there: looked at again each time one
+// of them records something.
+async function arrived(found) {
+  for (;;) {
+    const value = found();
+    if (value) return value;
+    await changed();
+  }
 }
 
 const config = (change = {}) => ask("PUT", "kuvo/link/config", { phones: true, machines: false, relay: relay.url, name: "Studio Mac", app: "0.9.0", ...change });
@@ -292,6 +293,31 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
   } finally {
     app.away = false;
   }
+  // Back: it proves it's this Mac's app again before it's asked anything.
+  const hellos = app.hellos;
+  assert.equal((await it.request("GET", "kuvo/usage")).status, 200);
+  assert.equal(app.hellos, hellos + 1, "proved again after it went");
+
+  // Whatever answers where the app's host.json says (left by an app that crashed) gets a phone's
+  // request no further than the proof it can't give: the phone hears this Mac isn't answering.
+  const impostorCalls = [];
+  const impostor = http.createServer((request, response) => {
+    impostorCalls.push(request.url);
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ proof: "0".repeat(64) }));
+  });
+  await new Promise(resolve => impostor.listen(0, "127.0.0.1", resolve));
+  const hostFile = path.join(process.env.KUVO_HOME, "run", "host.json");
+  fs.writeFileSync(hostFile, JSON.stringify({ url: `http://127.0.0.1:${impostor.address().port}`, password: "host-password" }));
+  try {
+    const refused = await it.request("GET", "kuvo/usage");
+    assert.equal(refused.status, 503);
+    assert.deepEqual([...new Set(impostorCalls)], ["/hello"]);
+  } finally {
+    fs.rmSync(hostFile, { force: true });
+    impostor.close();
+  }
+  assert.equal((await it.request("GET", "kuvo/usage")).status, 200, "the app again, once the file's gone");
 });
 
 test("the app's own answer reaches the phone as it is, a 404 too; an answer cut off ends as cut off, not as whole", async () => {
@@ -318,7 +344,7 @@ test("mail from your machines goes to the app; the app's mail and pushes go out 
   const sealed = link.frame(link.Frame.mail, 0, crypto.randomBytes(48));
   const mailedBefore = app.mailed.length;
   machine.send(macAddress, sealed);
-  await arrived(() => app.mailed.length > mailedBefore, "the app got no mail");
+  await arrived(() => app.mailed.length > mailedBefore);
   assert.deepEqual(app.mailed.at(-1), { from: machine.address.toString("base64url"), frame: sealed.toString("base64") });
   // The app's mail, sealed by the app: to the machine as it was.
   const going = link.frame(link.Frame.mail, 0, crypto.randomBytes(64));
@@ -336,7 +362,7 @@ test("mail from your machines goes to the app; the app's mail and pushes go out 
   const told = await ask("POST", "kuvo/attention/notice", { notice: { title: "Ada", body: "Done.", category: "ask", thread: "ask_1", data: { ask: "ask_1" } } });
   assert.equal(told.status, 200);
   // On its way over the box's connection: there once the relay has it.
-  const mine = await arrived(() => relay.pushed.slice(before).find(each => each.to.equals(it.device.address)), "the relay got no push for the phone");
+  const mine = await arrived(() => relay.pushed.slice(before).find(each => each.to.equals(it.device.address)));
   const opened = link.openOneWay(link.readFrame(mine.payload).body, it.key, link.publicOf(macKey));
   const notice = JSON.parse(opened.payload.toString());
   assert.equal(notice.title, "Ada");
@@ -397,9 +423,9 @@ test("mail the app couldn't take at once is handed over when it can, in the orde
   const refused = app.turnedAway;
   machine.send(macAddress, first);
   machine.send(macAddress, second);
-  await arrived(() => app.turnedAway > refused, "the app was never asked");
+  await arrived(() => app.turnedAway > refused);
   app.away = false;
-  await arrived(() => app.mailed.length >= before + 2, "the app never got the mail");
+  await arrived(() => app.mailed.length >= before + 2);
   assert.deepEqual(app.mailed.slice(before).map(each => each.frame), [first.toString("base64"), second.toString("base64")]);
   await config({ machines: false });
 });
@@ -413,7 +439,7 @@ test("a link no longer wanted leaves the relay, and says it's off", async () => 
   assert.ok(relay.has(macAddress));
   await config({ machines: false });
   await untilStatus("off");
-  await arrived(() => !relay.has(macAddress), "it's still on the relay");
+  await arrived(() => !relay.has(macAddress));
 });
 
 test("whatever the relay sends, and a relay that goes, the box's own routes go on answering", async () => {

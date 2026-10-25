@@ -4587,9 +4587,10 @@ const monotonic = () => performance.now();
 export class NoticeHold {
   // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
   // the clock (a test's own), `now` for time gone by; `wall`, the date, for what's kept. `save(entries)`:
-  // what's held, kept for a bridge that starts again, which gives them back as `held`: each with the
-  // rest of its hold, and what was seen kept seen, while its clients have a moment to say they're
-  // still there (`RESTORED_WAIT`).
+  // what's held, kept for a bridge that starts again, which gives them back as `held`: what was held
+  // for a client in use with the rest of its hold, and what was seen kept seen, while its clients
+  // have a moment to say they're still there (`RESTORED_WAIT`); what was only waiting for the relay,
+  // at once.
   constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
     Object.assign(this, { send, now, wall, setTimer, clearTimer, save });
     this.leases = new Map();
@@ -4600,18 +4601,22 @@ export class NoticeHold {
     this.answered = [];
     this.timer = null;
     const start = this.now(), today = this.wall();
-    this.held = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number").map(entry => {
+    const restored = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number");
+    this.held = restored.map(entry => {
       const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR);
-      return { notice: entry.notice, wall: entry.at, at: start - age, due: start + Math.max(0, holdFor(entry.notice.category) - age), seen: entry.seen === true };
+      // One held for a client keeps the rest of its hold; one only waiting for the relay goes now.
+      const due = entry.attended === true ? start - age + holdFor(entry.notice.category) : start - age;
+      return { notice: entry.notice, wall: entry.at, at: start - age, due: Math.max(due, start - age), seen: entry.seen === true };
     });
-    if (this.held.length) this.leases.set("restored", start + RESTORED_WAIT);
+    if (restored.some(entry => entry.attended === true)) this.leases.set("restored", start + RESTORED_WAIT);
     this.saved = NoticeHold.kept(this.held);
     this.settle();
   }
 
   // What's kept of what's held, as JSON: when each was made, by the date.
   static kept(entries) {
-    return JSON.stringify(entries.map(({ notice, wall, seen }) => ({ notice, at: wall, seen })));
+    // `attended`: held because a client was in use, not only waiting for the relay.
+    return JSON.stringify(entries.map(({ notice, wall, seen, at, due }) => ({ notice, at: wall, seen, attended: due > at })));
   }
 
   // Whether a client is in use now, and how many notices wait.
@@ -8096,16 +8101,32 @@ async function macKeys() {
 // Mail from your machines for the app, handed over in the order it came: one the app didn't take
 // (gone a moment, starting again) is tried again a few times, then let go, with a line in the
 // box's log saying so.
-let mailing = Promise.resolve();
+// At most this much waits (an app that hangs takes a while over each): the oldest is let go first.
+export const MOST_MAIL_WAITING = 200;
+const mailWaiting = [];
+let mailing = false;
 function mailToApp(from, frame) {
-  const given = { from: from.toString("base64url"), frame: frame.toString("base64") };
-  mailing = mailing.then(async () => {
-    for (let tries = 0; tries < 5; tries++) {
-      if (await linkHost("link/mailed", given)) return;
-      await new Promise(done => setTimeout(done, Math.min(8_000, 500 * 2 ** tries)));
+  mailWaiting.push({ from: from.toString("base64url"), frame: frame.toString("base64") });
+  if (mailWaiting.length > MOST_MAIL_WAITING) {
+    mailWaiting.shift();
+    console.error("Mail from one of your machines waited too long for Kuvo Code, and the oldest was let go.");
+  }
+  if (mailing) return;
+  mailing = true;
+  (async () => {
+    while (mailWaiting.length) {
+      const given = mailWaiting[0];
+      let taken = false;
+      for (let tries = 0; tries < 5 && !taken; tries++) {
+        taken = Boolean(await linkHost("link/mailed", given));
+        if (!taken) await new Promise(done => setTimeout(done, Math.min(8_000, 500 * 2 ** tries)));
+      }
+      if (!taken) console.error("Mail from one of your machines couldn't be handed to Kuvo Code, and was let go.");
+      // Let go meanwhile (too much waiting): it's already gone from the front.
+      if (mailWaiting[0] === given) mailWaiting.shift();
     }
-    console.error("Mail from one of your machines couldn't be handed to Kuvo Code, and was let go.");
-  });
+    mailing = false;
+  })();
 }
 
 // What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
@@ -8115,7 +8136,9 @@ async function* toApp(request, phone, signal) {
   const host = appHost();
   if (host) {
     try {
-      // Nothing goes until it's proved it's this Mac's app.
+      // Nothing goes until it's proved it's this Mac's app: once for each host.json, which is
+      // enough because this box (`serve`) ends with its app (its stdin closes), so no other
+      // process can take the app's port while this box still trusts it, without the file changing.
       await proveHost(host);
       response = await fetch(`${host.url}/link/route`, {
         method: "POST",
@@ -8303,7 +8326,9 @@ export function macNoticeHold(clock = {}) {
 // A notice of this Mac's for your phones (its news, its app's own asks): held and sent while the
 // phone link's on, or until its app says whether it is (as it starts); none while it's off.
 export function macTell(notice) {
-  return macLink.hold ? macLink.hold.tell(notice) : true;
+  // Off: let go now, so turning it on later never sends what came while it was off.
+  if (!macLink.hold || (macLink.config && !macLink.config.phones)) return true;
+  return macLink.hold.tell(notice);
 }
 
 // This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,

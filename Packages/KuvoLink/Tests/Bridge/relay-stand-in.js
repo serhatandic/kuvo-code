@@ -45,7 +45,8 @@ function readFrames(buffer) {
   return { frames, rest: buffer.subarray(offset) };
 }
 
-export async function relayStandIn({ addressOf }) {
+// `changed`: called each time what it keeps changes (a push, a device gone), for a test waiting on it.
+export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   // Who's on it, by address (hex): how to give each what comes for it.
   const devices = new Map();
   const pushed = [];
@@ -66,7 +67,10 @@ export async function relayStandIn({ addressOf }) {
     }
     if (!state.address) return;
     if (kind === 2 && message.length >= 17) return deliver(state.address, message.subarray(1, 17), message.subarray(17));
-    if (kind === 5 && message.length >= 17) pushed.push({ from: state.address, to: Buffer.from(message.subarray(1, 17)), payload: Buffer.from(message.subarray(17)) });
+    if (kind === 5 && message.length >= 17) {
+      pushed.push({ from: state.address, to: Buffer.from(message.subarray(1, 17)), payload: Buffer.from(message.subarray(17)) });
+      changed();
+    }
   };
   const server = http.createServer((_request, response) => response.writeHead(426).end());
   server.on("upgrade", (request, socket) => {
@@ -88,6 +92,7 @@ export async function relayStandIn({ addressOf }) {
     const gone = () => {
       sockets.delete(socket);
       if (state.address && devices.get(state.address.toString("hex")) === give) devices.delete(state.address.toString("hex"));
+      changed();
     };
     socket.on("close", gone);
     socket.on("error", gone);

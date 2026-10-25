@@ -533,8 +533,11 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
   phone link's on, and sends it once it's on. A permission or question held while the box couldn't
   hear its engine (it restarted, the stream dropped) is looked up when it hears it again, and let
   go if it isn't asked any more. A box keeps what it holds in `run/held-notices.json` (with when
-  each was made, by the date), so the next one sends it if it stops first. The Mac's own
-  notifications are the same either way.
+  each was made, by the date, whether it was seen, and whether a client was in use), so the next
+  one sends it if it stops first: what was held only because the relay wasn't there goes at once;
+  what was held for a client in use keeps the rest of its hold, and a seen ask keeps waiting, for
+  20 seconds while its clients say again that they're in use (a Mac renews every 15), then by their
+  word as before. The Mac's own notifications are the same either way.
 - **This Mac's app**, alone (`403` for anyone else), hands its box what only it knows:
   `POST kuvo/attention/notice {"notice"}`, a notice (`Notice`'s JSON) for an ask from its panel's
   browser, held and sent with the box's own; and `POST kuvo/attention/answered {"id"}`, a request or
@@ -681,7 +684,8 @@ host serves:
     alone; `POST api/credential/<id>/activate` uses one; `DELETE api/credential/<id>` removes one.
   - `GET kuvo/accounts/ended` → `{providers: [id]}`, the plans whose sign-in in use ended (a run
     on one was refused, and it couldn't be renewed; the Mac says "Sign-in ended"), until a run on
-    it works again or you sign in again; `POST kuvo/accounts/<provider>/forget` is Disconnect, as
+    it works again or you sign in again (kept in `run/ended-sign-ins.json`, so every part of the box,
+    `box route` too, says the same); `POST kuvo/accounts/<provider>/forget` is Disconnect, as
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
@@ -1435,7 +1439,8 @@ keys (`link/identity`) are never asked of a host that hasn't given it. When the 
 interface starts again (it failed, or Try Again), what the link has open through it ends: a phone's
 followed `link/route` streams end (the phone follows again), a request in the gap is a `503`, and
 mail for the app waits in the box's queue and is tried again, in order, a few times over about
-fifteen seconds before it's let go with a line in the box's log.
+fifteen seconds before it's let go with a line in the box's log; past 200 waiting, the oldest is
+let go the same way.
 
 For the app only (anyone else gets `403`):
 

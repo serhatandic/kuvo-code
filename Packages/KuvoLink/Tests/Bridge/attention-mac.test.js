@@ -362,7 +362,7 @@ test("held as this Mac's box stopped while you were at the Mac: each keeps the r
   const permission = { title: "Fix the tests", subtitle: "shop", body: "Wants to run a command: npm test", category: "permission", thread: "ses_a", data: { session: "ses_a", request: "per_1" } };
   const finished = { title: "Fix the tests", subtitle: "shop", body: "All green.", category: "finished", thread: "ses_a", data: { session: "ses_a" } };
   const kept = () => fs.writeFileSync(path.join(support, "box", "run", "held-notices.json"),
-    JSON.stringify([{ notice: permission, at: today - 5_000, seen: true }, { notice: finished, at: today - 5_000, seen: false }]));
+    JSON.stringify([{ notice: permission, at: today - 5_000, seen: true, attended: true }, { notice: finished, at: today - 5_000, seen: false, attended: true }]));
   kept();
   const mac = await macBox();
   // Started again: nothing goes before the app's had a moment to say you're still here.
@@ -381,10 +381,21 @@ test("held as this Mac's box stopped while you were at the Mac: each keeps the r
 test("held as this Mac's box stopped, and the app doesn't say you're here again: all of it goes a moment later", async () => {
   const today = TODAY;
   const permission = { title: "Fix the tests", subtitle: "shop", body: "Wants to run a command: npm test", category: "permission", thread: "ses_a", data: { session: "ses_a", request: "per_1" } };
-  fs.writeFileSync(path.join(support, "box", "run", "held-notices.json"), JSON.stringify([{ notice: permission, at: today - 5_000, seen: true }]));
+  fs.writeFileSync(path.join(support, "box", "run", "held-notices.json"), JSON.stringify([{ notice: permission, at: today - 5_000, seen: true, attended: true }]));
   const mac = await macBox();
   mac.time.pass(link.RESTORED_WAIT - 1);
   assert.deepEqual(mac.phone, []);
   mac.time.pass(1);
   assert.deepEqual(mac.phone.map(notice => notice.category), ["permission"]);
+});
+
+test("news made while the phone link is off never reaches your phone, even once it's turned on", async () => {
+  const mac = await macBox({ config: { phones: false, machines: false } });
+  await mac.app(here());
+  await mac.finished();
+  assert.equal(mac.hold.count, 0, "let go at once");
+  link.macLink.config = { phones: true, machines: false };
+  mac.time.pass(link.NEWS_HOLD);
+  await mac.app({ for: 0 });
+  assert.deepEqual(mac.phone, []);
 });
