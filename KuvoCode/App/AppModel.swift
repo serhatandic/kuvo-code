@@ -358,7 +358,7 @@ final class AppModel {
             shell["KUVO_INTEGRATIONS"] = integrations.path
             // This Mac's box, before the engine: it keeps the engine's settings (and the other
             // areas that have moved onto it), and goes on through the engine's restarts.
-            await box.start(engine: binary, environment: shell)
+            await box.start(engine: binary, environment: await boxEnvironment(shell))
             guard launch == self.launch else { return }
             // The settings as they are now (they can change while the engine is down, and the box
             // adds its defaults as it starts), brought up to date before the engine reads them;
@@ -428,19 +428,7 @@ final class AppModel {
             // This Mac's box finds the engine as a machine's does (started above, once; tried again
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
-            // It sends this Mac's wake-ups with the app's own kuvo-wake, as a machine's keeper does.
-            try? WakeUps.installCommand()
-            var boxEnvironment = shell
-            // It keeps bots' keys in your Keychain through the app, and reads Settings ›
-            // Integrations' catalog with this Mac's own paths.
-            // Without it, the box can't reach them, and says so, rather than keep them elsewhere.
-            boxEnvironment["KUVO_KEYS_ON_HOST"] = "1"
-            // A listener that couldn't start once gets a second try.
-            var hosting = try? await host.start()
-            if hosting == nil { hosting = try? await host.start() }
-            if let hosting { boxEnvironment.merge(hosting) { _, new in new } }
-            MachineBox.writeMacCatalog()
-            boxEnvironment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
+            let boxEnvironment = await boxEnvironment(shell)
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on

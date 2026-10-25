@@ -66,4 +66,20 @@ import Testing
             #expect(try await ask("/keys/set", ["name": other, "value": "x"], password: password, at: environment).status == 400, "\(other)")
         }
     }
+
+    /// The box the app starts (before its engine, or again after) can send this Mac's wake-ups,
+    /// with the app's own kuvo-wake, and reach your Keychain through the app, which it's told is
+    /// where its keys are: without that, it would keep keys in files of its own.
+    @Test func thisMacsBoxIsStartedAbleToSendWakeUpsAndReachYourKeychain() async throws {
+        let app = AppModel()
+        let environment = await app.boxEnvironment(["PATH": "/usr/bin:/bin"])
+        defer { app.host.stop() }
+        #expect(environment["PATH"] == "/usr/bin:/bin", "your shell's, as it was")
+        #expect(environment["KUVO_WAKE_COMMAND"] == WakeUps.command.path)
+        #expect(FileManager.default.isExecutableFile(atPath: WakeUps.command.path), "kuvo-wake, there")
+        #expect(environment["KUVO_KEYS_ON_HOST"] == "1")
+        #expect(environment["KUVO_HOST_URL"]?.hasPrefix("http://127.0.0.1:") == true)
+        #expect(environment["KUVO_HOST_PASSWORD"]?.count == 64)
+        #expect(FileManager.default.fileExists(atPath: BoxProcess.home.appending(path: "bin/integrations.json").path), "this Mac's catalog")
+    }
 }
