@@ -149,3 +149,16 @@ test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as
     stop();
   }
 });
+
+test("a client that archived a conversation holds its wake-ups through the box, and a pause of your own outlasts it", async () => {
+  const folder = path.join(support, "wakes", "ses_mac");
+  fs.rmSync(path.join(folder, "paused"), { force: true });
+  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true })).json.paused, true);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "archived");
+  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: false })).json.paused, false);
+  // Yours stays when it comes back.
+  await ask("POST", "kuvo/wakes/ses_mac/pause", { paused: true });
+  await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true });
+  assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: false })).json.paused, true);
+  assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "paused");
+});

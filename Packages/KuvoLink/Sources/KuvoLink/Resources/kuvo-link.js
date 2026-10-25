@@ -3243,6 +3243,12 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     if (failed) return yield* unavailable(failed);
     return yield* changed(200, listed());
   }
+  // Held while it's archived, and let go when it's back, as its archiving (the Mac's, or a phone's
+  // through this box) says: a hold of your own stays through both.
+  if (action === "pause" && typeof given.archived === "boolean") {
+    holdArchived(session, given.archived);
+    return yield* changed(200, listed());
+  }
   if (action === "pause" && typeof given.paused !== "boolean") return yield* json(400, { message: "Send {\"paused\": true} or false." });
   if (!folder) return yield* json(action === "pause" ? 200 : 404, action === "pause" ? listed() : {});
   if (isMoving(folder)) return yield* json(409, { message: MOVING });

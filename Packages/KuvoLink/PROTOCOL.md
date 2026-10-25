@@ -1022,7 +1022,9 @@ host serves:
   `every` 30m, 2h, 1d, 1w or weekdays, at least 5m), with the computer's own clock and weekends;
   `400 {"message"}` for what can't be one, `409` with 50 waiting. `POST
   kuvo/wakes/<session>/pause` with `{"paused": true}` holds them (a pause of your own), `false`
-  lets them go. Both answer the list as it is then. `POST
+  lets them go; with `{"archived": true}` they're held as archiving holds them (a client that
+  archived it on the engine directly says so), `false` lets go of only that hold. Both answer the
+  list as it is then. `POST
   kuvo/wakes/<session>/cancel` with `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one;
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still
   comes back at its time). Both answer `200 {}`, `404 {}` when there's no such one, `409
