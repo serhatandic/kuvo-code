@@ -101,7 +101,16 @@ script won't run the tests otherwise.
 happen, with the app's real parts; leave out what only restates the code.
 Some run the agents bridge the app ships for real (`RealBridge`, with a stand-in
 engine that listens on a loopback port): the script gives them a Bun
-(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine Kuvo Code downloaded).
+(`KUVO_TEST_BUN`: `bun` on your PATH, else the engine a demo, perf or e2e copy
+downloaded).
+
+Nothing that starts a copy of the app or its engine for a test, a demo or a
+measurement may use the real Kuvo Code: its bundle ID (`run.kuvo.code`), its
+folder in Application Support (its engine, sessions and sign-ins) or the app in
+Applications. The scripts check with `scripts/real-app-guard.sh` and stop, naming
+themselves, and a debug build launched with any `KUVO_DEMO_*`, `KUVO_PERF_*` or
+`KUVO_E2E` variable won't start under the real bundle ID or with the real
+engine. `python3 -m unittest discover -s Tests/Guard` checks each of them.
 
 Recorded engine responses in `Tests/OpenCodeKitTests/Fixtures` drive most of
 OpenCodeKit's tests. `LiveServerTests` run against a real binary when
@@ -325,7 +334,8 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 This Mac's group chats moved into its box from what 0.5 to 0.8.0-beta.1 kept (`GroupMigration`).
 `scripts/groups-rehearsal.sh` rehearses it with the real released builds. They can only run as
 Kuvo Code itself, so it saves your Kuvo Code's folder and settings first and puts them back at the
-end (its Keychain items are shared too: an old build may ask for them). Have someone at the Mac.
+end (its Keychain items are shared too: an old build may ask for them). Have someone at the Mac:
+each step but `check` asks you to type yes at the terminal first.
 
 1. `./scripts/groups-rehearsal.sh prepare` downloads 0.5.22, 0.6.6, 0.7.2 and 0.8.0-beta.1 and
    builds this checkout as `run.kuvo.code`, then `save`.

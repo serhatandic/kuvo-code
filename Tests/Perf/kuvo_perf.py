@@ -31,6 +31,24 @@ def log(*parts):
     print(time.strftime("%H:%M:%S"), *parts, flush=True)
 
 
+GUARD = os.path.join(REPO, "scripts", "real-app-guard.sh")
+
+
+def guard(caller, *values):
+    """Stops here, naming `caller`, when any of `values` is the real Kuvo Code's: its bundle ID, its
+    folder in Application Support (its engine among what's there), or the installed app
+    (scripts/real-app-guard.sh says what counts)."""
+    if subprocess.run(["sh", GUARD, caller] + [str(v) for v in values if v]).returncode != 0:
+        sys.exit(1)
+
+
+def bundle_id(app):
+    """The bundle ID an app copy runs as, from its Info.plist."""
+    import plistlib
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        return plistlib.load(f).get("CFBundleIdentifier", "")
+
+
 def sh(command, check=True, **kwargs):
     done = subprocess.run(command, capture_output=True, text=True, **kwargs)
     if check and done.returncode != 0:
@@ -64,20 +82,33 @@ def project(name):
 
 
 def quit_app(app=None):
-    sh(["osascript", "-e", 'tell application id "%s" to quit' % BUNDLE], check=False)
+    """Asks the perf copy to quit (for a few seconds at most: a busy main thread never answers),
+    then stops what's left of it by its process number."""
+    try:
+        subprocess.run(["osascript", "-e", 'tell application id "%s" to quit' % BUNDLE], capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        pass
     time.sleep(2)
-    for path in [app or APP]:
-        sh(["pkill", "-f", path + "/Contents/MacOS"], check=False)
+    running = sh(["pgrep", "-f", (app or APP) + "/Contents/MacOS/"], check=False)
+    for pid in running.split():
+        if int(pid) != os.getpid():
+            sh(["kill", "-KILL", pid], check=False)
     time.sleep(1)
 
 
 def launch(app, **env):
     """The perf copy, in the background, its window past the screen's edge."""
+    values = {"KUVO_DEMO_BACKGROUND": "1", "KUVO_DEMO_USAGE": "off", "KUVO_DEMO_OFFSCREEN": "1", "KUVO_DEMO_WINDOW": "1300x820",
+              "KUVO_DEMO_MACHINE_ROOT": ".kuvo-code-perf",
+              # The engine finds skills in ~/.claude/skills, where one can be a link into your Desktop:
+              # macOS would ask whether the copy may read it, and the run would wait on the answer.
+              "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1"}
+    values.update({k: str(v) for k, v in env.items()})
+    guard("kuvo_perf.py launch", app, bundle_id(app), *values.values())
+    if bundle_id(app) != BUNDLE:
+        sys.exit("kuvo_perf.py launch: %s runs as %s, not the perf copy (%s): build it with `kuvo_perf.py build`." % (app, bundle_id(app), BUNDLE))
     quit_app(app)
     sh(["defaults", "write", BUNDLE, "analytics.noticeShown", "-bool", "true"])
-    values = {"KUVO_DEMO_BACKGROUND": "1", "KUVO_DEMO_USAGE": "off", "KUVO_DEMO_OFFSCREEN": "1", "KUVO_DEMO_WINDOW": "1300x820",
-              "KUVO_DEMO_MACHINE_ROOT": ".kuvo-code-perf"}
-    values.update({k: str(v) for k, v in env.items()})
     command = ["open", "-n", "-g"]
     for k, v in values.items():
         command += ["--env", "%s=%s" % (k, v)]
@@ -148,7 +179,28 @@ CASES = {
 
 # ---- Group chats (PerfGroups): a three-bot discussion on a stand-in model ----
 
-ENGINE = os.environ.get("KUVO_PERF_ENGINE", HOME + "/Library/Application Support/run.kuvo.code/engine/2.0.32/opencode")
+# The engine group chat runs start with: KUVO_PERF_ENGINE's, else the one the perf copy downloaded
+# itself, kept here between runs (each starts from a clean copy, which would download it again).
+# Never the real Kuvo Code's.
+ENGINES = os.path.join(TEMP, "kuvo-perf-engine")
+
+
+def engine():
+    if os.environ.get("KUVO_PERF_ENGINE"):
+        return os.environ["KUVO_PERF_ENGINE"]
+    import glob
+    kept = sorted(glob.glob(os.path.join(ENGINES, "*", "opencode")))
+    return kept[-1] if kept else None
+
+
+def keep_engine():
+    """Keeps the engine the perf copy downloaded, for the next runs."""
+    import glob
+    for binary in glob.glob(os.path.join(SUPPORT, "engine", "*", "opencode")):
+        kept = os.path.join(ENGINES, os.path.basename(os.path.dirname(binary)), "opencode")
+        if not os.path.exists(kept):
+            os.makedirs(os.path.dirname(kept), exist_ok=True)
+            sh(["cp", "-c", binary, kept])
 
 
 class StandIn:
@@ -250,7 +302,7 @@ def groups_bench(app, label):
     """Plays the discussion in a group chat of `app` (a build of this checkout or an older one),
     from a clean copy: the bots and 40 chats made first, then the app opened again (the chats it
     shows in its first moment, kept from before) and the discussion measured. Prints its numbers."""
-    clean()
+    clean(keep_engine=True)
     os.makedirs(ROOT, exist_ok=True)
     replies = os.path.join(ROOT, "replies.jsonl")
     stand_in = StandIn(replies)
@@ -261,13 +313,16 @@ def groups_bench(app, label):
                 os.remove(result)
             # KUVO_PERF_PROFILE / KUVO_PERF_STALLS given here go to the measured run (README).
             extra = {k: v for k, v in os.environ.items() if mode == "run" and k in ("KUVO_PERF_PROFILE", "KUVO_PERF_STALLS")}
-            launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, KUVO_OPENCODE_BINARY=ENGINE, **extra)
+            if engine():
+                extra["KUVO_OPENCODE_BINARY"] = engine()
+            launch(app, KUVO_DEMO_GROUP_REPLAY=mode, KUVO_PERF_PROVIDER=stand_in.url, KUVO_PERF_LOG=result, **extra)
             deadline = time.time() + 900
             while not (os.path.exists(result) and os.path.getsize(result) > 0):
                 if time.time() > deadline:
                     raise RuntimeError("no result from " + mode)
                 time.sleep(1)
             quit_app(app)
+            keep_engine()
         measured = json.load(open(result))
     finally:
         stand_in.stop()
@@ -287,15 +342,20 @@ def groups_bench(app, label):
     return line
 
 
-def clean():
+def clean(keep_engine=False):
     """Removes everything the perf copy keeps on this Mac, and the perf folder."""
+    guard("kuvo_perf.py clean", BUNDLE, SUPPORT)
     quit_app()
-    sh(["defaults", "delete", BUNDLE], check=False)
+    # For a few seconds at most: left alone, it has waited for good.
+    try:
+        subprocess.run(["defaults", "delete", BUNDLE], capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("`defaults delete %s` didn't finish: stopping rather than measuring a copy that isn't clean" % BUNDLE)
     lib = HOME + "/Library/"
     for path in [SUPPORT, lib + "Caches/" + BUNDLE, lib + "HTTPStorages/" + BUNDLE, lib + "HTTPStorages/" + BUNDLE + ".binarycookies",
                  lib + "WebKit/" + BUNDLE, lib + "Saved Application State/" + BUNDLE + ".savedState",
                  lib + "Preferences/" + BUNDLE + ".plist", os.path.join(TEMP, BUNDLE),
-                 os.path.join(sh(["getconf", "DARWIN_USER_CACHE_DIR"]), BUNDLE), ROOT]:
+                 os.path.join(sh(["getconf", "DARWIN_USER_CACHE_DIR"]), BUNDLE), ROOT] + ([] if keep_engine else [ENGINES]):
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
         elif os.path.exists(path):
@@ -316,6 +376,8 @@ if __name__ == "__main__":
     if not a:
         print(USAGE)
         sys.exit(2)
+    # Every mode works on the perf copy's own bundle ID, folders and engine, never the real app's.
+    guard("kuvo_perf.py " + a[0], BUNDLE, SUPPORT, engine())
     if a[0] == "build":
         print(build(*a[1:3]))
     elif a[0] == "record" and len(a) >= 3:
