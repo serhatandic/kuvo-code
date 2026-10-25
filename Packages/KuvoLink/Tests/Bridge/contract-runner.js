@@ -33,9 +33,11 @@ let root = "";
 const MACHINE = "lab.invalid";
 const vectors = new URL("../../Vectors/routes/", import.meta.url);
 const read = (url, name) => fs.readFileSync(new URL(name, url), "utf8");
-const boxFiles = { "integrations.json": read(vectors, "box/integrations.json"), "mcp-catalog.json": read(vectors, "box/mcp-catalog.json"), "bot-kit.json": read(vectors, "box/bot-kit.json") };
-// What this Mac's app gives its own box to make bots with (its kit, in the bots' folder), as a
-// machine's Mac gives it one: the words for a bot on this Mac.
+// What a client puts beside every box's bridge: the integrations, the popular MCP servers, and
+// what the box makes bots with and tells them (Kuvo Code's own words, as they ship).
+const boxFiles = { "integrations.json": read(vectors, "box/integrations.json"), "mcp-catalog.json": read(vectors, "box/mcp-catalog.json"),
+  "bot-words.json": fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8") };
+// What's this Mac's own that its app gives its box to make bots with (its kit, in the bots' folder).
 const macKit = () => read(vectors, "box/mac-bot-kit.json");
 
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
@@ -171,7 +173,7 @@ const botFolder = id => path.join(botsRoot, id);
 function freshBox() {
   for (const folder of [home, botsRoot, wakesRoot, path.join(root, "work"), path.join(root, "worktrees")]) fs.rmSync(folder, { recursive: true, force: true });
   // A machine's release brings what it makes bots with; this Mac's box has its app's kit.
-  for (const [name, text] of Object.entries(boxFiles)) if (box === "machine" || name !== "bot-kit.json") write(path.join(home, "bin", name), text);
+  for (const [name, text] of Object.entries(boxFiles)) write(path.join(home, "bin", name), text);
   if (box === "mac") write(path.join(botsRoot, "kit.json"), macKit());
   write(wakeCommand, kuvoWake);
   fs.chmodSync(wakeCommand, 0o755);
