@@ -24,6 +24,32 @@ nonisolated enum AppInfo {
         fatalError("A test reached \(what), which would show a macOS prompt and wait on it. Give it a stand-in in the tests.", file: file, line: line)
     }
 
+    /// The real Kuvo Code's bundle ID: its settings, Keychain items and folders.
+    static let realBundleID = "run.kuvo.code"
+
+    /// Why a debug launch for a demo, a test or a measurement (any `KUVO_DEMO_*`, `KUVO_PERF_*` or
+    /// `KUVO_E2E` variable) mustn't start, or nil when it may: run as the real Kuvo Code, it would
+    /// use your settings, sessions and sign-ins, and send what it does to your models on your
+    /// accounts; with the real app's engine (`KUVO_OPENCODE_BINARY` in its folder), the same.
+    /// `scripts/real-app-guard.sh` holds the scripts that start copies to the same rule.
+    static func realAppRefusal(bundleID: String, environment: [String: String],
+                               realSupport: URL = URL.applicationSupportDirectory.appending(path: realBundleID)) -> String? {
+        let asked = environment.keys.filter { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }.sorted()
+        guard !asked.isEmpty else { return nil }
+        let because = "launched for a demo, test or measurement (\(asked.joined(separator: ", ")))"
+        if bundleID.lowercased() == realBundleID {
+            return "Refusing to start: \(because) as the real Kuvo Code (\(realBundleID)). Build a copy of its own, with APP_BUNDLE_ID=run.kuvo.code.demo (or .perf, .e2e, .shots)."
+        }
+        if let engine = environment["KUVO_OPENCODE_BINARY"] {
+            let real = realSupport.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false).lowercased()
+            let given = URL(filePath: engine).standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false).lowercased()
+            if given == real || given.hasPrefix(real.hasSuffix("/") ? real : real + "/") {
+                return "Refusing to start: \(because) with the real Kuvo Code's engine (\(engine)). Leave KUVO_OPENCODE_BINARY out, so this copy runs its own."
+            }
+        }
+        return nil
+    }
+
     /// The tests' own folder, in the temporary folder: their data, Trash and repositories.
     static var testRoot: URL { FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests") }
     /// Where the tests' Trash is (see `FileManager.moveToTrash`).
