@@ -5,8 +5,7 @@ import Observation
 /// Whether you're using Kuvo Code on this Mac, told to each box it's connected to (KuvoLink's
 /// PROTOCOL.md, "kuvo/attention"): this Mac's own, and your machines, so a notice for your phones
 /// waits a little while you're here, and doesn't go if you answer it or look at its conversation
-/// meanwhile (`NoticeHold`, and the same in each machine's bridge). The Mac's own notifications
-/// are unchanged.
+/// meanwhile (each box's `NoticeHold`, in kuvo-link.js). The Mac's own notifications are unchanged.
 ///
 /// In use: the Mac awake, its screen awake and unlocked, your account in front, input in the last
 /// two minutes, and Kuvo Code able to show you things here (its window in front, or its
@@ -22,6 +21,17 @@ final class Attention {
     static let renewEvery: TimeInterval = 15
     /// No input for this long: you're not here.
     static let idleAfter: TimeInterval = 120
+
+    /// A notification this Mac showed of news that goes to phones, as the boxes match it with their
+    /// notices: its conversation (a notice's thread), whether it asked you something or was news,
+    /// and the request or ask it's about, when it is. `machine`: whose news it was (nil: this
+    /// Mac's), told to that box alone, and not sent.
+    struct Shown: Equatable {
+        var session: String
+        var ask: Bool
+        var request: String?
+        var machine: String?
+    }
 
     /// What this Mac tells it from: a test's own (its own notification centers, no timer).
     struct Mac {
@@ -64,7 +74,7 @@ final class Attention {
     private let onScreen: () -> [String]
     /// Tells each box: in use with these on screen and these just shown in a notification here, or
     /// not any more (nil).
-    private let tell: ([String]?, [NoticeHold.Shown]) -> Void
+    private let tell: ([String]?, [Shown]) -> Void
 
     private var systemAsleep = false
     private var screenAsleep = false
@@ -76,7 +86,7 @@ final class Attention {
     private var stopTimer: (() -> Void)?
     private var isRunning = false
 
-    init(mac: Mac = .live, onScreen: @escaping () -> [String], tell: @escaping ([String]?, [NoticeHold.Shown]) -> Void) {
+    init(mac: Mac = .live, onScreen: @escaping () -> [String], tell: @escaping ([String]?, [Shown]) -> Void) {
         self.mac = mac
         self.onScreen = onScreen
         self.tell = tell
@@ -144,7 +154,7 @@ final class Attention {
 
     /// This Mac showed `shown` in a notification of its own (`Notifier.shownHere`): while you're
     /// here, the boxes count it as seen, so your phones don't tell you again.
-    func shown(_ shown: NoticeHold.Shown) {
+    func shown(_ shown: Shown) {
         guard isRunning else { return }
         check()
         guard case .some(.some(let sessions)) = told else { return }

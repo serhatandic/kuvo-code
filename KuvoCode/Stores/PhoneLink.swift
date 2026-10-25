@@ -942,6 +942,9 @@ final class PhoneLink {
     /// said (a newer word never comes before an older one), counted until it's there.
     @ObservationIgnored private var toldBox: Task<Void, Never>?
 
+    /// Once what's been said to this Mac's box so far is there.
+    func saidToBox() async { await toldBox?.value }
+
     private func toBox(_ path: String, _ body: Data) {
         guard let client = box() else { return }
         let previous = toldBox, delivering = delivering
@@ -958,10 +961,10 @@ final class PhoneLink {
     /// "mac"), and each of your machines by mail, so notices for your phones wait a little there too,
     /// and one you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each notification shown goes
     /// to the box whose news it was alone.
-    func attend(_ sessions: [String]?, shown: [NoticeHold.Shown] = []) {
+    func attend(_ sessions: [String]?, shown: [Attention.Shown] = []) {
         guard Self.isEnabled else { return }
         let seconds = sessions == nil ? 0 : Attention.lease
-        let words = { (shown: [NoticeHold.Shown]) in
+        let words = { (shown: [Attention.Shown]) in
             shown.map { each -> [String: Any] in
                 var entry: [String: Any] = ["session": each.session, "ask": each.ask]
                 if let request = each.request { entry["request"] = request }

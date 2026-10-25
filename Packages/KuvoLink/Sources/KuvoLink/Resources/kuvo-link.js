@@ -2287,7 +2287,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
         return yield* json(200, {});
       }
       if (!isObject(given?.notice) || typeof given.notice.title !== "string") return yield* json(400, { message: "Send {notice}." });
-      if (macLink.config?.phones) hold.tell(given.notice);
+      macTell(given.notice);
       return yield* json(200, {});
     }
     // A client in use here (PROTOCOL.md, "kuvo/attention"): notices for your phones wait a little
@@ -4303,10 +4303,141 @@ function prefixBytes(text, bytes) {
 const cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
 
 // A notification's JSON, under NOTICE_LIMIT bytes: what doesn't fit of the body ends in "…".
+// ---- What a notice shows (KuvoLink's SecretMask: the same rules, held to Vectors/masking.json) ----
+// What looks like a secret (a key, a token, a password) as dots, everything else as written, so a
+// notice on a phone's lock screen never shows one and still says what happened.
+
+const SHOWN_LENGTH = 4000;
+const HASH_NAMES = "commit|sha|sha1|sha256|sha512|md5|rev|revision|hash|ref|head|onto|checksum|digest|etag|integrity|fingerprint|cache[ _.-]?key|public[ _.-]?key|object|oid|tree|parent|blob|base|id|uuid|tag|build|version|release";
+// Either case, letter by letter (a part of a pattern that takes either, where the rest doesn't).
+const eitherCase = word => [...word].map(letter => /[a-z]/i.test(letter) ? `[${letter.toLowerCase()}${letter.toUpperCase()}]` : letter).join("");
+
+const trimmedName = prefix => prefix.replace(/[\s:=>"'\]\\_-]+$/, "");
+
+export function isSecretName(prefix) {
+  const name = trimmedName(prefix);
+  const word = name.split(/[\s([{,;"'=/]+/).filter(Boolean).at(-1) ?? "";
+  if (/secret|private|pass|pwd|token|credential/i.test(word)) return true;
+  return /key$/i.test(name) && !/(cache|public)[ _.-]?key$/i.test(name);
+}
+
+export function namesHash(prefix) {
+  if (prefix.endsWith(":")) {
+    const before = prefix.slice(0, -1);
+    const token = before.split(/\s+/).filter(Boolean).at(-1);
+    if (token && /[/.]/.test(token) && before.length && !/\s/.test(before.at(-1))) return true;
+  }
+  return !isSecretName(prefix) && new RegExp(`(?:${HASH_NAMES})s?$`, "i").test(trimmedName(prefix));
+}
+
+const HEX_AFTER_NAME = /(?<=[A-Za-z0-9_])(?:\\?["'])?\]?[ \t]*(?::=|=>|[:=])[ \t]*(?:\\?["'])?([0-9a-fA-F]{32,})(?![0-9A-Za-z])/dg;
+
+export function maskedHexValues(text) {
+  let result = text;
+  for (const match of [...text.matchAll(HEX_AFTER_NAME)].reverse()) {
+    const [start, end] = match.indices[1];
+    const prefix = text.slice(Math.max(0, start - 32), start);
+    if (namesHash(prefix)) continue;
+    result = result.slice(0, start) + "•••" + result.slice(end);
+  }
+  return result;
+}
+
+const HEX_PART = /(?<![0-9A-Za-z])[0-9a-f]{32,}(?![0-9A-Za-z])/g;
+
+export function markingHashes(run, before) {
+  let result = run;
+  for (const hit of [...run.matchAll(HEX_PART)].reverse()) {
+    const prefix = (before + run.slice(0, hit.index)).slice(-32);
+    const isCommit = hit[0].length === 40 || hit[0].length === 64;
+    let isHash;
+    if (isCommit && (!prefix.length || /[\s/+"'([]/.test(prefix.at(-1)))) isHash = true;
+    else if (isCommit && prefix.endsWith("-")) isHash = !isSecretName(prefix);
+    else isHash = namesHash(prefix);
+    if (isHash) result = result.slice(0, hit.index) + "h" + result.slice(hit.index + hit[0].length);
+  }
+  return result;
+}
+
+const WORDS = /[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g;
+
+// `text` cut to what a notice shows, between words, so a key isn't cut short of looking like one.
+function cutShown(text) {
+  const start = [...text].slice(0, SHOWN_LENGTH);
+  let end = start.length;
+  for (let index = start.length - 1; index >= Math.max(0, start.length - 100); index--) {
+    if (!/[\p{L}\p{N}_\-+/=]/u.test(start[index])) {
+      end = index;
+      break;
+    }
+  }
+  return start.slice(0, end).join("") + "…";
+}
+
+export function maskedNamed(text) {
+  // (A possessive `?+` written as a lookahead captured and matched again: what's there is taken.)
+  const named = /((?:api[_-]?key|secret(?:[_-]?access[_-]?key)?|password|passwd|authorization)["']?\s*[:=]\s*["']?(?=((?:bearer\s+|basic\s+|token\s+(?:token=)?["']?)?))\2|bearer\s+|(?<![\w-])--(?=\w)[\w-]{0,60}?(?:password|passwd|secret)[=\s]+(?!-))[^\s"'&;]{3,}/gi;
+  text = text.replace(named, "$1•••");
+  const flag = /((?<![\w-])--(?=\w)[\w-]{0,60}?(?<!(?:sort|foreign|partition|group|cache|order|index|range|lookup|hash)[-_])(?<!hot|turn|mon)(?:token|key)[=\s]+(?!-))(?![0-9][^\s"'&;]{0,7}(?:[\s"'&;]|$))[^\s"'&;]{3,}/gi;
+  text = text.replace(flag, "$1•••");
+  text = maskedHexValues(text);
+  const token = /(token["']?\s*[:=]\s*["']?(?=((?:bearer\s+|basic\s+)?))\2)(?![0-9]+(?:[\s"'&;,}]|$))[^\s"'&;]{3,}/gi;
+  text = text.replace(token, "$1•••");
+  text = text.replace(/(:\/\/[^\s/:@]+:)[^\s/@]+@/g, "$1•••@");
+  text = text.replace(/(:\/\/)[^\s/:@]{20,}@/g, "$1•••@");
+  text = text.replace(/(\bcurl\b[^\n]*?\s(?:-u|--user)\s+[^\s:]+:)\S+/g, "$1•••");
+  text = text.replace(/(secret[_-]?access[_-]?key\s+)\S+/gi, "$1•••");
+  text = text.replace(/(hooks\.slack\.com\/services\/)[^\s"'<>]+/g, "$1•••");
+  const mysql = new RegExp(`(\\b(?:${["mysql", "mariadb", "mysqldump", "mysqladmin"].map(eitherCase).join("|")})\\b[^\\n]*?\\s-p)\\S+`, "g");
+  text = text.replace(mysql, "$1•••");
+  return text;
+}
+
+const KEY_STARTS = /^(sk-|sk_live_|sk_test_|rk_live_|rk_test_|whsec_|ghp_|gho_|ghs_|github_pat_|xox[abpe]-|AKIA|AIza|glpat-|dop_v1_|sbp_|pul-|npm_|hf_|gsk_|xai-|pplx-|r8_|lin_api_|ntn_|shp(at|ss|ca)_)/;
+const IS_HASH = /^([0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+
+export function masked(text) {
+  text = maskedNamed([...text].length > SHOWN_LENGTH ? cutShown(text) : text);
+  let result = "";
+  let at = 0;
+  for (const match of text.matchAll(/[A-Za-z0-9_\-+/=]{20,}/g)) {
+    const run = match[0];
+    const location = match.index;
+    if (run.length < 24) {
+      if (!/^(AKIA|ASIA)[0-9A-Z]{16}$/.test(run)) continue;
+      result += text.slice(at, location) + "•••";
+      at = location + run.length;
+      continue;
+    }
+    const prefixed = run.split("/").some(part => KEY_STARTS.test(part));
+    const isHash = IS_HASH.test(run);
+    const before = text.slice(Math.max(0, location - 32), Math.max(0, location - 32) + Math.min(32, location));
+    const plain = markingHashes(run, before)
+      .replace(/(?<![0-9A-Fa-f])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9A-Fa-f])/g, "u")
+      .replace(/\/var\/folders\/[^/]+\/[^/]+/g, "/var/folders/t/t");
+    const wordy = plain.split(/[/\-_.]/).filter(part => part.length).every(part => {
+      if (part.length < 12) return true;
+      if (/^[0-9]*[a-fA-F][0-9a-fA-F]*$/.test(part)) return part.length < 20;
+      return part.length / Math.max(1, (part.match(WORDS) ?? []).length) >= 3.5;
+    });
+    const mixed = /[A-Za-z]/.test(run) && /\d/.test(run);
+    if (!((prefixed && mixed) || (mixed && !isHash && !wordy))) continue;
+    result += text.slice(at, location) + "•••";
+    at = location + run.length;
+  }
+  return result + text.slice(at);
+}
+
+// Whether a notice shows all of `text`: one that hides some of it doesn't answer from its buttons,
+// as you'd answer what you can't see.
+export const showsAll = text => [...text].length <= SHOWN_LENGTH && masked(text) === text;
+
 export function noticeJSON(notice) {
-  const value = { t: "notify", title: cut(String(notice.title ?? ""), 200), category: notice.category, thread: String(notice.thread ?? ""), data: notice.data ?? {} };
-  if (notice.subtitle) value.subtitle = cut(String(notice.subtitle), 200);
-  let body = String(notice.body ?? "");
+  // What it shows masked, as the Mac's own notifications are: a phone's lock screen never shows
+  // a key.
+  const value = { t: "notify", title: cut(masked(String(notice.title ?? "")), 200), category: notice.category, thread: String(notice.thread ?? ""), data: notice.data ?? {} };
+  if (notice.subtitle) value.subtitle = cut(masked(String(notice.subtitle)), 200);
+  let body = masked(String(notice.body ?? ""));
   while (true) {
     const json = Buffer.from(sortedJSON({ ...value, body }));
     if (json.length <= NOTICE_LIMIT || !body) return json;
@@ -4506,12 +4637,25 @@ const plain = text => String(text ?? "")
   .replace(/`/g, "")
   .replace(/\s+/g, " ").trim();
 
-// "Wants to run a command: npm test", as the Mac says it.
+// "Wants to run a command: npm test", as the Mac says it: every one it covers (a command line's
+// commands each, as Allow takes them all), up to four, then how many more.
 export function describePermission(request) {
   const what = { edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" }[request.action] ?? request.action;
-  const resource = request.resources?.[0];
-  return !resource || resource === "*" ? `Wants to ${what}.` : `Wants to ${what}: ${resource}`;
+  const shown = (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*");
+  if (!shown.length) return `Wants to ${what}.`;
+  const more = shown.length > 4 ? ` · and ${shown.length - 4} more` : "";
+  return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
 }
+
+// Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
+const showsAllCovered = request => (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*").length <= 4;
+
+// A question's one field and its choices, as the Mac answers it from a notification.
+const singleQuestion = form => {
+  if (form.metadata?.kind !== "question") return null;
+  const fields = (form.fields ?? []).filter(field => !field.hidden && !field.when?.length);
+  return fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
+};
 
 // What a form asks, as the Mac's notification says it.
 export function describeForm(form) {
@@ -4534,6 +4678,17 @@ const isHiddenRun = session => Boolean(session?.metadata?.kuvo?.engineFor || ses
 function engineGet(engine, route) {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) })
     .then(response => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
+}
+
+// This box's chats, conversations of no project: a machine's in its folder, a Mac's beside its box.
+const chatsFolder = () => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
+
+// A project's name, as the Mac shows it: its own, or its folder's; a worktree's is its project's.
+export function projectNameOf(directory) {
+  if (!directory) return undefined;
+  if (directory === chatsFolder()) return "Chats";
+  const project = readWorktrees().find(each => each.root === directory)?.project ?? directory;
+  return readProjects().find(each => each.directory === project)?.name || path.basename(project) || undefined;
 }
 
 // The notification for an engine event, or null for one that isn't news. `get(route)` asks the
@@ -4563,23 +4718,26 @@ export async function noticeFor(event, get) {
     }
     return null;
   };
-  const about = (shown, category, body, extra = {}) => {
+  // `answerable` false: its buttons would answer what it can't show, so it has none, and you
+  // answer in the conversation. `untitled`: what one without a title is called.
+  const about = (shown, category, body, extra = {}, { answerable = true, untitled = "New Session" } = {}) => {
     const bot = isBot(shown);
-    const folder = shown.location?.directory ?? "";
     return {
-      title: shown.title || "New Session",
-      subtitle: bot ? undefined : path.basename(folder) || undefined,
+      title: shown.title || untitled,
+      subtitle: bot ? undefined : projectNameOf(shown.location?.directory ?? ""),
       body,
       category,
       thread: shown.id,
-      data: { session: shown.id, ...extra },
+      data: { session: shown.id, ...extra, ...(answerable ? {} : { answerable: "0" }) },
     };
   };
   switch (event.type) {
     case "permission.asked": {
       const where = await shown(data.sessionID);
       if (isHiddenRun(where)) return null;
-      return about(where, "permission", describePermission(data), { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}) });
+      const body = describePermission(data);
+      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}) },
+        { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {
       // The form comes under `form`, with its session.
@@ -4588,7 +4746,10 @@ export async function noticeFor(event, get) {
       if (!asker) return null;
       const where = await shown(asker);
       if (isHiddenRun(where)) return null;
-      return about(where, "question", describeForm(form), { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) });
+      const body = describeForm(form);
+      const choices = (singleQuestion(form)?.options ?? []).map(option => String(option?.label ?? ""));
+      return about(where, "question", body, { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) },
+        { answerable: showsAll(body) && choices.every(showsAll), untitled: "Kuvo Code" });
     }
     case "session.execution.succeeded":
     case "session.execution.failed": {
@@ -4611,6 +4772,19 @@ export async function noticeFor(event, get) {
     }
     default:
       return null;
+  }
+}
+
+// What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any
+// more: answered while its events couldn't be heard, so it never goes. One it can't tell about
+// stays as it is.
+export async function settleHeld(engine, hold) {
+  for (const entry of [...hold.held]) {
+    const { request, requestSession, session } = entry.notice?.data ?? {};
+    const kind = { permission: "permission", question: "form" }[entry.notice?.category];
+    if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string") continue;
+    const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session)}/${kind}`).catch(() => null))?.data;
+    if (Array.isArray(asked) && !asked.some(each => each?.id === request)) hold.resolve(request);
   }
 }
 
@@ -4673,12 +4847,11 @@ const pause = (ms, signal) => new Promise(resolve => {
 // and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
 // each one's notification to `tell` and each request answered to `answered`, and doing what the
 // box does as they come.
-// With `bots` (this Mac's box, whose app does the rest of that work itself still), only what it does
-// for its bots.
 // `bots`: only its bots' part (this Mac's box, whose app does the rest of a machine's work);
 // `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
-// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`).
-export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false } = {}) {
+// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`); `hold`:
+// where those notices wait, settled each time the events are heard again (`settleHeld`).
+export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -4689,6 +4862,8 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
+      // What was answered while its events couldn't be heard (it restarted, the stream dropped).
+      if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn.
       freshenBots(source).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -4726,7 +4901,7 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
 
 const endedSignIns = new Map();
 
-async function noteSignIn(event, source) {
+export async function noteSignIn(event, source) {
   const ended = event.type === "session.execution.failed";
   if (!ended && (event.type !== "session.step.ended" || !endedSignIns.size)) return;
   if (ended && (event.data?.error?.type !== "provider.auth" || !String(event.data?.error?.message ?? "").startsWith("Request failed"))) return;
@@ -7980,22 +8155,28 @@ async function* macLinkRoute(route, request, signal) {
 // This Mac's notices for your phones (PROTOCOL.md, "kuvo/attention"): held a little while you're at
 // a computer (the app says when, as "mac"), then sealed here for each paired phone that's said where
 // it is and pushed on the link's connection; kept for a box that starts again, as a machine's are.
-function macNoticeHold() {
+// `clock`: a test's own (NoticeHold's `now`, `setTimer`, `clearTimer`).
+export function macNoticeHold(clock = {}) {
   let held = [];
   try { held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8")); } catch {}
   return new NoticeHold({
+    ...clock,
     send: notice => {
       const link = readLink();
       const phones = (link?.phones ?? []).filter(phone => phone.address);
-      if (!phones.length || !macLink.config?.phones) return true;
+      // Not told yet whether the phone link's on (the app hasn't said, as it starts): held.
+      if (!macLink.config) return false;
+      if (!phones.length || !macLink.config.phones) return true;
       const host = macLink.host;
       if (!host?.welcomed || !link?.key) return false;
       const json = noticeJSON(notice);
       const key = Buffer.from(link.key, "base64url");
+      // Gone out to one at least, or held to try again (a connection closing as it's sent).
+      let sent = 0;
       for (const phone of phones) {
-        try { host.send(pushTo(phone, json, key)); } catch {}
+        try { if (host.send(pushTo(phone, json, key))) sent += 1; } catch {}
       }
-      return true;
+      return sent > 0;
     },
     held,
     save: entries => {
@@ -8005,6 +8186,13 @@ function macNoticeHold() {
       } catch {}
     },
   });
+}
+
+// A notice of this Mac's for your phones (its news, its app's own asks): held and sent while the
+// phone link's on, or until its app says whether it is (as it starts); none while it's off.
+export function macTell(notice) {
+  if (!macLink.hold || (macLink.config && !macLink.config.phones)) return true;
+  return macLink.hold.tell(notice);
 }
 
 // This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,
@@ -8294,7 +8482,7 @@ async function run() {
   });
   const tell = notice => hold.tell(notice);
   const answered = id => hold.resolve(id);
-  watchEvents(readEngineFile, tell, undefined, answered);
+  watchEvents(readEngineFile, tell, undefined, answered, { hold });
   // The coding agents here (their sessions, and group chats that live here), through their bridge.
   watchEvents(readBridgeFile, tell, undefined, answered);
   // What its group chats send your other computers, carried on the relay connection that's up.
@@ -8552,10 +8740,9 @@ async function serve() {
   if (readKit()) try { keepJobs(); } catch {}
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
-  const tell = notice => (macLink.config?.phones && macLink.hold ? macLink.hold.tell(notice) : true);
   const answered = id => macLink.hold?.resolve(id);
-  watchEvents(readEngineFile, tell, undefined, answered, { bots: true, notices: IS_MAC, signIns: true });
-  watchEvents(readBridgeFile, tell, undefined, answered, { bots: true, notices: IS_MAC });
+  watchEvents(readEngineFile, macTell, undefined, answered, { bots: true, notices: IS_MAC, signIns: true, hold: macLink.hold });
+  watchEvents(readBridgeFile, macTell, undefined, answered, { bots: true, notices: IS_MAC });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
   const leave = async () => {

@@ -470,8 +470,11 @@ doesn't fit is cut, ending in "…". Keys are sorted, as both sides write them.
 
 Who sends it: each box, for what happens on it, so each notice comes once.
 
-- **The Mac**, for its own sessions, its group chats and browser asks, never a machine's. Like a
-  machine, it holds each a little while a client is in use there ("kuvo/attention", below).
+- **This Mac's box**, for the Mac's own sessions and group chats, as a machine's bridge words
+  them, and for what agents ask as they browse in the Mac's panel, which its app hands it
+  (`kuvo/attention/notice`, below); never a machine's. Like a machine, it holds each a little
+  while a client is in use there ("kuvo/attention", below), and sends none while the Mac's phone
+  link is off.
 - **A machine's bridge**, for that machine's sessions (permissions, questions, runs finished
   or failed, bots' news), what agents ask for as they browse there (category `ask`), and its
   coding agents' sessions and the group chats that live there (a meeting held, a bot done with
@@ -507,7 +510,8 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
   With its notifications on, each notice it shows you while in use (a notification, unless its
   style in System Settings is None; or, with its window in front, its sidebar and tabs) it says at
   once in `shown`, to the box whose news it was alone: its own, or a machine's. With its
-  notifications off it says none. Its own box hears it in the app; each of its machines whose
+  notifications off it says none. Its own box hears it from the app, as the client `mac`; each of
+  its machines whose
   bridge talks to peers by mail, `{"attention": {for, sessions, shown?}, "at"}`, taken only from a
   Mac that set the machine up, and only when its `at` isn't older than that Mac's last (mail can
   come out of order). A Mac without the phone link on says nothing.
@@ -525,9 +529,16 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
 - So a client that vanishes (a Mac's lid closed before it could say so) holds nothing back longer
   than a hold or its lease, whichever ends first, and a conversation it last showed doesn't count
   as seen. One a box couldn't hand to the relay (no connection just now) is tried again every few
-  seconds, for ten minutes. A machine's bridge keeps what it holds in `run/held-notices.json`
-  (with when each was made, by the date), so the next one sends it if it stops first. The Mac's own
+  seconds, for ten minutes; this Mac's box holds what it makes before its app says whether the
+  phone link's on, and sends it once it's on. A permission or question held while the box couldn't
+  hear its engine (it restarted, the stream dropped) is looked up when it hears it again, and let
+  go if it isn't asked any more. A box keeps what it holds in `run/held-notices.json` (with when
+  each was made, by the date), so the next one sends it if it stops first. The Mac's own
   notifications are the same either way.
+- **This Mac's app**, alone (`403` for anyone else), hands its box what only it knows:
+  `POST kuvo/attention/notice {"notice"}`, a notice (`Notice`'s JSON) for an ask from its panel's
+  browser, held and sent with the box's own; and `POST kuvo/attention/answered {"id"}`, a request or
+  ask answered or gone there, whose notice, held, then never goes.
 - A phone needn't say it's in use: it leaves out what's on its screen itself, and its own lease
   would hold its own notices.
 
@@ -668,10 +679,12 @@ host serves:
   - Its sign-ins: `GET api/credential` (with what each is signed in with), or `GET
     kuvo/accounts/credentials` → `{credentials: [{id, integrationID, label, active}]}`, the list
     alone; `POST api/credential/<id>/activate` uses one; `DELETE api/credential/<id>` removes one.
-  - On a Mac only: `GET kuvo/accounts/ended` → `{providers: [id]}`, the plans whose sign-in in use
-    ended (the service refused it; the Mac says "Sign-in ended"); `POST
-    kuvo/accounts/<provider>/forget` is Disconnect, as Settings › Accounts does it: its sign-ins
-    and keys on the Mac, and the copies on your machines.
+  - `GET kuvo/accounts/ended` → `{providers: [id]}`, the plans whose sign-in in use ended (a run
+    on one was refused, and it couldn't be renewed; the Mac says "Sign-in ended"), until a run on
+    it works again or you sign in again; `POST kuvo/accounts/<provider>/forget` is Disconnect, as
+    Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
+    isn't a plan there, an integration's server among them). Every box from bridge 0.9.59
+    (`accounts.ended`); a Mac before answered them itself.
   What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
 - On a Mac, `kuvo/hosts`: the machines this phone may reach directly, with their addresses
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
@@ -1263,7 +1276,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `groups.joinable` | `kuvo/groups/joinable` |
 | `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
 | `update` | a machine only: `kuvo/update` |
-| `accounts.ended` | a Mac only: `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` |
+| `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.59) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
 | `hosts` | a Mac only: `kuvo/hosts…` |
 | `mac` | a Mac only: `kuvo/mac` |
@@ -1421,8 +1434,6 @@ For the app only (anyone else gets `403`):
   to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
 - `POST kuvo/link/send {"to", "frame"}`: a mail frame the app sealed itself (base64), to a relay
   address (base64url): `200`, `503` while not on the relay, `413` for one too big for it.
-- `POST kuvo/link/push {"notice"}`: a notice (`Notice`'s JSON) for every paired phone that's said
-  where it is, sealed here for each: `200 {"phones"}`, `503` while not on the relay.
 
 The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
 phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone

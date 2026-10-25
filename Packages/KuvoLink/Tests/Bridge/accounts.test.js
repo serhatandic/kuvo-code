@@ -1,0 +1,118 @@
+// Your plans' sign-ins on a box, as a phone sees and changes them (PROTOCOL.md, "kuvo/accounts"),
+// on every box, this Mac's too: the plans whose sign-in ran out and couldn't be renewed (a run on
+// one was refused), until it works again or you sign in again; and Disconnect, as Settings ›
+// Accounts does it, for your plans alone, never an integration's server. The engine is a stand-in.
+//
+// Run with `node --test Packages/KuvoLink/Tests/Bridge/accounts.test.js`.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { after, test } from "node:test";
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-accounts-"));
+process.env.KUVO_HOME = home;
+after(() => fs.rmSync(home, { recursive: true, force: true }));
+const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+
+// An engine with your plans, an integration's server, and what each is signed in with; it keeps
+// what was removed.
+async function engineWith() {
+  const engine = {
+    sessions: { ses_a: { id: "ses_a", model: { providerID: "openai" } }, ses_k: { id: "ses_k", model: { providerID: "anthropic" } } },
+    credentials: [
+      { id: "crd_1", integrationID: "openai", label: "me" },
+      { id: "crd_2", integrationID: "openai", label: "work" },
+      { id: "crd_3", integrationID: "anthropic", label: "Work" },
+      { id: "crd_4", integrationID: "sirket-proxy", label: "Şirket" },
+      { id: "crd_5", integrationID: "şirket-proxy", label: "Şirket, from before" },
+      { id: "crd_6", integrationID: "notion", label: "Notion" },
+    ],
+    // The sign-in each plan uses now.
+    inUse: { openai: { credentialID: "crd_1", method: "oauth" }, anthropic: { credentialID: "crd_3", method: "key" } },
+    removed: [],
+  };
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url, "http://x");
+    const send = (status, body) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    if (request.method === "DELETE" && url.pathname.startsWith("/api/credential/")) {
+      const id = decodeURIComponent(url.pathname.split("/").pop());
+      engine.removed.push(id);
+      engine.credentials = engine.credentials.filter(each => each.id !== id);
+      return send(200, { data: true });
+    }
+    if (url.pathname === "/api/credential") return send(200, { data: engine.credentials });
+    if (url.pathname === "/api/integration") {
+      const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", ...engine.inUse[id] }] : [] });
+      return send(200, { data: [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }] });
+    }
+    const session = engine.sessions[decodeURIComponent(url.pathname.split("/").pop())];
+    send(session ? 200 : 404, { data: session ?? null });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  after(() => { server.closeAllConnections(); server.close(); });
+  engine.source = { port: server.address().port, password: "pw" };
+  return engine;
+}
+
+const engine = await engineWith();
+const handle = link.engineHandler(() => engine.source);
+async function ask(method, route) {
+  const parts = [];
+  for await (const part of handle({ method, path: route, headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
+  const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+  let json;
+  try { json = JSON.parse(text); } catch {}
+  return { status: parts[0].head.status, json };
+}
+const ended = async () => (await ask("GET", "kuvo/accounts/ended")).json.providers;
+// A run on the engine, as its events say it ended.
+const refused = session => link.noteSignIn({ type: "session.execution.failed", data: { sessionID: session, error: { type: "provider.auth", message: "Request failed with status 401" } } }, engine.source);
+
+test("a plan whose sign-in ran out is listed, until it works again or you sign in again; a key never is", async () => {
+  assert.deepEqual(await ended(), []);
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  // It worked after all: a step on its model ended well.
+  await link.noteSignIn({ type: "session.step.ended", data: { sessionID: "ses_a" } }, engine.source);
+  assert.deepEqual(await ended(), []);
+
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  // Signed in again: the one in use is another.
+  engine.inUse.openai = { credentialID: "crd_2", method: "oauth" };
+  assert.deepEqual(await ended(), []);
+
+  // A key refused, or a run that failed some other way: nothing to sign in to again.
+  await refused("ses_k");
+  await link.noteSignIn({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "provider.auth", message: "Invalid model" } } }, engine.source);
+  await link.noteSignIn({ type: "session.execution.failed", data: { sessionID: "ses_a", error: { type: "unknown", message: "Request failed" } } }, engine.source);
+  assert.deepEqual(await ended(), []);
+});
+
+test("Disconnect signs the box out of that plan alone, and of nothing that isn't one", async () => {
+  engine.inUse.openai = { credentialID: "crd_1", method: "oauth" };
+  await refused("ses_a");
+  assert.deepEqual(await ended(), ["openai"]);
+  assert.equal((await ask("POST", "kuvo/accounts/openai/forget")).status, 200);
+  assert.deepEqual(engine.removed.sort(), ["crd_1", "crd_2"]);
+  assert.ok(!engine.credentials.some(each => each.integrationID === "openai"));
+  engine.inUse.openai = undefined;
+  assert.deepEqual(await ended(), []);
+
+  // Only a plan's own name: an integration's server, one the box hasn't, or a path that isn't one
+  // signs nothing out.
+  for (const route of ["kuvo/accounts/notion/forget", "kuvo/accounts/nowhere/forget", "kuvo/accounts/a%2Fb/forget", "kuvo/accounts/../credential/forget", "kuvo/accounts//forget"]) {
+    assert.notEqual((await ask("POST", route)).status, 200, route);
+  }
+  assert.equal((await ask("GET", "kuvo/accounts/anthropic/forget")).status, 405);
+  assert.deepEqual(engine.removed.sort(), ["crd_1", "crd_2"]);
+});
+
+test("a provider named in any language can be disconnected from a phone: by its plain id, or the name it was given before", async () => {
+  engine.removed = [];
+  assert.equal((await ask("POST", "kuvo/accounts/sirket-proxy/forget")).status, 200);
+  assert.equal((await ask("POST", `kuvo/accounts/${encodeURIComponent("şirket-proxy")}/forget`)).status, 200);
+  assert.deepEqual(engine.removed, ["crd_4", "crd_5"]);
+});

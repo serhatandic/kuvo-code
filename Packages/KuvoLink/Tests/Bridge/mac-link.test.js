@@ -82,8 +82,9 @@ const macSecret = crypto.randomBytes(32);
 const macAddress = link.addressOf(macSecret);
 const keys = { key: macKey.toString("base64url"), secret: macSecret.toString("base64url"), sign: link.newSigningSeed() };
 
-// The app's own request to its box, as `serve` takes it.
-const handle = link.engineHandler(link.readEngineFile, { name: "Mac" });
+// The app's own request to its box, as `serve` takes it, with this Mac's notices held there.
+link.macLink.hold = link.macNoticeHold();
+const handle = link.engineHandler(link.readEngineFile, { name: "Mac" }, link.readBridgeFile, () => {}, link.macLink.hold);
 async function ask(method, p, body, { fromApp = true } = {}) {
   const parts = [];
   for await (const part of handle({ method, path: p, headers: {}, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0), fromApp }, {}, undefined)) parts.push(part);
@@ -301,24 +302,33 @@ test("mail from your machines goes to the app; the app's mail and pushes go out 
   assert.deepEqual(delivered.payload, going);
   assert.deepEqual(delivered.address, macAddress);
   assert.equal((await ask("POST", "kuvo/link/send", { to: machine.address.toString("base64url"), frame: Buffer.alloc(70_000).toString("base64") })).status, 413);
-  // A notice, sealed here for each phone that's said where it is.
+  // A notice only the app knows (an ask from its panel's browser), sealed here for each phone
+  // that's said where it is.
   const { it } = await paired();
   await it.request("GET", "kuvo/personalities");
   const before = relay.pushed.length;
-  const pushedTo = await ask("POST", "kuvo/link/push", { notice: { title: "Ada", body: "Done." } });
-  assert.equal(pushedTo.status, 200);
+  const told = await ask("POST", "kuvo/attention/notice", { notice: { title: "Ada", body: "Done.", category: "ask", thread: "ask_1", data: { ask: "ask_1" } } });
+  assert.equal(told.status, 200);
   // On its way over the box's connection: there once the relay has it.
   const mine = await arrived(() => relay.pushed.slice(before).find(each => each.to.equals(it.device.address)), "the relay got no push for the phone");
   const opened = link.openOneWay(link.readFrame(mine.payload).body, it.key, link.publicOf(macKey));
-  assert.deepEqual(JSON.parse(opened.payload.toString()), { title: "Ada", body: "Done." });
-  // A connection that's closing as it's asked takes nothing: none's said to have gone.
+  const notice = JSON.parse(opened.payload.toString());
+  assert.equal(notice.title, "Ada");
+  assert.equal(notice.body, "Done.");
+  // A connection that's closing as it's sent takes nothing: the notice is held to try again.
   const real = link.macLink.host;
   link.macLink.host = { welcomed: true, send: () => false };
   try {
-    assert.equal((await ask("POST", "kuvo/link/push", { notice: { title: "Ada", body: "Again." } })).status, 503);
+    await ask("POST", "kuvo/attention/notice", { notice: { title: "Ada", body: "Again.", category: "ask", thread: "ask_2", data: { ask: "ask_2" } } });
+    assert.ok((await ask("GET", "kuvo/attention")).json.held >= 1, "held");
   } finally {
     link.macLink.host = real;
   }
+  // Answered meanwhile: it never goes.
+  await ask("POST", "kuvo/attention/answered", { id: "ask_2" });
+  assert.equal((await ask("GET", "kuvo/attention")).json.held, 0);
+  // Not for anyone but the app.
+  assert.equal((await ask("POST", "kuvo/attention/notice", { notice: { title: "x" } }, { fromApp: false })).status, 403);
   await config({ machines: false });
 });
 

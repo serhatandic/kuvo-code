@@ -5,9 +5,9 @@ import Testing
 @testable import KuvoCode
 
 /// Your plan accounts from a phone, as this Mac answers it: the sign-ins it has, listed by name and
-/// which is in use, or as the engine keeps them; the plans whose sign-in ended; Disconnect, as
-/// Settings › Accounts does it, only for your plans. A sign-in page started there reaches the
-/// engine with what its method's form fills in. The engine is faked.
+/// which is in use, or as the engine keeps them. A sign-in page started there reaches the engine
+/// with what its method's form fills in. The plans whose sign-in ended, and Disconnect, are this
+/// Mac's box's, as every box's (the bridge's tests' accounts). The engine is faked.
 @MainActor
 @Suite(.serialized) struct PhoneAccountsTests {
     let engine: FakeEngine
@@ -64,48 +64,13 @@ import Testing
         #expect(kept.status == 200 && String(decoding: kept.body, as: UTF8.self).contains("sk-ant-secret"))
     }
 
-    @Test func endedAndDisconnect() async throws {
-        defer { StubWeb.stop() }
-        var forgot: [String] = []
-        link.endedSignIns = { ["openai"] }
-        link.forgetSignIn = { provider in
-            guard provider == "openai" else { return false }
-            forgot.append(provider)
-            return true
-        }
-        let ended = try await ask("kuvo/accounts/ended")
-        #expect(ended.status == 200)
-        #expect((try JSONSerialization.jsonObject(with: ended.body) as? [String: [String]]) == ["providers": ["openai"]])
-
-        #expect(try await ask("kuvo/accounts/openai/forget", method: "POST").status == 200)
-        #expect(forgot == ["openai"])
-        // Only a plan's own name: nothing else is signed out.
-        for path in ["kuvo/accounts/../credential/forget", "kuvo/accounts/a%2Fb/forget", "kuvo/accounts//forget", "kuvo/accounts/notion/forget"] {
-            #expect(try await ask(path, method: "POST").status == 404, "\(path)")
-        }
-        #expect(try await ask("kuvo/accounts/openai/forget", method: "GET").status == 404)
-        #expect(forgot == ["openai"])
-    }
-
     /// A provider you add with a name in any language gets an id of plain letters, so a phone can
-    /// name it to disconnect it, as the Mac does; one added before keeps the name it was given,
-    /// and a phone can disconnect it too.
-    @Test func aProviderNamedInAnyLanguageCanBeDisconnectedFromAPhone() async throws {
+    /// name it to disconnect it, as the Mac does (the box signs it out: the bridge's tests'
+    /// accounts, with one added before by the name it was given).
+    @Test func aProviderNamedInAnyLanguageGetsAPlainID() {
         #expect(CustomProviderEditor.providerID(for: "Şirket Proxy") == "sirket-proxy")
         #expect(CustomProviderEditor.providerID(for: "Kırmızı API v2") == "kirmizi-api-v2")
         #expect(CustomProviderEditor.providerID(for: "  ★ ") == "")
-        var forgotten: [String] = []
-        link.forgetSignIn = { provider in
-            forgotten.append(provider)
-            return true
-        }
-        let id = CustomProviderEditor.providerID(for: "Şirket Proxy")
-        #expect(try await ask("kuvo/accounts/\(id)/forget", method: "POST").status == 200)
-        #expect(forgotten == ["sirket-proxy"])
-
-        let older = "şirket-proxy".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/")))!
-        #expect(try await ask("kuvo/accounts/\(older)/forget", method: "POST").status == 200)
-        #expect(forgotten == ["sirket-proxy", "şirket-proxy"])
     }
 
     /// OpenCode's sign-in page, started as the Mac starts it: with its method's hidden answer (the

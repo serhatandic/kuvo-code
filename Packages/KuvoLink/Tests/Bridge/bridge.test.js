@@ -808,6 +808,46 @@ test("engine events become notifications, as the Mac words them", async () => {
   assert.equal(await link.noticeFor({ type: "session.text.delta", data: { sessionID: "ses_main" } }, get), null);
 });
 
+test("a notice shows what it covers up to four, never a secret, and has no answer buttons where it can't show all they'd answer", async () => {
+  const sessions = {
+    ses_main: { id: "ses_main", title: "Fix the tests", location: { directory: "/home/me/kuvo-ai" } },
+    ses_tree: { id: "ses_tree", title: "Try it", location: { directory: "/home/me/trees/kuvo-ai-try" } },
+    ses_chat: { id: "ses_chat", title: "", location: { directory: path.join(home, "chats") } },
+  };
+  const get = async route => {
+    const id = decodeURIComponent(route.split("/").pop());
+    if (!sessions[id]) throw new Error("404");
+    return { data: sessions[id] };
+  };
+  // Your project's own name, and a worktree's project's.
+  link.changeProjects(() => [{ directory: "/home/me/kuvo-ai", name: "Kuvo AI", folders: [] }]);
+  fs.writeFileSync(path.join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ root: "/home/me/trees/kuvo-ai-try", project: "/home/me/kuvo-ai", branch: "try" }] }));
+  try {
+    const many = await link.noticeFor({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_main", action: "shell", resources: ["a", "b", "c", "d", "e", "f"] } }, get);
+    assert.equal(many.body, "Wants to run a command: a · b · c · d · and 2 more");
+    assert.equal(many.subtitle, "Kuvo AI");
+    assert.equal(many.data.answerable, "0", "Allow would allow what it doesn't show");
+    const four = await link.noticeFor({ type: "permission.asked", data: { id: "per_2", sessionID: "ses_tree", action: "shell", resources: ["a", "b", "c", "*", "d"] } }, get);
+    assert.equal(four.body, "Wants to run a command: a · b · c · d");
+    assert.equal(four.subtitle, "Kuvo AI", "a worktree's project");
+    assert.equal(four.data.answerable, undefined);
+    // A secret in what it asks: masked, and not answered from the notice.
+    const secret = await link.noticeFor({ type: "permission.asked", data: { id: "per_3", sessionID: "ses_main", action: "shell", resources: ["export OPENAI_API_KEY=sk-proj-4fJk29dLqZx81mNbVc7TyQ"] } }, get);
+    assert.equal(secret.data.answerable, "0");
+    const sent = JSON.parse(link.noticeJSON(secret).toString());
+    assert.ok(!sent.body.includes("4fJk29dLqZx81mNbVc7TyQ") && sent.body.includes("•••"), sent.body);
+    // A question whose choice hides a secret: not answered from the notice; an untitled chat's.
+    const form = { id: "frm_1", sessionID: "ses_chat", metadata: { kind: "question" }, fields: [{ key: "a", type: "string", description: "Which key?", options: [{ value: "1", label: "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" }, { value: "2", label: "None" }] }] };
+    const asked = await link.noticeFor({ type: "form.created", data: { form } }, get);
+    assert.equal(asked.data.answerable, "0");
+    assert.equal(asked.title, "Kuvo Code");
+    assert.equal(asked.subtitle, "Chats");
+  } finally {
+    fs.rmSync(path.join(home, "box", "worktrees.json"), { force: true });
+    fs.rmSync(path.join(home, "box", "projects.json"), { force: true });
+  }
+});
+
 test("a Mac's phones document, by mail, counts from the Macs that set the machine up alone, a newer one only: a phone removed there loses its way in", async () => {
   const machine = link.newKey(), mac = link.newKey(), other = link.newKey(), stranger = link.newKey();
   const seeds = { mac: link.newSigningSeed(), other: link.newSigningSeed(), stranger: link.newSigningSeed() };
@@ -889,7 +929,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   // Where each one is reached: a route a client would ask first, answered with whatever this box
   // has now, never as one it doesn't have (403).
   const routes = {
-    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], agents: ["GET", "kuvo/agents/api/session"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
+    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], agents: ["GET", "kuvo/agents/api/session"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
     "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], groups: ["GET", "kuvo/groups"],
@@ -906,7 +946,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
   for (const [feature, [method, route]] of Object.entries(routes)) assert.notEqual(await status(method, route), 403, `${feature}: ${method} ${route}`);
   // The Mac's own aren't here.
-  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/accounts/ended", "kuvo/usage"]) assert.equal(await status("GET", route), 403, route);
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/usage"]) assert.equal(await status("GET", route), 403, route);
   fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
 });
 
