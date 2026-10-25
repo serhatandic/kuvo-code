@@ -63,6 +63,14 @@ extension AppModel {
                 return error.localizedDescription
             }
         }
+        // Bots here with keys of their own for it stop using it first: their keys go, and their
+        // folders' settings stop naming its server. Where their box can't yet, nothing goes, and
+        // this says why, rather than leave a bot using an integration you removed.
+        for bot in bots.list where bot.machine == nil {
+            let theirs = Set(Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) })
+            let held = await Task.detached { IntegrationKeys.variables(ofBot: bot.id) }.value
+            if !theirs.isDisjoint(with: held), let why = await BotKeys.remove(service, bot: bot, app: self) { return "\(bot.name)’s own key couldn’t be taken away: \(why)" }
+        }
         let api = api(for: box)
         // Its sign-in as the engine has it now, asked before it leaves the settings.
         var signIn = listed
@@ -71,13 +79,6 @@ extension AppModel {
         // Taken out of the settings where this Mac's box keeps them, or its keys and sign-in stay.
         if let failure = await config.settled() { return failure }
         if let signIn { forgetSignIn(signIn, on: box) }
-        // Bots here with keys of their own for it stop using it too: their keys go, and their
-        // folders' settings stop naming its server.
-        for bot in bots.list where bot.machine == nil {
-            let theirs = Set(Integrations.keys(of: service.way).map { IntegrationKeys.variable(service.id, $0.name, bot: bot.id) })
-            let held = await Task.detached { IntegrationKeys.variables(ofBot: bot.id) }.value
-            if !theirs.isDisjoint(with: held) { await BotKeys.remove(service, bot: bot, app: self) }
-        }
         for variable in Integrations.keys(of: service.way).map({ IntegrationKeys.variable(service.id, $0.name) }) { IntegrationKeys.set(nil, for: variable) }
         // What its server kept: its own folder (and the file it once kept).
         for name in [service.id, "\(service.id).json"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "integrations/\(name)")) }

@@ -10,6 +10,8 @@ import OpenCodeKit
 @MainActor
 final class TestBox {
     let process: BoxProcess
+    /// What it asks the app for (the test copy's own Keychain, in memory).
+    let host = HostInterface()
     private let enginePort: UInt16
 
     /// Node, where it usually is (CI's, Homebrew's, nvm's).
@@ -39,6 +41,9 @@ final class TestBox {
         environment["KUVO_BOTS"] = Bots.root.path
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
+        environment["KUVO_KEYS_ON_HOST"] = "1"
+        environment.merge(try await host.start()) { _, new in new }
+        MachineBox.writeMacCatalog()
         await process.start(node: node, environment: environment)
         guard let endpoint = process.endpoint else { throw TestFailure("This Mac's box didn't start: \(process.failure ?? "")") }
         StubWeb.letThrough(port: endpoint.url.port ?? 0)
@@ -59,6 +64,7 @@ final class TestBox {
     }
 
     func stop() {
+        host.stop()
         process.stop()
         BoxProcess.engineChanged(nil, version: nil, pid: nil)
         StubWeb.stopListening(port: enginePort)

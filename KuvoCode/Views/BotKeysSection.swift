@@ -39,15 +39,14 @@ struct BotKeysSection: View {
             }
         }
         .task(id: bot.id) { await reload() }
-        // Its machine connecting (or going): read again.
-        .task(id: bot.machine.flatMap { app.machines.engine($0)?.isReady }) { if status != nil { await reload() } }
+        // Where it lives coming back (its machine connecting, this Mac's box starting again): read again.
+        .task(id: bot.machine.flatMap { app.machines.engine($0)?.isReady } ?? (app.box.endpoint != nil)) { if status != nil { await reload() } }
     }
 
-    /// What its row says of it now. While it's read: on this Mac, at once, so nothing (rather than
-    /// a moment of "Checking…"); on a machine, that it's being checked.
+    /// What its row says of it now; while it's read (by the box it lives on), that it's being checked.
     private func state(of service: Integrations.Service) -> String {
         switch status {
-        case nil: bot.machine == nil ? " " : "Checking…"
+        case nil: "Checking…"
         case .unreadable: "Can’t be checked now"
         case .read: own.contains(service.id) ? "Its own key" : shared.contains(service.id) ? (bot.machine.map { "\($0)’s shared key, from its Settings › Integrations" } ?? "Your shared key, from Settings › Integrations") : "No key"
         }
@@ -65,7 +64,7 @@ struct BotKeysSection: View {
                         .foregroundStyle(own.contains(service.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 }
                 Spacer(minLength: 8)
-                if removing.contains(service.id) || (status == nil && bot.machine != nil) {
+                if removing.contains(service.id) || status == nil {
                     Spinner(size: 14)
                 } else if status?.own == nil {
                     EmptyView()

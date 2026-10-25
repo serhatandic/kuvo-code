@@ -47,10 +47,10 @@ enum MachineBox {
     /// Settings › Integrations' catalog as the tool reads it (`integrations.json`), for a phone to
     /// add and remove them there with this Mac closed: each as `kuvo/integrations` describes it,
     /// with its settings there and its keys' variables. Those that use a Mac's own apps aren't in it.
-    @MainActor static func integrationsJSON() -> Data {
+    @MainActor static func integrationsJSON(forMac: Bool = false) -> Data {
         let entries: [[String: Any]] = Integrations.all.filter { !Integrations.macOnly.contains($0.id) }.map { service in
             var entry = PhoneLink.described(service)
-            if let settings = Integrations.settings(for: service, on: "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
+            if let settings = Integrations.settings(for: service, on: forMac ? nil : "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
                 entry["settings"] = value
             }
             let keys = Integrations.keys(of: service.way)
@@ -58,6 +58,14 @@ enum MachineBox {
             return entry
         }
         return (try? JSONSerialization.data(withJSONObject: ["integrations": entries], options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+    }
+
+    /// The same for this Mac's box, with this Mac's own paths (its keys' files in the app's
+    /// temporary folder): what its bots' own keys are named with in their folders' settings.
+    @MainActor static func writeMacCatalog() {
+        let file = BoxProcess.home.appending(path: "bin/integrations.json")
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? integrationsJSON(forMac: true).write(to: file, options: .atomic)
     }
 
     /// The popular servers as the tool reads them (`mcp-catalog.json`), written when they change,
@@ -139,6 +147,11 @@ enum MachineBox {
 
     /// `kuvo-link.js box <arguments>` there, with `input` on its standard input, with whichever
     /// engine runtime the machine has (this version's, or the one at work there).
+    /// Its bots' folders' settings made right, as a bridge older than `kuvo/bots/keys/refresh` does it.
+    static func refreshBotKeys(on connection: SSHConnection) async throws {
+        _ = try await run("bot-keys-refresh", input: nil, on: connection)
+    }
+
     private static func run(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Answer {
         try JSONDecoder().decode(Answer.self, from: try await answer(arguments, input: input, on: connection))
     }
@@ -152,12 +165,6 @@ enum MachineBox {
         struct Routed: Decodable { var status: Int; var body: String }
         guard let routed = try? JSONDecoder().decode(Routed.self, from: Data(output.utf8)) else { throw Failure.refused("The machine didn't answer: \(output.prefix(200))") }
         return (routed.status, Data(routed.body.utf8))
-    }
-
-    /// Its bots' folders' settings as their keys and the machine's integrations are now (after the
-    /// integrations' catalog changed, or a bot moved there).
-    static func refreshBotKeys(on connection: SSHConnection) async throws {
-        _ = try await run("bot-keys-refresh", input: nil, on: connection)
     }
 
     /// What `kuvo-link.js box <arguments>` answered (its last line, JSON), or why not.

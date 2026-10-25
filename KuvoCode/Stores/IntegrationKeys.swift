@@ -167,7 +167,10 @@ nonisolated enum IntegrationKeys {
     }
 
     /// The keys you saved, by their variables, without reading them.
-    static var names: [String] {
+    static var names: [String] { listed ?? [] }
+
+    /// The same, or nil when the Keychain couldn't say (locked, say), which isn't "none".
+    static var listed: [String]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -175,7 +178,9 @@ nonisolated enum IntegrationKeys {
             kSecMatchLimit as String: kSecMatchLimitAll,
         ]
         var result: CFTypeRef?
-        guard Keychain.copyMatching(query, &result) == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
+        let status = Keychain.copyMatching(query, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return nil }
         return items.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 }

@@ -27,6 +27,9 @@ final class BoxProcess {
     @ObservationIgnored private var server: ServerProcess?
     /// What it was started with, to start it again the same way.
     @ObservationIgnored private var runtime: (executable: URL, environment: [String: String], arguments: (URL) -> [String])?
+
+    /// What it was last started with, beside what it sets itself.
+    var environment: [String: String]? { runtime?.environment }
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var isStarting = false
     /// Up, the first time or again (late, after Try Again, or after it stopped by itself).

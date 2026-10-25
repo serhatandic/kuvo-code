@@ -7,8 +7,7 @@ import Network
 @MainActor
 final class BrowserToolServer {
     private let agent: BrowserAgent
-    private var listener: NWListener?
-    private var connections: [ObjectIdentifier: HTTPConnection] = [:]
+    private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
     private let token = UUID().uuidString + UUID().uuidString
     private(set) var url: URL?
     /// The session a caller works for, when it isn't one you see: an engine run in a session with
@@ -42,54 +41,15 @@ final class BrowserToolServer {
         ] as [String: Any]]]]
     }
 
-    /// Starts listening on a free loopback port and returns the address.
+    /// Starts listening on a free loopback port and returns the address. One that can't listen
+    /// now (waiting for a network that may never come) fails rather than holding the engine's
+    /// start: it starts without the browser.
     func start() async throws -> URL {
         if let url { return url }
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-        let listener = try NWListener(using: parameters)
-        self.listener = listener
-        listener.newConnectionHandler = { [weak self] connection in
-            MainActor.assumeIsolated { self?.accept(connection) }
-        }
-        let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-            listener.stateUpdateHandler = { state in
-                MainActor.assumeIsolated {
-                    guard !resumed else { return }
-                    switch state {
-                    case .ready:
-                        resumed = true
-                        continuation.resume(returning: listener.port?.rawValue ?? 0)
-                    // One that can't listen now (waiting for a network that may never come) fails
-                    // rather than holding the engine's start: it starts without the browser.
-                    case .failed(let error), .waiting(let error):
-                        resumed = true
-                        listener.cancel()
-                        continuation.resume(throwing: error)
-                    case .cancelled:
-                        resumed = true
-                        continuation.resume(throwing: CancellationError())
-                    default:
-                        break
-                    }
-                }
-            }
-            listener.start(queue: .main)
-        }
+        let port = try await server.start()
         let url = URL(string: "http://127.0.0.1:\(port)/mcp")!
         self.url = url
         return url
-    }
-
-    private func accept(_ connection: NWConnection) {
-        let http = HTTPConnection(connection: connection) { [weak self] request in
-            await self?.respond(to: request) ?? .init(status: 503)
-        } closed: { [weak self] id in
-            self?.connections[id] = nil
-        }
-        connections[ObjectIdentifier(http)] = http
-        http.start()
     }
 
     // MARK: HTTP
@@ -97,7 +57,7 @@ final class BrowserToolServer {
     private func respond(to request: HTTPRequest) async -> HTTPResponse {
         guard request.path.hasPrefix("/mcp") else { return .init(status: 404) }
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
-              String(authorization.dropFirst(7)) == token else { return .init(status: 401) }
+              samePassword(String(authorization.dropFirst(7)), token) else { return .init(status: 401) }
         switch request.method {
         case "POST": break
         case "DELETE": return .init(status: 200)
@@ -528,153 +488,5 @@ enum BrowserTools {
         default:
             return text("Unknown tool \(name).", error: true)
         }
-    }
-}
-
-// MARK: - A minimal HTTP/1.1 server connection
-
-struct HTTPRequest {
-    var method: String
-    var path: String
-    var headers: [String: String]
-    var body: Data
-}
-
-struct HTTPResponse {
-    var status: Int
-    var headers: [String: String] = [:]
-    var body = Data()
-
-    static func json(_ object: Any) -> HTTPResponse {
-        // Sorted, so the tools' list reads the same at every launch, and a conversation picked up
-        // after one keeps the provider's prompt cache.
-        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
-        return HTTPResponse(status: 200, headers: ["Content-Type": "application/json"], body: data)
-    }
-}
-
-/// One client connection: reads requests (keep-alive), answers them one at a time. It keeps
-/// reading meanwhile, so a client that goes away stops what it asked for.
-@MainActor
-private final class HTTPConnection {
-    private let connection: NWConnection
-    private let handler: (HTTPRequest) async -> HTTPResponse
-    private let closed: (ObjectIdentifier) -> Void
-    private var buffer = Data()
-    /// The request being answered.
-    private var answering: Task<Void, Never>?
-    private var closing = false
-
-    init(connection: NWConnection, handler: @escaping (HTTPRequest) async -> HTTPResponse, closed: @escaping (ObjectIdentifier) -> Void) {
-        self.connection = connection
-        self.handler = handler
-        self.closed = closed
-    }
-
-    func start() {
-        connection.stateUpdateHandler = { [weak self] state in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                switch state {
-                case .failed, .cancelled:
-                    self.closing = true
-                    self.answering?.cancel()
-                    self.closed(ObjectIdentifier(self))
-                default: break
-                }
-            }
-        }
-        connection.start(queue: .main)
-        receive()
-    }
-
-    private func receive() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, complete, error in
-            MainActor.assumeIsolated {
-                guard let self, !self.closing else { return }
-                if let data { self.buffer.append(data) }
-                if self.answering == nil { self.process() }
-                if complete || error != nil {
-                    // Gone: what it asked stops.
-                    self.connection.cancel()
-                } else if !self.closing {
-                    self.receive()
-                }
-            }
-        }
-    }
-
-    /// The most a request's headers and body may take: far more than a tool call needs.
-    static let maxHead = 64 * 1024
-    static let maxBody = 16 * 1024 * 1024
-
-    /// Starts answering a complete request in the buffer, if there is one.
-    private func process() {
-        guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
-            // Headers that never end aren't a request.
-            if buffer.count > Self.maxHead { refuse() }
-            return
-        }
-        guard headerEnd.lowerBound - buffer.startIndex <= Self.maxHead else { return refuse() }
-        let head = String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self)
-        var lines = head.components(separatedBy: "\r\n")
-        let requestLine = lines.removeFirst().split(separator: " ")
-        guard requestLine.count >= 2 else {
-            closing = true
-            return connection.cancel()
-        }
-        var headers: [String: String] = [:]
-        for line in lines {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-        }
-        // A length that isn't one, below zero or too big is turned away before it's read.
-        guard let length = Int(headers["content-length"] ?? "0"), (0...Self.maxBody).contains(length) else { return refuse() }
-        let bodyStart = headerEnd.upperBound
-        guard buffer.count - bodyStart >= length else { return }
-        let body = buffer.subdata(in: bodyStart..<(bodyStart + length))
-        buffer.removeSubrange(..<(bodyStart + length))
-        let request = HTTPRequest(method: String(requestLine[0]), path: String(requestLine[1]), headers: headers, body: body)
-        answering = Task {
-            let response = await handler(request)
-            send(response)
-        }
-    }
-
-    /// A request it won't read: says so, and closes the connection.
-    private func refuse() {
-        closing = true
-        buffer = Data()
-        let head = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] _ in
-            MainActor.assumeIsolated { self?.connection.cancel() }
-        })
-    }
-
-    private func send(_ response: HTTPResponse) {
-        let reason: String = switch response.status {
-        case 200: "OK"
-        case 202: "Accepted"
-        case 400: "Bad Request"
-        case 401: "Unauthorized"
-        case 404: "Not Found"
-        case 405: "Method Not Allowed"
-        default: "Error"
-        }
-        var head = "HTTP/1.1 \(response.status) \(reason)\r\n"
-        var headers = response.headers
-        headers["Content-Length"] = String(response.body.count)
-        headers["Connection"] = "keep-alive"
-        for (name, value) in headers { head += "\(name): \(value)\r\n" }
-        head += "\r\n"
-        guard !closing else { return }
-        connection.send(content: Data(head.utf8) + response.body, completion: .contentProcessed { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, !self.closing else { return }
-                self.answering = nil
-                // The next request on this connection, if one came in meanwhile.
-                self.process()
-            }
-        })
     }
 }
