@@ -437,9 +437,13 @@ final class AppModel {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let wakes: Void = wakeUps.follow()
+                        async let personalities: Void = Personalities.shared.follow()
+                        // What a 0.8.0 beta changed of your personalities where it kept them.
+                        await Personalities.shared.takeFromOld()
                         await workspace.followProjects()
                         await worktrees
                         await wakes
+                        await personalities
                     }
                 }
             }

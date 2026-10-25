@@ -95,12 +95,13 @@ extension AppModel {
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
         EngineConfig.machines = { [weak self] in self?.machines.engines.values.map(\.config) ?? [] }
         // Your personalities, one library on every computer.
-        Personalities.shared.onChange = { [weak self] in self?.personalitiesChanged() }
-        // A machine's view of them, by mail, that changed some here (PROTOCOL.md, "Documents"): bots
-        // with one of those hear what it is now.
-        phoneLink.tookPersonalities = { [weak self] ids in
+        // Kept by this Mac's box; however one changed there (here, from a phone, taken from a
+        // machine's copy), the machines take it, and bots with it hear what it is now.
+        Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        Personalities.shared.onChange = { [weak self] changed in
             guard let self else { return }
-            Task { for id in ids { await self.bots.personalityChanged(id) } }
+            personalitiesChanged()
+            Task { for id in changed { await self.bots.personalityChanged(id) } }
         }
         workspace.onRunEnded = { [weak self] session in
             self?.bots.runEnded(session: session)
@@ -611,10 +612,8 @@ extension AppModel {
     /// it hear its new words.
     func syncPersonalities(with engine: MachineEngine) async {
         guard let met = try? await MachineBox.personalities(Personalities.shared.library, on: engine.machine.connection) else { return }
-        let changed = Personalities.shared.take(met)
-        guard !changed.isEmpty else { return }
-        personalitiesChanged(except: engine.machine.id)
-        for id in changed { await bots.personalityChanged(id) }
+        // Where this Mac keeps them: what changed there is told (`Personalities.onChange`).
+        await Personalities.shared.take(met)
     }
 
     /// Your personalities changed here (made, changed or removed, or taken from one machine): the

@@ -147,14 +147,16 @@ struct BotEditor: View {
             // A shared bot's personality, found here (or added) once, not at every redraw.
             if isNew, !adoptedRecipe, let recipe {
                 adoptedRecipe = true
-                do {
-                    if personality == nil, let found = try recipe.personalityHere() {
-                        personality = found.id
-                        if found.added { addedPersonality = found.id }
+                Task {
+                    do {
+                        if personality == nil, let found = try await recipe.personalityHere() {
+                            personality = found.id
+                            if found.added { addedPersonality = found.id }
+                        }
+                    } catch {
+                        // Yours are full (or couldn't be reached): it starts without one, and says why.
+                        failure = "Its personality, “\(recipe.personality?.name ?? "")”, couldn’t be added to yours. \(error.localizedDescription) Then pick one for it."
                     }
-                } catch {
-                    // Yours are full: it starts without one, and says why.
-                    failure = "Its personality, “\(recipe.personality?.name ?? "")”, didn’t fit in yours. Shorten or remove one of yours, then pick one for it."
                 }
             }
             // The model it talks on: one picked for it whose account you've signed out of (none
@@ -480,7 +482,7 @@ struct BotEditor: View {
         guard !isWorking || waitsForMachine, let addedPersonality,
               !bots.list.contains(where: { $0.personality == addedPersonality }),
               let added = Personalities.shared.personality(addedPersonality) else { return }
-        Personalities.shared.delete(added)
+        Task { try? await Personalities.shared.delete(added) }
     }
 
     // MARK: Saving
@@ -828,30 +830,34 @@ private struct PersonalityPicker: View {
     }
 
     private func delete(_ personality: Personality) {
-        store.delete(personality)
         if selection == personality.id { selection = nil }
-        Task { await bots.personalityChanged(personality.id) }
+        // Bots with it hear it's gone as its box takes it away (`Personalities.onChange`).
+        Task {
+            do { try await store.delete(personality) } catch { refusal = error.localizedDescription }
+        }
     }
 
     private func saveDraft() {
         guard canSave, let draft else { return }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            if let id = draft.id, var personality = store.personality(id) {
-                personality.name = name
-                personality.description = description
-                try store.update(personality)
-                Task { await bots.personalityChanged(id) }
-            } else {
-                selection = try store.add(name: name, description: description).id
+        // Bots with it hear its new words as its box takes them (`Personalities.onChange`).
+        Task {
+            do {
+                if let id = draft.id, var personality = store.personality(id) {
+                    personality.name = name
+                    personality.description = description
+                    try await store.update(personality)
+                } else {
+                    selection = try await store.add(name: name, description: description).id
+                }
+            } catch {
+                refusal = error.localizedDescription
+                AccessibilityNotification.Announcement(error.localizedDescription).post()
+                return
             }
-        } catch {
-            refusal = error.localizedDescription
-            AccessibilityNotification.Announcement(error.localizedDescription).post()
-            return
+            self.draft = nil
         }
-        self.draft = nil
     }
 
     /// A personality to pick: on accent glass when it's the one, a soft fill under the pointer.
