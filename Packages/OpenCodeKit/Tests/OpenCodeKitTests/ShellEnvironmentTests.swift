@@ -25,19 +25,45 @@ import Testing
         #expect(environment?["KUVO_FROM_PROFILE"] == "yes")
     }
 
+    private func pid(in file: URL) -> pid_t? {
+        (try? String(contentsOf: file, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
     /// One whose profile leaves something running in the background with its output (a daemon it
-    /// starts) is given up on when its time is up: reading its output to the end used to wait for
-    /// that to stop too, and the engine's start with it.
+    /// starts) still gives its environment once it has finished: reading its output to the end
+    /// used to wait for that to stop too, and the engine's start with it.
     @Test func somethingYourProfileLeavesRunningDoesntHoldUpTheStart() async throws {
         let pidFile = root.appending(path: "background.pid")
         defer {
-            if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap({ pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) {
-                kill(pid, SIGKILL)
-            }
+            if let pid = pid(in: pidFile) { kill(pid, SIGKILL) }
             try? FileManager.default.removeItem(at: root)
         }
-        let environment = await ShellEnvironment.run(shell: try shell("/bin/sleep 600 & echo $! > '\(pidFile.path)'"), flags: "-lc",
-                                                     timeout: .milliseconds(300))
-        #expect(environment == nil, "the app goes on with its own")
+        let profile = "export KUVO_FROM_PROFILE=yes; /bin/sleep 600 & echo $! > '\(pidFile.path)'"
+        let environment = await ShellEnvironment.run(shell: try shell(profile), flags: "-lc", timeout: .seconds(30))
+        #expect(environment?["KUVO_FROM_PROFILE"] == "yes")
+    }
+
+    /// An interactive profile that takes a while (nvm, pyenv) still gives what it sets, rather than
+    /// the login shell's without it.
+    @Test func aSlowInteractiveProfileIsWaitedFor() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        // An interactive shell takes no notice of SIGTERM.
+        let profile = "case \"$1\" in -ilc) trap '' TERM; /bin/sleep 6; export KUVO_FROM_ZSHRC=yes;; esac"
+        let environment = await ShellEnvironment.load(shell: try shell(profile), fallback: [:])
+        #expect(environment["KUVO_FROM_ZSHRC"] == "yes")
+    }
+
+    /// One given up on is stopped for good, interactive or not: it doesn't run on in the background.
+    @Test func oneGivenUpOnIsStopped() async throws {
+        let pidFile = root.appending(path: "shell.pid")
+        defer {
+            if let pid = pid(in: pidFile) { kill(pid, SIGKILL) }
+            try? FileManager.default.removeItem(at: root)
+        }
+        let profile = "trap '' TERM; echo $$ > '\(pidFile.path)'; exec /bin/sleep 600"
+        let environment = await ShellEnvironment.run(shell: try shell(profile), flags: "-ilc", timeout: .seconds(2))
+        #expect(environment == nil)
+        let shell = try #require(pid(in: pidFile))
+        #expect(kill(shell, 0) != 0, "it's gone")
     }
 }
