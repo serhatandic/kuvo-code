@@ -6936,7 +6936,7 @@ export async function takeLetter(sender, letter, { send, targets, answer = () =>
   if (delivering.has(id)) return;
   if (seenAlready(id, now)) return send(sender, { delivered: { id, ok: true } });
   // An answer a tool here waits for (from the box its letter went to): to it.
-  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && answered(sender, letter.answers, letter.text, now)) {
+  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && answered(sender, letter, now)) {
     noteSeen(id, now);
     return send(sender, { delivered: { id, ok: true } });
   }
@@ -7433,10 +7433,11 @@ export function letterWent(sender, { id, ok, why, retry, answer }) {
   else if (answer === false) reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 
-// The answer to letter `id`, from the box it went to, for the tool waiting for it here: true when
-// one still waits (it notes it does, `<id>.alive`, every two seconds as it looks); else it comes
-// as a message.
-function answered(sender, id, text, now = Date.now()) {
+// The answer (`letter`) to letter `answers`, from the box it went to, for the tool waiting for it
+// here: true when one still waits (it notes it does, `<id>.alive`, every two seconds as it looks);
+// else it comes as a message. One the tool doesn't take after all (it stopped as it came) comes as
+// a message too (`deliverLeftAnswers`): it's kept with who it's from and for.
+function answered(sender, { answers: id, text, from, to }, now = Date.now()) {
   // On this Mac: the request still waiting for it, if it's still there.
   if (IS_MAC) {
     const waiter = macWaiting.get(id);
@@ -7452,8 +7453,41 @@ function answered(sender, id, text, now = Date.now()) {
   let alive = 0;
   try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
   if (now - alive > 10_000) return false;
-  reply(id, { text: String(text).slice(0, 8000) });
+  // Its sender as that box named it, when that box alone lists it.
+  const told = readPeerAgents();
+  const agent = peerOf(from, peersOf(readLink()), told)?.key === sender.key ? (told[sender.key]?.list ?? []).find(each => each.session === from) : null;
+  reply(id, { text: cutText(text, 8000), to, from: agent ? from : "unknown", name: agent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}` });
   return true;
+}
+
+// Answers a tool here was given but never took (its turn stopped as one came): to the conversation
+// that asked, as a message, once the tool's gone (it left `<id>.gaveup`, or stopped noting it
+// waits). Each once: taken out of the tool's way first, put back to try again if it can't go now.
+export async function deliverLeftAnswers(now = Date.now(), targets = peerTargets()) {
+  for (const name of listOf(REPLIES)) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -5);
+    const file = path.join(REPLIES, name);
+    let answer;
+    try { answer = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; }
+    if (typeof answer?.text !== "string" || typeof answer.to !== "string") continue;
+    let alive = 0;
+    try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
+    if (!fs.existsSync(path.join(REPLIES, `${id}.gaveup`)) && now - alive <= 10_000) continue;
+    const taken = `${file}.delivering`;
+    try { fs.renameSync(file, taken); } catch { continue; }
+    try {
+      const place = await placeOfSession(answer.to, targets);
+      if (place) {
+        await asked(place.target, "POST", `api/session/${encodeURIComponent(answer.to)}/prompt`,
+          { id: messageID(), text: composeLetter(String(answer.name ?? "another agent"), String(answer.from ?? "unknown"), answer.text, false), delivery: "steer" });
+      }
+      fs.rmSync(taken, { force: true });
+      fs.rmSync(path.join(REPLIES, `${id}.gaveup`), { force: true });
+    } catch {
+      try { fs.renameSync(taken, file); } catch {}
+    }
+  }
 }
 
 // A letter as mail for `peer`, its words cut to fit what the relay takes (UTF-8, and escaped as
@@ -9101,6 +9135,7 @@ async function run() {
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     try { sendOutbox(current ?? { send() {} }, undefined, Date.now(), current?.welcomed ? 0 : Date.now() - lastWelcomed); } catch {}
+    deliverLeftAnswers().catch(() => {});
   }, 3_000);
 
   let attempt = 0;

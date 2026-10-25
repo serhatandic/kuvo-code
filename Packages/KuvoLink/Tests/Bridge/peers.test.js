@@ -269,7 +269,7 @@ test("this box's letters go to the box their agent is on, again each minute unti
   // The tool still waiting (it notes so as it looks).
   fs.writeFileSync(path.join(run, "replies", "ltr_waits.alive"), "");
   await answer(second.peer);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_waits.json"), "utf8")), { text: "Done." });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(run, "replies", "ltr_waits.json"), "utf8")).text, "Done.");
   assert.equal(fs.existsSync(path.join(run, "replies", "ltr_waits.wait")), false);
   assert.equal(said.at(-1).delivered.ok, true);
 
@@ -526,4 +526,33 @@ test("a letter's words are cut where a character ends, never in the middle of on
     { send: (peer, message) => said.push(message), targets: [target], told: {}, peers: [fourth.peer], wait: 10 });
   const words = prompts.at(-1).text.split("\n\n").slice(1).join("\n\n");
   assert.equal(words, "a".repeat(31_999), "the emoji that didn't fit whole is left out");
+});
+
+test("an answer that came just as the tool waiting for it stopped reaches its conversation as a message, once", async t => {
+  fresh({ legacy: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({ [second.pub]: { at: 1, kind: "machine", list: [{ session: "ses_remote", name: "Remote", kind: "session" }] } }));
+  const { prompts, target } = await engine(t);
+  // This box's conversation asked second's agent, and waits for its answer (it got there).
+  const sending = path.join(run, "outbox", "sending");
+  const replies = path.join(run, "replies");
+  fs.mkdirSync(sending, { recursive: true });
+  fs.mkdirSync(replies, { recursive: true });
+  const now = Date.now();
+  fs.writeFileSync(path.join(sending, "ltr_asked1.json"), JSON.stringify({ from: "ses_target", to: "ses_remote", text: "Done?", wait: true, at: now, sentTo: second.pub }));
+  link.letterWent(second.peer, { id: "ltr_asked1", ok: true });
+  // The tool, still looking.
+  fs.writeFileSync(path.join(replies, "ltr_asked1.alive"), "");
+  const said = [];
+  await link.takeLetter(second.peer, { id: "ltr_answer1", from: "ses_remote", to: "ses_target", text: "Done, late.", at: now, answers: "ltr_asked1" },
+    { send: (peer, message) => said.push(message), targets: [target], told: link.readPeerAgents(), peers: link.peersOf(link.readLink()), now });
+  assert.equal(said.at(-1).delivered.ok, true, "it's here");
+  // The tool stopped right then, without taking it (its turn was stopped).
+  fs.rmSync(path.join(replies, "ltr_asked1.alive"), { force: true });
+  fs.writeFileSync(path.join(replies, "ltr_asked1.gaveup"), "");
+  await link.deliverLeftAnswers(now + 3000, [target]);
+  assert.equal(prompts.at(-1).text, link.composeLetter("Remote", "ses_remote", "Done, late.", false));
+  // Once.
+  const count = prompts.length;
+  await link.deliverLeftAnswers(now + 6000, [target]);
+  assert.equal(prompts.length, count);
 });

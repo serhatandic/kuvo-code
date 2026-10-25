@@ -271,7 +271,9 @@ connection.
   to collect over SSH.
   - A subagent writes as its conversation.
   - A waiting tool reads `run/replies/<id>.json` (`{text}`, `{failed}` or `{note}`), and touches
-    `<id>.alive` as it looks. An answer that comes once it isn't is delivered as a message.
+    `<id>.alive` as it looks. An answer that comes once it isn't is delivered as a message, and so
+    is one it was given but never took (its turn stopped as the answer came): once the tool's gone
+    (`<id>.gaveup`, or `<id>.alive` ten seconds old), once (bridge 0.9.63).
   - After eleven minutes, or its turn stopped, the tool leaves `<id>.gaveup`, and its letter goes on
     without waiting.
   - With no relay for five minutes, letters not yet sent move to `run/outbox` for the Mac, marked
