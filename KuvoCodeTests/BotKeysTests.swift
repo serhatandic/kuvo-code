@@ -7,12 +7,14 @@ import Testing
 /// folder's settings name it, readable by you alone, with what else that file says kept; no other
 /// bot's folder, nor what a machine's engine is given, names it; taken away, it goes and the
 /// folder's own settings stay. A bot working in a project uses the keys your sessions there use.
-/// The keys are in the test copy's own Keychain items.
+/// This Mac's box keeps them, in the test copy's own Keychain items through the app.
 @MainActor
 @Suite(.serialized) struct BotKeysTests {
-    let root = AppInfo.testRoot.appending(path: "BotKeys-\(UUID().uuidString.prefix(6))")
+    let root = Bots.root
     let app = AppModel()
+    let engine = StubEngine(port: 47905)
 
+    /// A bot here, its folder where the app keeps bots' and described there as it writes it.
     private func bot(_ id: String, project: String? = nil) throws -> Bot {
         let folder = root.appending(path: id).path(percentEncoded: false)
         try FileManager.default.createDirectory(atPath: folder + "/workspace", withIntermediateDirectories: true)
@@ -22,7 +24,10 @@ import Testing
         if let project { json["project"] = project }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(Bot.self, from: JSONSerialization.data(withJSONObject: json))
+        let bot = try decoder.decode(Bot.self, from: JSONSerialization.data(withJSONObject: json))
+        try Bots.descriptorData(bot).map { try $0.write(to: URL(filePath: folder).appending(path: Bot.Descriptor.file)) }
+        try Data(bot.sessionID.utf8).write(to: URL(filePath: folder).appending(path: "session"))
+        return bot
     }
 
     private func settings(of bot: Bot) -> [String: Any]? {
@@ -35,9 +40,12 @@ import Testing
         let service = try #require(BotKeys.services.first { !Integrations.keys(of: $0.way).isEmpty })
         let names = Integrations.keys(of: service.way).map(\.name)
         let ada = try bot("bot_ada"), ben = try bot("bot_ben")
+        let box = try await TestBox(engine: engine.url)
         defer {
+            box.stop()
+            engine.stop()
             for name in names { _ = IntegrationKeys.set(nil, for: IntegrationKeys.variable(service.id, name, bot: ada.id)) }
-            try? FileManager.default.removeItem(at: root)
+            for id in [ada.id, ben.id] { try? FileManager.default.removeItem(at: root.appending(path: id)) }
         }
         // Ada's folder already has settings of its own.
         let own = URL(filePath: ada.directory).appending(path: ".opencode")
@@ -114,12 +122,13 @@ import Testing
         TestEnvironment.prepare()
         let service = try #require(BotKeys.services.first { !Integrations.keys(of: $0.way).isEmpty })
         let names = Integrations.keys(of: service.way).map(\.name)
-        let project = root.appending(path: "project").path(percentEncoded: false)
+        let project = AppInfo.testRoot.appending(path: "BotKeysProject-\(UUID().uuidString.prefix(6))").path(percentEncoded: false)
         try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let helper = try bot("bot_helper", project: project)
         defer {
             for name in names { _ = IntegrationKeys.set(nil, for: IntegrationKeys.variable(service.id, name, bot: helper.id)) }
-            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(atPath: project)
+            try? FileManager.default.removeItem(at: root.appending(path: helper.id))
         }
         _ = await BotKeys.save(Dictionary(uniqueKeysWithValues: names.map { ($0, "helper-secret") }), for: service, bot: helper, app: app)
         #expect(!FileManager.default.fileExists(atPath: project + "/.opencode"), "nothing written into your project")
