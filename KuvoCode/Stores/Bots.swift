@@ -313,7 +313,7 @@ final class Bots {
         You were just made, and the person who made you hasn't written yet. Write them your first message, as yourself: short, warm, a few sentences at most.
         - If your name says what you're for (like "Social Media Manager" or "Inbox Helper"), say in a sentence what you take your job to be, then ask the one or two things you need to know to start, like which accounts or sites, how often, or in what tone.
         - If it doesn't, say hello and ask what they'd like you to do.
-        Don't use any tools, and don't write your job into your memory until they've answered.
+        Don't use any tools, and don't keep a job until they've answered.
         </system-reminder>
         """
 
@@ -771,21 +771,35 @@ final class Bots {
     /// What the bot's session knows about being a bot: who it is, its job, its memory and how to
     /// wake itself up.
     /// `personality`: what its personality tells it, when not its own (a machine's kit, see
-    /// `MachineKit`, has a stand-in there).
-    static func instructions(for bot: Bot, personality: String? = nil, timeZone: String = TimeZone.current.identifier) -> String {
+    /// `MachineKit`, has a stand-in there). `byTool`: it keeps its job with its set_job tool, in its
+    /// box's record, as every bot a box keeps does (a machine's; this Mac's once its box keeps
+    /// them); otherwise in its memory, under "## Job", where this app reads it.
+    static func instructions(for bot: Bot, personality: String? = nil, timeZone: String = TimeZone.current.identifier, byTool: Bool? = nil) -> String {
         let place = bot.machine.map { "the Linux machine \"\($0)\"" } ?? "this Mac"
         let job = bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         let told = personality ?? Personalities.shared.personality(bot.personality)?.instruction
+        let byTool = byTool ?? (bot.machine != nil)
+        let keeping = byTool
+            ? """
+            Your job is what the user gives you in this conversation, and it changes as they tell you more. Keep it with \
+            set_job: what you do in a few words, like "Keeps the build green" (Kuvo Code shows it under your name), and the \
+            details: what to watch, what to make, what never to do without asking. When the user gives you a job or changes it, \
+            call set_job before anything else, with the whole job as it is now.
+            """
+            : """
+            Your job is what the user gives you in this conversation, and it changes as they tell you more. Keep it at the top \
+            of your memory file, under a "## Job" heading: first, on a line of its own, what you do in a few words, like "Keeps \
+            the build green" (Kuvo Code shows it under your name); then, below it, the details: what to watch, what to make, what \
+            never to do without asking. When the user gives you a job or changes it, update that section before anything else.
+            """
+        let kept = byTool ? "Your job:" : "Your job, as your memory has it:"
         return """
         You are \(bot.name), one of the user's bots in Kuvo Code\(bot.job.isEmpty ? "" : ": \(bot.job)"). A bot is a teammate with one job, \
         who keeps working on it over time in this one conversation. You run on \(place).
         \(told.map { "\n\($0)\n" } ?? "")
-        Your job is what the user gives you in this conversation, and it changes as they tell you more. Keep it at the top \
-        of your memory file, under a "## Job" heading: first, on a line of its own, what you do in a few words, like "Keeps \
-        the build green" (Kuvo Code shows it under your name); then, below it, the details: what to watch, what to make, what \
-        never to do without asking. When the user gives you a job or changes it, update that section before anything else.
+        \(keeping)
 
-        \(job.isEmpty ? "You don't have a job yet: ask the user what they'd like you to do, if they haven't said." : "Your job, as your memory has it:\n\(job)")
+        \(job.isEmpty ? "You don't have a job yet: ask the user what they'd like you to do, if they haven't said." : "\(kept)\n\(job)")
 
         You can work on a schedule. Kuvo Code wakes you up at the times you choose, even while the user is away, so you can do \
         things later ("in 2 hours", "tomorrow at 9") or again and again ("every 5 minutes", "every morning"). Never say you can't \
@@ -836,7 +850,7 @@ final class Bots {
         Your name, look, personality and model are set by the user in Kuvo Code, under Edit Bot. You can't change them, \
         and writing a new name into your memory doesn't change it either. If you're asked to, say so plainly and suggest \
         Edit Bot, which lists the models they can use; don't list models yourself, since you'd see ones they have no \
-        account for. Your job is yours to keep, in your memory, as the user gives it to you.
+        account for. Your job is yours to keep, as the user gives it to you.
         """
 
     /// Gives each bot's session the current wording of its instructions, once a run of the app,
@@ -1206,8 +1220,8 @@ extension Bots {
             personalities: Personalities.presets.map { .init(id: $0.id, name: $0.name, description: $0.description, custom: false, instruction: $0.instruction) },
             looks: .init(colors: BotLook.Tint.allCases.map(\.rawValue), shapes: BotLook.Form.allCases.map(\.rawValue), faces: BotLook.Face.allCases.map(\.rawValue)),
             startingModel: nil, projects: [],
-            instructions: instructions(for: sample, personality: "⟦personality⟧", timeZone: timeZone),
-            jobInstructions: instructions(for: working, personality: "⟦personality⟧", timeZone: timeZone),
+            instructions: instructions(for: sample, personality: "⟦personality⟧", timeZone: timeZone, byTool: true),
+            jobInstructions: instructions(for: working, personality: "⟦personality⟧", timeZone: timeZone, byTool: true),
             projectNote: projectNote, identityNote: identityNote, memory: blankMemory("⟦name⟧"), greeting: greeting,
             rules: [], timeZone: timeZone, zoneinfo: nil)
     }
