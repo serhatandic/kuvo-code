@@ -184,29 +184,31 @@ public final class ServerProcess: @unchecked Sendable {
                 log.append(data)
             }
         }
-        process.terminationHandler = { process in onExit(process.terminationStatus) }
+        let exit = Arrival<Int32>()
+        process.terminationHandler = { process in
+            exit.deliver(process.terminationStatus)
+            onExit(process.terminationStatus)
+        }
+        let firstLine = FirstLine(stdout.fileHandleForReading)
         try process.run()
 
         let url: URL
         do {
             url = try await withThrowingTaskGroup(of: URL.self) { group in
-                group.addTask { try await Self.readHandshake(from: stdout.fileHandleForReading, process: process, log: log) }
+                group.addTask { try await Self.readHandshake(firstLine, exit: exit, log: log) }
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw ServerProcessError.timedOut
                 }
-                let url = try await group.next()!
-                group.cancelAll()
-                return url
+                // The other one, given up: waiting on the server ends with it.
+                defer { group.cancelAll() }
+                return try await group.next()!
             }
         } catch {
+            // As `stop` does: its stdin closed (a server's signal to go), and it's stopped.
+            try? stdin.fileHandleForWriting.close()
             process.terminate()
             throw error
-        }
-
-        // Keep draining stdout so the server never blocks on a full pipe.
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
         }
         return ServerProcess(endpoint: ServerEndpoint(url: url, password: password), process: process, stdin: stdin, log: log)
     }
@@ -223,18 +225,16 @@ public final class ServerProcess: @unchecked Sendable {
 
     deinit { stop() }
 
-    private static func readHandshake(from handle: FileHandle, process: Process, log: LogTail) async throws -> URL {
-        var line = Data()
-        for try await byte in handle.bytes {
-            if byte == UInt8(ascii: "\n") { break }
-            line.append(byte)
-        }
-        guard !line.isEmpty else {
+    /// Its first line, `{"url": …}`, waited for without holding a thread: given up (its time is
+    /// up, or its start was) as soon as that's asked.
+    private static func readHandshake(_ firstLine: FirstLine, exit: Arrival<Int32>, log: LogTail) async throws -> URL {
+        guard let said = await firstLine.arrival.wait() else { throw CancellationError() }
+        guard case .line(let line) = said, !line.isEmpty else {
             // stdout closed before the handshake: the server died while starting. What it said
             // as it went, read to its end (not after a moment, if something it started keeps it).
-            process.waitUntilExit()
-            log.waitUntilClosed(for: 1)
-            throw ServerProcessError.exited(status: process.terminationStatus, output: log.text)
+            guard let status = await exit.wait() else { throw CancellationError() }
+            await log.closed(within: .seconds(1))
+            throw ServerProcessError.exited(status: status, output: log.text)
         }
         struct Handshake: Decodable { var url: URL }
         guard let handshake = try? JSONDecoder().decode(Handshake.self, from: line) else {
@@ -269,10 +269,11 @@ extension Pipe {
 
 /// The last few kilobytes of a stream.
 final class LogTail: @unchecked Sendable {
-    private let lock = NSCondition()
+    private let lock = NSLock()
     private var buffer = Data()
     private let limit = 16 * 1024
-    private var isClosed = false
+    /// Everything's been read: the other end closed.
+    let closed = Arrival<Void>()
 
     func append(_ data: Data) {
         lock.withLock {
@@ -281,23 +282,96 @@ final class LogTail: @unchecked Sendable {
         }
     }
 
-    /// Everything's been read: the other end closed.
     func close() {
-        lock.withLock {
-            isClosed = true
-            lock.broadcast()
-        }
+        closed.deliver(())
     }
 
-    func waitUntilClosed(for seconds: TimeInterval) {
-        let deadline = Date(timeIntervalSinceNow: seconds)
-        lock.withLock {
-            while !isClosed, lock.wait(until: deadline) {}
+    /// Waits until it's closed, or `limit` at most (something the process started can keep it).
+    func closed(within limit: Duration) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { _ = await self.closed.wait() }
+            group.addTask { try? await Task.sleep(for: limit) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
     var text: String {
         lock.withLock { String(decoding: buffer, as: UTF8.self) }
+    }
+}
+
+/// The first line a server says on its stdout, read as it comes, on the pipe's own queue: a
+/// FileHandle's `bytes` reads one at a time across the whole app, so a server that said nothing
+/// held up every other one's start, and its own time limit with it. What it says after is read
+/// and let go, so it never blocks on a full pipe.
+final class FirstLine: @unchecked Sendable {
+    enum Said: Sendable {
+        case line(Data)
+        /// stdout closed first.
+        case closed
+    }
+
+    let arrival = Arrival<Said>()
+    private let lock = NSLock()
+    private var buffer = Data()
+
+    init(_ handle: FileHandle) {
+        handle.readabilityHandler = { [self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                arrival.deliver(.closed)
+                return
+            }
+            let line: Data? = lock.withLock {
+                guard !arrival.hasArrived else { return nil }
+                buffer.append(data)
+                guard let end = buffer.firstIndex(of: UInt8(ascii: "\n")) else { return nil }
+                defer { buffer = Data() }
+                return buffer[..<end]
+            }
+            if let line { arrival.deliver(.line(Data(line))) }
+        }
+    }
+}
+
+/// A value that comes once, from any thread, waited for without holding a thread.
+final class Arrival<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value?
+    private var waiting: [UUID: CheckedContinuation<Value?, Never>] = [:]
+
+    var hasArrived: Bool { lock.withLock { value != nil } }
+
+    /// The first one counts; any after are let go.
+    func deliver(_ value: Value) {
+        let resumed = lock.withLock { () -> [CheckedContinuation<Value?, Never>] in
+            guard self.value == nil else { return [] }
+            self.value = value
+            defer { waiting = [:] }
+            return Array(waiting.values)
+        }
+        for continuation in resumed { continuation.resume(returning: value) }
+    }
+
+    /// It, once it's come; nil if the waiting task is cancelled first.
+    func wait() async -> Value? {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Value?, Never>) in
+                let now: Value?? = lock.withLock {
+                    if let value { return .some(value) }
+                    if Task.isCancelled { return .some(nil) }
+                    waiting[id] = continuation
+                    return nil
+                }
+                if let now { continuation.resume(returning: now) }
+            }
+        } onCancel: {
+            let continuation = lock.withLock { waiting.removeValue(forKey: id) }
+            continuation?.resume(returning: nil)
+        }
     }
 }
 
