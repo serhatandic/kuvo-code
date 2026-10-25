@@ -12,7 +12,9 @@ import Foundation
 /// - it reads stdout and stderr as they come, so a program that says a lot never blocks on a
 ///   full pipe (a pipe holds 64 KB) waiting for a reader that only reads once it has ended;
 /// - once the program has ended, it waits only a moment for the end of its output: something it
-///   left running in the background (a daemon a hook or a profile starts) can hold that open;
+///   left running in the background (a daemon a hook or a profile starts) can hold that open.
+///   All it said before it ended is kept, and what that leftover says after is read and let go
+///   until it ends, so it runs on as it would have (never killed by a closed pipe);
 /// - given a `limit`, a program still running then is sent SIGTERM and, if it takes no notice
 ///   (an interactive shell doesn't), SIGKILL a moment later. Without one it runs as long as it
 ///   takes, for what has no natural end (a push, an upload, a machine's install).
@@ -61,8 +63,10 @@ public enum ChildProcess {
 
     /// From SIGTERM to SIGKILL, for a program that doesn't stop.
     static let grace: Duration = .seconds(2)
-    /// From its end to giving up on the end of its output (something it left running holds it).
+    /// From its end to giving up on the end of its output (something it left running holds it),
+    /// once what it said before it ended is all read; that can take up to `catchingUp` more.
     static let afterExit: Duration = .milliseconds(500)
+    static let catchingUp: Duration = .seconds(1)
 
     /// Runs `executable` and waits for it, without holding a thread. Throws when it can't start,
     /// and `CancellationError` when the task is cancelled (the program is stopped first), unless
@@ -72,7 +76,18 @@ public enum ChildProcess {
                            directory: URL? = nil, input: Input = .nothing, output: Output = .collect,
                            errors: Errors = .collect, limit: Duration? = nil, cancellable: Bool = true) async throws -> Result {
         let running = try Running(executable, arguments, environment: environment, directory: directory, input: input,
-                                  output: output, errors: errors, limit: limit)
+                                  output: output, errors: errors, limit: limit, afterExit: afterExit)
+        return try await run(running, cancellable: cancellable)
+    }
+
+    /// As `run`, giving up on the end of its output `afterExit` after it ends (for the tests).
+    static func run(_ executable: String, _ arguments: [String], afterExit: Duration) async throws -> Result {
+        let running = try Running(executable, arguments, environment: nil, directory: nil, input: .nothing, output: .collect,
+                                  errors: .collect, limit: nil, afterExit: afterExit)
+        return try await run(running, cancellable: true)
+    }
+
+    private static func run(_ running: Running, cancellable: Bool) async throws -> Result {
         let finished = {
             try await withCheckedThrowingContinuation { continuation in
                 running.start { continuation.resume(with: $0) }
@@ -92,7 +107,7 @@ public enum ChildProcess {
                                    directory: URL? = nil, input: Input = .nothing, output: Output = .collect,
                                    errors: Errors = .collect, limit: Duration? = nil) throws -> Result {
         let running = try Running(executable, arguments, environment: environment, directory: directory, input: input,
-                                  output: output, errors: errors, limit: limit)
+                                  output: output, errors: errors, limit: limit, afterExit: afterExit)
         let done = DispatchSemaphore(value: 0)
         let outcome = Outcome()
         running.start {
@@ -124,11 +139,15 @@ public enum ChildProcess {
         private var timedOut = false
         private var cancelled = false
         private var done = false
+        /// Readers between taking bytes out of a pipe and keeping them.
+        private var reading = 0
+        private let afterExit: Duration
         private var completion: (@Sendable (Swift.Result<Result, Error>) -> Void)?
 
         init(_ executable: String, _ arguments: [String], environment: [String: String]?, directory: URL?,
-             input: Input, output: Output, errors: Errors, limit: Duration?) throws {
+             input: Input, output: Output, errors: Errors, limit: Duration?, afterExit: Duration) throws {
             self.limit = limit
+            self.afterExit = afterExit
             process.executableURL = URL(filePath: executable)
             process.arguments = arguments
             if let environment { process.environment = environment }
@@ -165,32 +184,33 @@ public enum ChildProcess {
             case .discard:
                 process.standardError = FileHandle.nullDevice
             case .withOutput:
-                if let outputPipe {
-                    process.standardError = outputPipe
-                } else {
-                    let pipe = Pipe.unshared()
-                    process.standardError = pipe
-                    read(pipe.fileHandleForReading, errors: true)
-                }
+                guard let outputPipe else { preconditionFailure("stderr goes with stdout only when stdout is collected") }
+                process.standardError = outputPipe
             }
         }
 
-        /// Reads `handle` as it comes, on its own queue, into what it said or what it complained.
+        /// Reads `handle` as it comes, on its own queue, into what it said or what it complained;
+        /// once the result is in, what still comes (from something it left running) is read and
+        /// let go until that ends, so it's never killed by a closed pipe the next time it prints.
+        /// The handler holds this, and so the pipe, until then.
         private func read(_ handle: FileHandle, errors: Bool) {
             open += 1
             readers.append(handle)
             handle.readabilityHandler = { [self] handle in
+                // Counted while it reads: bytes out of the pipe but not kept yet aren't caught up.
+                lock.withLock { reading += 1 }
                 let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    let finished = lock.withLock { () -> Bool in
-                        open -= 1
-                        return open == 0 && ended != nil
+                let finished = lock.withLock { () -> Bool in
+                    reading -= 1
+                    guard data.isEmpty else {
+                        if !done { errors ? complained.append(data) : said.append(data) }
+                        return false
                     }
-                    if finished { finish() }
-                } else {
-                    lock.withLock { errors ? complained.append(data) : said.append(data) }
+                    open -= 1
+                    return open == 0 && ended != nil
                 }
+                if data.isEmpty { handle.readabilityHandler = nil }
+                if finished { finish() }
             }
         }
 
@@ -209,8 +229,10 @@ public enum ChildProcess {
                 if finished {
                     finish()
                 } else {
-                    // The end of its output, or what came by a moment after.
-                    DispatchQueue.global().asyncAfter(deadline: .now() + ChildProcess.afterExit.dispatch) { [weak self] in self?.finish() }
+                    // The end of its output, or, if something it left running holds that open,
+                    // all it said before it ended a moment after.
+                    let giveUp = DispatchTime.now() + afterExit.dispatch + ChildProcess.catchingUp.dispatch
+                    DispatchQueue.global().asyncAfter(deadline: .now() + afterExit.dispatch) { [weak self] in self?.finishOnceCaughtUp(by: giveUp) }
                 }
             }
             do {
@@ -226,6 +248,21 @@ public enum ChildProcess {
             if let limit {
                 DispatchQueue.global().asyncAfter(deadline: .now() + limit.dispatch) { [weak self] in self?.stop(timedOut: true) }
             }
+        }
+
+        /// Finishes once nothing is left in its pipes or between a pipe and what's kept, so
+        /// nothing it said before is dropped; by `giveUp` whatever happens (what it left running
+        /// may never stop talking).
+        private func finishOnceCaughtUp(by giveUp: DispatchTime) {
+            let caughtUp = lock.withLock { () -> Bool in
+                reading == 0 && readers.allSatisfy { reader in
+                    var info = stat()
+                    // A pipe's size is what's in it, not read yet.
+                    return fstat(reader.fileDescriptor, &info) != 0 || info.st_size == 0
+                }
+            }
+            if caughtUp || DispatchTime.now() >= giveUp { return finish() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(10)) { [weak self] in self?.finishOnceCaughtUp(by: giveUp) }
         }
 
         /// Stops it, if it's still running: SIGTERM, then SIGKILL if that doesn't do it.
@@ -250,6 +287,8 @@ public enum ChildProcess {
                 done = true
                 return self.completion
             }
+            // It never started: nothing will come.
+            for reader in readers { reader.readabilityHandler = nil }
             letGo()
             completion?(.failure(error))
         }
@@ -258,6 +297,7 @@ public enum ChildProcess {
             let outcome = lock.withLock { () -> (Swift.Result<Result, Error>, (@Sendable (Swift.Result<Result, Error>) -> Void)?)? in
                 guard !done, let ended else { return nil }
                 done = true
+                defer { said = Data(); complained = Data() }
                 if cancelled, !timedOut { return (.failure(CancellationError()), completion) }
                 return (.success(Result(status: ended.status, reason: ended.reason, output: said, errors: complained, timedOut: timedOut)), completion)
             }
@@ -266,10 +306,10 @@ public enum ChildProcess {
             outcome.1?(outcome.0)
         }
 
-        /// Stops reading (what it left running no longer holds this end) and closes its files.
+        /// Closes its files. Its pipes stay read (and what comes let go) until what it left
+        /// running closes them: closed here, that would be killed the next time it printed.
         private func letGo() {
             process.terminationHandler = nil
-            for reader in readers { reader.readabilityHandler = nil }
             for file in files { try? file.close() }
         }
     }

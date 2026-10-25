@@ -19,62 +19,33 @@ import Testing
         (try? String(contentsOf: file, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /// Before: the old way, waiting for the program to end and only then reading what it said
-    /// (`waitUntilExit`, then `readDataToEndOfFile`), can never finish with a program that says
-    /// more than a pipe holds. Shown without waiting on a clock: once its pipe is full and it's
-    /// still running with more to say, it can't go on until something reads, and the old way
-    /// reads only after it has ended.
-    @Test func theOldWayCantFinishWithAProgramThatSaysALot() async throws {
-        defer { try? FileManager.default.removeItem(at: root) }
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", "head -c 1000000 /dev/zero"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        let reading = pipe.fileHandleForReading.fileDescriptor
-        let ended = Arrival<Void>()
-        let oldWay = Thread {
-            process.waitUntilExit()
-            _ = pipe.fileHandleForReading.readDataToEndOfFile()
-            ended.deliver(())
-        }
-        try process.run()
-        oldWay.start()
-        await Self.untilFull(reading)
-        #expect(process.isRunning, "blocked on its full pipe, with 1 MB to say")
-        #expect(!ended.hasArrived, "the old way still waits for it to end")
-        // Let it go, so nothing's left running.
-        kill(process.processIdentifier, SIGKILL)
-        _ = await ended.wait()
+    /// A named pipe in the test's folder, for a program and the test to wait on each other
+    /// without a clock.
+    private func fifo(_ name: String) throws -> URL {
+        let file = root.appending(path: name)
+        guard mkfifo(file.path, 0o600) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        return file
     }
 
-    /// Before: reading to the end of what it said can't finish when it has ended but left
-    /// something running in the background that holds its output (a daemon a hook starts): the
-    /// pipe has no more to read, and isn't at its end either.
-    @Test func theOldWayCantFinishWhenSomethingLeftRunningHoldsTheOutput() async throws {
-        let pidFile = root.appending(path: "background.pid")
-        defer {
-            if let pid = pid(in: pidFile) { kill(pid, SIGKILL) }
-            try? FileManager.default.removeItem(at: root)
-        }
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", "/bin/sleep 600 & echo $! > '\(pidFile.path)'; echo said"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        let exited = Arrival<Void>()
-        process.terminationHandler = { _ in exited.deliver(()) }
-        try process.run()
-        _ = await exited.wait()
-        let reading = pipe.fileHandleForReading.fileDescriptor
-        _ = fcntl(reading, F_SETFL, fcntl(reading, F_GETFL) | O_NONBLOCK)
-        var buffer = [UInt8](repeating: 0, count: 64)
-        #expect(Darwin.read(reading, &buffer, buffer.count) == 5, "what it said")
-        #expect(Darwin.read(reading, &buffer, buffer.count) == -1 && errno == EAGAIN,
-                "not at its end: `readDataToEndOfFile` would wait for the background job to end")
+    /// What's written to `fifo`, once something has and has closed it (waits for that).
+    private static func read(_ fifo: URL) async -> String {
+        await Task.detached { () -> String in
+            guard let handle = FileHandle(forReadingAtPath: fifo.path) else { return "" }
+            defer { try? handle.close() }
+            return String(decoding: (try? handle.readToEnd()) ?? Data(), as: UTF8.self)
+        }.value
     }
 
-    /// After: all of what it says on both, however much, and how it ended.
+    /// Writes `text` to `fifo`, once something reads it (waits for that).
+    private static func write(_ text: String, to fifo: URL) async {
+        await Task.detached {
+            guard let handle = FileHandle(forWritingAtPath: fifo.path) else { return }
+            try? handle.write(contentsOf: Data(text.utf8))
+            try? handle.close()
+        }.value
+    }
+
+    /// All of what it says on both, however much, and how it ended.
     @Test func aProgramThatSaysALotOnBothIsHeardInFull() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let result = try await ChildProcess.run("/bin/sh", ["-c", talker + "; exit 3"])
@@ -95,8 +66,8 @@ import Testing
         #expect(result.succeeded)
     }
 
-    /// After: one that ended but left something running with its output is heard, and the app
-    /// goes on, without waiting for that to end.
+    /// One that ended but left something running with its output is heard, and the app goes
+    /// on, without waiting for that to end.
     @Test func whatALeftoverHoldsDoesntHoldUpTheResult() async throws {
         let pidFiles = [root.appending(path: "background-1.pid"), root.appending(path: "background-2.pid")]
         defer {
@@ -130,20 +101,53 @@ import Testing
         #expect(kill(child, 0) != 0, "it's gone")
     }
 
-    /// A run called off (the task cancelled: a panel closed, a reconnect called off) stops its
-    /// program rather than leaving it running.
+    /// A run called off once its program is running (the task cancelled: a panel closed, a
+    /// reconnect called off) stops the program rather than leaving it running.
     @Test func aCancelledRunStopsItsProgram() async throws {
-        let pidFile = root.appending(path: "child.pid")
+        let started = try fifo("started")
+        nonisolated(unsafe) var child: pid_t?
+        defer {
+            if let child { kill(child, SIGKILL) }
+            try? FileManager.default.removeItem(at: root)
+        }
+        let task = Task {
+            try await ChildProcess.run("/bin/sh", ["-c", "echo $$ > '\(started.path)'; exec /bin/sleep 600"])
+        }
+        child = pid_t(await Self.read(started).trimmingCharacters(in: .whitespacesAndNewlines))
+        let running = try #require(child)
+        #expect(kill(running, 0) == 0, "it's running")
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(kill(running, 0) != 0, "it's gone")
+    }
+
+    /// What a program leaves running in the background (a hook's `git push &`) runs on after
+    /// the result is in, printing as it goes (more than a pipe holds), and finishes: it isn't
+    /// killed by a closed pipe the next time it prints, nor stuck on one nobody reads.
+    @Test func whatALeftoverSaysLaterDoesntStopIt() async throws {
+        let go = try fifo("go"), told = try fifo("told")
+        defer { try? FileManager.default.removeItem(at: root) }
+        // It takes no notice of SIGPIPE here, so a closed pipe shows as a failed print rather
+        // than a leftover that's gone and a test waiting on it.
+        let leftover = "(trap '' PIPE; read x < '\(go.path)'; /usr/bin/head -c 200000 /dev/zero; echo \"printed $?\" > '\(told.path)') &"
+        let result = try await ChildProcess.run("/bin/sh", ["-c", leftover + " echo now"])
+        #expect(result.outputText == "now\n")
+        await Self.write("go\n", to: go)
+        #expect(await Self.read(told) == "printed 0\n", "it printed, and finished")
+    }
+
+    /// All it said before it ended is in the result even when what it left running holds its
+    /// output and its end of it is given up on at once: the cutoff waits for the reading to
+    /// catch up.
+    @Test func whatItSaidBeforeTheCutoffIsKept() async throws {
+        let pidFile = root.appending(path: "background.pid")
         defer {
             if let pid = pid(in: pidFile) { kill(pid, SIGKILL) }
             try? FileManager.default.removeItem(at: root)
         }
-        let task = Task {
-            try await ChildProcess.run("/bin/sh", ["-c", "echo $$ > '\(pidFile.path)'; exec /bin/sleep 600"])
-        }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        if let child = pid(in: pidFile) { #expect(kill(child, 0) != 0, "it's gone") }
+        let script = "/bin/sleep 600 & echo $! > '\(pidFile.path)'; head -c 1000000 /dev/zero | tr '\\0' a"
+        let result = try await ChildProcess.run("/bin/sh", ["-c", script], afterExit: .zero)
+        #expect(result.output.count == 1_000_000)
     }
 
     /// One that can't start says why.
@@ -161,24 +165,5 @@ import Testing
         let result = try await ChildProcess.run("/bin/cat", input: .file(source), output: .file(target))
         #expect(result.succeeded)
         #expect(try Data(contentsOf: target) == Data(repeating: 7, count: 300_000))
-    }
-
-    /// Waits until the pipe that `descriptor` reads holds all it can: woken by each write, never by
-    /// a clock.
-    private static func untilFull(_ descriptor: Int32) async {
-        await Task.detached {
-            let queue = kqueue()
-            defer { close(queue) }
-            var change = kevent(ident: UInt(descriptor), filter: Int16(EVFILT_READ), flags: UInt16(EV_ADD | EV_CLEAR),
-                                fflags: 0, data: 0, udata: nil)
-            _ = kevent(queue, &change, 1, nil, 0, nil)
-            while true {
-                var info = stat()
-                fstat(descriptor, &info)
-                if info.st_blksize > 0, info.st_size >= Int64(info.st_blksize) { return }
-                var event = kevent()
-                _ = kevent(queue, nil, 0, &event, 1, nil)
-            }
-        }.value
     }
 }
