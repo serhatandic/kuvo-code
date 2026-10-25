@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// The app's identity, read from the bundle so renaming the app only touches
 /// `Config/App.xcconfig`.
@@ -16,12 +17,33 @@ nonisolated enum AppInfo {
     static let isHostingTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
 
+    /// A copy that never shows a macOS prompt, as nobody is there to answer one: the test copy, and
+    /// in a debug build a demo copy launched in the background (`KUVO_DEMO_BACKGROUND`) or with
+    /// `KUVO_DEMO_NO_PROMPTS=1`. `KUVO_DEMO_NO_PROMPTS=0` lets a background copy ask after all.
+    static let neverPrompts = isHostingTests || demoNeverPrompts(ProcessInfo.processInfo.environment)
+
+    /// Whether a demo copy launched with `environment` never prompts (always false in a release).
+    static func demoNeverPrompts(_ environment: [String: String]) -> Bool {
+        #if DEBUG
+        if let value = environment["KUVO_DEMO_NO_PROMPTS"] { return value != "0" }
+        return environment["KUVO_DEMO_BACKGROUND"] != nil
+        #else
+        return false
+        #endif
+    }
+
     /// For what shows you a macOS prompt (Touch ID, a login item, the usage panel's Keychain reads):
-    /// a test reaching it stops the run at once, saying what and from where, rather than waiting
-    /// on you to answer. The tests use stand-ins for these (see `Keychain`, `Notifier`).
-    static func neverInTests(_ what: String, file: StaticString = #fileID, line: UInt = #line) {
-        guard isHostingTests else { return }
-        fatalError("A test reached \(what), which would show a macOS prompt and wait on it. Give it a stand-in in the tests.", file: file, line: line)
+    /// whether it may go ahead. A test reaching it stops the run at once, saying what and from
+    /// where (the tests use stand-ins for these: see `Keychain`, `Notifier`); a demo copy that
+    /// never prompts skips it, and says so in the log with where it was asked from.
+    static func mayPrompt(_ what: String, file: StaticString = #fileID, line: UInt = #line) -> Bool {
+        if isHostingTests {
+            fatalError("A test reached \(what), which would show a macOS prompt and wait on it. Give it a stand-in in the tests.", file: file, line: line)
+        }
+        guard neverPrompts else { return true }
+        Logger(subsystem: realBundleID, category: "prompts")
+            .notice("Skipped \(what, privacy: .public) (\(String(describing: file), privacy: .public):\(Int(line))): this copy never shows a macOS prompt (KUVO_DEMO_NO_PROMPTS)")
+        return false
     }
 
     /// The real Kuvo Code's bundle ID: its settings, Keychain items and folders.

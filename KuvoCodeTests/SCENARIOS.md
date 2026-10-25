@@ -94,3 +94,4 @@ for Linux's tools).
 | Updates: only a release build updates itself | UpdatesTests; the release bundle's feed in CI ("Check the app bundle") | Sparkle's own window and install |
 | Move to Applications (to update itself) | AppLocationTests | the offer, a modal alert, and a disk image's read-only copy |
 | Anonymous usage stays anonymous | AnalyticsPrivacyTests | |
+| Copies for demos, tests and measurements: never as the real app or with its engine; one left to run on its own asks macOS nothing | RealAppGuardTests, DemoNoPromptsTests; the scripts' own in `Tests/Guard` | that each skipped prompt is skipped in a running copy (by hand: a background demo copy, and its `prompts` log) |

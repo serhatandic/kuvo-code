@@ -216,7 +216,17 @@ relay other than one on this Mac (`ws://127.0.0.1:8790`).
 Debug builds read these environment variables to open the app in a given state
 without clicking, for trying a change or taking screenshots. What the window does
 for them (tabs, the panel, prompts, bots, Settings) is in `KuvoCode/App/Demo`, and
-the `KUVO_PERF_*` runs are in `DemoPerf` there:
+the `KUVO_PERF_*` runs are in `DemoPerf` there.
+
+A demo copy left to run on its own must never show a macOS prompt, because nobody is
+there to answer it and the copy would wait for good. With `KUVO_DEMO_BACKGROUND`, or
+`KUVO_DEMO_NO_PROMPTS=1`, it asks nothing, as the test copy doesn't: no request to
+show notifications; Keychain reads and writes that would ask fail at once instead;
+Touch ID, Open at Login and the usage panel are skipped; and the engine leaves out
+`~/.claude/skills`, where a link can lead into your Desktop. Each skip is in the log
+with where it was asked from (`log show --predicate 'subsystem == "run.kuvo.code" AND
+category == "prompts"'`). `KUVO_DEMO_NO_PROMPTS=0` lets a background copy ask after all,
+when you're there to answer.
 
 | Variable | Effect |
 | --- | --- |
@@ -237,7 +247,8 @@ the `KUVO_PERF_*` runs are in `DemoPerf` there:
 | `KUVO_DEMO_QUEUE` | Messages to queue once that session's agent is working, separated by `\|` |
 | `KUVO_DEMO_WAITING` | With `KUVO_DEMO_SESSION`: these messages shown waiting in its queue, separated by `\|`, without sending them; `<words>@<picture path>` attaches a picture |
 | `KUVO_DEMO_NEW_PROJECT` | Open the New Project sheet with these comma-separated folders |
-| `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere |
+| `KUVO_DEMO_BACKGROUND` | Don't bring the window forward, so it doesn't take the keyboard while you work elsewhere; it also asks nothing of macOS (above) |
+| `KUVO_DEMO_NO_PROMPTS` | `1`: never show a macOS prompt (above); `0`: a background copy may ask after all |
 | `KUVO_DEMO_TAB_IDLE` | Seconds an agent's tab you haven't looked at stays once no agent works in it (an hour otherwise) |
 | `KUVO_DEMO_FILES` | Comma-separated paths to attach to that prompt |
 | `KUVO_DEMO_COMPOSER_FILES` | Comma-separated paths to show as attached in the composer |

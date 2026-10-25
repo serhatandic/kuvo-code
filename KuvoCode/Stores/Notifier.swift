@@ -418,6 +418,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // The tests' copy never asks, nor posts: macOS would show its prompt for it, then the
         // tests' notifications.
         if AppInfo.isHostingTests { return false }
+        // Nor does a demo copy that never prompts.
+        guard AppInfo.mayPrompt("asking to show notifications") else { return false }
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
         isAuthorized = granted
         return granted

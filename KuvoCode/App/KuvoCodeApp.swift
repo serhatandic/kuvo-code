@@ -44,6 +44,9 @@ enum Launch {
                 Logger(subsystem: AppInfo.realBundleID, category: "launch").fault("\(refusal, privacy: .public)")
                 exit(78)
             }
+            // A demo copy left to run on its own asks nothing: what would wait on the Keychain's
+            // prompt fails at once instead (see `AppInfo.neverPrompts`).
+            if AppInfo.neverPrompts { Keychain.neverAsk() }
             #endif
             KuvoCodeApp.main()
         }
