@@ -1125,7 +1125,7 @@ extension AgentMail {
                 // With this Mac's digest of documents, so a machine that missed one gets it now.
                 // With what this Mac's box answers: its bots take a chat's turns there (`groups.seats`).
                 var payload: [String: Any] = ["agents": ["at": Self.now, "list": encoded, "features": PhoneLink.features], "at": Self.now]
-                if let have = app.phoneLink.documentsDigest() { payload["docs"] = ["have": have] }
+                if let have = await app.phoneLink.documentsDigest() { payload["docs"] = ["have": have] }
                 let mailed = await app.phoneLink.mail(payload, to: machine)
                 if mailed == .sent { announcedTo[machine] = (data, now, Set(list.prefix(count).map(\.session))) }
                 if mailed != .tooBig { break }

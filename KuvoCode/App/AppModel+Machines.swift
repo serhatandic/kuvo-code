@@ -608,8 +608,8 @@ extension AppModel {
     /// Your personalities changed here (made, changed or removed, or taken from one machine): the
     /// machines connected now take them, with what their bots and group chats are told.
     func personalitiesChanged(except machine: String? = nil) {
-        // Every machine hears it by mail too, connected or not (PROTOCOL.md, "Documents").
-        Task { await phoneLink.tellMachines() }
+        // (Every machine hears it by mail too, connected or not: this Mac's box tells them,
+        // PROTOCOL.md "Documents".)
         // This Mac's bots with one of them are told what it is now, by its box.
         bots.personalitiesChanged()
         // This Mac's group chats, what each personality tells a bot.

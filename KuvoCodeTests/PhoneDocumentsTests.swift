@@ -6,178 +6,150 @@ import Testing
 @testable import KuvoCode
 
 /// This Mac's side of the documents your computers copy between them (PROTOCOL.md, "Documents"),
-/// as its real PhoneLink keeps them: a phone removed on a machine leaves this Mac too; a machine's
-/// view of your personalities comes in, an older or forged one changes nothing; a machine you
-/// remove is named in what this Mac gives the others, so it lets this Mac go; and a Mac that lost
-/// count of its own moves past what a machine has. Only the machine is a stand-in: documents
-/// signed with a key of its own.
+/// as the app hands them to this Mac's box, which keeps the rules (the bridge's tests' mac-docs and
+/// two-boxes): your machines as Kuvo Code set them up, one you remove named so it lets this Mac go;
+/// how far this Mac's documents had come before the box kept them, never back; a phone removed on a
+/// machine leaving this Mac too; and the copy the app keeps for an older Kuvo Code, which reads it
+/// as it always has. The box is the real one, its relay one nobody answers; only the machines are
+/// stand-ins: documents signed with keys of their own.
 @MainActor
-@Suite(.serialized) struct PhoneDocumentsTests {
-    init() { TestEnvironment.prepare() }
+@Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneDocumentsTests {
+    let folder: URL
+    var file: URL { folder.appending(path: "phone-link.json") }
+
+    init() throws {
+        TestEnvironment.prepare()
+        folder = AppInfo.testRoot.appending(path: "PhoneDocuments/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
+        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
+    }
 
     /// A machine as this Mac keeps it, with the key it signs with.
     private struct Machine {
         let id: String
         let key = Documents.SigningKey()
         let x25519 = LinkKey()
+        var sign: String { Documents.origin(of: key) }
         var host: [String: Any] {
-            ["name": id, "address": Data(repeating: 7, count: 16).base64URL, "key": x25519.publicBytes.base64URL, "peers": true, "sign": Documents.origin(of: key)]
+            ["name": id, "address": Data(repeating: 7, count: 16).base64URL, "key": x25519.publicBytes.base64URL, "peers": true, "sign": sign]
         }
         func sign(_ kind: String, _ n: Int, _ body: [String: Any]) throws -> [String: Any] {
             Documents.sign(key, kind: kind, n: n, body: try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)).json
         }
     }
 
-    /// A PhoneLink with a file of its own: `phones` paired here, `machines` set up.
-    private func link(phones: [[String: Any]] = [], machines: [Machine], also: [String: [String: Any]] = [:]) throws -> (PhoneLink, URL) {
-        let file = AppInfo.testRoot.appending(path: "PhoneDocuments/\(UUID().uuidString).json")
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let saved: [String: Any] = ["phones": phones, "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) }).merging(also) { $1 }]
+    /// As an older Kuvo Code kept them: `phones` paired here, `machines` set up, and how far this
+    /// Mac's own documents had come (`counts`, by kind).
+    private func kept(phones: [[String: Any]] = [], machines: [Machine], also: [String: [String: Any]] = [:], counts: [String: Int] = [:]) throws {
+        let own = counts.mapValues { ["n": $0, "h": "", "b": ""] as [String: Any] }
+        let saved: [String: Any] = ["phones": phones, "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) }).merging(also) { $1 },
+                                    "documents": ["own": own, "held": [:], "views": [:], "left": []]]
         try JSONSerialization.data(withJSONObject: saved).write(to: file)
-        return (PhoneLink(file: file, identity: (LinkKey(), RelaySecret())), file)
     }
 
-    private func body(_ envelope: Documents.Envelope) -> [String: Any] { Documents.read(envelope)?.object ?? [:] }
-
-    /// Removed on a machine: gone here, and from this Mac's box, which lets phones in (the box is
-    /// the real one, its relay one nobody answers).
-    @Test(.timeLimit(.minutes(1))) func aPhoneRemovedOnAMachineLeavesThisMacToo() async throws {
-        let lab = Machine(id: "lab.invalid")
-        let lost = Data(repeating: 1, count: 32).base64URL, kept = Data(repeating: 2, count: 32).base64URL
-        let phone = { (key: String, pairing: String) -> [String: Any] in ["key": key, "name": "iPhone", "added": 0, "pairing": pairing] }
-        UserDefaults.standard.set(true, forKey: "phoneLink")
-        UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
-        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
-        let (link, file) = try link(phones: [phone(lost, "p1"), phone(kept, "p2")], machines: [lab])
-        let box = try await SettingsBox(port: 47_951)
+    /// This Mac's link, as the app starts it, on a box of the test's own: once the box has its
+    /// machines and what was kept, and tries the relay.
+    private func started(on box: SettingsBox) async throws -> PhoneLink {
+        let link = PhoneLink(file: file, identity: (LinkKey(), RelaySecret()), signing: signing)
         let client = box.client
         link.box = { client }
+        // It has machines, as the app says: this Mac meets them at the relay.
+        link.hasMachines = { true }
+        box.box.host.phoneLink = link
         link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
-        defer {
-            link.stop()
-            box.stop()
-            try? FileManager.default.removeItem(at: file)
-            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
-        }
-        struct Kept: Decodable { struct Phone: Decodable { var key: String }; var phones: [Phone] }
-        let onTheBox = { try await client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.key).sorted() }
-        try await until { if case .failed = link.status { true } else { false } }
-        #expect(try await onTheBox() == [lost, kept].sorted())
-        // Signed by another key, as if by the machine: nothing.
-        let forged = Documents.sign(Documents.SigningKey(), kind: "phones", n: 1, body: Data(#"{"phones":[],"removed":[{"key":"\#(lost)","pairing":"p1"}]}"#.utf8))
-        link.takeDocuments(["give": [forged.json]], from: lab.id)
-        #expect(link.phones.map(\.key).sorted() == [lost, kept].sorted())
-        // The machine's own: the lost phone removed itself there.
-        link.takeDocuments(["give": [try lab.sign("phones", 1, ["phones": [], "removed": [["key": lost, "pairing": "p1"]]])]], from: lab.id)
-        #expect(link.phones.map(\.key) == [kept])
-        #expect(link.paired.removed.contains(.init(key: lost, pairing: "p1")))
-        // This Mac's box no longer lets it in.
-        await link.removalsTaken()
-        #expect(try await onTheBox() == [kept])
-        // Kept so after a restart.
-        #expect(PhoneLink(file: file).phones.map(\.key) == [kept])
+        try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
+        return link
     }
 
-    @Test func aMachinesViewOfYourPersonalitiesComesInAndAnOlderOneDoesnt() async throws {
-        let lab = Machine(id: "lab.invalid")
-        let (link, file) = try link(machines: [lab])
-        defer { try? FileManager.default.removeItem(at: file) }
-        // Where this Mac keeps them: its box, which the app's store reaches.
-        try? FileManager.default.removeItem(at: Personalities.boxFile)
-        let box = try await SettingsBox(port: 47_935)
-        let shared = Personalities.shared
-        shared.box = { box.client }
-        var told: Set<String> = []
-        let onChange = shared.onChange
-        shared.onChange = { told.formUnion($0) }
-        defer {
-            shared.box = { nil }
-            shared.onChange = onChange
-            box.stop()
-            try? FileManager.default.removeItem(at: Personalities.boxFile)
-        }
-        await shared.refresh()
-        let id = "custom.lab-\(UUID().uuidString.lowercased())"
-        let made = ["id": id, "name": "Calm", "description": "Made on the machine.", "symbol": "person.crop.circle", "updated": 1_760_000_000_000] as [String: Any]
-        await link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)?.value
-        #expect(shared.personality(id)?.description == "Made on the machine.")
-        #expect(told == [id], "its bots are told")
-        // An older view of the machine's, though it counts the change higher: nothing.
-        var older = made
-        older["description"] = "Older."
-        older["updated"] = 1_760_000_000_900
-        await link.takeDocuments(["give": [try lab.sign("personalities", 4, ["personalities": [older], "removed": []])]], from: lab.id)?.value
-        #expect(shared.personality(id)?.description == "Made on the machine.")
-        // Removed there: removed here, whatever this Mac changed meanwhile.
-        try await shared.update(Personality(id: id, name: "Calm", description: "Changed here.", symbol: "person.crop.circle"))
-        await link.takeDocuments(["give": [try lab.sign("personalities", 6, ["personalities": [], "removed": [["id": id, "removed": 1_760_000_000_001]]])]], from: lab.id)?.value
-        #expect(shared.personality(id) == nil)
-        // None left for the suites after.
-        try? FileManager.default.removeItem(at: Personalities.boxFile)
-        await shared.refresh()
+    let signing = Documents.SigningKey()
+
+    private func done(_ box: SettingsBox, _ link: PhoneLink) {
+        link.stop()
+        box.stop()
+        try? FileManager.default.removeItem(at: folder)
+        for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    /// One that comes while this Mac's box isn't up (Kuvo Code starting) isn't lost: this Mac
-    /// doesn't say it has it, so the machine gives it again.
-    @Test func aMachinesViewThatCouldntBeTakenIsAskedForAgain() async throws {
-        let lab = Machine(id: "lab.invalid")
-        let (link, file) = try link(machines: [lab])
-        defer { try? FileManager.default.removeItem(at: file) }
-        Personalities.shared.box = { nil }
-        let made = ["id": "custom.lab-calm", "name": "Calm", "description": "Made on the machine.", "symbol": "person.crop.circle", "updated": 1_760_000_000_000] as [String: Any]
-        await link.takeDocuments(["give": [try lab.sign("personalities", 5, ["personalities": [made], "removed": []])]], from: lab.id)?.value
-        let origin = Documents.origin(of: lab.key)
-        let have = link.documents.digest(origin: "this-mac")
-        #expect(!have.contains { $0.first as? String == origin && $0[1] as? String == "personalities" }, "its view isn't claimed: \(have)")
-        #expect(PhoneLink(file: file).documents.views[origin] == nil, "nor after a restart")
+    /// This Mac's own documents as setting a machine up gives them, read.
+    private func own(_ box: SettingsBox) async throws -> [String: Documents.Document] {
+        struct Given: Decodable { var macSign: String; var docs: [Documents.Envelope] }
+        let given = try await box.client.value(Given.self, "GET", "kuvo/link/setup")
+        #expect(given.macSign == Documents.origin(of: signing), "signed with this Mac's key, from your Keychain")
+        return Dictionary(given.docs.compactMap(Documents.read).filter { $0.origin == given.macSign }.map { ($0.kind, $0) }) { first, _ in first }
     }
 
-    @Test func aMachineYouRemoveIsToldThisMacLetItGo() throws {
+    @Test func yourMachinesAreTheBoxsAndOneYouRemoveIsToldThisMacLetItGo() async throws {
         let lab = Machine(id: "lab.invalid"), shed = Machine(id: "shed.invalid")
-        let (link, file) = try link(machines: [lab, shed])
-        defer { try? FileManager.default.removeItem(at: file) }
-        let peers = { () throws -> [String: Any] in
-            self.body(try #require(link.allDocuments().first { Documents.read($0)?.kind == "peers" }))
-        }
-        let boxes = try #require(try peers()["boxes"] as? [[String: Any]])
+        try kept(machines: [lab, shed])
+        let box = try await SettingsBox(port: 47_962)
+        let link = try await started(on: box)
+        defer { done(box, link) }
+        let peers = { try await own(box)["peers"]?.object ?? [:] }
+        let boxes = try #require(try await peers()["boxes"] as? [[String: Any]])
         #expect(boxes.compactMap { $0["id"] as? String }.sorted() == ["lab.invalid", "shed.invalid"])
-        #expect(boxes.first { $0["id"] as? String == "lab.invalid" }?["sign"] as? String == Documents.origin(of: lab.key))
+        #expect(boxes.first { $0["id"] as? String == "lab.invalid" }?["sign"] as? String == lab.sign)
         link.forget(machine: shed.id)
-        let after = try peers()
+        await link.saidToBox()
+        let after = try await peers()
         #expect((after["boxes"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["lab.invalid"])
         #expect(after["left"] as? [String] == [shed.x25519.publicBytes.base64URL])
     }
 
-    @Test func oneComputerUnderTwoNamesStaysWhenOneNameIsForgotten() throws {
+    @Test func oneComputerUnderTwoNamesStaysWhenOneNameIsForgotten() async throws {
         let lab = Machine(id: "lab.invalid")
-        let (link, file) = try link(machines: [lab], also: ["lab-alias.invalid": lab.host])
-        defer { try? FileManager.default.removeItem(at: file) }
+        try kept(machines: [lab], also: ["lab-alias.invalid": lab.host])
+        let box = try await SettingsBox(port: 47_963)
+        let link = try await started(on: box)
+        defer { done(box, link) }
         // Folded into the other (Settings › Machines: two names for one computer).
         link.forget(machine: "lab-alias.invalid")
-        let peers = body(try #require(link.allDocuments().first { Documents.read($0)?.kind == "peers" }))
+        await link.saidToBox()
+        let peers = try await own(box)["peers"]?.object ?? [:]
         #expect((peers["boxes"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == ["lab.invalid"])
         #expect(peers["left"] as? [String] == [], "still one of this Mac's, so not told to let it go")
     }
 
-    @Test func aDigestCantPushThisMacsCountPastWhatItCanCountOnFrom() throws {
+    /// How far this Mac's documents had come before its box kept them: the box goes on from there,
+    /// and the copy an older Kuvo Code reads says so, read as that version reads it.
+    @Test func thisMacsCountsGoOnFromBeforeAndAnOlderVersionReadsThem() async throws {
         let lab = Machine(id: "lab.invalid")
-        let (link, file) = try link(machines: [lab])
-        defer { try? FileManager.default.removeItem(at: file) }
-        let first = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
-        link.takeDocuments(["have": [[first.origin, "peers", Int.max, "x"], [first.origin, "phones", 9_007_199_254_740_991, "x"]]], from: lab.id)
-        let now = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
-        #expect(now.n == first.n)
+        try kept(machines: [lab], counts: ["peers": 30, "phones": 12])
+        let box = try await SettingsBox(port: 47_964)
+        let link = try await started(on: box)
+        defer { done(box, link) }
+        let now = try await own(box)
+        let peers = try #require(now["peers"]), phones = try #require(now["phones"])
+        #expect(peers.n > 30 && phones.n > 12, "past what your machines have")
+        // The copy: what an older Kuvo Code decodes, its counts the box's.
+        struct Older: Decodable { var documents: MacDocuments }
+        try await until { (try? JSONDecoder().decode(Older.self, from: Data(contentsOf: file)))?.documents.own["peers"]?.n == peers.n }
+        let older = try JSONDecoder().decode(Older.self, from: Data(contentsOf: file))
+        #expect(older.documents.own["phones"]?.n == phones.n)
     }
 
-    @Test func aMacThatLostCountMovesPastWhatAMachineHas() throws {
+    /// Removed on a machine (its phones document, as setting it up brings it, or its mail): gone
+    /// from this Mac's box, here, and where an older version reads your phones.
+    @Test func aPhoneRemovedOnAMachineLeavesThisMacToo() async throws {
         let lab = Machine(id: "lab.invalid")
-        let (link, file) = try link(machines: [lab])
-        defer { try? FileManager.default.removeItem(at: file) }
-        let first = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
-        // The machine has this Mac's peers document at version 7 (from before this Mac's file was
-        // put back from an older copy, say).
-        link.takeDocuments(["have": [[first.origin, "peers", 7, "x"]]], from: lab.id)
-        let now = try #require(link.allDocuments().compactMap(Documents.read).first { $0.kind == "peers" })
-        #expect(now.n == 8)
+        let lost = Data(repeating: 1, count: 32).base64URL, keep = Data(repeating: 2, count: 32).base64URL
+        let phone = { (key: String, pairing: String) -> [String: Any] in ["key": key, "name": "iPhone", "added": 0, "pairing": pairing] }
+        try kept(phones: [phone(lost, "p1"), phone(keep, "p2")], machines: [lab])
+        let box = try await SettingsBox(port: 47_965)
+        let link = try await started(on: box)
+        defer { done(box, link) }
+        let from = lab.x25519.publicBytes.base64URL
+        let given = { (doc: [String: Any]) throws -> Data in try JSONSerialization.data(withJSONObject: ["from": from, "docs": ["give": [doc]]]) }
+        // Signed by another key, as if by the machine: nothing.
+        let forged = try given(Documents.sign(Documents.SigningKey(), kind: "phones", n: 1, body: Data(#"{"phones":[],"removed":[{"key":"\#(lost)","pairing":"p1"}]}"#.utf8)).json)
+        _ = try await box.client.send("POST", "kuvo/link/docs", body: forged)
+        #expect(link.phones.map(\.key).sorted() == [lost, keep].sorted())
+        // The machine's own: the lost phone removed itself there.
+        let own = try given(try lab.sign("phones", 1, ["phones": [], "removed": [["key": lost, "pairing": "p1"]]]))
+        _ = try await box.client.send("POST", "kuvo/link/docs", body: own)
+        try await until { link.phones.map(\.key) == [keep] }
+        #expect(link.paired.removed.contains(.init(key: lost, pairing: "p1")))
+        #expect(PhoneLink(file: file).phones.map(\.key) == [keep], "kept so after a restart, and for an older version")
     }
 }

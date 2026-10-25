@@ -149,7 +149,7 @@ final class Moves {
         }
         app?.workspace.movedAway = away
         // Your machines hear where moved conversations live now.
-        if let app { Task { await app.phoneLink.tellMachines() } }
+        app?.phoneLink.peersChanged()
         Self.pending = Set(records.filter { record in
             record.kind == .bot && record.stage == .switched && underWay[record.id] == nil && app?.bots.bot(record.id).map { $0.machine == record.from } == true
         }.flatMap { [$0.id] + $0.sessions })

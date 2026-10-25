@@ -89,12 +89,16 @@ function noted(provider) {
     try { return provider in JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
   };
   return new Promise(resolve => {
-    if (has()) return resolve();
+    // Watched before it's looked at, so a write in between isn't missed.
     const watcher = fs.watch(path.dirname(file), () => {
       if (!has()) return;
       watcher.close();
       resolve();
     });
+    if (has()) {
+      watcher.close();
+      resolve();
+    }
   });
 }
 

@@ -170,6 +170,13 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   itself left out ("Peers"). `left` names the machines that Mac removed (never one it still has,
   under another name): a box that finds itself there and no longer among `boxes` stops counting
   that Mac, as `leave` does. The Mac mails it to a machine as it removes it, once.
+- **This Mac's box** keeps the Mac's side (bridge 0.9.62): it signs the Mac's documents with the
+  Mac's signing key (from the app, in memory only), takes its machines' and passes them on, and
+  mails them on its relay connection, as a machine's bridge does; its peers are the machines its
+  app set up (`kuvo/link/peers`, "This Mac's box: the relay"). It takes `peers` only of its own (a
+  copy it lost count of), and `phones` and `personalities` from its machines and itself. Before,
+  the app did this itself, with its counts in `phone-link.json`; the box takes them as it starts,
+  and its app writes the box's back there, so going back to an older Kuvo Code goes on from them.
 - **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
   pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
   lets in its own and its Macs' phones, less every pairing removed in any phones document it
@@ -1433,7 +1440,8 @@ frame that isn't one, the app away) stops the box's own routes.
 What a phone asks, it answers itself for the areas that have moved onto it and its phones
 (`kuvo/phones…`); the rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
-machines send it, it hands the app (`link/mailed`) until what that mail carries moves onto the box.
+machines send it, it takes the documents of itself (from 0.9.62), and hands the app the rest
+(`link/mailed`) until that moves onto the box too.
 All three go through the app's `hello` proof first (the host interface, above), and the link's
 keys (`link/identity`) are never asked of a host that hasn't given it. When the app's host
 interface starts again (it failed, or Try Again), what the link has open through it ends: a phone's
@@ -1455,12 +1463,27 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `POST kuvo/link/phones/take {"phones", "removed"}`: phones an older Kuvo Code kept
+- `POST kuvo/link/phones/take {"phones", "removed", "documents"?}`: phones an older Kuvo Code kept
   (`phone-link.json`), met with the box's: each in unless its pairing was removed, each removal
-  taking off what it removes. The app keeps `phone-link.json` in step with the box, so going back
+  taking off what it removes; and how far this Mac's documents had come (`documents`, `{own, held,
+  views, left}`, as `phone-link.json` keeps them: the box's counts only ever go up). The app keeps
+  `phone-link.json` in step with the box (`kuvo/link/phones` carries `documents` too), so going back
   to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
 - `POST kuvo/link/send {"to", "frame"}`: a mail frame the app sealed itself (base64), to a relay
   address (base64url): `200`, `503` while not on the relay, `413` for one too big for it.
+- `PUT kuvo/link/peers {"peers": [{key, sign, address, name, id}], "moved": [{session, key}]}`
+  (bridge 0.9.62): your machines the app set up over SSH that sign their documents, and the
+  conversations being moved, for the Mac's peers document. One no longer there is one this Mac
+  removed: named in `left`, and mailed the peers document once, while the box still knows where it
+  is. `400 {"message"}` for one that isn't a machine's record.
+- `GET kuvo/link/setup` → `{"mac", "macSign", "docs"}`: what setting up a machine over SSH gives it
+  (this Mac's key, the key its documents are signed with, and its documents, its own as they are
+  now and those it keeps of its machines). `POST kuvo/link/docs {"from", "docs"}`: what the
+  machine's setup answer gave of documents (`from`, its key), taken as if by mail; `404` for one
+  that isn't one of this Mac's machines.
+- `GET kuvo/link/documents` → `{"own", "held", "views", "left", "have"}`: this Mac's documents as the
+  box keeps them, its own brought up to date first, and its digest, which the app's agents' mail
+  carries until that mail moves here too.
 
 The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
 phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone
