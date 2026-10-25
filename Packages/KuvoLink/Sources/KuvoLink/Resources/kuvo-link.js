@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.51";
+export const BRIDGE_VERSION = "0.9.52";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -747,10 +747,10 @@ const keyFile = name => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS
 /** What this Mac's box let go of (in its trash), moved on by its app to the Finder's Trash (`trash`);
  * nothing without its app. */
 async function hostTrash(folder) {
-  if (!KEY_HOST) return;
-  const response = await fetch(`${KEY_HOST.url}/trash`, {
+  if (!APP_HOST) return;
+  const response = await fetch(`${APP_HOST.url}/trash`, {
     method: "POST",
-    headers: { authorization: `Bearer ${KEY_HOST.password}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${APP_HOST.password}`, "content-type": "application/json" },
     body: JSON.stringify({ path: folder }),
     signal: AbortSignal.timeout(15_000),
   });

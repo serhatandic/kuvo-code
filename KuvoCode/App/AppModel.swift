@@ -639,6 +639,10 @@ final class AppModel {
         #endif
         eventTask?.cancel()
         eventTask = nil
+        // What it followed of this Mac's box (its projects, worktrees, wake-ups and bots) stops
+        // with it, and starts again with the next start.
+        boxFollowed?.cancel()
+        boxFollowed = nil
         server?.stop()
         server = nil
         BoxProcess.engineChanged(nil, version: nil, pid: nil)

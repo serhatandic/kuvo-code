@@ -292,14 +292,14 @@ final class Bots {
     func follow() async {
         struct Line: Decodable { var bots: [ListedBot] }
         while !Task.isCancelled {
-            if let app {
-                do {
+            // The app gone (a test's): nothing more to follow for it.
+            guard let app else { return }
+            do {
                     for try await data in (client(BoxClient.mac) ?? app.box(BoxClient.mac)).follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
                         take(line.bots, from: BoxClient.mac)
                     }
-                } catch {}
-            }
+            } catch {}
             // The box started again, or isn't up yet: followed again in a moment.
             try? await Task.sleep(for: .seconds(2))
         }

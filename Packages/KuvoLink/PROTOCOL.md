@@ -1349,7 +1349,7 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
   those it can tell. The app reads the cookies again only once they've changed (or after 30
   seconds);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
-  Finder's Trash (bridge 0.9.51); one anywhere else stays where it is.
+  Finder's Trash (bridge 0.9.52); one anywhere else stays where it is.
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it

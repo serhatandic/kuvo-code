@@ -16,16 +16,17 @@ after(() => fs.rmSync(support, { recursive: true, force: true }));
 // The app, keeping keys by name, answering or not.
 const kept = new Map([["KUVO_KEY_TODOIST_TODOIST_API_KEY__BOT_ADA0000001", "tok"], ["KUVO_KEY_TODOIST_TODOIST_API_KEY", "shared"]]);
 let answering = false;
+const trashed = [];
 const host = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const reply = (status, value) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
-    if (!answering) return reply(503, { message: "Not now." });
     const given = body ? JSON.parse(body) : {};
+    if (request.url === "/trash") { trashed.push(given.path); return reply(200, {}); }
+    if (!answering) return reply(503, { message: "Not now." });
     if (request.url === "/keys/names") return reply(200, { names: [...kept.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? "")) });
     if (request.url === "/keys/delete") { kept.delete(given.name); return reply(200, {}); }
-    if (request.url === "/trash") return reply(200, {});
     reply(404, {});
   });
 });
@@ -52,6 +53,9 @@ test("a bot deleted while its app isn't answering for its keys goes at once, and
   for await (const part of handle({ method: "DELETE", path: "kuvo/bots/bot_ada0000001", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
   assert.equal(parts[0].head.status, 200, "deleted all the same");
   assert.equal(fs.existsSync(folder), false);
+  // Its folder handed to the app for the Finder's Trash, from the box's own trash folder.
+  assert.equal(trashed.length, 1);
+  assert.ok(trashed[0].startsWith(path.join(process.env.KUVO_HOME, "trash") + path.sep) && trashed[0].endsWith("bot_ada0000001"), trashed[0]);
   assert.ok(kept.has("KUVO_KEY_TODOIST_TODOIST_API_KEY__BOT_ADA0000001"), "its key couldn't be reached yet");
 
   answering = true;
