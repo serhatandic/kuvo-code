@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Each computer sends its own wake-ups and watches, your Mac the same way as a machine, and your phone sees one added, sent or paused anywhere at once. A wake-up that can't be delivered is tried again after a minute, then less and less often, up to every half hour, on machines too.
+- Each computer sends its own wake-ups and watches, your Mac the same way as a machine. A wake-up that can't be delivered is tried again after a minute, then less and less often, up to every half hour, on machines too.
 - Your Mac's group chats run the same way as a machine's now, in what Kuvo Code keeps running in the background on your Mac: they meet, talk and hand out work with the window closed, and a group chat on your Mac can have bots from your machines, each taking its turn on its own machine. Your chats move over the first time you open this version, as they were; the old files are kept in Kuvo Code's Backups folder.
 - While your Mac's group chats are starting, or if they stop, a chat shows as you last saw it and says so above the composer, and what you write waits there; stopped, the chat and the sidebar offer Restart.
 - A group chat you delete on your Mac goes to the Trash.
