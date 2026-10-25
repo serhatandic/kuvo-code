@@ -51,8 +51,6 @@ final class PhoneLink {
     /// Your bots, for `kuvo/bots`: the phone draws and describes each as the Mac does; set by
     /// AppModel.
     @ObservationIgnored weak var bots: Bots?
-    /// Every conversation's wake-ups and watches, for `kuvo/wakes`; set by AppModel.
-    @ObservationIgnored weak var wakeUps: WakeUps?
     /// What agents ask you for while they browse, for `kuvo/asks`: a phone answers them as the
     /// cards in the window do; set by AppModel.
     @ObservationIgnored weak var browserAsks: BrowserAsks?
@@ -774,8 +772,26 @@ final class PhoneLink {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
-            return EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
-                                        allowing: { path, _ in path.hasPrefix("kuvo/") })
+            let forwarded = EngineRoutes.forward(request, to: base, password: box.password, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
+                                                 allowing: { path, _ in path.hasPrefix("kuvo/") })
+            // A change to a conversation's wake-ups: what the app shows of them (and `kuvo/bots`
+            // lists) has it before the answer goes back, so what's read next agrees.
+            let parts = route.split(separator: "/").map(String.init)
+            guard request.method.uppercased() == "POST", parts.count >= 3, parts[1] == "wakes", let session = parts[2].removingPercentEncoding else { return forwarded }
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        var answer: [LinkResponsePart] = []
+                        for try await part in forwarded { answer.append(part) }
+                        await link?.wakesChanged(session)
+                        for part in answer { continuation.yield(part) }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
         }
         var routed = request
         routed.path = route
@@ -916,17 +932,6 @@ final class PhoneLink {
                 Task { @MainActor in
                     let reads = ["GET", "HEAD"].contains(request.method.uppercased())
                     let (status, body) = reads ? await link?.credentialsJSON() ?? (503, Data()) : (405, Data("{}".utf8))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
-                }
-            }
-        }
-        // A session's wake-ups and watches: read, or one canceled.
-        if route.hasPrefix("kuvo/wakes/") {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = await link?.answerWakes(request) ?? (503, Data())
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(body))
                     continuation.finish()
@@ -1146,7 +1151,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/config", "kuvo/mcp/catalog"]
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
 
@@ -1223,7 +1228,7 @@ final class PhoneLink {
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
         "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
         "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "wakes", "wakes.edit", "worktrees", "worktrees.events",
+        "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1255,7 +1260,7 @@ final class PhoneLink {
         }
         let encoder = JSONEncoder()
         // A list is read (GET, or HEAD), as a machine's bridge has it: anything else is 405.
-        if ["kuvo/bots", "kuvo/named", "kuvo/asks", "kuvo/wakes"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
+        if ["kuvo/bots", "kuvo/named", "kuvo/asks"].contains(request.path), !["GET", "HEAD"].contains(request.method.uppercased()) {
             return (405, Data("{}".utf8))
         }
         switch request.path {
@@ -1297,20 +1302,6 @@ final class PhoneLink {
             return (200, Data("{}".utf8))
         case "kuvo/asks":
             return (200, asksJSON())
-        case "kuvo/wakes":
-            // Every session's with a wake-up or a watch, for the marks beside it as in the sidebar:
-            // its soonest wake-up (seconds since 1970) and whether it watches. Bots' come with `kuvo/bots`.
-            struct Listed: Encodable {
-                struct Entry: Encodable { var session: String; var next: Double?; var watching: Bool }
-                var sessions: [Entry]
-            }
-            let wakes = wakeUps?.wakes ?? [:]
-            let watches = wakeUps?.watches ?? [:]
-            let keys = Set(wakes.filter { !$0.value.isEmpty }.keys).union(watches.filter { !$0.value.isEmpty }.keys).filter { bots?.bot($0) == nil }
-            let entries = keys.sorted().map { key in
-                Listed.Entry(session: key, next: wakes[key]?.map(\.due).min()?.timeIntervalSince1970, watching: watches[key]?.isEmpty == false)
-            }
-            return (200, (try? JSONEncoder().encode(Listed(sessions: entries))) ?? Data())
         case "kuvo/accounts/ended":
             return (200, (try? JSONEncoder().encode(["providers": endedSignIns()])) ?? Data())
         case let path where path.hasPrefix("kuvo/accounts/") && path.hasSuffix("/forget") && request.method.uppercased() == "POST":
@@ -1646,6 +1637,16 @@ final class PhoneLink {
         var personality: String?, model: ModelRef?
     }
 
+    /// A conversation's wake-ups as its box has them now, for what the app shows of them.
+    func wakesChanged(_ session: String) async {
+        guard let app = bots?.app else { return }
+        if let bot = app.bots.bot(forSession: session) {
+            await app.wakeUps.read(bot.wakeOwner)
+        } else if let found = app.workspace.session(session) {
+            await app.wakeUps.read(WakeUps.owner(of: found))
+        }
+    }
+
     private func entry(_ bot: Bot) -> BotEntry {
         BotEntry(id: bot.id, session: bot.sessionID, name: bot.name, look: bot.look, machine: bot.machine, job: bot.job,
                  paused: bots?.paused.contains(bot.id) == true,
@@ -1874,89 +1875,6 @@ final class PhoneLink {
         return String(parts[2]).removingPercentEncoding
     }
 
-    /// `GET kuvo/wakes/<session>`: its wake-ups, watches and whether they're paused, read now;
-    /// `POST kuvo/wakes/<session>` with `{"due", "every"?, "note"}` adds one; `…/cancel` with
-    /// `{"wake": "<id>"}` or `{"watch": "<letters>"}` cancels one, `…/now` with `{"wake": "<id>"}`
-    /// sends one now (one that repeats still comes back at its time), and `…/pause` with
-    /// `{"paused"}` holds them or lets them go, as the bar over the Mac's composer does. Adding and
-    /// pausing answer the list as it is then. Times are seconds since 1970.
-    /// A wake-up that couldn't go or be taken back: 409 while its conversation is on its way to
-    /// another computer (as a machine's bridge says it), else 503.
-    nonisolated private static func status(of error: any Error) -> Int {
-        if case .moving? = error as? Moves.Failure { return 409 }
-        return 503
-    }
-
-    private func answerWakes(_ request: LinkRequest) async -> (Int, Data) {
-        let parts = request.path.split(separator: "?").first?.split(separator: "/").map(String.init) ?? []
-        guard parts.count >= 3, let session = parts[2].removingPercentEncoding, let app = AgentMail.shared.app,
-              let found = app.workspace.session(session) else { return (404, Data("{}".utf8)) }
-        // A bot's are in its own folder, as Edit Bot shows them.
-        let owner = app.bots.bot(forSession: session)?.wakeOwner ?? WakeUps.owner(of: found)
-        let wakeUps = app.wakeUps
-        // As they are now: a machine session's aren't read until something asks.
-        await wakeUps.read(owner)
-        if parts.count == 4, parts[3] == "now", request.method.uppercased() == "POST" {
-            struct Given: Decodable { var wake: String }
-            guard let id = (try? JSONDecoder().decode(Given.self, from: request.body))?.wake,
-                  let wake = wakeUps.wakes[owner.key]?.first(where: { $0.id == id || $0.letters == id }) else { return (404, Data("{}".utf8)) }
-            do { try await wakeUps.wakeNow(wake, of: owner) } catch {
-                return (Self.status(of: error), (try? JSONEncoder().encode(["message": error.localizedDescription])) ?? Data())
-            }
-            return (200, Data("{}".utf8))
-        }
-        if parts.count == 3, request.method.uppercased() == "POST" {
-            struct Given: Decodable { var due: Double; var every: String?; var note: String }
-            guard let given = try? JSONDecoder().decode(Given.self, from: request.body),
-                  !given.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return (400, Self.message("Send when it comes (`due`, seconds since 1970) and what it says (`note`)."))
-            }
-            let every = given.every.flatMap(Wakes.Repeat.init)
-            if given.every != nil, every == nil { return (400, Self.message("That isn’t a repeat: 30m, 2h, 1d, 1w or weekdays.")) }
-            do {
-                try await wakeUps.add(to: owner, at: Date(timeIntervalSince1970: given.due), every: every, note: given.note)
-            } catch WakeUps.Failure.tooSoon {
-                return (400, Self.message(WakeUps.Failure.tooSoon.localizedDescription))
-            } catch WakeUps.Failure.tooMany {
-                return (409, Self.message(WakeUps.Failure.tooMany.localizedDescription))
-            } catch {
-                return (Self.status(of: error), Self.message(error.localizedDescription))
-            }
-            await wakeUps.read(owner)
-        } else if parts.count == 4, parts[3] == "pause", request.method.uppercased() == "POST" {
-            struct Given: Decodable { var paused: Bool }
-            guard let given = try? JSONDecoder().decode(Given.self, from: request.body) else { return (400, Self.message("Send {\"paused\": true} or false.")) }
-            do { try await wakeUps.setPaused(given.paused, owner) } catch {
-                return (Self.status(of: error), Self.message(error.localizedDescription))
-            }
-        } else if parts.count == 4, parts[3] == "cancel", request.method.uppercased() == "POST" {
-            struct Given: Decodable { var wake: String?; var watch: String? }
-            let given = try? JSONDecoder().decode(Given.self, from: request.body)
-            do {
-                if let id = given?.wake, let wake = wakeUps.wakes[owner.key]?.first(where: { $0.id == id || $0.letters == id }) {
-                    try await wakeUps.cancel(wake, of: owner)
-                } else if let letters = given?.watch, let watch = wakeUps.watches[owner.key]?.first(where: { $0.letters == letters }) {
-                    try await wakeUps.cancel(watch, of: owner)
-                } else {
-                    return (404, Data("{}".utf8))
-                }
-            } catch {
-                return (Self.status(of: error), (try? JSONEncoder().encode(["message": error.localizedDescription])) ?? Data())
-            }
-            return (200, Data("{}".utf8))
-        } else if parts.count != 3 {
-            return (404, Data("{}".utf8))
-        }
-        struct Listed: Encodable {
-            struct Wake: Encodable { var id: String; var due: Double; var note: String; var every: String? }
-            struct Watch: Encodable { var letters: String; var every: String; var check: String; var note: String }
-            var wakes: [Wake]; var watches: [Watch]; var paused: Bool
-        }
-        let listed = Listed(wakes: (wakeUps.wakes[owner.key] ?? []).map { .init(id: $0.id, due: $0.due.timeIntervalSince1970, note: $0.note, every: $0.every?.text) },
-                            watches: (wakeUps.watches[owner.key] ?? []).map { .init(letters: $0.letters, every: $0.every, check: $0.check, note: $0.note) },
-                            paused: wakeUps.paused.contains(owner.key))
-        return (200, (try? JSONEncoder().encode(listed)) ?? Data())
-    }
 
     /// Stops a command an agent left running, as Stop in the bar over the composer does: found
     /// among the ones this Mac follows, or asked of the engine of `session` when given.

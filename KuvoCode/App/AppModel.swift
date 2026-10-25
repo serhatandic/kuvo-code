@@ -230,7 +230,6 @@ final class AppModel {
         phoneLink.movedSessions = { [weak self] in self?.moves.livePlaces ?? [:] }
         Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
         phoneLink.bots = bots
-        phoneLink.wakeUps = wakeUps
         phoneLink.browserAsks = browserAsks
         phoneLink.workspace = workspace
         phoneLink.machineName = { [weak self] id in self?.machines.list.first { $0.id == id }?.name }
@@ -421,16 +420,21 @@ final class AppModel {
             // This Mac's box finds the engine as a machine's does (started above, once; tried again
             // here if it didn't start then).
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
-            let boxEnvironment = shell
+            // It sends this Mac's wake-ups with the app's own kuvo-wake, as a machine's keeper does.
+            try? WakeUps.installCommand()
+            var boxEnvironment = shell
+            boxEnvironment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
             Task {
                 await box.start(engine: binary, environment: boxEnvironment)
-                // Its worktrees and projects, as this Mac's box keeps them, from now on (what was
-                // kept here before goes there).
+                // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
+                // (what was kept here before goes there).
                 if boxFollowed == nil {
                     boxFollowed = Task {
                         async let worktrees: Void = workspace.followWorktrees()
+                        async let wakes: Void = wakeUps.follow()
                         await workspace.followProjects()
                         await worktrees
+                        await wakes
                     }
                 }
             }
@@ -447,7 +451,7 @@ final class AppModel {
             await workspaceLoaded
             guard launch == self.launch else { return }
             startMachines()
-            bots.startWaking()
+            bots.startSyncing()
             await catalogLoaded
         } catch {
             // Stopped, or started over, meanwhile.
