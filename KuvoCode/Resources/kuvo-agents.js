@@ -11232,92 +11232,13 @@ function seatRules(folder, askFirst, denies) {
     "kuvo-browser_browser_save_pdf",
     "kuvo-browser_browser_upload",
     "kuvo-browser_schedule_wake_up",
-    "kuvo-browser_watch_for_change"
+    "kuvo-browser_watch_for_change",
+    "kuvo-browser_set_job"
   ].map((action) => ({ action, resource: "*", effect: "deny" }));
   if (askFirst)
     rules.push({ action: "webfetch", resource: "*", effect: "deny" });
   rules.push({ action: "external_directory", resource: folder.replace(/\/+$/, "") + "/*", effect: "allow" });
   return [...rules, ...denies];
-}
-function headingLevel(line) {
-  const trimmed2 = trimSpaces(line);
-  let marks = 0;
-  while (marks < trimmed2.length && trimmed2[marks] === "#")
-    marks++;
-  if (marks < 1 || marks > 6)
-    return;
-  const after = trimmed2.slice(marks);
-  return after.length === 0 || after[0] === " " ? marks : undefined;
-}
-function isJobHeading(line) {
-  const trimmed2 = trimSpaces(line);
-  if (!trimmed2.startsWith("#"))
-    return false;
-  const title = trimSpaces(trimmed2.replace(/^#+/, "")).toLowerCase();
-  if (title === "job" || title === "my job" || title === "the job" || title.startsWith("job:"))
-    return true;
-  if (!title.startsWith("job "))
-    return false;
-  const first = trimSpaces(title.slice(4))[0];
-  return first !== undefined && "-\u2013\u2014:(".includes(first);
-}
-function jobInHeading(line) {
-  const title = trimSpaces(trimSpaces(line).replace(/^#+/, ""));
-  if (!title.toLowerCase().startsWith("job"))
-    return;
-  let rest = trimSpaces(title.slice(3));
-  const mark = rest[0];
-  if (mark === undefined || !":-\u2013\u2014(".includes(mark))
-    return;
-  rest = trimSpaces(rest.slice(1));
-  if (mark === "(" && rest.endsWith(")"))
-    rest = trimSpaces(rest.slice(0, -1));
-  return rest.length === 0 ? undefined : { text: rest, isColon: mark === ":" };
-}
-function jobInMemory(text) {
-  const all = text.split(`
-`);
-  const start = all.findIndex(isJobHeading);
-  if (start < 0)
-    return;
-  const level = headingLevel(all[start]) ?? 1;
-  let end = all.length;
-  let inCode = false;
-  for (let index = start + 1;index < all.length; index++) {
-    const trimmed2 = trimSpaces(all[index]);
-    if (trimmed2.startsWith("```") || trimmed2.startsWith("~~~")) {
-      inCode = !inCode;
-      continue;
-    }
-    const other = inCode ? undefined : headingLevel(all[index]);
-    if (other !== undefined && other <= level) {
-      end = index;
-      break;
-    }
-  }
-  let section = trim(all.slice(start + 1, end).join(`
-`));
-  const inline = jobInHeading(all[start]);
-  if (inline && (inline.isColon || section.length === 0))
-    section = [inline.text, section].filter((part) => part.length > 0).join(`
-`);
-  let line = section.split(`
-`).map(trimSpaces).find((part) => part.length > 0) ?? "";
-  for (const mark of ["- ", "* ", "> "])
-    if (line.startsWith(mark))
-      line = line.slice(mark.length);
-  line = line.replaceAll("**", "").replaceAll("__", "");
-  if (line.toLowerCase().startsWith("job:"))
-    line = line.slice(4);
-  line = trimSpaces(line);
-  if (length(line) > 48) {
-    const stop = line.indexOf(". ");
-    if (stop >= 0)
-      line = line.slice(0, stop);
-  }
-  if (line.endsWith(".") && !line.endsWith(".."))
-    line = line.slice(0, -1);
-  return { line, section };
 }
 
 // Agents/src/groups/store.ts
@@ -11469,14 +11390,13 @@ class GroupStore {
     const sessionID = text(join17(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const memory = text(join17(folder, "MEMORY.md"));
-    const job = memory ? jobInMemory(memory) : undefined;
+    const job = read(join17(folder, "job.json"));
     const directory = text(join17(folder, "directory"))?.trim() || join17(folder, "workspace");
     return {
       id,
       name: String(described.name),
-      job: job?.line ?? String(described.job ?? ""),
-      instructions: job?.section ?? "",
+      job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
+      instructions: typeof job?.details === "string" ? job.details : "",
       memoryFile: join17(folder, "MEMORY.md"),
       folder,
       sessionID,
@@ -15521,4 +15441,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 6f4ae0dd7bd80eb4636aa4012b1a0ab12d4db98171c74057f7eb885557f02fad
+// Built from Agents/src 3cc448f8358ebb95857224d3b79d44cca0879f784e2f9514fc77b93f495b4757
