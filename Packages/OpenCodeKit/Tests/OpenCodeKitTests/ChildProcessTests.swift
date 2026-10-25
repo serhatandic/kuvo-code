@@ -136,6 +136,65 @@ import Testing
         #expect(await Self.read(told) == "printed 0\n", "it printed, and finished")
     }
 
+    /// A leftover that waits on `go`, then prints more than a pipe holds and says on `told`
+    /// whether that worked. It takes no notice of SIGPIPE, so a closed pipe shows as a failed
+    /// print rather than a leftover that's gone and a test waiting on it.
+    private func leftover(_ index: Int) throws -> (script: String, go: URL, told: URL) {
+        let go = try fifo("go-\(index)"), told = try fifo("told-\(index)")
+        let script = "(trap '' PIPE; read x < '\(go.path)'; /usr/bin/head -c 200000 /dev/zero; echo \"printed $?\" > '\(told.path)') & echo now"
+        return (script, go, told)
+    }
+
+    /// Runs that something they left running keeps read are capped across the app, so they can
+    /// never use up its descriptors: past the cap the oldest are let go (their pipes closed), and
+    /// the rest read on.
+    @Test func lingeringRunsAreCappedOldestFirst() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lingering = ChildProcess.Lingering(cap: 32, limit: .seconds(600), now: { ContinuousClock.now })
+        var leftovers: [(script: String, go: URL, told: URL)] = []
+        for index in 0..<40 {
+            let leftover = try leftover(index)
+            leftovers.append(leftover)
+            let result = try await ChildProcess.run("/bin/sh", ["-c", leftover.script], afterExit: .zero, lingering: lingering)
+            #expect(result.outputText == "now\n")
+        }
+        #expect(lingering.count == 32, "never more than the cap")
+        for (index, leftover) in leftovers.enumerated() {
+            await Self.write("go\n", to: leftover.go)
+            let told = await Self.read(leftover.told)
+            #expect(told == (index < 8 ? "printed 1\n" : "printed 0\n"), "leftover \(index): the 8 oldest let go, the rest read")
+        }
+    }
+
+    /// One read on longer than its limit is let go; before that it's read.
+    @Test func aLingeringRunIsLetGoAfterItsLimit() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TestClock()
+        let lingering = ChildProcess.Lingering(cap: 32, limit: .seconds(600), now: { clock.now })
+        let (early, late) = (try leftover(0), try leftover(1))
+        _ = try await ChildProcess.run("/bin/sh", ["-c", early.script], afterExit: .zero, lingering: lingering)
+        clock.advance(by: .seconds(599))
+        lingering.sweep()
+        #expect(lingering.count == 1, "not yet")
+        await Self.write("go\n", to: early.go)
+        #expect(await Self.read(early.told) == "printed 0\n", "read until then")
+
+        _ = try await ChildProcess.run("/bin/sh", ["-c", late.script], afterExit: .zero, lingering: lingering)
+        clock.advance(by: .seconds(600))
+        lingering.sweep()
+        #expect(lingering.count == 0)
+        await Self.write("go\n", to: late.go)
+        #expect(await Self.read(late.told) == "printed 1\n", "let go: its pipes closed")
+    }
+
+    /// A clock the test moves.
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var instant = ContinuousClock.now
+        var now: ContinuousClock.Instant { lock.withLock { instant } }
+        func advance(by duration: Duration) { lock.withLock { instant += duration } }
+    }
+
     /// All it said before it ended is in the result even when what it left running holds its
     /// output and its end of it is given up on at once: the cutoff waits for the reading to
     /// catch up.

@@ -14,7 +14,8 @@ import Foundation
 /// - once the program has ended, it waits only a moment for the end of its output: something it
 ///   left running in the background (a daemon a hook or a profile starts) can hold that open.
 ///   All it said before it ended is kept, and what that leftover says after is read and let go
-///   until it ends, so it runs on as it would have (never killed by a closed pipe);
+///   until it ends, so it runs on as it would have (never killed by a closed pipe), within
+///   bounds that keep the app's descriptors from running out (`Lingering`);
 /// - given a `limit`, a program still running then is sent SIGTERM and, if it takes no notice
 ///   (an interactive shell doesn't), SIGKILL a moment later. Without one it runs as long as it
 ///   takes, for what has no natural end (a push, an upload, a machine's install).
@@ -68,6 +69,57 @@ public enum ChildProcess {
     static let afterExit: Duration = .milliseconds(500)
     static let catchingUp: Duration = .seconds(1)
 
+    /// Runs still read after their result is in, because something they left running holds their
+    /// pipes (each holds two descriptors a pipe): at most `cap` of them across the app, each for
+    /// `limit` at most, so a wake-up check that leaves `something &` every minute can never use
+    /// up the app's descriptors. One let go has its pipes closed: what it left running then finds
+    /// them closed the next time it prints, as it would have before.
+    final class Lingering: @unchecked Sendable {
+        static let shared = Lingering(cap: 32, limit: .seconds(600), now: { ContinuousClock.now })
+
+        let cap: Int
+        let limit: Duration
+        private let now: @Sendable () -> ContinuousClock.Instant
+        private let lock = NSLock()
+        private var entries: [(id: ObjectIdentifier, until: ContinuousClock.Instant, stop: @Sendable () -> Void)] = []
+
+        init(cap: Int, limit: Duration, now: @escaping @Sendable () -> ContinuousClock.Instant) {
+            self.cap = cap
+            self.limit = limit
+            self.now = now
+        }
+
+        var count: Int { lock.withLock { entries.count } }
+
+        /// Notes `id`, still read, until `stop` lets it go: what's over the cap, oldest first, is
+        /// for the caller to stop once it holds no lock of its own.
+        fileprivate func add(_ id: ObjectIdentifier, stop: @escaping @Sendable () -> Void) -> [@Sendable () -> Void] {
+            let over = lock.withLock { () -> [@Sendable () -> Void] in
+                entries.append((id, now() + limit, stop))
+                let over = max(0, entries.count - cap)
+                defer { entries.removeFirst(over) }
+                return entries.prefix(over).map(\.stop)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + limit.dispatch) { [weak self] in self?.sweep() }
+            return over
+        }
+
+        /// It came to the end of its pipes by itself.
+        fileprivate func remove(_ id: ObjectIdentifier) {
+            lock.withLock { entries.removeAll { $0.id == id } }
+        }
+
+        /// Lets go of those past their time.
+        func sweep() {
+            let expired = lock.withLock { () -> [@Sendable () -> Void] in
+                let now = now()
+                defer { entries.removeAll { $0.until <= now } }
+                return entries.filter { $0.until <= now }.map(\.stop)
+            }
+            for stop in expired { stop() }
+        }
+    }
+
     /// Runs `executable` and waits for it, without holding a thread. Throws when it can't start,
     /// and `CancellationError` when the task is cancelled (the program is stopped first), unless
     /// it isn't `cancellable`: then it runs to its end however the task goes (a change on a
@@ -76,14 +128,15 @@ public enum ChildProcess {
                            directory: URL? = nil, input: Input = .nothing, output: Output = .collect,
                            errors: Errors = .collect, limit: Duration? = nil, cancellable: Bool = true) async throws -> Result {
         let running = try Running(executable, arguments, environment: environment, directory: directory, input: input,
-                                  output: output, errors: errors, limit: limit, afterExit: afterExit)
+                                  output: output, errors: errors, limit: limit, afterExit: afterExit, lingering: .shared)
         return try await run(running, cancellable: cancellable)
     }
 
-    /// As `run`, giving up on the end of its output `afterExit` after it ends (for the tests).
-    static func run(_ executable: String, _ arguments: [String], afterExit: Duration) async throws -> Result {
+    /// As `run`, giving up on the end of its output `afterExit` after it ends, and reading on
+    /// after that as `lingering` allows (for the tests).
+    static func run(_ executable: String, _ arguments: [String], afterExit: Duration, lingering: Lingering = .shared) async throws -> Result {
         let running = try Running(executable, arguments, environment: nil, directory: nil, input: .nothing, output: .collect,
-                                  errors: .collect, limit: nil, afterExit: afterExit)
+                                  errors: .collect, limit: nil, afterExit: afterExit, lingering: lingering)
         return try await run(running, cancellable: true)
     }
 
@@ -107,7 +160,7 @@ public enum ChildProcess {
                                    directory: URL? = nil, input: Input = .nothing, output: Output = .collect,
                                    errors: Errors = .collect, limit: Duration? = nil) throws -> Result {
         let running = try Running(executable, arguments, environment: environment, directory: directory, input: input,
-                                  output: output, errors: errors, limit: limit, afterExit: afterExit)
+                                  output: output, errors: errors, limit: limit, afterExit: afterExit, lingering: .shared)
         let done = DispatchSemaphore(value: 0)
         let outcome = Outcome()
         running.start {
@@ -142,12 +195,17 @@ public enum ChildProcess {
         /// Readers between taking bytes out of a pipe and keeping them.
         private var reading = 0
         private let afterExit: Duration
+        private let lingering: Lingering
+        /// Noted in `lingering`: still read after its result is in.
+        private var lingers = false
         private var completion: (@Sendable (Swift.Result<Result, Error>) -> Void)?
 
         init(_ executable: String, _ arguments: [String], environment: [String: String]?, directory: URL?,
-             input: Input, output: Output, errors: Errors, limit: Duration?, afterExit: Duration) throws {
+             input: Input, output: Output, errors: Errors, limit: Duration?, afterExit: Duration,
+             lingering: Lingering) throws {
             self.limit = limit
             self.afterExit = afterExit
+            self.lingering = lingering
             process.executableURL = URL(filePath: executable)
             process.arguments = arguments
             if let environment { process.environment = environment }
@@ -207,6 +265,11 @@ public enum ChildProcess {
                         return false
                     }
                     open -= 1
+                    // At the end of its pipes after its result: no longer lingering.
+                    if open == 0, lingers {
+                        lingers = false
+                        lingering.remove(ObjectIdentifier(self))
+                    }
                     return open == 0 && ended != nil
                 }
                 if data.isEmpty { handle.readabilityHandler = nil }
@@ -294,16 +357,37 @@ public enum ChildProcess {
         }
 
         private func finish() {
+            var over: [@Sendable () -> Void] = []
             let outcome = lock.withLock { () -> (Swift.Result<Result, Error>, (@Sendable (Swift.Result<Result, Error>) -> Void)?)? in
                 guard !done, let ended else { return nil }
                 done = true
                 defer { said = Data(); complained = Data() }
+                // Something it left running holds its pipes: read on, within bounds.
+                if open > 0 {
+                    lingers = true
+                    over = lingering.add(ObjectIdentifier(self)) { [self] in stopReading() }
+                }
                 if cancelled, !timedOut { return (.failure(CancellationError()), completion) }
                 return (.success(Result(status: ended.status, reason: ended.reason, output: said, errors: complained, timedOut: timedOut)), completion)
             }
             guard let outcome else { return }
+            for stop in over { stop() }
             letGo()
             outcome.1?(outcome.0)
+        }
+
+        /// No longer read: let go of by `lingering`. Each pipe's end here is closed at once,
+        /// `/dev/null` put in its place, so a handler still at work reads its end rather than a
+        /// closed descriptor; the handlers held this, so it goes after.
+        private func stopReading() {
+            lock.withLock { lingers = false }
+            let nothing = Darwin.open("/dev/null", O_RDONLY | O_CLOEXEC)
+            defer { if nothing >= 0 { close(nothing) } }
+            for reader in readers {
+                reader.readabilityHandler = nil
+                // (dup2 clears close-on-exec: set again, as `Pipe.unshared` has it.)
+                if nothing >= 0, dup2(nothing, reader.fileDescriptor) >= 0 { _ = fcntl(reader.fileDescriptor, F_SETFD, FD_CLOEXEC) }
+            }
         }
 
         /// Closes its files. Its pipes stay read (and what comes let go) until what it left
