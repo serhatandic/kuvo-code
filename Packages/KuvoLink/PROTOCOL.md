@@ -765,45 +765,60 @@ host serves:
 - `kuvo/keys`: the computer's own integrations' keys (`KUVO_KEY_<INTEGRATION>_<NAME>`, as its
   settings name them; a bot's own aren't among them). `GET kuvo/keys` lists them, `{"keys":
   [name]}`; `GET kuvo/keys/<name>` answers `{"value"}` (404 for none, 400 for a name that
-  isn't a shared key's), `PUT` with `{"value"}` sets one and `DELETE` removes it. On a Mac they're
-  in its Keychain; on a machine in `~/.kuvo-code/box/keys` (`409 {"message"}` until its settings
+  isn't a shared key's), `PUT` with `{"value"}` sets one and `DELETE` removes it. This Mac's box
+  keeps them in its Keychain, through its app ("Host interface"; `503 {"message"}` while the app
+  can't be reached); a machine's in `~/.kuvo-code/box/keys` (`409 {"message"}` until its settings
   are its own).
   The engine reads one as it next reads its settings, so set the key before adding what names it
   (`kuvo/config`). An integration added on a machine names its keys
   `{file:~/.kuvo-code/box/keys/<name>}` there; on a Mac, `{file:<its keys' folder>/<name>}`.
   "Also Apply to…", from any client, is the same changes sent to each computer you pick
   (`kuvo/config/apply`), with the keys it names brought first from where you made them.
-- Integrations, as Settings › Integrations has them, each computer its own (a Mac for its own,
-  keys in its Keychain; a machine's bridge for the machine's, keys in
-  `~/.kuvo-code/box/keys`, from the catalog its Mac leaves in `bin/integrations.json`, with the
-  Mac closed too; `409 {"message"}` until its settings are its own).
+- Integrations, as Settings › Integrations has them, each computer's box its own (this Mac's,
+  keys in its Keychain through its app; a machine's, keys in `~/.kuvo-code/box/keys`, with the Mac
+  closed too; `409 {"message"}` until its settings are its own), from the catalog a Mac leaves in
+  the box's `bin/integrations.json` (this Mac's app in its own box's as it starts it, with the ones
+  that use its own apps). Where its keys can't be reached now (this Mac's app not answering),
+  `503 {"message"}`.
   - `GET kuvo/integrations` → `{"integrations": [{id, title, summary, kind, symbol, site, how,
     way, keys?, help?, redirect?, by?, macOnly?, added, keysSaved?, health?, signIn?, siteSignedIn?}],
-    "problem"?}`, by kind in the page's order (`kind` is its title: "Mail and Calendar", "Chat",
+    "engineDown"?, "problem"?}`, by kind in the page's order (`kind` is its title: "Mail and Calendar", "Chat",
     "Social", "Code and Work"). `way`: `official` (connect, then sign in), `token` (its maker's
     server, with a token you bring), `app` (your app's client ID and secret, made with `redirect`,
     then sign in), `package` (an open-source server, `by`, with the keys you bring; `macOnly` for
     one that uses the Mac's own apps, which a machine's catalog leaves out) or `browser`
     (the agent uses its site in the computer's browser: not added here; `siteSignedIn` says
-    whether it's signed in there, on a Mac). `keys`: `[{name, label, prompt}]`, `keysSaved`
-    whether the computer has them. `how` is the tag the page shows. Added: `health` is
-    `connected`, `starting`, `waitsForCode` (on a Mac: Outlook, until its first use's code), `needsSignIn`,
-    `failed` or `disabled` (turned off in MCP Servers, its settings' `disabled`: it won't start
-    until it's turned on, so there's nothing to wait for; a Mac's Settings says "Off", with Turn
-    On), and `signIn` is the
+    whether it's signed in there, on this Mac's box, as its app reads the panel browser's cookies;
+    a machine's box can't tell yet, as its browser's cookies are read only by a Mac connected to
+    it, so it leaves it out). `keys`: `[{name, label, prompt}]`,
+    `keysSaved` whether the computer has them (left out while its keys can't be reached). `how` is the tag the page shows. Added: `health` is
+    `connected`, `starting` (also just turned on, while the engine still says it's off),
+    `waitsForCode` (Outlook, until its first use's code), `needsSignIn`, `failed` or `disabled`
+    (turned off in MCP Servers, its settings' `disabled`: it won't start until it's turned on, so
+    there's nothing to wait for; Settings says "Off", with Turn On). While its engine isn't running
+    or doesn't answer, `engineDown` is true and an added one's `health` is left out (one turned off
+    still says `disabled`). `signIn` is the
     engine's integration to sign in with, through
     `api/integration/<signIn>/connect/oauth` as any (its page returns to `127.0.0.1:19876`:
     `kuvo/sign-in/return`). `problem`: the settings file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
     (or Add Key…) does: with the keys given, or those the computer has; one added already is
     written again (the engine reads its keys again), and with new keys its server connects again a
-    moment later. `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
+    moment later, in the engine's own copy and in every folder it has open (`api/debug/location`;
+    over `box route`, in a process of its own, `kuvo-link.js box reconnect <id>`). `200 {"integration"}`, as listed; `400 {"message"}` without the keys it needs;
     `404` for none; `409 {"message"}` for one used on its site, or a settings file that can't be
-    changed; on a Mac, `500 {"message"}` when the Keychain wouldn't keep its keys.
-  - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: its keys, its sign-in, what its
-    server kept, and bots' own keys for it there (each computer keeps its bots' keys itself: "Bots'
-    own keys"). `200 {}`, `404` for one not added, `409 {"message"}` for a settings file that can't
-    be changed. A Mac's Remove… for a machine is the machine's own, through `box route`.
+    changed; `503 {"message"}` when its keys can't be kept (this Mac's Keychain, through its app).
+  - `DELETE kuvo/integrations/<id>` removes it, as Remove… does: bots' own keys for it there first
+    (each computer keeps its bots' keys itself: "Bots' own keys"), then it, its sign-in, what its
+    server kept and its keys. `200 {}`; for one not added, `200 {}` when keys of it were left (a
+    Remove that couldn't take them away: they go now), else `404`; `409 {"message"}` for a settings
+    file that can't be changed, `503 {"message"}` when its bots' keys can't be taken away (nothing
+    removed) or its own can't (removed, with its key still kept, which Remove again takes). A
+    Mac's Remove… is its box's, through `BoxClient` (a machine's through `box route`).
+  - Not on the box yet: bringing added integrations up to date as the engine starts (a package's
+    pinned version, Code Mode off, keys named where the computer reads them) is the Mac app's
+    (`Integrations.upgrade`), through `kuvo/config`, for its own box and each machine as it
+    connects; a machine whose Mac doesn't connect keeps them as they were.
 - Bots' own keys, as Edit Bot shows and changes them: a key a bot has of its own for an
   integration you bring a key for, used only in its conversation, kept on the computer the bot
   lives on (a Mac's bots' in its Keychain, which its box reaches through the app: "Host
@@ -833,24 +848,48 @@ host serves:
     0.9.46 ran `kuvo-link.js box bot-keys-refresh` over SSH, which still does the same.)
   - Moving a bot (Move to Computer), its keys go with it: read where it lived, given where it
     goes, then taken away where it was.
-- Skills, as Settings › Skills has them, each computer its own (a Mac for its folder, a machine's
-  bridge for its `~/.kuvo-code/config/opencode/skills`, with the Mac closed too). Its
+- Skills, as Settings › Skills has them, each computer its own, kept by its box: the folder its
+  engine reads them from (a machine's `~/.kuvo-code/config/opencode/skills`, with the Mac closed
+  too; this Mac's box's, the app's engine's own, where a Mac has always kept them, named to it as
+  `KUVO_ENGINE_CONFIG`). Every client, the Mac app too, reaches them through these routes. Its
   engine lists them (`api/skill`) and finds a change within a moment.
-  - `GET kuvo/skills` → `{"folder", "github": {"<name>": {repository, path}}}`: the folder as its
-    engine names skills' paths in it, and which skills came from GitHub (the rest you added).
+  - `GET kuvo/skills` → `{"folder", "folders", "github": {"<name>": {repository, path}}}`: the
+    folder as its engine names skills' paths in it, the folders in it by name (not hidden ones),
+    whether its engine lists them or not, which a new skill can't take, and which skills came from
+    GitHub (the rest you added).
   - `kuvo/skills/<name>` (its folder's name): `GET` → `{"text"}`, its SKILL.md; `PUT {"text",
     "new"?}` writes it (`new`: a new one, named as Settings names one, lowercase a to z, digits and
     hyphens, and `409 {"message"}` when the name is taken, by a folder there or a skill the engine
     lists from elsewhere; without it, `404` for none, and `409 {"message"}` for one from GitHub,
-    which stays as it came, as in Settings); `DELETE` puts its folder away (the Mac's Trash, or
-    `~/.kuvo-code/trash/skills`, kept 30 days from then). `400 {"message"}` for a name that isn't
-    a folder's. A 404 or 405 answers `{}`.
-  - GitHub's collections, which the computer reaches, never the phone: `GET kuvo/skill-library`
+    which stays as it came, as in Settings); `DELETE` puts its folder away, in Recently Deleted.
+    `400 {"message"}` for a name that isn't a folder's. A 404 or 405 answers `{}`.
+  - Recently Deleted (`skills.trash`): each box keeps a skill it put away for 30 days, in
+    `trash/skills` in its folder, as `<folder>-<seconds>`: its name says when it was put away,
+    never the folder's date. It clears what's older as it starts, once a day while it runs (a
+    machine's while its bridge runs), and whenever its list is read, a restore is asked for or
+    another skill is put away. The box decides it all; a client shows the list and sends Restore.
+    - `GET kuvo/skill-trash` → `{"entries": [{id, folder, name, description?, deleted, goes}]}`,
+      newest first: `id` names the entry, `folder` the name it goes back under, `name` and
+      `description` are what its SKILL.md says (`name` is the folder's when it doesn't say),
+      `deleted` when it was put away and `goes` when it's cleared, in seconds since 1970.
+    - `POST kuvo/skill-trash/<id>/restore` → `{"name"}`: its folder back whole, under its name.
+      `409 {"message"}` when a skill has that folder's name now ("There’s a skill called pdf
+      now. Delete it first to restore this one."), or the engine lists one by that name from
+      elsewhere ("There’s a skill called pdf in ~/.claude/skills, so this one can’t be restored
+      under that name"; the one put away, which the engine can list a moment longer, doesn't
+      count): neither changes, and the entry stays. `400 {"message"}` for what isn't an entry's
+      id (a path, a hidden name), `404 {}` for one that isn't there (restored, or past its 30
+      days). The skills routes' messages are written to show as they are, with curly
+      apostrophes.
+  - GitHub's collections, which a box reaches, never a client (the Mac app browses them through
+    this Mac's box, and adds a skill through the box it's for): `GET kuvo/skill-library`
     → `{"repositories": [{id, owner, name, title, summary}]}`, the well-known ones; `GET
     kuvo/skill-library/<owner>/<name>` (any repository on GitHub) → `{"repository", "skills":
-    [{name, path, files}], "partial"}` (`partial`: GitHub cut a very big one's list short); `GET
-    kuvo/skill-library/<owner>/<name>/about?path=<path>` → `{name?, description?}` from a skill's
-    SKILL.md, asked for as each one shows (a big collection has hundreds); `POST
+    [{name, path, files, about: {name?, description?}}], "partial"}`, each with what its SKILL.md
+    says it is (`partial`: GitHub cut a very big one's list short); `GET
+    kuvo/skill-library/<owner>/<name>/about?path=<path>` → `{name?, description?}`, one skill's.
+    A box reads SKILL.md files from GitHub a few at a time, and keeps what they say while it runs,
+    so a big collection (hundreds) never holds up another request; `POST
     kuvo/skill-library/install {"repository": "owner/name", "path"}` → `{"name"}`, installed
     under its folder's name. Errors are `{"message"}`: 404 for a repository or skill there isn't,
     409 for a name that's taken, 503 while GitHub is limiting requests, 502 when it couldn't be
@@ -1148,7 +1187,8 @@ host serves:
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
 (`app`, `bridge`), before it shows what needs a route. A route it names can still refuse for now,
-with a message to show: `503` while the engine or the coding agents' bridge is down, and on a
+with a message to show: `503` while the engine or the coding agents' bridge is down (or, on this
+Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
@@ -1184,6 +1224,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
+| `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -1244,7 +1285,9 @@ used the machine (`run/link.seen`).
 
 A Mac runs the same box a machine does: the app starts `kuvo-link.js serve` (bridge 0.9.33 and
 later) beside its engine, with the engine's Bun and `KUVO_HOME` in the app's own folder
-(`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`. It answers the box's
+(`~/Library/Application Support/run.kuvo.code/box`), never `~/.kuvo-code`, and
+`KUVO_ENGINE_CONFIG`, the app's engine's settings folder (its `XDG_CONFIG_HOME`), where it keeps
+the skills a Mac has always kept ("Skills"). It answers the box's
 routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `{"url"}` on its
 first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
 the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
@@ -1266,16 +1309,19 @@ Mac's agents mail carries its bots' `id` and `look` and its `features`.
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
 app gives the box the engine's settings folder (`KUVO_ENGINE_CONFIG`, the engine's
-`XDG_CONFIG_HOME`), so nothing moves. They're its own from the start (never `409`). Its keys are
-in the Mac's Keychain, which the app answers for (`kuvo/keys`); the box names them where the app
-writes them for the engine to read (`KUVO_KEYS`). The app puts the popular servers in its
+`XDG_CONFIG_HOME`), so nothing moves. They're its own from the start (never `409`). Its keys
+(`kuvo/keys`, and those Settings › Integrations adds with, `kuvo/integrations`) stay in the Mac's
+Keychain, under the service they've always had: the box asks the app for them ("Host interface")
+and names them where the app writes them for the engine to read (`KUVO_KEYS`, in the app's
+temporary folder), never in its own folder. What integrations' servers keep (a sign-in) is in the
+app's `integrations` folder (`KUVO_INTEGRATIONS`), as the engine runs them with it. The app puts the popular servers in its
 `bin/mcp-catalog.json` as it starts it, and those that use a Mac's own apps are listed and added
 there.
 
 #### Host interface
 
-What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): today, its
-keys, which the app keeps in the Keychain. The app listens on `127.0.0.1` and passes the box
+What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): its keys,
+which the app keeps in the Keychain, and (bridge 0.9.50) what its browser is signed in to. The app listens on `127.0.0.1` and passes the box
 `KUVO_HOST_URL` and `KUVO_HOST_PASSWORD`; the box takes the password out of its environment as it
 starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Bearer
 <KUVO_HOST_PASSWORD>` and `content-type: application/json`:
@@ -1283,7 +1329,11 @@ starts, so nothing it runs has it. Each call is a `POST` with `Authorization: Be
 - `keys/names {"prefix"?, "suffix"?}` → `{"names"}`, the keys kept whose names begin and end so;
 - `keys/get {"name"}` → `{"value"}`, or `404` for none;
 - `keys/set {"name", "value"}` → `{}`;
-- `keys/delete {"name"}` → `{}`, for one there wasn't too.
+- `keys/delete {"name"}` → `{}`, for one there wasn't too;
+- `sites/signed-in {}` → `{"sites": {"<integration>": <bool>}}`, whether the panel's browser is
+  signed in to the sites the agent uses there (X, LinkedIn, Reddit), as their cookies say: only
+  those it can tell. The app reads the cookies again only once they've changed (or after 30
+  seconds).
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
@@ -1360,7 +1410,7 @@ aren't in it. A change that would take the library past what a document holds is
   with it; 400 without both.
 - `PATCH kuvo/personalities/<id>` with `{name?, description?}` changes one and answers with it;
   `DELETE` removes it. 404 for one that isn't there, or a preset.
-- `GET kuvo/personalities/events` (bridge 0.9.49, feature `personalities.events`): ndjson
+- `GET kuvo/personalities/events` (bridge 0.9.51, feature `personalities.events`): ndjson
   `{"personalities": [...]}`, the same list as `GET`, a line now and one each time the library
   changes: through these routes, a copy met (another box's document, a `take`), or another
   process writing the file (`box personalities` over SSH). Only the ones you made: presets come

@@ -69,7 +69,7 @@ export async function standInHost(password) {
     const given = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const { value: _, ...asked } = given;
     host.asked.push({ call: request.url, ...asked });
-    if (host.down) return answer(500, { message: "The Keychain is locked." });
+    if (host.down || host.failing?.has(request.url)) return answer(500, { message: "The Keychain is locked." });
     switch (request.url) {
       case "/keys/names": {
         const names = [...host.keys.keys()].filter(name => name.startsWith(given.prefix ?? "") && name.endsWith(given.suffix ?? ""));
@@ -91,6 +91,9 @@ export async function standInHost(password) {
       case "/keys/delete":
         host.keys.delete(given.name);
         return answer(200, {});
+      // Whether its browser is signed in to the sites the agent uses there, as the test sets it.
+      case "/sites/signed-in":
+        return host.sites ? answer(200, { sites: host.sites }) : answer(503, { message: "It can't tell now." });
       default:
         return answer(404, {});
     }

@@ -218,6 +218,12 @@ const fixtures = {
     write(path.join(folder, "SKILL.md"), given.text);
     if (given.github) write(path.join(folder, ".kuvo-source.json"), JSON.stringify({ branch: "main", path: given.github.path, repository: given.github.repository }));
   },
+  // One in Recently Deleted, put away `daysAgo` days ago, named by when, as the box keeps them.
+  trashedSkill(given) {
+    const when = Date.now() - given.daysAgo * 86_400_000;
+    const folder = path.join(home, "trash", "skills", `${given.name}-${Math.floor(when / 1000)}`);
+    write(path.join(folder, "SKILL.md"), given.text);
+  },
   settings(given) {
     write(path.join(home, "box", "opencode.json"), given.text ?? JSON.stringify(given.value));
   },

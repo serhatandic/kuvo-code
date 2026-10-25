@@ -42,12 +42,26 @@
       ]
     },
     {
-      "name": "one turned off in MCP Servers says so, not that it's starting",
+      "name": "one turned off in MCP Servers says so, not that it's starting; turned on again, it's starting",
       "steps": [
         { "send": "POST kuvo/integrations/todoist", "body": { "keys": { "TODOIST_API_KEY": "tok_123" } }, "expect": { "status": 200 } },
         { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "mcp", "servers", "todoist", "disabled" ], "value": true } ] }, "expect": { "status": 200 } },
         { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": true, "health": "disabled" } ] } } } },
+        { "send": "PATCH kuvo/config", "body": { "changes": [ { "path": [ "mcp", "servers", "todoist", "disabled" ], "value": null } ] }, "expect": { "status": 200 } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": true, "health": "starting" } ] } } } },
         { "send": "DELETE kuvo/integrations/todoist", "expect": { "status": 200 } }
+      ]
+    },
+    {
+      "name": "a key set through kuvo/keys is the one it's added with, and goes with it",
+      "why": "kuvo/keys and kuvo/integrations keep keys in the same place on each box (a machine's files, this Mac's Keychain through its app), as Also Apply brings a key first and then adds what names it.",
+      "steps": [
+        { "send": "PUT kuvo/keys/KUVO_KEY_TODOIST_TODOIST_API_KEY", "body": { "value": "tok_brought" }, "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/integrations", "expect": { "status": 200, "json": { "integrations": { "<includes>": [ { "id": "todoist", "added": false, "keysSaved": true } ] } } } },
+        { "send": "POST kuvo/integrations/todoist", "body": {}, "expect": { "status": 200, "json": { "integration": { "id": "todoist", "added": true, "keysSaved": true } } } },
+        { "send": "GET kuvo/keys", "expect": { "status": 200, "json": { "keys": [ "KUVO_KEY_TODOIST_TODOIST_API_KEY" ] } } },
+        { "send": "DELETE kuvo/integrations/todoist", "expect": { "status": 200, "json": {} } },
+        { "send": "GET kuvo/keys", "expect": { "status": 200, "json": { "keys": [] } } }
       ]
     },
     {

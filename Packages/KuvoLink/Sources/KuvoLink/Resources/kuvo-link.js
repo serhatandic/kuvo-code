@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.49";
+export const BRIDGE_VERSION = "0.9.51";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -34,7 +34,7 @@ export const FEATURES = [
   "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -692,7 +692,9 @@ async function* forward(target, path, request, signal, allows) {
 // MARK: Integrations (PROTOCOL.md, "Integrations"), as the Mac's Settings › Integrations has them.
 
 const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
-const INTEGRATION_DATA = path.join(K, "integrations");
+// What integrations' servers keep (a sign-in), where the engine runs them with it (KUVO_INTEGRATIONS:
+// this Mac's in the app's own folder, a machine's in `integrations`).
+const INTEGRATION_DATA = process.env.KUVO_INTEGRATIONS || path.join(K, "integrations");
 // Bots' own keys (`answerBotKeys`), the box's own beside its shared ones: a start from a Mac
 // replaces what it sent in `keys`, and leaves `box` alone.
 const BOT_KEYS = path.join(K, "box", "bot-keys");
@@ -700,7 +702,8 @@ const BOT_KEYS = path.join(K, "box", "bot-keys");
 // MARK: Where keys are kept (PROTOCOL.md, "Host interface"): integrations' keys by their variable's
 // name (`KUVO_KEY_<ID>_<NAME>`, a bot's own `…__<BOT>`). A machine keeps them in files only you can
 // read (its shared ones in `box/keys`, its bots' own in `box/bot-keys`); this Mac's box asks its
-// app (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`), which keeps them in the Keychain.
+// app (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`), which keeps them in the Keychain and writes the files
+// its engine reads them from. What else only the app can tell (its browser's sign-ins) it asks there too.
 
 /** The only names the box ever asks for. */
 const STORED_KEY = /^KUVO_KEY_[A-Z0-9_]+$/;
@@ -710,7 +713,7 @@ class KeysUnavailable extends Error {}
 
 // Taken as the box starts, and its password out of its environment then, so nothing it runs (git,
 // kuvo-wake) has it.
-const KEY_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
+const APP_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
   ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
 // A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
@@ -719,8 +722,8 @@ delete process.env.KUVO_HOST_PASSWORD;
 
 /** The app that keeps this box's keys, or null for its files; this Mac's box without its app says so. */
 function keyHost() {
-  if (KEYS_ON_HOST && !KEY_HOST) throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
-  return KEY_HOST;
+  if (KEYS_ON_HOST && !APP_HOST) throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
+  return APP_HOST;
 }
 
 // Key work, one change at a time: on this Mac each key is a round trip to the app, and two changes
@@ -741,16 +744,16 @@ const checkedKeyName = name => {
 /** The file one is kept in on a machine: a bot's own beside the others, the shared ones in `box/keys`. */
 const keyFile = name => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS : BOX_KEYS, name);
 
-/** One of the app's host calls (`keys/<what>`): its answer's JSON, or null for a 404 when `missing` is fine. */
-async function askHost(host, what, body, missing = false) {
+/** One of the app's host calls (`keys/names`, `sites/signed-in`…): its answer's JSON, or null for a 404 when `missing` is fine. */
+async function askHost(host, call, body, missing = false) {
   let response;
   try {
-    response = await fetch(`${host.url}/keys/${what}`, {
+    response = await fetch(`${host.url}/${call}`, {
       method: "POST",
       headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
       body: JSON.stringify(body),
       // Reading or saving one can wait on you (a Keychain prompt on this Mac): two minutes for those.
-      signal: AbortSignal.timeout(what === "get" || what === "set" ? 120_000 : 15_000),
+      signal: AbortSignal.timeout(call === "keys/get" || call === "keys/set" ? 120_000 : 15_000),
     });
   } catch {
     throw new KeysUnavailable("Kuvo Code isn't answering for this Mac's keys. Try again in a moment.");
@@ -776,7 +779,7 @@ async function keyNames({ prefix = "", suffix = "" } = {}) {
   const host = keyHost();
   let names;
   if (host) {
-    const answer = await askHost(host, "names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
+    const answer = await askHost(host, "keys/names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
     // An answer without its list isn't "no keys" (a refresh would take every bot's servers away).
     if (!Array.isArray(answer.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
     names = answer.names;
@@ -791,7 +794,7 @@ async function readKey(name) {
   checkedKeyName(name);
   const host = keyHost();
   if (!host) return textOf(keyFile(name));
-  const answer = await askHost(host, "get", { name }, true);
+  const answer = await askHost(host, "keys/get", { name }, true);
   return typeof answer?.value === "string" ? answer.value : null;
 }
 
@@ -800,51 +803,87 @@ async function writeKey(name, value) {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
   const host = keyHost();
-  if (host) return void await askHost(host, "set", { name, value });
-  writePrivate(keyFile(name), value);
+  if (host) return void await askHost(host, "keys/set", { name, value });
+  // A shared one under the settings' lock, as a Mac making the machine's settings its own copies them.
+  if (name.includes("__")) writePrivate(keyFile(name), value);
+  else locked(CONFIG_LOCK, () => writePrivate(keyFile(name), value));
 }
 
 /** One key gone (nothing for one there wasn't). */
 async function deleteKey(name) {
   checkedKeyName(name);
   const host = keyHost();
-  if (host) return void await askHost(host, "delete", { name });
-  fs.rmSync(keyFile(name), { force: true });
+  if (host) return void await askHost(host, "keys/delete", { name });
+  if (name.includes("__")) fs.rmSync(keyFile(name), { force: true });
+  else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
 }
 
+/** Whether this Mac's browser is signed in to the sites the agent uses there, by integration, as its
+ * app reads their cookies; null where that can't be told (a machine's box, or its app not answering). */
+async function siteSignIns() {
+  if (!APP_HOST) return null;
+  try {
+    const answer = await askHost(APP_HOST, "sites/signed-in", {});
+    return isObject(answer?.sites) ? answer.sites : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The integrations this box offers, from the catalog its Mac leaves in `bin` (this Mac's app, as it
+ * starts its box): on a machine, not those that use a Mac's own apps. */
 function integrationCatalog(file = INTEGRATIONS_FILE) {
-  try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && !each.macOnly); } catch { return []; }
+  try { return (JSON.parse(fs.readFileSync(file, "utf8")).integrations ?? []).filter(each => typeof each?.id === "string" && (IS_MAC || !each.macOnly)); } catch { return []; }
 }
 
-/** How it's doing here, as the Mac's Integrations.health says it: `off`, turned off in MCP Servers. */
+/** How it's doing here, as Settings › Integrations says it: `off`, turned off in MCP Servers, so it
+ * won't start until it's turned on. Just turned on, while the engine still says it's off, it's
+ * starting. A server that signs in by itself with a code the first time it's used (Outlook's,
+ * `signInFile` in the catalog) waits for that code until its sign-in is there. */
 function integrationHealth(entry, server, off, signedIn) {
   if (off) return "disabled";
-  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed", disabled: "disabled" }[server?.status?.status] ?? "starting";
+  let health = { connected: "connected", needs_auth: "needsSignIn", failed: "failed" }[server?.status?.status] ?? "starting";
   if (health === "connected" && server?.integrationID && !signedIn.has(server.integrationID) && ["official", "app"].includes(entry.way)) health = "needsSignIn";
+  if (health === "connected" && typeof entry.signInFile === "string" && !fs.existsSync(path.join(INTEGRATION_DATA, entry.id, path.basename(entry.signInFile)))) health = "waitsForCode";
   return health;
 }
 
 /** Each as `kuvo/integrations` lists it, from the catalog, with how it's doing on this machine. */
+/** Each as `kuvo/integrations` lists it, and whether its engine couldn't say how they're doing
+ * (`engineDown`: not running, or not answering), when an added one's `health` is left out. */
 async function integrationEntries(catalog, engine, signal) {
   const { settings } = readSettings();
-  let servers = [];
+  let servers = null;
   let signedIn = new Set();
   if (engine) {
-    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
     const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
     signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
   }
-  return catalog.map(({ settings: _, variables, ...entry }) => {
+  const engineDown = !Array.isArray(servers);
+  // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
+  let names = null;
+  try {
+    names = await keyNames();
+  } catch (error) {
+    if (!(error instanceof KeysUnavailable)) throw error;
+  }
+  const sites = catalog.some(entry => entry.way === "browser") ? await siteSignIns() : null;
+  const entries = catalog.map(({ settings: _, variables, signInFile, ...entry }) => {
     const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
     const shown = { ...entry, added };
-    if (variables) shown.keysSaved = Object.values(variables).every(name => fs.existsSync(path.join(BOX_KEYS, name)));
+    if (variables && names) shown.keysSaved = Object.values(variables).every(name => names.includes(name));
+    if (entry.way === "browser" && typeof sites?.[entry.id] === "boolean") shown.siteSignedIn = sites[entry.id];
     if (added) {
-      const server = (Array.isArray(servers) ? servers : []).find(each => each?.name === entry.id);
-      shown.health = integrationHealth(entry, server, valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true, signedIn);
+      const off = valueAt(settings ?? {}, [...SERVERS, entry.id, "disabled"]) === true;
+      const server = (servers ?? []).find(each => each?.name === entry.id);
+      // Without its engine, only one turned off can be told: it won't start whatever the engine says.
+      if (!engineDown || off) shown.health = integrationHealth({ ...entry, signInFile }, server, off, signedIn);
       if (server?.integrationID) shown.signIn = server.integrationID;
     }
     return shown;
   });
+  return { entries, engineDown };
 }
 
 /** Its bots' own keys for it (`KUVO_KEY_<ID>_<NAME>__<BOT>`) and their folders' settings naming its server, gone. */
@@ -878,17 +917,58 @@ async function droppingBotsIntegration(entry) {
   for (const name of named) await deleteKey(name);
 }
 
+/** Whether this box keeps every one of `variables`. */
+async function keepsAll(variables) {
+  const kept = await keyNames();
+  return variables.every(variable => kept.includes(variable));
+}
+
 /** Runs `run` in `ms`, without keeping the bridge up for it. */
 const soon = (run, ms) => setTimeout(run, ms).unref?.();
 
-/** `kuvo/integrations…`, for this machine's own. `later` runs what waits a moment (a test's own). */
+// Set by `box route`, a command that answers once and ends: what waits a moment goes in a process
+// of its own, which outlives it.
+let answersOnce = false;
+
+/** Its server connected again a moment after its keys changed, once the engine has read them. */
+function reconnectLater(engine, id, later) {
+  if (!engine) return;
+  if (answersOnce && later === soon) {
+    spawn(process.execPath, [fileURLToPath(import.meta.url), "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    return;
+  }
+  later(() => reconnectEverywhere(engine, id), 2_000);
+}
+
+/** An MCP server connected again everywhere its engine runs a copy: its own, and each folder it
+ * has open (`api/debug/location`), as sessions and bots there each have theirs. */
+export async function reconnectEverywhere(engine, id) {
+  const connect = `/api/experimental/mcp/${encodeURIComponent(id)}/connect`;
+  await call(engine, "POST", connect).catch(() => {});
+  const open = await call(engine, "GET", "/api/debug/location").catch(() => []);
+  const folders = new Set((Array.isArray(open) ? open : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
+  for (const folder of folders) await call(engine, "POST", connect, undefined, undefined, folder).catch(() => {});
+}
+
+/** `kuvo/integrations…`, for this box's own, its keys where it keeps them (a machine's files, this
+ * Mac's Keychain through its app). `later` runs what waits a moment (a test's own). */
 export async function answerIntegrations(method, requestPath, body, engine, signal, file = INTEGRATIONS_FILE, later = soon) {
+  try {
+    return await integrationsAnswer(method, requestPath, body, engine, signal, file, later);
+  } catch (error) {
+    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
+    throw error;
+  }
+}
+
+async function integrationsAnswer(method, requestPath, body, engine, signal, file, later) {
   const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return ""; } });
   const catalog = integrationCatalog(file);
   if (parts.length === 2) {
     if (method !== "GET") return { status: 405, value: {} };
     const { problem } = readSettings();
-    return { status: 200, value: { integrations: await integrationEntries(catalog, engine, signal), ...(problem ? { problem } : {}) } };
+    const { entries, engineDown } = await integrationEntries(catalog, engine, signal);
+    return { status: 200, value: { integrations: entries, ...(engineDown ? { engineDown } : {}), ...(problem ? { problem } : {}) } };
   }
   const entry = parts.length === 3 ? catalog.find(each => each.id === parts[2]) : null;
   if (!entry) return { status: 404, value: {} };
@@ -896,19 +976,22 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
   if (problem) return { status: 409, value: { message: `The engine's settings file can't be changed from here: ${problem}` } };
   const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
   if (method === "POST") {
-    if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on this machine.` } };
+    if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on ${IS_MAC ? "this Mac" : "this machine"}.` } };
     const variables = entry.variables ?? {};
     const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
     const names = Object.keys(variables);
+    if (!Object.values(variables).every(variable => typeof variable === "string" && STORED_KEY.test(variable))) {
+      return { status: 409, value: { message: `${entry.title} can't be added here: its keys aren't named as Kuvo Code names them.` } };
+    }
     let newKeys = false;
     if (names.length) {
       if (names.every(name => typeof given[name] === "string" && given[name].trim())) {
-        for (const name of names) {
-          const saved = setBoxKey(variables[name], given[name].trim());
-          if (saved.status !== 200) return { status: saved.status, value: { message: saved.message } };
-        }
+        // All of them, one change at a time with any other key work here.
+        await keyWork(async () => {
+          for (const name of names) await writeKey(variables[name], given[name].trim());
+        });
         newKeys = true;
-      } else if (!names.every(name => fs.existsSync(path.join(BOX_KEYS, variables[name])))) {
+      } else if (!(await keepsAll(names.map(name => variables[name])))) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ");
         return { status: 400, value: { message: `${entry.title} needs ${labels}: send them as {"keys": {"${names[0]}": …}}.` } };
       }
@@ -918,15 +1001,30 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a
-    // moment later, with the new ones, as Settings does it.
-    if (newKeys && engine) {
-      later(() => call(engine, "POST", `/api/experimental/mcp/${encodeURIComponent(entry.id)}/connect`).catch(() => {}), 2_000);
-    }
-    const [listed] = await integrationEntries([entry], engine, signal);
+    // moment later, with the new ones, in every folder the engine has open.
+    if (newKeys) reconnectLater(engine, entry.id, later);
+    const { entries: [listed] } = await integrationEntries([entry], engine, signal);
     return { status: 200, value: { integration: listed } };
   }
   if (method === "DELETE") {
-    if (!added) return { status: 404, value: {} };
+    if (!added) {
+      // Its keys, left by a Remove that couldn't take them away: they go now. Nothing left, 404.
+      const own = Object.values(entry.variables ?? {}).filter(variable => STORED_KEY.test(variable));
+      const kept = own.length ? (await keyNames()).filter(name => own.includes(name)) : [];
+      if (!kept.length) return { status: 404, value: {} };
+      await keyWork(async () => {
+        for (const name of kept) await deleteKey(name);
+      });
+      return { status: 200, value: {} };
+    }
+    // Bots here with keys of their own for it stop using it first: where their keys can't be taken
+    // away, nothing goes, rather than leave a bot using an integration you removed.
+    try {
+      await dropBotsIntegration(entry);
+    } catch (error) {
+      if (!(error instanceof KeysUnavailable)) throw error;
+      return { status: 503, value: { message: `${entry.title} wasn't removed: its bots' own keys for it couldn't be taken away. ${error.message}` } };
+    }
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn;
     if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.(each => each?.name === entry.id)?.integrationID;
@@ -938,13 +1036,15 @@ export async function answerIntegrations(method, requestPath, body, engine, sign
         if (each?.integrationID === signIn) await call(engine, "DELETE", `/api/credential/${encodeURIComponent(each.id)}`, undefined, signal).catch(() => {});
       }
     }
-    for (const variable of Object.values(entry.variables ?? {})) setBoxKey(variable, null);
+    // What its server kept: its own folder (and the file it once kept).
     for (const name of [entry.id, `${entry.id}.json`]) fs.rmSync(path.join(INTEGRATION_DATA, name), { recursive: true, force: true });
     try {
-      await dropBotsIntegration(entry);
+      await keyWork(async () => {
+        for (const variable of Object.values(entry.variables ?? {})) if (STORED_KEY.test(variable)) await deleteKey(variable);
+      });
     } catch (error) {
       if (!(error instanceof KeysUnavailable)) throw error;
-      return { status: 503, value: { message: `${entry.title} is removed, but its bots' own keys for it are still kept. ${error.message}` } };
+      return { status: 503, value: { message: `${entry.title} is removed, but its key is still kept. ${error.message}` } };
     }
     return { status: 200, value: {} };
   }
@@ -1629,14 +1729,17 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
   return { status: 404, value: {} };
 }
 
-// MARK: Skills (PROTOCOL.md, "Skills"), as the Mac's SkillsPlace and SkillLibrary have them.
+// MARK: Skills (PROTOCOL.md, "Skills"): every box's, a Mac's too, and every client's way to GitHub's collections.
 
-const SKILLS = path.join(K, "config", "opencode", "skills");
+// Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
+// in this box's folder on a machine, and the app's engine's on a Mac (KUVO_ENGINE_CONFIG), so a
+// Mac's skills stay where they've always been.
+const SKILLS = path.join(process.env.KUVO_ENGINE_CONFIG || path.join(K, "config"), "opencode", "skills");
 const SKILL_SOURCE = ".kuvo-source.json";
 // GitHub, or a test's stand-in for it, in a test's folder only (never a machine's own).
 const testGitHub = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_GITHUB : undefined;
 const GITHUB = { api: testGitHub ?? "https://api.github.com", raw: testGitHub ?? "https://raw.githubusercontent.com" };
-// The well-known collections, as the Mac lists them (SkillLibrary.repositories).
+// The well-known collections, roughly most popular first. Anyone can open another by name.
 export const SKILL_REPOSITORIES = [
   ["anthropics", "skills", "Anthropic", "The reference set: documents, spreadsheets, slides, PDFs, design and more."],
   ["openai", "skills", "OpenAI", "Codex's catalog of curated skills."],
@@ -1660,10 +1763,68 @@ const limited = () => new SkillFailure(503, "GitHub is limiting requests for now
 /** A folder's name in the skills folder: not a path, nor hidden. */
 const isSkillFolder = name => typeof name === "string" && name.length > 0 && name.length <= 128 && !name.startsWith(".") && !/[\/\\\0]/.test(name);
 
-/** A skill's name from what's typed, as the Mac's SkillFile.name makes it. */
+/** A skill's name from what's typed, as Settings makes it (SkillFile.name). */
 export function skillName(text) {
-  const words = String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
+  // Composed first (an "é" typed as "e" and a mark is one letter, left out whole), as Settings does.
+  const words = String(text).normalize("NFC").toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
   return words.join("-").slice(0, 64).replace(/-+$/, "");
+}
+
+/** The skills folder's own folders (not hidden), by name: what a new skill's name mustn't take,
+ * whether its engine lists it or not. */
+function skillFolders() {
+  return listOf(SKILLS).filter(name => !name.startsWith(".") && (() => { try { return fs.statSync(path.join(SKILLS, name)).isDirectory(); } catch { return false; } })()).sort();
+}
+
+// Recently Deleted: a skill put away, in this box's own trash, as `<its folder's name>-<when, in
+// seconds>`, kept 30 days from then. Its name says when, never its folder's date, which a Finder
+// visit or a backup put back can change.
+const SKILL_TRASH = path.join(K, "trash", "skills");
+const SKILL_TRASH_DAYS = 30;
+const DAY = 86_400_000;
+
+const isDirectory = file => { try { return fs.statSync(file).isDirectory(); } catch { return false; } };
+
+/** A Recently Deleted entry's id read: the folder's name it goes back to and when it was put away
+ * (seconds since 1970), or null for what isn't an entry's id (a path, a hidden name, anything not
+ * `<name>-<seconds>`). */
+export function skillTrashEntry(entry) {
+  const found = typeof entry === "string" && entry.length <= 141 ? /^(.+)-(\d{1,12})$/.exec(entry) : null;
+  return found && isSkillFolder(found[1]) && isSkillFolder(entry) ? { folder: found[1], deleted: Number(found[2]) } : null;
+}
+
+/** What's been in Recently Deleted 30 days or more, gone for good. */
+function clearSkillTrash(now = Date.now()) {
+  for (const id of listOf(SKILL_TRASH)) {
+    const entry = skillTrashEntry(id);
+    if (entry && entry.deleted * 1000 <= now - SKILL_TRASH_DAYS * DAY) try { fs.rmSync(path.join(SKILL_TRASH, id), { recursive: true, force: true }); } catch {}
+  }
+}
+
+/** Recently Deleted cleared as the box starts and once a day while it runs, so what's past its 30
+ * days goes with no client there too. Its timer, which never keeps the process up. */
+export function keepSkillTrashClear() {
+  clearSkillTrash();
+  const timer = setInterval(() => clearSkillTrash(), DAY);
+  timer.unref?.();
+  return timer;
+}
+
+/** Recently Deleted, newest first: each with what its SKILL.md says it is, when it was put away and
+ * when it goes, in seconds since 1970. */
+function skillTrashEntries() {
+  const entries = [];
+  for (const id of listOf(SKILL_TRASH)) {
+    const entry = skillTrashEntry(id);
+    const away = path.join(SKILL_TRASH, id);
+    if (!entry || !isDirectory(away)) continue;
+    const about = skillAbout(textOf(path.join(away, "SKILL.md")) ?? "");
+    entries.push({
+      id, folder: entry.folder, name: about.name || entry.folder, ...(about.description ? { description: about.description } : {}),
+      deleted: entry.deleted, goes: entry.deleted + SKILL_TRASH_DAYS * 86_400,
+    });
+  }
+  return entries.sort((a, b) => b.deleted - a.deleted || a.id.localeCompare(b.id));
 }
 
 /** Skills installed from GitHub, by their folder's name, with where they came from. */
@@ -1697,16 +1858,16 @@ async function skillRepository(owner, name) {
   if (kept && Date.now() - kept.at < 15 * 60_000) return kept.repository;
   const response = await github(`${GITHUB.api}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
   const info = response.status === 200 ? await response.json().catch(() => null) : null;
-  if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn't found on GitHub.`);
+  if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn’t found on GitHub.`);
   const repository = { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
   if (lookedUp.size > 50) lookedUp.clear();
   lookedUp.set(key, { repository, at: Date.now() });
   return repository;
 }
 
-/** The names of the skills the engine lists (its own, and those in other tools' folders), which a
+/** The skills the engine lists (its own, and those in other tools' folders), `{id, path?}`, which a
  * new one mustn't take; none when it doesn't answer. */
-async function engineSkillNames(engine) {
+async function engineSkills(engine) {
   if (!engine?.port) return [];
   try {
     const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
@@ -1714,16 +1875,31 @@ async function engineSkillNames(engine) {
       signal: AbortSignal.timeout(5_000),
     });
     const listed = response.ok ? (await response.json())?.data : null;
-    return Array.isArray(listed) ? listed.map(skill => skill?.id).filter(id => typeof id === "string") : [];
+    return Array.isArray(listed)
+      ? listed.filter(skill => typeof skill?.id === "string").map(skill => ({ id: skill.id, ...(typeof skill.path === "string" ? { path: skill.path } : {}) }))
+      : [];
   } catch {
     return [];
   }
 }
 
-/** A repository's skills, from its file list, as SkillLibrary.skills(in:) reads it. */
+const engineSkillNames = async engine => (await engineSkills(engine)).map(skill => skill.id);
+
+/** Where a skill the engine lists is, said short: "in ~/.claude/skills", "built in". */
+function skillPlace(file) {
+  if (typeof file !== "string" || !file) return "elsewhere";
+  if (file.startsWith("/builtin/")) return "built in";
+  const folder = path.dirname(path.dirname(file));
+  const home = os.homedir();
+  return `in ${folder === home || folder.startsWith(home + path.sep) ? "~" + folder.slice(home.length) : folder}`;
+}
+
+/** A repository's skills, from its file list (one request to GitHub's API): each folder with a
+ * SKILL.md, with every file in it (the deepest skill's, for skills inside skills), or the
+ * repository itself when its SKILL.md is at the top (without its hidden folders). */
 export async function skillsIn(repository) {
   const response = await github(`${GITHUB.api}/repos/${repository.owner}/${repository.name}/git/trees/${repository.branch}?recursive=1`);
-  if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn't found on GitHub.`);
+  if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn’t found on GitHub.`);
   const tree = await response.json();
   const files = (tree.tree ?? []).filter(entry => entry.type === "blob").map(entry => entry.path);
   const dirname = file => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
@@ -1745,9 +1921,38 @@ export async function skillsIn(repository) {
   return { skills, partial: tree.truncated === true };
 }
 
+/** What skills' SKILL.md files say they are, by repository, branch and folder, kept while the box
+ * runs: a collection's are read once, however often it's opened or a phone asks for one. */
+const skillAbouts = new Map();
+/** At most this many read from GitHub at once, the rest waiting their turn, so a big collection
+ * never holds up an install or another client's request. */
+const ABOUT_READS = 16;
+let aboutReading = 0;
+const aboutWaiting = [];
+
+/** What a skill's SKILL.md says it is: `{name?, description?}`, `{}` when GitHub doesn't say. */
+async function aboutSkill(repository, folder) {
+  const key = `${repository.id.toLowerCase()}@${repository.branch}:${folder}`;
+  if (skillAbouts.has(key)) return skillAbouts.get(key);
+  if (aboutReading >= ABOUT_READS) await new Promise(resolve => aboutWaiting.push(resolve));
+  aboutReading++;
+  try {
+    if (skillAbouts.has(key)) return skillAbouts.get(key);
+    const response = await github(rawURL(repository, folder ? `${folder}/SKILL.md` : "SKILL.md"), false).catch(() => null);
+    if (response?.status !== 200) return {};
+    const about = skillAbout(await response.text());
+    if (skillAbouts.size > 5_000) skillAbouts.clear();
+    skillAbouts.set(key, about);
+    return about;
+  } finally {
+    aboutReading--;
+    aboutWaiting.shift()?.();
+  }
+}
+
 const rawURL = (repository, file) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
 
-/** The front matter's name and description, as SkillLibrary.about(markdown:) reads them. */
+/** The front matter's name and description. */
 export function skillAbout(markdown) {
   const lines = String(markdown).split(/\r\n|\r|\n/);
   const about = {};
@@ -1779,7 +1984,7 @@ async function installSkill(repository, skill) {
   try {
     for (const file of skill.files) {
       const response = await github(rawURL(repository, file), false);
-      if (response.status !== 200) throw new SkillFailure(404, `${file} wasn't found on GitHub.`);
+      if (response.status !== 200) throw new SkillFailure(404, `${file} wasn’t found on GitHub.`);
       const relative = skill.path ? file.slice(skill.path.length + 1) : file;
       const into = path.join(staging, relative);
       if (!into.startsWith(staging + path.sep)) continue;
@@ -1795,20 +2000,20 @@ async function installSkill(repository, skill) {
   }
 }
 
-/** `kuvo/skills…` and `kuvo/skill-library…`, for this machine's own folder. */
+/** `kuvo/skills…`, `kuvo/skill-trash…` and `kuvo/skill-library…`, for this box's own folder. */
 export async function answerSkills(method, requestPath, body, engine = null) {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
-  if (parts.includes(null)) return { status: 400, value: { message: "That isn't a path." } };
+  if (parts.includes(null)) return { status: 400, value: { message: "That isn’t a path." } };
   const message = text => ({ message: text });
   try {
     if (parts[1] === "skills" && parts.length === 2) {
       if (method !== "GET") return { status: 405, value: {} };
-      return { status: 200, value: { folder: SKILLS, github: skillSources() } };
+      return { status: 200, value: { folder: SKILLS, folders: skillFolders(), github: skillSources() } };
     }
     if (parts[1] === "skills" && parts.length === 3) {
       const name = parts[2];
-      if (!isSkillFolder(name)) return { status: 400, value: message("That isn't a skill's name.") };
+      if (!isSkillFolder(name)) return { status: 400, value: message("That isn’t a skill’s name.") };
       const folder = path.join(SKILLS, name);
       const file = path.join(folder, "SKILL.md");
       if (method === "GET") {
@@ -1820,12 +2025,12 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         if (typeof text !== "string" || !text.trim()) return { status: 400, value: message('Send the skill\'s SKILL.md as {"text": …}.') };
         if (body?.new === true) {
           if (skillName(name) !== name) return { status: 400, value: message("Names use lowercase letters a to z, digits and hyphens.") };
-          if (fs.existsSync(folder) || (await engineSkillNames(engine)).includes(name)) return { status: 409, value: message(`There's a skill called ${name} already.`) };
+          if (fs.existsSync(folder) || (await engineSkillNames(engine)).includes(name)) return { status: 409, value: message(`There’s a skill called ${name} already.`) };
         } else if (!fs.existsSync(folder)) {
           return { status: 404, value: {} };
         } else if (skillSources()[name]) {
           // As Settings has it: one from GitHub is as it came, not edited.
-          return { status: 409, value: message(`${name} came from GitHub, so it isn't edited here.`) };
+          return { status: 409, value: message(`${name} came from GitHub, so it isn’t edited here.`) };
         }
         fs.mkdirSync(folder, { recursive: true });
         fs.writeFileSync(`${file}.new`, text);
@@ -1834,19 +2039,42 @@ export async function answerSkills(method, requestPath, body, engine = null) {
       }
       if (method === "DELETE") {
         if (!fs.existsSync(folder)) return { status: 404, value: {} };
-        // To Kuvo Code's own trash, kept 30 days, as the Mac puts a machine's away.
-        const trash = path.join(K, "trash", "skills");
-        fs.mkdirSync(trash, { recursive: true });
-        const away = path.join(trash, `${name}-${Math.floor(Date.now() / 1000)}`);
-        fs.renameSync(folder, away);
-        // Dated now: moving it kept its own date, and an old one would go at once.
-        const now = new Date();
-        fs.utimesSync(away, now, now);
-        const old = Date.now() - 30 * 86_400_000;
-        for (const each of listOf(trash)) try { if (fs.statSync(path.join(trash, each)).mtimeMs < old) fs.rmSync(path.join(trash, each), { recursive: true, force: true }); } catch {}
+        // To this box's own trash (Recently Deleted), kept 30 days.
+        fs.mkdirSync(SKILL_TRASH, { recursive: true });
+        let when = Math.floor(Date.now() / 1000);
+        while (fs.existsSync(path.join(SKILL_TRASH, `${name}-${when}`))) when++;
+        fs.renameSync(folder, path.join(SKILL_TRASH, `${name}-${when}`));
+        clearSkillTrash();
         return { status: 200, value: {} };
       }
       return { status: 405, value: {} };
+    }
+    if (parts[1] === "skill-trash") {
+      // Recently Deleted: what's past its 30 days goes first, whatever's asked.
+      clearSkillTrash();
+      if (parts.length === 2) {
+        if (method !== "GET") return { status: 405, value: {} };
+        return { status: 200, value: { entries: skillTrashEntries() } };
+      }
+      if (parts.length === 4 && parts[3] === "restore") {
+        if (method !== "POST") return { status: 405, value: {} };
+        const entry = parts[2];
+        const name = skillTrashEntry(entry)?.folder;
+        if (!name) return { status: 400, value: message("That isn’t an entry in Recently Deleted.") };
+        const away = path.join(SKILL_TRASH, entry);
+        if (!isDirectory(away)) return { status: 404, value: {} };
+        const back = path.join(SKILLS, name);
+        // Never over another: one by its name now stays, and so does this one, to restore later.
+        if (fs.existsSync(back)) return { status: 409, value: message(`There’s a skill called ${name} now. Delete it first to restore this one.`) };
+        // Nor beside one the engine finds elsewhere by that name (another tool's folder), which it
+        // would hide; the one put away, which the engine can list a moment longer, doesn't count.
+        const elsewhere = (await engineSkills(engine)).find(skill => skill.id === name && !skill.path?.startsWith(SKILLS + path.sep));
+        if (elsewhere) return { status: 409, value: message(`There’s a skill called ${name} ${skillPlace(elsewhere.path)}, so this one can’t be restored under that name.`) };
+        fs.mkdirSync(SKILLS, { recursive: true });
+        fs.renameSync(away, back);
+        return { status: 200, value: { name } };
+      }
+      return { status: 404, value: {} };
     }
     if (parts[1] === "skill-library") {
       if (parts.length === 2 && method === "GET") return { status: 200, value: { repositories: SKILL_REPOSITORIES.map(({ branch, ...shown }) => shown) } };
@@ -1855,7 +2083,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         if (!owner || !name || typeof body?.path !== "string") return { status: 400, value: message('Send {"repository": "owner/name", "path": …}.') };
         const repository = await skillRepository(owner, name);
         const skill = (await skillsIn(repository)).skills.find(each => each.path === body.path);
-        if (!skill) return { status: 404, value: message(`There's no skill at ${body.path} in ${repository.id}.`) };
+        if (!skill) return { status: 404, value: message(`There’s no skill at ${body.path} in ${repository.id}.`) };
         await installSkill(repository, skill);
         return { status: 200, value: { name: skill.name } };
       }
@@ -1863,16 +2091,17 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         const repository = await skillRepository(parts[2], parts[3]);
         const { skills, partial } = await skillsIn(repository);
         const { branch, ...shown } = repository;
-        return { status: 200, value: { repository: shown, skills, partial } };
+        // Each with what its SKILL.md says it is, so a client shows them without asking for each.
+        const described = await Promise.all(skills.map(async skill => ({ ...skill, about: await aboutSkill(repository, skill.path) })));
+        return { status: 200, value: { repository: shown, skills: described, partial } };
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
         const repository = await skillRepository(parts[2], parts[3]);
-        // As written: a "+" is a plus, as the Mac reads it.
+        // As written: a "+" is a plus.
         const pair = query.split("&").find(each => each.startsWith("path="));
         let at = "";
-        try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn't a path.") }; }
-        const response = await github(rawURL(repository, at ? `${at}/SKILL.md` : "SKILL.md"), false).catch(() => null);
-        return { status: 200, value: response?.status === 200 ? skillAbout(await response.text()) : {} };
+        try { at = pair ? decodeURIComponent(pair.slice(5)) : ""; } catch { return { status: 400, value: message("That isn’t a path.") }; }
+        return { status: 200, value: await aboutSkill(repository, at) };
       }
     }
     return { status: 404, value: {} };
@@ -1942,9 +2171,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
-    // Settings › Skills (PROTOCOL.md, "Skills"): this machine's own skills folder, and GitHub's
-    // collections, which this machine reaches itself, with the Mac closed too.
-    if (/^kuvo\/(skills|skill-library)(\/|\?|$)/.test(request.path)) {
+    // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
+    // collections, which it reaches itself (a machine's with the Mac closed too).
+    if (/^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
       const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
@@ -1977,23 +2206,11 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       const adding = route.match(/^kuvo\/mcp\/catalog\/([^/]+)$/);
       if (adding && method === "POST") return yield* answered(addFromCatalog(decodeURIComponent(adding[1])));
-      if (route === "kuvo/keys") return yield* (method === "GET" ? json(200, { keys: boxKeyNames() }) : json(405, {}));
-      const key = route.match(/^kuvo\/keys\/([^/]+)$/);
-      if (key) {
-        let name = "";
-        try { name = decodeURIComponent(key[1]); } catch {}
-        if (!/^KUVO_KEY_[A-Za-z0-9_]+$/.test(name) || name.includes("__")) return yield* json(400, { message: "That isn't a key's name." });
-        if (method === "GET") {
-          const value = boxKey(name);
-          return yield* (value == null ? json(404, {}) : json(200, { value }));
-        }
-        if (method === "PUT") {
-          const value = parsed(request.body)?.value;
-          if (typeof value !== "string" || !value) return yield* json(400, { message: "Send {\"value\": \"…\"}." });
-          return yield* answered(setBoxKey(name, value));
-        }
-        if (method === "DELETE") return yield* answered(setBoxKey(name, null));
-        return yield* json(405, {});
+      // Its integrations' keys, where it keeps them (a machine's files, this Mac's Keychain through
+      // its app): a bot's own aren't among them.
+      if (route === "kuvo/keys" || route.startsWith("kuvo/keys/")) {
+        const { status, value } = await answerKeys(method, route, parsed(request.body));
+        return yield* json(status, value);
       }
       return yield* json(404, {});
     }
@@ -4591,17 +4808,36 @@ export function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
   locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
 }
 
-// The box's own keys, by name (a bot's own, which its folder keeps, aren't among them).
-export function boxKeyNames(folder = BOX_KEYS) {
-  let names = [];
-  try { names = fs.readdirSync(folder); } catch {}
-  return names.filter(name => KEY_NAME.test(name) && !name.includes("__")).sort();
-}
-
-// One of them, as it's kept; null for one there isn't.
-export function boxKey(name, folder = BOX_KEYS) {
-  if (!KEY_NAME.test(String(name)) || String(name).includes("__")) return null;
-  try { return fs.readFileSync(path.join(folder, name), "utf8"); } catch { return null; }
+// `kuvo/keys…`: the box's integrations' keys, through its key store (`keyNames`, `readKey`…), a
+// bot's own not among them; where they can't be reached now (this Mac's app not answering), `503`.
+async function answerKeys(method, route, body) {
+  try {
+    if (route === "kuvo/keys") return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter(name => !name.includes("__")) } } : { status: 405, value: {} };
+    const parts = route.split("/");
+    let name = "";
+    try { name = parts.length === 3 ? decodeURIComponent(parts[2]) : ""; } catch {}
+    if (!STORED_KEY.test(name) || name.includes("__")) return { status: 400, value: { message: "That isn't a key's name." } };
+    switch (method) {
+      case "GET": {
+        const value = await readKey(name);
+        return value == null ? { status: 404, value: {} } : { status: 200, value: { value } };
+      }
+      case "PUT": {
+        const value = body?.value;
+        if (typeof value !== "string" || !value) return { status: 400, value: { message: "Send {\"value\": \"…\"}." } };
+        await keyWork(() => writeKey(name, value));
+        return { status: 200, value: {} };
+      }
+      case "DELETE":
+        await keyWork(() => deleteKey(name));
+        return { status: 200, value: {} };
+      default:
+        return { status: 405, value: {} };
+    }
+  } catch (error) {
+    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
+    throw error;
+  }
 }
 
 // A key of the box's own, set (`value`) or removed (null): integrations' servers read it there.
@@ -7092,6 +7328,8 @@ async function run() {
   };
   setTimeout(nightly, 60_000);
   setInterval(nightly, 600_000);
+  // Recently Deleted's skills past their 30 days, gone with no client there too.
+  keepSkillTrashClear();
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
@@ -7200,6 +7438,7 @@ async function box(command) {
     case "route": {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
+      answersOnce = true;
       let given = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
@@ -7211,6 +7450,16 @@ async function box(command) {
         if (part.body) chunks.push(Buffer.from(part.body));
       }
       return say({ status, body: Buffer.concat(chunks).toString("utf8") });
+    }
+    case "reconnect": {
+      // An integration's server connected again everywhere, a moment after `route` changed its
+      // keys, once the engine has read them.
+      const id = process.argv[4];
+      await new Promise(done => setTimeout(done, 2_000));
+      let engine;
+      try { engine = readEngineFile(); } catch { return; }
+      if (id) await reconnectEverywhere(engine, id);
+      return;
     }
     case "bot-keys-refresh":
       // Its bots' folders' settings as their keys and this machine's integrations are now.
@@ -7227,7 +7476,7 @@ async function box(command) {
       return say({ status: 200, ...met });
     }
     default:
-      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | bot-keys-refresh | personalities | update-status | update-now");
+      console.error("Usage: kuvo-link.js box adopt | read | change | key <name> | route | reconnect <server> | bot-keys-refresh | personalities | update-status | update-now");
       process.exit(2);
   }
 }
@@ -7300,6 +7549,8 @@ async function serve() {
   refreshBotsKeys().catch(() => {});
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
+  // Recently Deleted's skills past their 30 days, gone with no client there too.
+  keepSkillTrashClear();
   // Its app gone (its stdin closed): so is it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.on("close", () => process.exit(0));

@@ -18,6 +18,8 @@ final class BoxProcess {
     /// Where the box keeps what it has: its `KUVO_HOME`.
     static var home: URL { AppInfo.supportDirectory.appending(path: "box") }
     static var run: URL { home.appending(path: "run") }
+    /// What integrations' servers keep, which the engine is given too (`KUVO_INTEGRATIONS`).
+    static var integrations: URL { AppInfo.supportDirectory.appending(path: "integrations") }
 
     /// Where it's reached while it runs.
     private(set) var endpoint: ServerEndpoint?
@@ -49,6 +51,8 @@ final class BoxProcess {
     /// Starts it with the engine's Bun, once: it goes on through the engine's restarts.
     func start(engine: URL, environment: [String: String]) async {
         var env = environment
+        // GitHub's stand-in is for the tests' box only (`TestBox`), never the app's.
+        env["KUVO_TEST_GITHUB"] = nil
         env["BUN_BE_BUN"] = "1"
         // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
@@ -73,11 +77,13 @@ final class BoxProcess {
         }
         var env = environment
         env["KUVO_HOME"] = Self.home.path
-        // The engine's settings folder, where it reads its settings (a machine's box finds its
-        // engine's in its own folder): this Mac's settings stay where they've always been. And
+        // The engine's settings folder, where it reads its settings and the skills you add (a machine's box finds its
+        // engine's in its own folder): this Mac's settings and skills stay where they've always been. And
         // where the engine reads the keys you keep in the Keychain, which its settings name.
         env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
         env["KUVO_KEYS"] = IntegrationKeys.folder.path
+        // What integrations' servers keep (a sign-in), where the engine runs them with it.
+        env["KUVO_INTEGRATIONS"] = Self.integrations.path
         // The defaults it adds to them once, as it starts: those an earlier version added here
         // noted as done, so one you took out stays out.
         Self.noteDefaultsAdded(EngineConfig.defaultsAdded())

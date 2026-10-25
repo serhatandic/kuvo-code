@@ -127,7 +127,7 @@ run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the M
 bridge's real handler. Only the engine is a stand-in, the same small one on both. To add one:
 
 - Add it to the area's file: a `name` and `steps`. A step is `{"given": {<fixture>: {…}}}` (one
-  each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `settings`, `key`, `credential`,
+  each: `session`, `bot`, `wake`, `watch`, `pause`, `skill`, `trashedSkill`, `settings`, `key`, `credential`,
   `file`, `repository`, `write`, `ask`, `agentsBridge`, `peers`; bots before anything else), a request
   `{"send": "PATCH kuvo/bots/bot_ada", "body": {…}, "expect": {"status", "json"?, "type"?,
   "text"?}, "save": {"name": "bot.id"}}`, or `{"engineGot": {"method", "path", "json"}}`.
@@ -276,6 +276,9 @@ when you're there to answer.
 | `KUVO_DEMO_REMOVE_MACHINE` | With `KUVO_DEMO_SETTINGS=machines`: that machine's Remove dialog, open (nothing's removed unless you click) |
 | `KUVO_DEMO_ALSO_APPLY` | With `KUVO_DEMO_SETTINGS` and machines: the page's Also Apply to… bar, for a change noted but not made; `missing` applies one to an agent the machines don't have, `own` one to the shell (with Snapshots), once they're connected or couldn't be, for what the bar says stayed (nothing's written there) |
 | `KUVO_DEMO_MCP_SERVER` | With `KUVO_DEMO_SETTINGS=mcp`: that server's editor, open (added, off, if it isn't there); `<name>\|web` switches it to On the web |
+| `KUVO_DEMO_SETTINGS_SCROLL` | `bottom`: with `KUVO_DEMO_SETTINGS`, each page scrolled to its end a few seconds after it opens |
+| `KUVO_DEMO_SKILLS_COLLECTION` | With `KUVO_DEMO_SETTINGS=skills`: that collection on GitHub (`owner/name`) opened, as if typed and opened; `owner/name\|skill` also adds that skill, as Add Skill does |
+| `KUVO_DEMO_SKILLS_DELETED` | With `KUVO_DEMO_SETTINGS=skills`: `open` opens Recently Deleted; `restore:<folder>` also restores that skill, as Restore does |
 | `KUVO_DEMO_ACCOUNTS_MACHINE` | With `KUVO_DEMO_SETTINGS=accounts`: that machine's Accounts, in its own tab |
 | `KUVO_DEMO_WELCOME` | No tabs, so the welcome card shows |
 | `KUVO_DEMO_NEW_BOT` | The New Bot editor, open |
@@ -295,7 +298,7 @@ when you're there to answer.
 | `KUVO_DEMO_SELECTION_MENU` | `<x>,<y>`: the menu over selected text (Add to Chat, Copy), shown there in the conversation |
 | `KUVO_DEMO_DRAG` | `<x1>,<y1>,<x2>,<y2>`: a drag over the conversation, as events (`KUVO_DEMO_DRAG_AT` seconds after it opens); `KUVO_DEMO_DRAG_DIRECT=1` hands them to the view itself, as a window in the background takes a first click only to come forward |
 | `KUVO_DEMO_INTEGRATION_KEY` | `<id>\|<NAME>\|<value>`: saves an integration's key as Add Key… does, before the engine starts (no value removes it) |
-| `KUVO_DEMO_ADD_INTEGRATION` | With Settings › Integrations open: adds that integration, as Connect does |
+| `KUVO_DEMO_ADD_INTEGRATION` | With Settings › Integrations open: adds those integrations (comma-separated), as Connect does |
 | `KUVO_DEMO_SIGN_IN_SITE` | With Settings › Integrations open: signing in to that service on its site (`x`, `discord`…), in the sheet |
 | `KUVO_DEMO_INTEGRATION_KINDS` | Settings › Integrations shows only these kinds, comma-separated (`mail`, `chat`, `social`, `code`), to get a row in view |
 | `KUVO_DEMO_TAKE_OVER` | Seconds: the panel's browser is taken over from the agent once it starts browsing, and handed back after that long |

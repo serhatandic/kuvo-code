@@ -431,6 +431,15 @@ struct ScrollingSettingsForm<Content: View>: View {
         }
         .scrollPosition($position)
         .scrollBounceBehavior(.basedOnSize)
+        #if DEBUG
+        // KUVO_DEMO_SETTINGS_SCROLL=bottom: scrolled to its end once it's filled, for a look at
+        // what's below the fold without scrolling the window.
+        .task {
+            guard ProcessInfo.processInfo.environment["KUVO_DEMO_SETTINGS_SCROLL"] == "bottom" else { return }
+            try? await Task.sleep(for: .seconds(6))
+            position.scrollTo(edge: .bottom)
+        }
+        #endif
     }
 }
 
