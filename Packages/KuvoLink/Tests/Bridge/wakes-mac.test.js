@@ -162,3 +162,29 @@ test("a client that archived a conversation holds its wake-ups through the box, 
   assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: false })).json.paused, true);
   assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "paused");
 });
+
+test("one an agent's kuvo-wake writes beside the box goes at its time, not at the next minute", { timeout: 20_000 }, async () => {
+  const folder = path.join(support, "wakes", "ses_due");
+  const stop = link.sendWakes();
+  try {
+    // The box has nothing due (its timer is a minute out) when the agent adds one for now.
+    const before = prompted.length;
+    const sent = new Promise(resolve => { heard = () => prompted.length > before && resolve(); });
+    fs.writeFileSync(path.join(folder, "wakes", `${Math.floor(Date.now() / 1000)}-mnopqr`), "Read the release notes");
+    await sent;
+    assert.equal(prompted.at(-1).text, "[Wake-up] Read the release notes");
+  } finally {
+    stop();
+  }
+});
+
+test("archiving a conversation that's moving to another computer waits for the move", async () => {
+  const folder = path.join(support, "wakes", "ses_mac");
+  fs.writeFileSync(path.join(folder, "paused"), "moving");
+  try {
+    assert.equal((await ask("POST", "kuvo/wakes/ses_mac/pause", { archived: true })).status, 409);
+    assert.equal(fs.readFileSync(path.join(folder, "paused"), "utf8"), "moving", "the move's hold stays its own");
+  } finally {
+    fs.rmSync(path.join(folder, "paused"), { force: true });
+  }
+});

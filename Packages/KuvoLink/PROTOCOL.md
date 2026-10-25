@@ -1029,14 +1029,13 @@ host serves:
   `POST kuvo/wakes/<session>/now` with `{"wake": "<id>"}` sends it now (one that repeats still
   comes back at its time). Both answer `200 {}`, `404 {}` when there's no such one, `409
   {"message"}` while its conversation is on its way to another computer, or `503 {"message"}`
-  when it couldn't go. A Mac answers for its sessions and its machines'; a machine's bridge for
-  its own sessions and bots, with the Mac closed too (a session that keeps none answers an empty
-  list). A wake-up reaches the conversation as a
+  when it couldn't go. Each box answers for its own sessions and bots, a Mac's and a machine's
+  alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
+  an empty list). A wake-up reaches the conversation as a
   message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
   watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching}]}`
   (`next`, the soonest, in seconds since 1970, left out when it has none). Bots' come with
-  `kuvo/bots`. A Mac lists its sessions' and those it has read of its machines'; a machine's
-  bridge its own.
+  `kuvo/bots`. Each box lists its own.
 - `POST kuvo/wakes/<session>/watch` with `{"every", "check", "note"}` makes a watch, as its agent
   makes one with `kuvo-wake watch`: `every` 5m or more, 2h or 1d, `check` a shell command run on
   that computer, `note` what to do when its output changes. It answers the list as it is then;

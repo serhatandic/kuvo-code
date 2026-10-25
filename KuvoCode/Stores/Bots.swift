@@ -511,31 +511,18 @@ final class Bots {
         }
         guard syncing == nil else { return }
         syncing = Task { [weak self] in
-            var launching = true
             while !Task.isCancelled {
-                guard let self else { return }
-                // A job changed in a Mac bot's memory (or, at launch, each one's), before its
-                // conversation's instructions are checked.
-                for id in memoryChanged() { await syncJob(of: id) }
-                // At launch, the instructions first (an update may have changed them); after that
-                // apart, so machines slow to answer never hold up the next round.
-                if launching { await syncInstructions() } else { syncInstructionsApart() }
-                launching = false
+                await self?.syncRound()
                 try? await Task.sleep(for: .seconds(20))
             }
         }
     }
 
-    /// Whether bots' instructions are being checked, so one check runs at a time.
-    @ObservationIgnored private var syncingInstructions = false
-
-    private func syncInstructionsApart() {
-        guard !syncingInstructions else { return }
-        syncingInstructions = true
-        Task { [weak self] in
-            await self?.syncInstructions()
-            self?.syncingInstructions = false
-        }
+    /// A job changed in a Mac bot's memory (at launch, each one's), then each conversation's
+    /// instructions as they should be.
+    private func syncRound() async {
+        for id in memoryChanged() { await syncJob(of: id) }
+        await syncInstructions()
     }
 
     /// Writes the bot's session in its folder, and the folder it works in, where `kuvo-wake fire`

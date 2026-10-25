@@ -46,11 +46,14 @@ final class WakeUps {
         case notConnected(String)
         case tooSoon
         case tooMany
+        /// Wake Up Now, for one that went meanwhile (at its time, or canceled).
+        case notWaiting
         var errorDescription: String? {
             switch self {
             case .notConnected(let machine): "\(machine) isn’t connected. Connect to it, then try again."
             case .tooSoon: "Pick a time at least a minute from now."
             case .tooMany: "There are \(Wakes.limit) wake-ups waiting already. Cancel some first."
+            case .notWaiting: "This wake-up isn’t waiting any more."
             }
         }
     }
@@ -87,10 +90,23 @@ final class WakeUps {
         var paused: Bool?
     }
 
-    /// The box a conversation lives on.
+    /// The box a conversation lives on: a machine's only while it's connected, so what can't
+    /// reach it says so by its name.
     private func box(of owner: Owner) throws -> BoxClient {
         guard let app else { throw Failure.notConnected(owner.machine ?? "This Mac") }
+        if let machine = owner.machine {
+            guard let engine = app.machines.engine(machine), engine.isReady else { throw Failure.notConnected(app.machines.engine(machine)?.machine.name ?? machine) }
+        }
         return app.box(owner.machine ?? BoxClient.mac)
+    }
+
+    /// Whether a conversation (by its key) lives on this Mac: a bot here, or a session that isn't a
+    /// machine's. One moved to a machine is that machine's to say, whatever its old folder here says.
+    private func livesHere(_ key: String) -> Bool {
+        guard let app else { return false }
+        if let bot = app.bots.bot(key) { return bot.machine == nil }
+        guard let session = app.workspace.session(key) else { return true }
+        return RemoteFolder.machine(of: session.location.directory) == nil
     }
 
     private static func route(_ owner: Owner, _ action: String? = nil) -> String {
@@ -129,10 +145,11 @@ final class WakeUps {
                         var keys: Set<String> = []
                         for entry in line.sessions {
                             let key = app.bots.bot(forSession: entry.session).map(\.id) ?? entry.session
+                            guard livesHere(key) else { continue }
                             keys.insert(key)
                             take(Listed(wakes: entry.wakes, watches: entry.watches, paused: entry.paused), for: key)
                         }
-                        for key in followed.subtracting(keys) { forget(key: key) }
+                        for key in followed.subtracting(keys) where livesHere(key) { forget(key: key) }
                         followed = keys
                     }
                 } catch {}
@@ -355,10 +372,11 @@ final class WakeUps {
         if Moves.isFrozen(owner.key) || Moves.isFrozen(owner.session) { throw Moves.Failure.moving }
         wakingNow.insert(key)
         defer { wakingNow.remove(key) }
-        let (status, data) = try await box(of: owner).send("POST", Self.route(owner, "now"), body: try JSONEncoder().encode(["wake": wake.id]))
-        // Gone (sent, or canceled): nothing to send.
-        guard (200..<300).contains(status) || status == 404 else { throw BoxRefusal(status: status, data: data) }
+        // By its letters, which a repeating one keeps as its time moves on.
+        let (status, data) = try await box(of: owner).send("POST", Self.route(owner, "now"), body: try JSONEncoder().encode(["wake": wake.letters]))
         await read(owner)
+        if status == 404 { throw Failure.notWaiting }
+        guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
     }
 
     /// A session's wake-ups wait while it's archived, and come back with it.

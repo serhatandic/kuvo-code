@@ -1173,6 +1173,27 @@ const worktreeFollowers = new Set();
 // Those following its projects (`kuvo/projects/events`).
 const projectFollowers = new Set();
 
+/** `folders` watched, with what's in them, for `changed`: whether the system tells of every change
+ * (a watch it can't keep goes, and so does that), and how to stop. */
+function watchFolders(folders, changed) {
+  let whole = folders.length > 0;
+  const watchers = [];
+  for (const folder of folders) {
+    try {
+      fs.mkdirSync(folder, { recursive: true });
+      const watcher = fs.watch(folder, { recursive: true }, changed);
+      watcher.on("error", () => {
+        whole = false;
+        watcher.close();
+      });
+      watchers.push(watcher);
+    } catch {
+      whole = false;
+    }
+  }
+  return { get whole() { return whole; }, close: () => { for (const watcher of watchers) watcher.close(); } };
+}
+
 /** What `read` says, a line now and one for each change after, in order: each change this process
  * makes as it's made (`followers` are told), and what another made, looked for each second; or,
  * given `folders` to watch, as the system says they change, looked for again every half minute
@@ -1185,15 +1206,9 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
     wake?.();
   };
   followers.add(told);
-  const watchers = folders.flatMap(folder => {
-    try {
-      fs.mkdirSync(folder, { recursive: true });
-      return [fs.watch(folder, { recursive: true }, told)];
-    } catch {
-      return [];
-    }
-  });
-  const every = watchers.length === folders.length && folders.length ? 30_000 : 1000;
+  const watching = watchFolders(folders, told);
+  // Its client gone: it stops now, not at the next look.
+  signal?.addEventListener("abort", () => wake?.(), { once: true });
   try {
     let last = "";
     while (!signal?.aborted) {
@@ -1204,16 +1219,17 @@ async function* followed(read, followers, signal, { folders = [] } = {}) {
           last = line;
         }
       }
+      if (signal?.aborted) break;
       await new Promise(done => {
         wake = done;
-        setTimeout(done, every);
+        setTimeout(done, watching.whole ? 30_000 : 1000);
       });
       wake = null;
       queue.push(JSON.stringify(read()));
     }
   } finally {
     followers.delete(told);
-    for (const watcher of watchers) watcher.close();
+    watching.close();
   }
 }
 
@@ -2382,24 +2398,31 @@ export function nextWake() {
 }
 
 /** This computer's wake-ups and watches sent by its box, as a machine's keeper sends its own with
- * the same `kuvo-wake fire`: at the soonest one's time, at least each minute (for watches, and one
- * whose time it finds out later), and again as they change here. One still due after it ran (it
- * couldn't go, or its conversation is archived) waits for the next minute. The returned function
+ * the same `kuvo-wake fire` (which keeps two runs apart itself): at the soonest one's time, at
+ * least each minute (for watches), and again as they change, here or by an agent's kuvo-wake. One
+ * still due after a run that was due before it (it couldn't go, or its conversation is archived)
+ * waits for the next minute; one that came due during it goes right after. The returned function
  * stops it. */
 export function sendWakes() {
-  let timer = null, running = false, again = false, stopped = false;
+  let timer = null, settling = null, running = false, again = false, stopped = false, started = 0, said = false;
   const schedule = (afterFire = false) => {
     if (stopped) return;
     clearTimeout(timer);
     const due = nextWake(), now = Date.now() / 1000;
-    const wait = due === null || (afterFire && due <= now) ? 60_000 : Math.min(60_000, Math.max(500, (due + 1 - now) * 1000));
+    const missed = afterFire && due !== null && due <= now && due < started;
+    const wait = due === null || missed ? 60_000 : Math.min(60_000, Math.max(500, (due + 1 - now) * 1000));
     timer = setTimeout(fire, wait);
   };
   const fire = () => {
     if (running) return void (again = true);
     running = true;
-    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], { timeout: 300_000 }, () => {
+    started = Date.now() / 1000;
+    execFile(WAKE_COMMAND, ["fire", BOTS, path.join(RUN, "engine.json")], error => {
       running = false;
+      if (error?.code === "ENOENT" && !said) {
+        said = true;
+        console.error(`Wake-ups can't be sent: there's no kuvo-wake at ${WAKE_COMMAND}.`);
+      }
       if (again) {
         again = false;
         fire();
@@ -2408,13 +2431,20 @@ export function sendWakes() {
       }
     });
   };
-  const changed = () => schedule();
+  // A change, here or beside it, once the folders settle (a wake-up is a file or two).
+  const changed = () => {
+    clearTimeout(settling);
+    settling = setTimeout(() => schedule(), 200);
+  };
   wakeFollowers.add(changed);
+  const watching = watchFolders([BOTS, SESSION_WAKES], changed);
   schedule();
   return () => {
     stopped = true;
     clearTimeout(timer);
+    clearTimeout(settling);
     wakeFollowers.delete(changed);
+    watching.close();
   };
 }
 
@@ -3207,9 +3237,9 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   // says no, else null.
   const kuvoWake = args => new Promise(resolve => execFile(WAKE_COMMAND, [folder, ...args], { encoding: "utf8", timeout: 30_000 },
     (error, _out, said) => resolve(error ? { missing: error.code === "ENOENT", refused: error.code === 2, said: String(said ?? "").trim() } : null)));
-  const unavailable = failed => failed.missing
-    ? json(503, { message: "Wake-ups aren’t set up on this computer yet. Try again in a moment." })
-    : json(failed.refused && failed.said ? 400 : 503, { message: failed.refused && failed.said ? failed.said : "It couldn’t be saved. Try again." });
+  const unavailable = (failed, what) => failed.missing
+    ? json(503, { message: "Wake-ups aren’t set up on this computer." })
+    : json(failed.refused && failed.said ? 400 : 503, { message: failed.refused && failed.said ? failed.said : `${what} couldn’t be saved. Try again.` });
   if (action === "watch") {
     const every = typeof given.every === "string" ? given.every.trim() : "";
     const check = typeof given.check === "string" ? given.check.trim() : "";
@@ -3222,7 +3252,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     }
     if (isMoving(folder)) return yield* json(409, { message: MOVING });
     const failed = await kuvoWake(["watch", every, check, note]);
-    if (failed) return yield* unavailable(failed);
+    if (failed) return yield* unavailable(failed, "The watch");
     return yield* changed(200, listed());
   }
   if (!action) {
@@ -3240,12 +3270,13 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     if (isMoving(folder)) return yield* json(409, { message: MOVING });
     if (readWakes(folder).wakes.length >= WAKE_LIMIT) return yield* json(409, { message: `There are ${WAKE_LIMIT} wake-ups waiting already. Cancel some first.` });
     const failed = await kuvoWake(["add", String(Math.floor(due)), ...(every ? ["--every", every] : []), note]);
-    if (failed) return yield* unavailable(failed);
+    if (failed) return yield* unavailable(failed, "The wake-up");
     return yield* changed(200, listed());
   }
   // Held while it's archived, and let go when it's back, as its archiving (the Mac's, or a phone's
   // through this box) says: a hold of your own stays through both.
   if (action === "pause" && typeof given.archived === "boolean") {
+    if (folder && isMoving(folder)) return yield* json(409, { message: MOVING });
     holdArchived(session, given.archived);
     return yield* changed(200, listed());
   }
@@ -3285,7 +3316,7 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     try {
       target = agents ? bridge() : readEngine();
     } catch {}
-    if (!target) return yield* json(503, { message: agents ? "The coding agents aren't running on this computer." : "The engine isn't running." });
+    if (!target) return yield* json(503, { message: agents ? "The coding agents aren’t running on this computer." : "The engine isn’t running." });
     const authorization = `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`;
     const directory = textOf(path.join(folder, "directory"));
     if (!agents && directory) await waitForTools(target.port, authorization, directory, signal);
@@ -3298,9 +3329,9 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
         signal,
       });
     } catch {
-      return yield* json(503, { message: "The wake-up couldn't be sent." });
+      return yield* json(503, { message: "The wake-up couldn’t be sent." });
     }
-    if (!response.ok) return yield* json(503, { message: `The wake-up couldn't be sent (${response.status}).` });
+    if (!response.ok) return yield* json(503, { message: `The wake-up couldn’t be sent (${response.status}).` });
     if (!chosen.every) cancelWake(folder, chosen.letters);
     return yield* changed(200, {});
   } finally {

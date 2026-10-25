@@ -383,6 +383,8 @@ import Testing
     /// starts, a daily one once however many days it missed, then waits for its next time; a
     /// one-off is done. The app shows what's left as the box says.
     @Test func wakeUpsMissedWhileClosedGoOnceAsItOpens() async throws {
+        var box: TestBox?
+        defer { done(box) }
         try await start(boxing: false)
         let prompts = recordPrompts()
         let owner = WakeUps.owner(of: try #require(app.workspace.session(id)))
@@ -395,8 +397,7 @@ import Testing
         try Data("Check the nightly build".utf8).write(to: URL(filePath: wakes + "/" + daily))
         try Data("Stand up and stretch".utf8).write(to: URL(filePath: wakes + "/" + once))
 
-        let box = try await startBox()
-        defer { done(box) }
+        box = try await startBox()
         let following = Task { await app.wakeUps.follow() }
         defer { following.cancel() }
         try await until { prompts.all.count == 2 && app.wakeUps.wakes[owner.key]?.count == 1 }

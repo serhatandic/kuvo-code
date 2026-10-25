@@ -626,6 +626,8 @@ public enum Wakes {
 
     if [ "$1" = fire ]; then
       record=$3; botsroot=$2
+      # Gone sessions' wake-ups (`settle`) are kept a month, then go for good.
+      find "${botsroot%/*}/trash" -mindepth 1 -maxdepth 1 -name 'wakes-*' -mtime +30 -exec rm -rf {} + 2>/dev/null
       [ -f "$record" ] || exit 0
       eport=$(listens "$record" port)
       epassword=$(listens "$record" password)

@@ -283,20 +283,25 @@ final class Moves {
         }
         let copied: (exports: [JSONValue], sessions: [Session])
         do {
-            let there = try await transport.home(on: machine)
+            // Its wake-ups wait while it moves, as a bot's do: first of all, as the computer it's
+            // on sends them by itself.
             let here = try await transport.home(on: from)
-            try await checkApart(here, on: from, there, on: machine)
-            let directory = machine.map { RemoteFolder.folder(there.chats, on: $0) } ?? there.chats
             let wakes = here.wakes + "/" + id
-            let copy = there.wakes + "/" + id
             let hasWakes = try await transport.exists(wakes, on: from)
             if hasWakes {
                 record.original = wakes
-                record.copy = copy
                 record.wasPaused = try await transport.exists(wakes + "/paused", on: from)
             }
             save(record)
             if hasWakes, !record.wasPaused { try await transport.write(Data(Self.hold.utf8), to: wakes + "/paused", on: from) }
+            let there = try await transport.home(on: machine)
+            try await checkApart(here, on: from, there, on: machine)
+            let directory = machine.map { RemoteFolder.folder(there.chats, on: $0) } ?? there.chats
+            let copy = there.wakes + "/" + id
+            if hasWakes {
+                record.copy = copy
+                save(record)
+            }
             try await settle([id], on: source, name: name)
             copied = try await carry(id, from: source, to: target, directory: directory, name: name, record: &record) {
                 guard hasWakes else { return }
