@@ -1,7 +1,8 @@
 // Two boxes over the relay: this Mac's (`serve`, here, with its app a stand-in) and one of its
 // machines (`kuvo-link.js run`, a process of its own, set up as the app sets one up over SSH). This
 // Mac's documents, from before its box held them and after, reach the machine; a phone the machine
-// lets go reaches this Mac's app; and mail goes both ways. Only the relay and the app are stand-ins.
+// lets go reaches this Mac's app; and a machine you remove lets this Mac go. (Agents, letters and
+// group chats' mail between the two: mac-peers.) Only the relay and the app are stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/two-boxes.test.js`.
 import assert from "node:assert/strict";
@@ -32,8 +33,8 @@ async function arrived(found) {
   }
 }
 
-// The app, as its host interface answers this Mac's box: its keys, and mail from your machines.
-const app = { keys: null, mailed: [] };
+// The app, as its host interface answers this Mac's box: its keys.
+const app = { keys: null };
 const appHost = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
@@ -45,11 +46,6 @@ const appHost = http.createServer((request, response) => {
     }
     if (request.headers.authorization !== "Bearer host-password") return response.writeHead(401).end();
     if (request.url === "/link/identity") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.keys));
-    if (request.url === "/link/mailed") {
-      app.mailed.push(given);
-      poke();
-      return response.writeHead(200, { "content-type": "application/json" }).end("{}");
-    }
     if (request.url === "/link/route") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end("{}");
     response.writeHead(404).end();
   });
@@ -86,6 +82,23 @@ async function ask(method, p, body) {
   let json;
   try { json = JSON.parse(text); } catch {}
   return { status: parts[0].head.status, json };
+}
+
+// What this Mac's box says on `route`'s stream (as the app follows it), once `found` says it's there.
+async function followed(route, found) {
+  const stop = new AbortController();
+  try {
+    for await (const part of handle({ method: "GET", path: route, headers: {}, body: Buffer.alloc(0), fromApp: true }, {}, stop.signal)) {
+      if (!part.body) continue;
+      for (const line of part.body.toString().split("\n").filter(Boolean)) {
+        const value = JSON.parse(line);
+        if (found(value)) return value;
+      }
+    }
+  } finally {
+    stop.abort();
+  }
+  throw new Error(`${route} ended first`);
 }
 
 // The machine's own files, as its bridge keeps them.
@@ -190,7 +203,7 @@ function phone() {
   };
 }
 
-test("this Mac's documents from before its box held them, and after, reach a machine; a phone the machine lets go reaches this Mac's app; mail goes both ways; a machine you remove lets this Mac go, and comes back when set up again", { timeout: 90_000 }, async t => {
+test("this Mac's documents from before its box held them, and after, reach a machine; a phone the machine lets go reaches this Mac's app; a machine you remove lets this Mac go, and comes back when set up again", { timeout: 90_000 }, async t => {
   signal = t.signal;
   // Before the move: the Mac (its app, then) had signed who its computers are, and its phones up
   // to version 7, and set the machine up with them.
@@ -219,24 +232,12 @@ test("this Mac's documents from before its box held them, and after, reach a mac
   assert.equal((await it.open({ key: link.publicOf(macKey), address: macAddress }, { pair: token })).kind, "mac");
   await onTheMachine(() => machineHas("phones") > 7 && (machineLink()?.phones ?? []).some(each => each.key === it.public));
 
-  // Mail from this Mac's app to the machine (its agents), sealed by the app, on the box's connection.
-  const sealed = link.frame(link.Frame.mail, 0, link.sealOneWay(Buffer.from(JSON.stringify({ agents: { at: Date.now(), list: [], features: [] }, at: Date.now() })), macKey, Buffer.from(lab.key, "base64url")).message);
-  assert.equal((await ask("POST", "kuvo/link/send", { to: lab.address, frame: sealed.toString("base64") })).status, 200);
-  await onTheMachine(() => {
-    try { return mac in JSON.parse(fs.readFileSync(path.join(machineHome, "run", "peer-agents.json"), "utf8")); } catch { return false; }
-  });
-
-  // The phone removes itself on the machine: the machine's phones document says so, this Mac's box
-  // takes it (the app hears it), and the mail came by the app too.
-  const mailedBefore = app.mailed.length;
+  // The phone removes itself on the machine: the machine's phones document says so, and this Mac's
+  // box takes it (the app hears it).
   assert.equal((await it.open({ key: Buffer.from(lab.key, "base64url"), address: Buffer.from(lab.address, "base64url") })).kind, "machine");
   assert.equal((await it.request("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] })).status, 200);
-  const removed = await arrived(async () => {
-    const phones = await ask("GET", "kuvo/link/phones");
-    return phones.json.removed.some(each => each.key === it.public) && phones.json;
-  });
+  const removed = await followed("kuvo/link/phones/events", phones => phones.removed.some(each => each.key === it.public));
   assert.ok(!removed.phones.some(each => each.key === it.public), "off this Mac's phones too");
-  assert.ok(app.mailed.length > mailedBefore, "the machine's mail reached the app");
 
   // Removed in Settings › Machines: it hears this Mac's peers document, and lets this Mac go.
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [], moved: [], removed: [lab.key] })).status, 200);

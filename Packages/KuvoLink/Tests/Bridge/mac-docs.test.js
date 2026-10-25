@@ -248,13 +248,12 @@ test("with the phone link off, this Mac's documents say nothing of your phones (
   assert.deepEqual(kinds, ["peers", "personalities"]);
 });
 
-test("a machine's documents coming in leave alone what this Mac's app keeps of its agents", async () => {
+test("a machine's documents coming in, before this Mac's box knows its own agents (its engine starting), keep them in the list its group chats name", async () => {
   const lab = machine("lab.invalid");
   await fresh(lab);
   const agents = path.join(support, "box", "run", "agents.json");
   fs.mkdirSync(path.dirname(agents), { recursive: true });
-  const kept = JSON.stringify({ machine: null, agents: [{ session: "ses_mine", name: "Ada", kind: "bot" }] });
-  fs.writeFileSync(agents, kept);
+  fs.writeFileSync(agents, JSON.stringify({ machine: null, agents: [{ session: "ses_mine", name: "Ada", kind: "bot" }] }));
   assert.equal((await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { give: [lab.sign("phones", 2, { phones: [], removed: [] })] } })).status, 200);
-  assert.equal(fs.readFileSync(agents, "utf8"), kept);
+  assert.deepEqual(JSON.parse(fs.readFileSync(agents, "utf8")).agents.map(agent => agent.session), ["ses_mine"]);
 });

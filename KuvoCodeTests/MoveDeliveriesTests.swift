@@ -4,11 +4,13 @@ import Testing
 @testable import KuvoCode
 
 /// What's sent to a bot while it moves to another computer: nothing reaches it on the way, and
-/// each wake-up, agent's letter and reply from a notification that came meanwhile arrives exactly
-/// once, where it lives once the move is over: where it went, or where it was if the move failed.
-/// A letter or a reply waits for that; a wake-up's file goes along with its folder (each computer's
-/// own kuvo-wake sends it: this Mac's box's, the machine's keeper's). The machine is a folder of the test's own and a second engine,
-/// stubbed; the move is held at its first step while things are sent to it.
+/// each wake-up and reply from a notification that came meanwhile arrives exactly once, where it
+/// lives once the move is over: where it went, or where it was if the move failed. A reply waits
+/// for that; a wake-up's file goes along with its folder (each computer's own kuvo-wake sends it:
+/// this Mac's box's, the machine's keeper's); an agent's letter, which this Mac's box takes, is put
+/// off while the app says it's moving (`link/moving`), and comes again (the bridge's peers and
+/// mac-peers tests). The machine is a folder of the test's own and a second engine, stubbed; the
+/// move is held at its first step while things are sent to it.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MoveDeliveriesTests {
     let mac = StubEngine(port: 47906)
@@ -26,7 +28,6 @@ import Testing
         for name in ["bots.json", "bots", "wakes", "groups.json", "groups"] { try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: name)) }
         try? FileManager.default.removeItem(at: AppInfo.testRoot.appending(path: "deliveries-box"))
         try? FileManager.default.removeItem(at: AppInfo.testTrash)
-        try? FileManager.default.removeItem(at: AgentMail.seenFile)
         UserDefaults.standard.removeObject(forKey: "movesUnderWay")
     }
 
@@ -107,10 +108,20 @@ import Testing
         #expect(fire.terminationStatus == 0)
     }
 
-    /// A letter from an agent on another machine, by mail.
-    private func letter(_ id: String, to session: String) -> [String: Any] {
-        let at = (Date.now.timeIntervalSince1970 * 1000).rounded()
-        return ["letter": ["id": id, "from": "ses_faraway", "name": "API", "to": session, "text": "The API's deployed.", "wait": false, "at": at], "at": at]
+    /// Whether the app tells this Mac's box `session` is moving now, as the box asks before it
+    /// delivers an agent's letter (`link/moving`, through the app's host interface).
+    private func moving(_ session: String) async throws -> Bool {
+        let host = HostInterface()
+        let environment = try await host.start()
+        defer { host.stop() }
+        let base = try #require(environment["KUVO_HOST_URL"]), password = try #require(environment["KUVO_HOST_PASSWORD"])
+        StubWeb.letThrough(port: URL(string: base)?.port ?? 0)
+        var request = URLRequest(url: try #require(URL(string: base + "/link/moving")))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["session": session])
+        let (data, _) = try await URLSession(configuration: .ephemeral).data(for: request)
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["moving"] as? Bool == true
     }
 
     private func prompts(_ engine: StubEngine, _ session: String, saying words: String) -> Int {
@@ -145,17 +156,14 @@ import Testing
         #expect(prompts(mac, session, saying: "check the build") == 0, "the machine sends it, not this Mac")
     }
 
-    /// A machine's bot coming to this Mac: a letter and a reply sent to it on the way arrive once
-    /// it's here, once, however often a letter's sender tries; the wake-up that came due meanwhile
-    /// goes from here, once.
+    /// A machine's bot coming to this Mac: a reply sent to it on the way arrives once it's here,
+    /// once, and a letter for it is put off until then; the wake-up that came due meanwhile goes
+    /// from here, once.
     @Test func whatCameWhileItMovedArrivesOnceWhereItWent() async throws {
         defer { Self.clean(); mac.stop() }
         let id = "bot_deliver002", session = "ses_deliver2"
         let original = try bot(id, session: session, in: boxRoot.appending(path: "bots"), on: machine)
         let app = app()
-        let before = AgentMail.shared.app
-        AgentMail.shared.app = app
-        defer { AgentMail.shared.app = before }
         let workspace = original.appending(path: "workspace").path
         app.workspace.add(try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject:
             StubEngine.session(session, title: "Scout", directory: RemoteFolder.folder(workspace, on: machine)))))
@@ -164,43 +172,32 @@ import Testing
 
         let move = Task { try await app.moves.move(bot: id, to: nil) }
         await waypoint.arrived()
-        let mail = letter("ltr_deliver2", to: session)
-        let sent = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
         let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
-        // Its sender tries again meanwhile.
-        let again = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
-        // These reach it before it goes on (the main actor takes them in turn).
+        // It reaches it before it goes on (the main actor takes them in turn).
         await Task.yield()
         try await fireMac()
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
+        #expect(try await moving(session), "a letter for it is put off")
         waypoint.open()
         try await move.value
-        await sent.value
         await replied.value
-        await again.value
         #expect(app.bots.bot(id)?.machine == nil)
-        #expect(prompts(mac, session, saying: "The API's deployed.") == 1, "it waited, and went once it could")
-        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
+        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1, "it waited, and went once it could")
+        #expect(try await !moving(session), "here now: a letter for it is delivered")
 
-        // Its sender tries again (as a machine does, until it hears it's there).
-        await AgentMail.shared.mailed(mail, from: "peer.invalid")
         try await fireMac()
         try await fireMac()
-        #expect(prompts(mac, session, saying: "The API's deployed.") == 1)
         #expect(prompts(mac, session, saying: "check the build") == 1)
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
     }
 
     /// A move that fails: what was sent to the bot on the way arrives where it was, once, its
-    /// wake-up included.
+    /// wake-up included; a letter for it is put off until it's over.
     @Test func whatCameWhileAMoveFailedArrivesOnceWhereItWas() async throws {
         defer { Self.clean(); mac.stop() }
         let id = "bot_deliver003", session = "ses_deliver3"
         let original = try bot(id, session: session, in: Bots.root)
         let app = app()
-        let before = AgentMail.shared.app
-        AgentMail.shared.app = app
-        defer { AgentMail.shared.app = before }
         let workspace = original.appending(path: "workspace").path
         mac.list([StubEngine.session(session, title: "Scout", directory: workspace)])
         await app.workspace.refresh()
@@ -210,25 +207,21 @@ import Testing
 
         let move = Task { try await app.moves.move(bot: id, to: machine) }
         await waypoint.arrived()
-        let mail = letter("ltr_deliver3", to: session)
-        let sent = Task { await AgentMail.shared.mailed(mail, from: "peer.invalid") }
         let replied = Task { await app.workspace.send("Thanks, carry on.", to: session) }
-        // Both reach it before it goes on (the main actor takes them in turn).
+        // It reaches it before it goes on (the main actor takes them in turn).
         await Task.yield()
         try await fireMac()
         #expect(mac.requests("POST", "/api/session/\(session)/prompt").isEmpty, "nothing goes to it on the way")
+        #expect(try await moving(session), "a letter for it is put off")
         waypoint.open()
         await #expect(throws: (any Error).self) { try await move.value }
-        await sent.value
         await replied.value
         #expect(app.bots.bot(id)?.machine == nil)
-        #expect(prompts(mac, session, saying: "The API's deployed.") == 1, "it waited, and went once it could")
-        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1)
+        #expect(prompts(mac, session, saying: "Thanks, carry on.") == 1, "it waited, and went once it could")
+        #expect(try await !moving(session), "still here: a letter for it is delivered")
 
-        await AgentMail.shared.mailed(mail, from: "peer.invalid")
         try await fireMac()
         try await fireMac()
-        #expect(prompts(mac, session, saying: "The API's deployed.") == 1)
         #expect(prompts(mac, session, saying: "check the build") == 1)
         #expect(box.requests("POST", "/api/session/\(session)/prompt").isEmpty)
     }

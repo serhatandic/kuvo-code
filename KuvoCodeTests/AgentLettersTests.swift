@@ -3,9 +3,10 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// Agents on a machine this Mac isn't connected to, by mail through the relay (PROTOCOL.md,
-/// "Peers"): the list of who's there, and their letters to conversations here. The engine is
-/// stubbed; the relay isn't connected, so what this Mac would mail back goes nowhere.
+/// Agents on a machine this Mac isn't connected to (PROTOCOL.md, "Peers"): listed as that machine
+/// told this Mac's box, and written to only where they are. (Letters between your computers,
+/// this Mac's box's too, are the bridge's: its peers and mac-peers tests.) The engine is stubbed,
+/// and so is what the box answers; the relay isn't connected.
 @MainActor
 @Suite(.serialized) struct AgentLettersTests {
     static let engine = "http://127.0.0.1:47994"
@@ -31,7 +32,6 @@ import Testing
 
     private func start() async -> Prompts {
         TestEnvironment.prepare()
-        try? FileManager.default.removeItem(at: AgentMail.seenFile)
         StubWeb.start(hosts: ["127.0.0.1"])
         let listed = StubWeb.json(["data": [Self.session(here)]])
         StubWeb.route(Self.engine + "/api/session") { _ in listed }
@@ -51,52 +51,6 @@ import Testing
 
     private func done() {
         StubWeb.stop()
-        try? FileManager.default.removeItem(at: AgentMail.seenFile)
-    }
-
-    private static var now: Double { (Date.now.timeIntervalSince1970 * 1000).rounded() }
-
-    private func letter(from: String, id: String = "ltr_" + UUID().uuidString.prefix(8), at: Double = now, text: String = "The API's deployed.") -> [String: Any] {
-        ["letter": ["id": id, "from": from, "name": "API", "to": here, "text": text, "wait": false, "at": at], "at": at]
-    }
-
-    /// A machine whose bridge talks to your other computers tells this Mac its agents: listed here
-    /// as on that machine. A letter from one of them reaches the conversation it's for, by the
-    /// name that machine gave it, once, however often it comes. One from anything else there, or
-    /// naming another machine's agent, comes from "an agent on" it, with no address to answer;
-    /// one too old, or for a conversation this Mac doesn't list, doesn't come.
-    @Test func aMachinesLetterReachesAConversationHereOnce() async throws {
-        let prompts = await start()
-        defer { done() }
-        let before = AgentMail.shared.app
-        AgentMail.shared.app = app
-        defer { AgentMail.shared.app = before }
-
-        await AgentMail.shared.mailed(["agents": ["at": Self.now, "list": [["session": "ses_faraway", "name": "API", "kind": "session", "project": "api"]]]], from: "peerbox")
-        let listed = try #require(AgentMail.shared.directory().first { $0.session == "ses_faraway" })
-        #expect(listed.machine == "peerbox" && listed.name == "API" && listed.project == "api")
-
-        await AgentMail.shared.mailed(letter(from: "ses_faraway", at: Self.now - 2 * 86_400_000), from: "peerbox")
-        var other = letter(from: "ses_faraway")
-        other["letter"] = (other["letter"] as? [String: Any])?.merging(["to": "ses_notlisted"]) { $1 }
-        await AgentMail.shared.mailed(other, from: "peerbox")
-        #expect(prompts.all.isEmpty)
-
-        let once = letter(from: "ses_faraway", id: "ltr_onceonly")
-        await AgentMail.shared.mailed(once, from: "peerbox")
-        await AgentMail.shared.mailed(once, from: "peerbox")
-        #expect(prompts.all == [AgentMail.compose(from: "API", session: "ses_faraway", text: "The API's deployed.", waits: false)])
-
-        await AgentMail.shared.mailed(letter(from: "ses_imposter"), from: "peerbox")
-        await AgentMail.shared.mailed(letter(from: "ses_faraway"), from: "elsewhere")
-        // One of this Mac's own, claimed by a machine: not taken for it.
-        await AgentMail.shared.mailed(["agents": ["at": Self.now + 1, "list": [["session": "ses_faraway", "name": "API", "kind": "session"],
-                                                                                ["session": here, "name": "Release notes", "kind": "session"]]]], from: "peerbox")
-        await AgentMail.shared.mailed(letter(from: here), from: "peerbox")
-        let unknown = AgentMail.compose(from: "an agent on peerbox", session: "unknown", text: "The API's deployed.", waits: false)
-        #expect(Array(prompts.all.dropFirst()) == [unknown, AgentMail.compose(from: "an agent on elsewhere", session: "unknown", text: "The API's deployed.", waits: false), unknown])
-        #expect(unknown.contains("It can't be answered"))
-        AgentMail.shared.machineRemoved("peerbox")
     }
 
     /// A message for an agent on a machine this Mac isn't connected to, with no way to mail it
@@ -113,22 +67,19 @@ import Testing
             asked.add("ses_faraway")
             return StubWeb.json([:])
         }
-        await AgentMail.shared.mailed(["agents": ["at": Self.now, "list": [["session": "ses_faraway", "name": "API", "kind": "session"]]]], from: "awaybox")
-        defer { AgentMail.shared.machineRemoved("awaybox") }
+        // A machine of this Mac's, not connected now, whose agents its box heard of.
+        _ = app.machines.add("awaybox")
+        defer { app.removeMachine("awaybox") }
+        AgentMail.shared.takeElsewhere([(machine: "awaybox", told: .init(at: 1, list: [.init(session: "ses_faraway", name: "API", kind: "session", project: nil, about: nil, machine: nil)])),
+                                         // One the box names that isn't one of this Mac's machines: not listed.
+                                         (machine: "gone.invalid", told: .init(at: 1, list: [.init(session: "ses_ghost", name: "Ghost", kind: "session", project: nil, about: nil, machine: nil)]))])
+        #expect(AgentMail.shared.directory().first { $0.session == "ses_faraway" }?.machine == "awaybox")
+        #expect(!AgentMail.shared.directory().contains { $0.session == "ses_ghost" })
         let sent = await AgentMail.shared.send(from: here, name: "Release notes", to: "API", text: "Is it deployed?", waits: false)
         #expect(!sent.isError, "\(sent.text)")
         #expect(sent.text.contains("awaybox"), "\(sent.text)")
         #expect(asked.all.isEmpty && prompts.all.isEmpty)
         let read = await AgentMail.shared.read("API", query: nil, caller: here)
         #expect(read.isError && read.text.contains("isn't connected"), "\(read.text)")
-    }
-
-    /// A letter's words cut to fit one mail: whole characters, within the bytes.
-    @Test func aLettersWordsCutToFit() {
-        let words = String(repeating: "é👍🏽a", count: 5000)
-        let cut = AgentMail.prefix(words, bytes: 1000)
-        #expect(cut.utf8.count <= 1000 && cut.utf8.count > 980)
-        #expect(words.hasPrefix(cut))
-        #expect(AgentMail.prefix("short", bytes: 1000) == "short")
     }
 }

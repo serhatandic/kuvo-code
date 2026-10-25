@@ -199,6 +199,18 @@ test("a letter from a peer: delivered once, said to be there, by its sender's ow
   for (let i = 0; i < 18; i++) await take(second.peer, letter());
   assert.equal(said.filter(each => each.delivered.ok).length, 13, "twenty in ten minutes, the seven before counted");
   assert.equal(said.at(-1).delivered.retry, true);
+
+  // For a conversation moving to or from another computer now, or that lives on another one now:
+  // not delivered, to try again, and it reaches it once it's there.
+  said.length = 0;
+  const prompted = prompts.length;
+  const moving = letter();
+  await take(stranger.peer, moving, { moving: async session => session === "ses_target" });
+  await take(stranger.peer, letter(), { moved: new Map([["ses_target", second.pub]]) });
+  assert.deepEqual(said.map(each => [each.delivered.ok, each.delivered.retry]), [[false, true], [false, true]]);
+  assert.equal(prompts.length, prompted);
+  await take(stranger.peer, moving);
+  assert.equal(prompts.length, prompted + 1, "once it's there");
 });
 
 test("this box's letters go to the box their agent is on, again each minute until it says it has them, cut to fit; only that box's word counts; an answer goes to the tool waiting, or as a message once it gave up", async () => {

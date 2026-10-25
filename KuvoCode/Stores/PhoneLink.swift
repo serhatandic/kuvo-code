@@ -131,12 +131,6 @@ final class PhoneLink {
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
     @ObservationIgnored var box: () -> BoxClient? = { nil }
-    /// Its connection, for what the app still sends on it (`BoxRelay`): only while it's wanted, so
-    /// this Mac's keys are made only then.
-    private var server: BoxRelay? {
-        guard relayWanted, hasIdentity, let client = box() else { return nil }
-        return BoxRelay(key: key, box: client)
-    }
     /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
@@ -215,10 +209,6 @@ final class PhoneLink {
     /// (`Moves.livePlaces`).
     @ObservationIgnored var movedSessions: () -> [String: String?] = { [:] }
 
-    /// Mail from one of your machines (PROTOCOL.md, "Peers"), opened: which machine, and what it
-    /// said. Set by the app (AgentMail).
-    @ObservationIgnored var onMail: (_ machine: String, _ payload: [String: Any]) -> Void = { _, _ in }
-
     /// This Mac's link, held by its box (KuvoLink's PROTOCOL.md, "This Mac's box: the relay"): told
     /// whether it's wanted, and followed (how it stands, and the phones it keeps), from now on.
     /// `endpoint`: this Mac's engine, for what a phone asks of it through the app.
@@ -266,8 +256,9 @@ final class PhoneLink {
     /// What this Mac's box is told of its link: whether the phone link is on, whether there are
     /// machines to meet, the relay, and how it's named to your phones.
     private var linkConfig: Data {
+        // (What it answers, for its agents' mail to your other computers: `features`.)
         let config: [String: Any] = ["phones": Self.isEnabled, "machines": hasMachines(), "relay": relay.absoluteString,
-                                     "name": Self.computerName, "app": AppInfo.version]
+                                     "name": Self.computerName, "app": AppInfo.version, "features": Self.features]
         return (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
     }
 
@@ -314,16 +305,12 @@ final class PhoneLink {
     private func followed(status line: Data) {
         struct Said: Decodable { var state: String; var reason: String? }
         guard let said = try? JSONDecoder().decode(Said.self, from: line) else { return }
-        let was = status
         status = switch said.state {
         case "connected": .connected
         case "connecting": .connecting
         case "failed": .failed(said.reason ?? "This Mac’s link stopped.")
         default: .off
         }
-        // On the relay again: your machines hear who's here, and tell their agents again (what they
-        // said meanwhile didn't come).
-        if status == .connected, was != .connected { Task { await askForAgents() } }
     }
 
     /// The phones as the box keeps them, kept here too (what your machines are told, and what an
@@ -697,23 +684,6 @@ final class PhoneLink {
         return try? JSONEncoder().encode(Body(peers: peers, moved: moved, removed: removed))
     }
 
-    /// This Mac just met the relay, and may have missed what your machines said: each tells it its
-    /// agents again (PROTOCOL.md, "Peers"). (Its documents, the box tells them itself.)
-    func askForAgents() async {
-        guard let server, status == .connected else { return }
-        for (_, host) in documentMachines { await send(["ask": "agents"], to: host, server: server) }
-    }
-
-    /// Mails `payload` to one of your machines' bridges (one that talks to other computers
-    /// itself): `offline` when it can't go now (no relay connection, or it isn't such a machine),
-    /// `tooBig` for one the relay won't take.
-    func mail(_ payload: [String: Any], to machine: String) async -> MailOutcome {
-        guard let server, status == .connected, let host = machineHosts[machine], host.peers == true, host.anotherMac != true,
-              let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes) else { return .offline }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return .tooBig }
-        return await server.mail(data, to: key, at: address)
-    }
-
     /// This Mac's public key, as your machines know it (none while the Keychain won't give it out).
     var macKey: String? {
         hasIdentity ? key.publicBytes.base64URL : nil
@@ -722,11 +692,6 @@ final class PhoneLink {
     /// A machine's link key, as your computers name it (one whose bridge talks to them itself).
     func key(of machine: String) -> String? {
         talksToPeers(machine) ? machineHosts[machine]?.key : nil
-    }
-
-    /// The machine with that link key, whose bridge talks to your other computers itself.
-    func machine(withKey key: String) -> String? {
-        machineHosts.first { $0.value.key == key && $0.value.peers == true && $0.value.anotherMac != true }?.key
     }
 
     /// Whether `machine`'s bridge talks to your other computers itself (it makes its own list of
@@ -739,17 +704,6 @@ final class PhoneLink {
     /// the relay now.
     func reachesByMail(_ machine: String) -> Bool {
         status == .connected && machineHosts[machine]?.peers == true && machineHosts[machine]?.anotherMac != true
-    }
-
-    /// A mail frame from the relay (this Mac's box hands it over, having taken any documents it
-    /// carries): opened with the key of one of your machines, or dropped.
-    func mailed(_ frame: Data) {
-        for (machine, host) in machineHosts where host.anotherMac != true {
-            guard let remote = Data(base64URL: host.key), let opened = try? Mail.open(frame, to: key, from: remote) else { continue }
-            guard let payload = try? JSONSerialization.jsonObject(with: opened) as? [String: Any] else { return }
-            onMail(machine, payload)
-            return
-        }
     }
 
     /// A machine you removed: phones stop being told about it, and this Mac's box tells it to let
@@ -769,23 +723,6 @@ final class PhoneLink {
     private var documentMachines: [(id: String, host: MachineHost)] {
         machineHosts.filter { $0.value.sign != nil && $0.value.anotherMac != true && $0.value.peers == true }
             .sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
-    }
-
-    /// This Mac's digest of documents, as its box keeps them (its own brought up to date first):
-    /// what its agents' mail carries every ten minutes, so a machine that missed one gets it then.
-    func documentsDigest() async -> [[Any]]? {
-        guard let client = box(), let (status, data) = try? await client.send("GET", "kuvo/link/documents"), status == 200,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["have"] as? [[Any]]
-    }
-
-    /// Mails `payload` to a machine.
-    private func send(_ payload: [String: Any], to host: MachineHost, server: BoxRelay) async {
-        var mail = payload
-        mail["at"] = Int64(Date.now.timeIntervalSince1970 * 1000)
-        guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
-              let data = try? JSONSerialization.data(withJSONObject: mail) else { return }
-        if await server.mail(data, to: key, at: address) != .sent { log.error("Couldn’t mail a machine") }
     }
 
     // MARK: Answering
@@ -1009,9 +946,9 @@ final class PhoneLink {
 
     /// You're using Kuvo Code on this Mac, with `sessions` on its screen and `shown` in its own
     /// notifications just now, or not any more (nil) (`Attention`): this Mac's box hears it (as
-    /// "mac"), and each of your machines by mail, so notices for your phones wait a little there too,
-    /// and one you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each notification shown goes
-    /// to the box whose news it was alone.
+    /// "mac"), and tells each of your machines by mail, so notices for your phones wait a little
+    /// there too, and one you saw here doesn't go (PROTOCOL.md, "kuvo/attention"). Each
+    /// notification shown goes to the box whose news it was alone (`elsewhere`, a machine's, by its id).
     func attend(_ sessions: [String]?, shown: [Attention.Shown] = []) {
         guard Self.isEnabled else { return }
         let seconds = sessions == nil ? 0 : Attention.lease
@@ -1022,28 +959,16 @@ final class PhoneLink {
                 return entry
             }
         }
-        if let body = try? JSONSerialization.data(withJSONObject: ["for": seconds, "sessions": sessions ?? [], "shown": words(shown.filter { $0.machine == nil })]) {
+        var elsewhere: [String: Any] = [:]
+        for (machine, each) in Dictionary(grouping: shown.filter { $0.machine != nil }, by: { $0.machine ?? "" }) { elsewhere[machine] = words(each) }
+        if let body = try? JSONSerialization.data(withJSONObject: ["for": seconds, "sessions": sessions ?? [], "shown": words(shown.filter { $0.machine == nil }),
+                                                                   "elsewhere": elsewhere]) {
             toBox("kuvo/attention", body)
-        }
-        guard let server, status == .connected else { return }
-        let at = Int64(Date.now.timeIntervalSince1970 * 1000)
-        let delivering = delivering
-        for (machine, host) in machineHosts where host.peers == true && host.anotherMac != true {
-            var word: [String: Any] = ["for": seconds, "sessions": sessions ?? []]
-            let theirs = shown.filter { $0.machine == machine }
-            if !theirs.isEmpty { word["shown"] = words(theirs) }
-            guard let key = Data(base64URL: host.key), let bytes = Data(base64URL: host.address), let address = LinkAddress(bytes: bytes),
-                  let data = try? JSONSerialization.data(withJSONObject: ["attention": word, "at": at]) else { continue }
-            delivering.withLock { $0 += 1 }
-            Task.detached {
-                await server.mail(data, to: key, at: address)
-                delivering.withLock { $0 -= 1 }
-            }
         }
     }
 
     /// As the app quits: not in use any more, so what's held goes now and your machines send theirs,
-    /// waited for a moment so it's out before the relay connection goes.
+    /// waited for a moment so this Mac's box has heard (it sends what's left before it goes).
     func flushBeforeQuit() {
         attend(nil)
         let delivering = delivering
@@ -1146,7 +1071,7 @@ final class PhoneLink {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 // Who a message names with & is worked out there, from the list as it is now.
-                if writes { await MainActor.run { AgentMail.shared.writeBoxDirectory() } }
+                if writes { await AgentMail.shared.refreshBoxDirectory() }
                 var answered = false
                 do {
                     for try await part in EngineRoutes.forward(forwarded, to: base, password: bridge.password, allowing: { path, _ in path.hasPrefix("api/kuvo/link/groups") }) {

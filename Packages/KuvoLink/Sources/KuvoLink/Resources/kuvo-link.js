@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.62";
+export const BRIDGE_VERSION = "0.9.63";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
@@ -2389,8 +2389,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (method !== "POST") return yield* json(405, {});
       const given = attentionGiven(parsed(request.body));
       if (!given) return yield* json(400, { message: "Say for how many seconds you're in use (for: 0 for not), and which conversations are on your screen (sessions)." });
-      // This Mac's app is "mac", as a Mac's word by mail is to a machine.
+      // This Mac's app is "mac", as a Mac's word by mail is to a machine; and your machines hear it.
       hold.attend(IS_MAC && request.fromApp ? "mac" : `phone:${phone?.key?.toString("base64url") ?? ""}`, given);
+      if (IS_MAC && request.fromApp) macAttendPeers(parsed(request.body), given);
       return yield* json(200, { for: given.seconds });
     }
     // Who `&` can name in a message here, as a Mac's composer offers them: this machine's bots and
@@ -5902,7 +5903,7 @@ export function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, opti
 // app once it has them (with the relay and name, `overlay`, never written), how it stands, and who
 // follows that and its phones.
 const MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
-export const macLink = { config: null, overlay: null, status: { state: "off" }, host: null, wake: null, statusFollowers: new Set(), phoneFollowers: new Set() };
+export const macLink = { config: null, overlay: null, status: { state: "off" }, host: null, wake: null, statusFollowers: new Set(), phoneFollowers: new Set(), lastWelcomed: Date.now() };
 
 export function readLink() {
   let link = null;
@@ -6917,8 +6918,10 @@ async function answerTo(target, session, id, wait = 2000) {
 // otherwise "an agent on" that box, with no address to answer (anything there could claim
 // another's). It goes to a conversation here that an agent could be (not a subagent's, a group
 // chat's seat, nor one put away); an answer (`answers`) to a letter a tool here waits for goes to
-// that tool. `send(peer, payload)` mails the peer; `answer(letter)` sends this box's answer back.
-export async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait } = {}) {
+// that tool. One for a conversation moving to or from another computer now (`moving`), or that
+// lives on another now, comes again, and reaches it where it lives then. `send(peer, payload)`
+// mails the peer; `answer(letter)` sends this box's answer back.
+export async function takeLetter(sender, letter, { send, targets, answer = () => {}, told = readPeerAgents(), peers = peersOf(readLink()), moved = movedOf(readLink()), now = Date.now(), wait, moving = async () => false } = {}) {
   if (!isObject(letter) || typeof letter.id !== "string" || !LETTER_ID.test(letter.id)) return;
   const { id } = letter;
   const no = (why, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
@@ -6935,6 +6938,8 @@ export async function takeLetter(sender, letter, { send, targets, answer = () =>
   delivering.add(id);
   let place, prompt, fromAgent = null;
   try {
+    const lives = moved.get(letter.to);
+    if ((lives && lives !== ownKey(readLink() ?? {})) || (await moving(letter.to))) return no("It's moving to another computer: it comes again once it's there.", true);
     place = await placeOfSession(letter.to, targets);
     if (!place) return no("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
@@ -6973,9 +6978,12 @@ export function peerMail(sender, payload, host, targets = () => []) {
   // Documents (PROTOCOL.md, "Documents"): given, in parts, or a digest of what it has.
   if (isObject(payload.docs)) receiveDocs(sender, payload.docs, host).catch(() => {});
   // It's just connected, and may have missed what this box told it (the relay keeps nothing):
-  // told again at the next round.
-  if (payload.ask === "agents") toldPeers.delete(sender.key);
-  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer }).catch(() => {});
+  // told again now.
+  if (payload.ask === "agents") {
+    toldPeers.delete(sender.key);
+    if (host?.welcomed) announce(host, readEngineFile).catch(() => {});
+  }
+  if (isObject(payload.letter)) takeLetter(sender, payload.letter, { send, targets: targets(), answer: leaveAnswer, ...(IS_MAC ? { moving: macMoving } : {}) }).catch(() => {});
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") letterWent(sender, payload.delivered);
@@ -6985,9 +6993,15 @@ export function peerMail(sender, payload, host, targets = () => []) {
 let ownList = null;
 let ownMachine = null;
 
-// Writes `run/agents.json`: this box's agents and its peers'.
+// Writes `run/agents.json`: this box's agents and its peers'. Its own as last written while it
+// can't say yet (its engine starting), rather than none.
 export function writeAgents(link = readLink()) {
-  const composed = composeAgents(ownList ?? [], ownMachine ?? link?.id ?? null, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link));
+  const ownID = ownMachine ?? link?.id ?? null;
+  let own = ownList;
+  if (!own) {
+    try { own = (JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"))?.agents ?? []).filter(agent => fitsAgent(agent) && (agent.machine ?? null) === ownID); } catch { own = []; }
+  }
+  const composed = composeAgents(own, ownID, peersOf(link), readPeerAgents(undefined, undefined, link), movedOf(link));
   try {
     const text = JSON.stringify(composed);
     if (textOf(AGENTS_FILE) !== text) writePrivate(AGENTS_FILE, text);
@@ -7198,13 +7212,18 @@ export async function watchSeats(host, signal) {
 
 // This box's own agents, worked out again, and `run/agents.json` with them, relay or not.
 export async function refreshOwn(readEngine, link = readLink()) {
-  if (!link?.key) return ownList;
-  ownMachine = link.id ?? null;
-  const list = await ownAgents(readEngine, link.id);
+  // (This Mac's box lists its agents with its link off too: its group chats name them.)
+  if (!link?.key && !IS_MAC) return ownList;
+  ownMachine = link?.id ?? null;
+  const list = await ownAgents(readEngine, link?.id);
   if (list) ownList = list;
   writeAgents(link);
   return ownList;
 }
+
+// What this box answers, as its agents' mail says (`kuvo/info`'s features): on a Mac, its app's
+// list, as the app gives it (`kuvo/link/config`).
+const ownFeatures = () => (IS_MAC && Array.isArray(macLink.config?.features) ? macLink.config.features : FEATURES);
 
 // Tells each peer this box's agents: when they change, and every ten minutes, with a digest of
 // its documents to each that takes them, so one that missed what was given gets it then (PROTOCOL.md,
@@ -7227,7 +7246,7 @@ export async function announce(host, readEngine, link = readLink(), now = Date.n
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: FEATURES }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures() }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;
@@ -7308,8 +7327,7 @@ async function afterDocs(work, before, library, link, host) {
   if (library !== before) await takePersonalities(library).catch(() => {});
   for (const mac of work.left) forgetMacsAgents(mac, link);
   host?.keepOnly?.(new Set((link.phones ?? []).map(phone => phone.key)));
-  // (On this Mac its app keeps the list of agents, until that's the box's too.)
-  if (!IS_MAC) writeAgents(link);
+  writeAgents(link);
   sendDocs(host, link, work.send);
 }
 
@@ -7487,8 +7505,9 @@ export function sendOutbox(host, link = readLink(), now = Date.now(), offline = 
     }
     // No box lists its agent now (lists change as boxes come and go): it waits.
     if (!peer) continue;
-    // No relay for a while: one never sent goes to the Mac, which takes it on over SSH.
-    if (offline > RELAY_GONE_AFTER && !letter.sentTo && !letter.answers) {
+    // No relay for a while: one never sent goes to the Mac, which takes it on over SSH (on a
+    // machine: this Mac's box waits for the relay).
+    if (!IS_MAC && offline > RELAY_GONE_AFTER && !letter.sentTo && !letter.answers) {
       try {
         const { via, sentTo, peer: _, ...rest } = letter;
         writePrivate(path.join(OUTBOX, `${id}.json`), JSON.stringify({ ...rest, wait: false, handed: now }));
@@ -8080,10 +8099,10 @@ export function startUpdate(options = {}) {
 // phones' sessions, paired and pairing as on a machine, answered here. Its keys stay in your
 // Keychain: the app gives them as the link starts (`link/identity`), and they're kept in memory
 // only; without them the link stays off and says why, and never makes keys of its own. Its app says
-// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet). Until each moves
-// here, what only the app does yet goes to it through the host: what a phone asks of the Mac's own
-// routes (`link/route`), and mail from your machines (`link/mailed`); the app's own mail and pushes
-// go out on this connection (`kuvo/link/send`, `kuvo/link/push`).
+// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet). Your other
+// computers' mail is taken here, as a machine takes it: documents, agents, letters, group chats'.
+// What a phone asks of the Mac's own routes, which only the app answers yet, goes to it through the
+// host (`link/route`).
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
@@ -8160,38 +8179,6 @@ async function macKeys() {
   // What it said of the keys before isn't so any more.
   if (macLink.status.state === "failed") setLinkStatus(macNeeded(readLink()) ? "connecting" : "off");
   return true;
-}
-
-// Mail from your machines for the app, handed over in the order it came: one the app didn't take
-// (gone a moment, starting again) is tried again a few times, then let go, with a line in the
-// box's log saying so.
-// At most this much waits (an app that hangs takes a while over each): the oldest is let go first.
-export const MOST_MAIL_WAITING = 200;
-const mailWaiting = [];
-let mailing = false;
-function mailToApp(from, frame) {
-  mailWaiting.push({ from: from.toString("base64url"), frame: frame.toString("base64") });
-  if (mailWaiting.length > MOST_MAIL_WAITING) {
-    mailWaiting.shift();
-    console.error("Mail from one of your machines waited too long for Kuvo Code, and the oldest was let go.");
-  }
-  if (mailing) return;
-  mailing = true;
-  (async () => {
-    while (mailWaiting.length) {
-      const given = mailWaiting[0];
-      let taken = false;
-      for (let tries = 0; tries < 5 && !taken; tries++) {
-        taken = Boolean(await linkHost("link/mailed", given));
-        if (!taken) await new Promise(done => setTimeout(done, Math.min(8_000, 500 * 2 ** tries)));
-      }
-      // (One the app took without answering in time may have reached it all the same.)
-      if (!taken) console.error("Mail from one of your machines wasn't taken by Kuvo Code as far as this box could tell, and isn't tried again.");
-      // Let go meanwhile (too much waiting): it's already gone from the front.
-      if (mailWaiting[0] === given) mailWaiting.shift();
-    }
-    mailing = false;
-  })();
 }
 
 // What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
@@ -8404,7 +8391,8 @@ async function* macLinkRoute(route, request, signal) {
       if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
         return yield* json(400, { message: "Say whether the phone link is on (phones) and there are machines (machines), and the relay." });
       }
-      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? "") };
+      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? ""),
+        ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
       const before = macLink.config;
       macLink.config = config;
       if (macLink.overlay) macLink.overlay = { ...macLink.overlay, relay: config.relay, name: config.name };
@@ -8498,18 +8486,73 @@ async function* macLinkRoute(route, request, signal) {
       const link = readLink();
       return yield* json(200, { ...macPhones().documents, have: link?.sign ? digestOf(link) : [] });
     }
-    case "kuvo/link/send": {
-      // Mail the app sealed itself (its documents, its agents' letters, its group chats'), to the
-      // address of one of your machines, on this connection.
+    case "kuvo/link/letters": {
+      // A letter from one of this Mac's conversations for an agent on another of your computers
+      // (`peer`, its key), left in the outbox as a machine's tool leaves one: sent now, and each
+      // minute until it's there; with `wait`, its answer, for as long as this is asked.
       if (method !== "POST") return yield* json(405, {});
       const given = parsed(request.body);
-      const frame = typeof given?.frame === "string" ? Buffer.from(given.frame, "base64") : null;
-      if (!frame?.length || !ADDRESS_TEXT.test(given?.to ?? "")) return yield* json(400, { message: "Send {to, frame}." });
-      if (frame.length > MAX_MAIL) return yield* json(413, { message: "It's too big for the relay." });
-      const host = macLink.host;
-      if (!host?.welcomed) return yield* json(503, { message: "Not connected to the relay now." });
-      host.send(relaySend(Buffer.from(given.to, "base64url"), frame));
+      const link = readLink();
+      const peer = peersOf(link).find(each => each.key === given?.peer);
+      const from = typeof given?.from === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(given.from) ? given.from : null;
+      if (!isObject(given) || typeof given.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(given.to) || typeof given.text !== "string" || !given.text.trim()) {
+        return yield* json(400, { message: "Send {peer, to, text}, and from, wait." });
+      }
+      if (!peer) return yield* json(404, { message: "That isn't one of this Mac's computers." });
+      const id = "ltr_" + crypto.randomBytes(16).toString("base64url");
+      const wait = given.wait === true && Boolean(from);
+      try {
+        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+        writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ from, to: given.to, text: given.text.slice(0, LETTER_TEXT), wait, at: Date.now(), peer: peer.key }));
+      } catch {
+        return yield* json(500, { message: "This Mac's box couldn't keep it." });
+      }
+      macSendOutbox();
+      if (!wait) return yield* json(200, { id });
+      return yield* json(200, { id, ...(await letterAnswer(id, signal)) });
+    }
+    case "kuvo/link/letters/take": {
+      // What an earlier Kuvo Code kept itself (PhoneLink, before this Mac's box took its peers): its
+      // letters on their way, and the letters it had delivered (so one sent again isn't twice).
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (!isObject(given)) return yield* json(400, { message: "Send {letters, seen}." });
+      const now = Date.now();
+      try {
+        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+        for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
+          if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string") continue;
+          const kept = { from: typeof letter.from === "string" ? letter.from : null, to: letter.to, text: letter.text.slice(0, LETTER_TEXT), wait: false,
+            at: typeof letter.at === "number" ? letter.at : now, peer: letter.peer, ...(typeof letter.answers === "string" ? { answers: letter.answers } : {}) };
+          writePrivate(path.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+        }
+        if (isObject(given.seen)) {
+          locked(PEER_LOCK, () => {
+            const seen = lettersSeen(now);
+            for (const [id, at] of Object.entries(given.seen)) if (LETTER_ID.test(id) && typeof at === "number" && now - at < LETTER_MEMORY) seen[id] = Math.max(seen[id] ?? 0, at);
+            writePrivate(LETTERS_SEEN, JSON.stringify(seen));
+          });
+        }
+      } catch {
+        return yield* json(500, { message: "This Mac's box couldn't keep them." });
+      }
+      macSendOutbox();
       return yield* json(200, {});
+    }
+    case "kuvo/link/agents/refresh": {
+      // The list of everyone made again from this Mac's conversations as they are now (one made a
+      // moment ago), before a group chat here names someone with &.
+      if (method !== "POST") return yield* json(405, {});
+      await refreshOwn(readEngineFile).catch(() => {});
+      return yield* json(200, {});
+    }
+    case "kuvo/link/agents": {
+      // The agents your other computers told this Mac of, by computer (its key, and its id here).
+      if (method !== "GET") return yield* json(405, {});
+      const link = readLink();
+      const told = readPeerAgents(undefined, undefined, link);
+      return yield* json(200, { peers: peersOf(link).map(peer => ({ key: peer.key, id: peer.id ?? null, at: told[peer.key]?.at ?? 0,
+        list: told[peer.key]?.list ?? [], features: told[peer.key]?.features ?? [] })) });
     }
     default:
       return yield* json(404, {});
@@ -8591,12 +8634,8 @@ export async function runMacLink() {
         // Phones only while the phone link's on (the relay can be up for your machines alone).
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
-        // Mail from your machines: their documents taken here; the rest for the app, until what it
-        // carries moves here too.
-        mail: (from, body, frame) => {
-          macMail(body, host);
-          mailToApp(from, frame);
-        },
+        // Mail from your machines, taken here as a machine takes it (`peerMail`).
+        mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
         handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {},
@@ -8607,8 +8646,10 @@ export async function runMacLink() {
       const started = Date.now();
       const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, () => {
         setLinkStatus("connected");
-        // Meeting your machines: this Mac's documents as they are now, and its digest to each; and
-        // those removed while it was away hear it.
+        // Meeting your machines: who this Mac's agents are, asking for theirs; this Mac's
+        // documents as they are now, and its digest to each; and those removed while it was away
+        // hear it.
+        announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
         try { docsChanged(host, { greet: true }); } catch {}
         try { tellUntold(); } catch {}
       });
@@ -8636,17 +8677,138 @@ export async function runMacLink() {
   setLinkStatus("off");
 }
 
-// Documents from one of this Mac's machines, in its mail: taken, met and passed on here.
-function macMail(body, host) {
-  const opened = openMail(body, readLink());
-  if (opened && isObject(opened.payload.docs)) receiveDocs(opened.sender, opened.payload.docs, host).catch(() => {});
-}
-
 // Something of this Mac's documents changed (a phone, a personality, your machines): what changed
 // goes to your machines now, if it's on the relay; they get it as they meet otherwise.
 export function macDocsChanged() {
   const host = macLink.host;
   if (host?.welcomed) try { docsChanged(host); } catch {}
+}
+
+// This Mac in use, or not any more, as its app says (`kuvo/attention`): each of your machines hears
+// it by mail, with what of its own this Mac's notifications showed (`elsewhere`, by its id here), so
+// notices for your phones wait a little there too, and one you saw here doesn't go.
+function macAttendPeers(body, given) {
+  const host = macLink.host;
+  const link = readLink();
+  if (!host?.welcomed || !link?.key) return;
+  const at = Date.now();
+  for (const peer of peersOf(link)) {
+    const shown = isObject(body?.elsewhere) && Array.isArray(body.elsewhere[peer.id]) ? body.elsewhere[peer.id] : [];
+    const theirs = attentionGiven({ for: 0, shown })?.shown ?? [];
+    const bytes = mailFor(peer, { attention: { for: given.seconds, sessions: given.sessions, ...(theirs.length ? { shown: theirs } : {}) }, at }, link);
+    if (bytes) try { host.send(bytes); } catch {}
+  }
+}
+
+// Whether one of this Mac's conversations is moving to or from another computer now: its app runs
+// the move (`link/moving`). Not when the app can't say (it isn't answering).
+async function macMoving(session) {
+  return (await linkHost("link/moving", { session }))?.moving === true;
+}
+
+// This Mac's box's agents and their letters, as a machine's link keeps them (`run`): its own listed
+// here, link or not (its group chats name them); told to your other computers, and its letters
+// sent, while the link's up; its group chats' mail carried on it.
+export function runMacPeers() {
+  const stop = new AbortController();
+  takeSeatLetters();
+  watchSeats(() => macLink.host, stop.signal);
+  refreshOwn(readEngineFile).catch(() => {});
+  const rounds = [
+    setInterval(() => {
+      const host = macLink.host;
+      if (host?.welcomed) announce(host, readEngineFile).catch(() => {});
+      else refreshOwn(readEngineFile).catch(() => {});
+    }, 60_000),
+    setInterval(macSendOutbox, 3_000),
+  ];
+  macLink.stopPeers = () => {
+    stop.abort();
+    for (const round of rounds) clearInterval(round);
+  };
+}
+
+// Stops them (a test's, as it ends).
+export function stopMacPeers() {
+  macLink.stopPeers?.();
+  macLink.stopPeers = null;
+}
+
+// The outbox, sent now while this Mac's box is on the relay (and its letters kept, not sent, while
+// it isn't).
+function macSendOutbox() {
+  const host = macLink.host;
+  if (host?.welcomed) macLink.lastWelcomed = Date.now();
+  try { sendOutbox(host?.welcomed ? host : { send() {} }, undefined, Date.now(), host?.welcomed ? 0 : Math.max(1, Date.now() - macLink.lastWelcomed)); } catch {}
+}
+
+// How long one of this Mac's conversations waits for a letter's answer at most.
+export const LETTER_WAIT = 660_000;
+
+// The answer to letter `id`, waited for as a machine's tool waits (`replies/<id>.json`, noting it
+// still waits in `<id>.alive`): its words; or how it went, when it didn't get there or its answer
+// can't come; or `{text: null}` once it's waited `most`, or its asker went. Then it goes on without
+// waiting (`<id>.gaveup`), and an answer that comes later reaches the conversation as a message.
+export async function letterAnswer(id, signal, most = LETTER_WAIT) {
+  const file = path.join(REPLIES, `${id}.json`);
+  const alive = path.join(REPLIES, `${id}.alive`);
+  let wake = null;
+  let watching = null;
+  try {
+    fs.mkdirSync(REPLIES, { recursive: true, mode: 0o700 });
+    // (Its own `.alive` changing isn't news.)
+    watching = fs.watch(REPLIES, (_event, name) => { if (!name || (String(name).startsWith(id) && !String(name).endsWith(".alive"))) wake?.(); });
+  } catch {}
+  const ends = Date.now() + most;
+  try {
+    while (!signal?.aborted && Date.now() < ends) {
+      try { fs.writeFileSync(alive, "", { mode: 0o600 }); } catch {}
+      try {
+        const said = JSON.parse(fs.readFileSync(file, "utf8"));
+        fs.rmSync(file, { force: true });
+        if (typeof said?.text === "string") return { text: said.text };
+        if (typeof said?.failed === "string") return { failed: said.failed };
+        if (typeof said?.note === "string") return { note: said.note };
+      } catch {}
+      // Looked at again when it comes, and every two seconds (it still waits: `.alive`).
+      await new Promise(resolve => {
+        const done = () => {
+          clearTimeout(timer);
+          wake = null;
+          signal?.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, Math.min(2000, Math.max(0, ends - Date.now())));
+        wake = done;
+        signal?.addEventListener("abort", done, { once: true });
+      });
+    }
+  } finally {
+    watching?.close();
+    fs.rmSync(alive, { force: true });
+  }
+  try { fs.writeFileSync(path.join(REPLIES, `${id}.gaveup`), "", { mode: 0o600 }); } catch {}
+  return { text: null };
+}
+
+// Group chats' letters an earlier Kuvo Code kept itself (`run/seat-letters.json`, its SeatRelay),
+// in the outbox now, as this box carries them.
+export function takeSeatLetters(file = path.join(RUN, "seat-letters.json")) {
+  let kept;
+  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+  try {
+    fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+    for (const [id, letter] of Object.entries(isObject(kept) ? kept : {})) {
+      if (!LETTER_ID.test(id) || !isObject(letter) || typeof letter.peer !== "string" || typeof letter.seat !== "string") continue;
+      let seat = null;
+      try { seat = JSON.parse(Buffer.from(letter.seat, "base64").toString("utf8")); } catch {}
+      if (!isObject(seat)) continue;
+      writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ peer: letter.peer, seat, at: typeof letter.at === "number" ? letter.at : Date.now(),
+        ...(typeof letter.sentTo === "string" ? { sentTo: letter.sentTo } : {}), ...(letter.gaveUp === true ? { gaveUp: true } : {}),
+        ...(typeof letter.aged === "number" ? { aged: letter.aged } : {}) }));
+    }
+    fs.rmSync(file, { force: true });
+  } catch {}
 }
 
 // Stops it (a test's, as it ends): what's open goes, and the loop with it.
@@ -9121,6 +9283,8 @@ async function serve() {
   sendWakes();
   // This Mac's link to your phones and machines, once its app says it's wanted.
   if (IS_MAC) runMacLink().catch(() => {});
+  // Its agents and their letters, and its group chats' mail, for your other computers.
+  if (IS_MAC) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app

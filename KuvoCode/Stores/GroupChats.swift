@@ -51,10 +51,12 @@ final class GroupChats {
     func send(_ text: String, to id: String) -> Bool {
         // Held for a move (its computer's status): it waits too, until it's where it's going.
         guard boxes.reach(id) == .ready, boxes.chat(id)?.held != true else { return false }
-        // Who it names with & is worked out where it lives: this Mac's box from the list as it is now.
-        if boxes.machine(of: id) == nil { AgentMail.shared.writeBoxDirectory() }
+        let here = boxes.machine(of: id) == nil
         Task {
             do {
+                // Who it names with & is worked out where it lives: this Mac's box from the list as
+                // it is now.
+                if here { await AgentMail.shared.refreshBoxDirectory() }
                 try await boxes.send(text, to: id)
             } catch {
                 let key = BotGroups.tabKey(id)

@@ -230,11 +230,11 @@ final class HostInterface {
             let headers = (given["headers"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
             let phone = (given["phone"] as? String).flatMap { Data(base64URL: $0) }
             return await Self.answer(phoneLink.answerForBox(LinkRequest(method: method, path: path, headers: headers, body: body), phone: phone))
-        case "/link/mailed":
-            // Mail one of your machines sent this Mac, for what the app still does with it.
-            guard let frame = (given["frame"] as? String).flatMap({ Data(base64Encoded: $0) }) else { return .init(status: 400) }
-            phoneLink?.mailed(frame)
-            return .json([:])
+        case "/link/moving":
+            // Whether one of this Mac's conversations is moving to or from another computer now
+            // (the app runs the move): a letter for it comes again once it's there.
+            guard let session = given["session"] as? String else { return .init(status: 400) }
+            return .json(["moving": Moves.frozen.contains(session) || Moves.isFrozen(session)])
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.

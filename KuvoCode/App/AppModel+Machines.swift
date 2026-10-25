@@ -42,12 +42,9 @@ extension AppModel {
             return ToolApproval(rules: found.permissions) == .approveAll
         }
         BrowserTools.isInView = { [weak self] session in self?.utilities.isInView(session) ?? false }
-        // Agents writing to each other, here and on machines.
+        // Agents writing to each other, here and on machines (and with machines this Mac isn't
+        // connected to, through this Mac's box).
         AgentMail.shared.app = self
-        // And with machines this Mac isn't connected to, by mail through the relay.
-        phoneLink.onMail = { machine, payload in
-            Task { await AgentMail.shared.mailed(payload, from: machine) }
-        }
         if mailTick == nil {
             mailTick = Task {
                 while !Task.isCancelled {

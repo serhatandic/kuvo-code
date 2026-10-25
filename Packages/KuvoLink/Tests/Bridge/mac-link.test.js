@@ -1,7 +1,8 @@
 // This Mac's box holds the relay connection a machine's bridge holds (PROTOCOL.md, "This Mac's box:
 // the relay"): with its keys from its app, in memory only; your phones paired and answered there,
-// what's the app's passed to the app; mail from your machines handed to the app, and the app's mail
-// and pushes sent on its connection. Only the relay and the app are stand-ins.
+// what's the app's passed to the app, and the app's notices pushed on its connection. (Your
+// machines' mail is the box's own: mac-peers and two-boxes.) Only the relay and the app are
+// stand-ins.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-link.test.js`.
 import assert from "node:assert/strict";
@@ -21,9 +22,9 @@ const waitingForChange = [];
 const changed = () => new Promise(resolve => waitingForChange.push(resolve));
 const poke = () => { for (const resolve of waitingForChange.splice(0)) resolve(); };
 
-// The app, as its host interface answers this Mac's box: its keys (your Keychain), the Mac's own
-// routes, and mail from your machines.
-const app = { keys: null, hellos: 0, away: false, turnedAway: 0, mailed: [], asked: [], streams: new Set() };
+// The app, as its host interface answers this Mac's box: its keys (your Keychain), and the Mac's
+// own routes.
+const app = { keys: null, hellos: 0, away: false, turnedAway: 0, asked: [], streams: new Set() };
 const appHost = http.createServer((request, response) => {
   const chunks = [];
   request.on("data", chunk => chunks.push(chunk));
@@ -44,11 +45,6 @@ const appHost = http.createServer((request, response) => {
     if (request.url === "/link/identity") {
       if (!app.keys) return response.writeHead(503).end("{}");
       return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.keys));
-    }
-    if (request.url === "/link/mailed") {
-      app.mailed.push(given);
-      poke();
-      return response.writeHead(200, { "content-type": "application/json" }).end("{}");
     }
     if (request.url === "/link/route") {
       app.asked.push(given);
@@ -338,24 +334,7 @@ test("the app's own answer reaches the phone as it is, a 404 too; an answer cut 
   assert.equal(pieces.at(-1).head.t, "cancel", "the phone hears it was cut off");
 });
 
-test("mail from your machines goes to the app; the app's mail and pushes go out on the box's connection", async () => {
-  app.keys = keys;
-  await config({ machines: true });
-  await untilStatus("connected");
-  const machine = relay.device();
-  const sealed = link.frame(link.Frame.mail, 0, crypto.randomBytes(48));
-  const mailedBefore = app.mailed.length;
-  machine.send(macAddress, sealed);
-  await arrived(() => app.mailed.length > mailedBefore);
-  assert.deepEqual(app.mailed.at(-1), { from: machine.address.toString("base64url"), frame: sealed.toString("base64") });
-  // The app's mail, sealed by the app: to the machine as it was.
-  const going = link.frame(link.Frame.mail, 0, crypto.randomBytes(64));
-  assert.equal((await ask("POST", "kuvo/link/send", { to: machine.address.toString("base64url"), frame: going.toString("base64") })).status, 200);
-  const delivered = link.readRelay(await machine.next());
-  assert.equal(delivered.kind, "deliver");
-  assert.deepEqual(delivered.payload, going);
-  assert.deepEqual(delivered.address, macAddress);
-  assert.equal((await ask("POST", "kuvo/link/send", { to: machine.address.toString("base64url"), frame: Buffer.alloc(70_000).toString("base64") })).status, 413);
+test("the app's own notices go out on the box's connection", async () => {
   // A notice only the app knows (an ask from its panel's browser), sealed here for each phone
   // that's said where it is.
   const { it } = await paired();
@@ -383,7 +362,6 @@ test("mail from your machines goes to the app; the app's mail and pushes go out 
   assert.equal((await ask("GET", "kuvo/attention")).json.held, 0);
   // Not for anyone but the app.
   assert.equal((await ask("POST", "kuvo/attention/notice", { notice: { title: "x" } }, { fromApp: false })).status, 403);
-  await config({ machines: false });
 });
 
 test("phones from before are taken, a removal winning; the app removes as the Mac; the link's routes are the app's alone", async () => {
@@ -411,25 +389,6 @@ test("with the phone link off, phones are let go and refused, and no pairing lin
   assert.equal((await ask("POST", "kuvo/phones/pair")).status, 409);
   assert.deepEqual(await it.open({}), { refused: true });
   await config({ phones: true, machines: false });
-});
-
-test("mail the app couldn't take at once is handed over when it can, in the order it came", async () => {
-  app.keys = keys;
-  await config({ machines: true });
-  await untilStatus("connected");
-  const machine = relay.device();
-  const first = link.frame(link.Frame.mail, 0, crypto.randomBytes(30));
-  const second = link.frame(link.Frame.mail, 0, crypto.randomBytes(31));
-  const before = app.mailed.length;
-  app.away = true;
-  const refused = app.turnedAway;
-  machine.send(macAddress, first);
-  machine.send(macAddress, second);
-  await arrived(() => app.turnedAway > refused);
-  app.away = false;
-  await arrived(() => app.mailed.length >= before + 2);
-  assert.deepEqual(app.mailed.slice(before).map(each => each.frame), [first.toString("base64"), second.toString("base64")]);
-  await config({ machines: false });
 });
 
 test("a link no longer wanted leaves the relay, and says it's off", async () => {

@@ -45,16 +45,19 @@ function readFrames(buffer) {
   return { frames, rest: buffer.subarray(offset) };
 }
 
-// `changed`: called each time what it keeps changes (a push, a device gone), for a test waiting on it.
+// `changed`: called each time what it keeps changes (a device on it or gone, a push), for a test waiting on it.
 export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   // Who's on it, by address (hex): how to give each what comes for it.
   const devices = new Map();
   const pushed = [];
+  const delivered = [];
   const sockets = new Set();
   const deliver = (from, to, payload) => {
     const device = devices.get(to.toString("hex"));
     if (!device) return devices.get(from.toString("hex"))?.(Buffer.concat([Buffer.from([3]), to]));
     device(Buffer.concat([Buffer.from([2]), from, payload]));
+    delivered.push({ from: Buffer.from(from), to: Buffer.from(to), payload: Buffer.from(payload) });
+    changed();
   };
   // A device's message to the relay, from `from` (null before its hello).
   const take = (message, state, give) => {
@@ -63,6 +66,7 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
       state.address = addressOf(message.subarray(1));
       devices.set(state.address.toString("hex"), give);
       give(Buffer.concat([Buffer.from([1]), state.address]));
+      changed();
       return;
     }
     if (!state.address) return;
@@ -101,6 +105,8 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   return {
     url: `ws://127.0.0.1:${server.address().port}`,
     pushed,
+    // What it gave a device on it, from another (in order).
+    delivered,
     // Whether a device is on it at `address`.
     has: address => devices.has(address.toString("hex")),
     // A device in this process: what comes for it, in order (`next`), and what it sends.

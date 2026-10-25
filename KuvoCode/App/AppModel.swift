@@ -49,9 +49,6 @@ final class AppModel {
     }()
     /// Every group chat, as the window shows them.
     @ObservationIgnored private(set) lazy var chats = GroupChats(boxes: boxGroups)
-    /// This Mac's group chats' mail to your machines and back, over the phone link's relay
-    /// connection, until this Mac's box takes that over.
-    let seatRelay = SeatRelay()
     /// What this Mac keeps, brought up to date with this version once, as it launches.
     let calibration = Calibration()
     /// Bots and chats moving to another computer.
@@ -216,7 +213,6 @@ final class AppModel {
         bots.app = self
         wakeUps.app = self
         boxGroups.app = self
-        seatRelay.app = self
         moves.app = self
         workspace.onMovedToAgents = { [weak self] from, to in await self?.movedToAgents(from: from, to: to) ?? false }
         workspace.onBotToAgents = { [weak self] id, model in try await self?.bots.moveToAgents(session: id, model: model) }
@@ -559,14 +555,11 @@ final class AppModel {
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()
             self?.boxGroups.disconnected(nil)
-            self?.seatRelay.stop()
         }
         agents.onConnected = { [weak self] in
             Task {
                 // This Mac's group chats first: they're what shows from the cache meanwhile.
                 await self?.boxGroups.connected(nil)
-                // Their mail to your machines and back.
-                self?.seatRelay.follow()
                 // A move of a group chat to or from this Mac cut short, now its bridge is there.
                 await self?.moves.recover()
                 await self?.catalog.refreshAgents()
@@ -587,9 +580,8 @@ final class AppModel {
         environment["KUVO_GROUPS"] = GroupMigration.root.path
         environment["KUVO_TRASH"] = BoxGroups.macTrash.path
         environment["KUVO_GROUPS_MEMORY_KEY"] = BotGroups.memoryKey
-        // Who can be named with & in a chat: this Mac's agents and its machines', as AgentMail lists them.
+        // Who can be named with & in a chat: this Mac's agents and its machines', as its box lists them.
         environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
-        AgentMail.shared.writeBoxDirectory()
         Task { await agents.start(engine: binary, environment: environment) }
         // Your time zone or how you write dates changed: meetings go by the new ones.
         if clockObservers.isEmpty {

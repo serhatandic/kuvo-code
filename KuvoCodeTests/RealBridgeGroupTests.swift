@@ -250,7 +250,7 @@ import Testing
         let api = try #require(bridge.api)
         let groups = BoxGroups()
         groups.bridge = { $0 == nil ? api : nil }
-        // Who this Mac's link says your machines and their bots are (SeatRelay.tellPeers).
+        // Who this Mac's link says your machines and their bots are (its box, `tellSeatPeers`).
         let peers: JSONValue = .object([
             "boxes": .array([.object(["key": .string("key_spare"), "name": .string("spare.invalid"), "seats": .bool(true)]),
                              .object(["key": .string("key_old"), "name": .string("old.invalid"), "seats": .bool(false)])]),

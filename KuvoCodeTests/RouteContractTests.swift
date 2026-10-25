@@ -405,7 +405,7 @@ final class MacBox {
                 "KUVO_GROUPS_MEMORY_KEY": BotGroups.memoryKey,
             ])
         case "peers":
-            // Your machines and their bots, as this Mac's link tells its bridge (SeatRelay.tellPeers).
+            // Your machines and their bots, as this Mac's link tells its bridge (its box, `tellSeatPeers`).
             let api = try #require(realBridge?.api, "\(at): peers are told to the real coding agents' bridge: give agentsBridge.groups first")
             let body = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: given))
             _ = try await api.client.send(try api.client.request("PUT", "api/kuvo/peers", body: body), as: JSONValue.self)

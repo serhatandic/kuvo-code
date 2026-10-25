@@ -222,15 +222,20 @@ connection.
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
-  again within a minute.
+  again at once (within a minute before bridge 0.9.63).
   - A machine's bridge writes `run/agents.json` (what `list_agents` reads there) from its own
-    agents and its peers', relay or not.
+    agents and its peers', relay or not, keeping its own as last written while it can't say now
+    (its engine starting).
+  - This Mac's box does all of this for the Mac, as a machine's bridge does (bridge 0.9.63; the
+    app did before): its own agents are its bots and its engine's and coding agents' sessions, its
+    `features` as its app gives them (`kuvo/link/config`), and it writes `box/run/agents.json`
+    (what its group chats name with `&`).
   - A moved session is the computer's a Mac says it lives on. A session listed by more than one
     peer is the Mac's when a Mac lists it, and otherwise nobody's.
-  - A Mac also lists the agents of its machines whose bridge doesn't talk to peers, each with its
-    `machine`, and takes their letters on over SSH.
   - A Mac connected over SSH writes its list to `run/mac-agents.json` (`{key, at, list}`), which
-    the bridge takes when it's newer than the Mac's mail.
+    the bridge takes when it's newer than the Mac's mail. That list also names the agents of its
+    machines whose bridge doesn't talk to peers, each with its `machine`, whose letters the Mac
+    takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?}}` goes to the box that listed
@@ -238,7 +243,10 @@ connection.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
     remembered two days, noted once delivered), at most 20 in ten minutes from a box, and only
     to a conversation an agent could be. A subagent's, a group chat's seat or one put away doesn't
-    take letters. One it can't look up now (its engine starting) is answered `retry`.
+    take letters. One it can't look up now (its engine starting) is answered `retry`, and so is one
+    for a conversation moving to or from another computer now, or that lives on another one now
+    (`moved`): it reaches it where it lives once the move is over (bridge 0.9.63). This Mac's box
+    asks its app whether one of its conversations is moving (`link/moving`).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
     lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
@@ -252,6 +260,10 @@ connection.
     waiting tool only from that box. Until `delivered` comes, it sends again each minute, for two
     days, and a letter whose agent no box lists now waits. Before a letter goes, its sender is
     told of to that box, if it wasn't.
+- **On this Mac**: its app's conversations' letters for an agent on another computer go to its box
+  (`kuvo/link/letters`), which leaves each in its own `run/outbox/sending` and sends it as below;
+  a waiting one is answered as the route's answer. The box never hands its letters to anyone over
+  SSH: without the relay, they wait for it.
 - **On a machine**: `send_message` leaves a letter for a peer's agent in
   `run/outbox/sending/<id>.json`, which the bridge sends, and others in `run/outbox` for the Mac
   to collect over SSH.
@@ -517,11 +529,12 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
   With its notifications on, each notice it shows you while in use (a notification, unless its
   style in System Settings is None; or, with its window in front, its sidebar and tabs) it says at
   once in `shown`, to the box whose news it was alone: its own, or a machine's. With its
-  notifications off it says none. Its own box hears it from the app, as the client `mac`; each of
-  its machines whose
-  bridge talks to peers by mail, `{"attention": {for, sessions, shown?}, "at"}`, taken only from a
-  Mac that set the machine up, and only when its `at` isn't older than that Mac's last (mail can
-  come out of order). A Mac without the phone link on says nothing.
+  notifications off it says none. Its own box hears it from the app, as the client `mac`, with
+  what it showed of each machine's news (`"elsewhere": {"<machine>": [shown…]}`, by the machine's
+  id); and the box tells each of its machines by mail (bridge 0.9.63; the app did before),
+  `{"attention": {for, sessions, shown?}, "at"}`, each with its own `shown`, taken only from a Mac
+  that set the machine up, and only when its `at` isn't older than that Mac's last (mail can come
+  out of order). A Mac without the phone link on says nothing.
 - **The box**, while any client's lease is current, holds each new notice: 30 seconds for what's
   asked of you (`permission`, `question`, `ask`), 60 for news (the rest). When its hold ends it
   goes, unless meanwhile it was answered (the permission or form replied to, or cancelled; the ask
@@ -1353,17 +1366,15 @@ Its group chats run in its coding agents' bridge, as a machine's do, with folder
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
 of in `box/trash` (`KUVO_TRASH`; the bridge says `kuvo.group.trashed {id, path}` and the app moves
 it to the Finder's Trash), and who can be named with `&` in `box/run/agents.json`
-(`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the app writes). `KUVO_BOX=mac` says
+(`KUVO_AGENTS_FILE`, as a machine's `run/agents.json`, which the box writes: "Peers"). `KUVO_BOX=mac` says
 it's a Mac's: its bots are the Mac's own (`machine` left out), made with the words the app puts in its
 `bin` and the kit it gives it in their folder (`bots/kit.json`, what's this Mac's own), with no time zone of
 their own (they go by the Mac's clock). Its bots remember its
 chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). PhoneLink passes a client's `kuvo/groups…`
-on to that bridge as `kuvo-link.js` does. Until the box process holds the relay connection, the
-phone link carries its group chats' mail (`seat`, "Peers") for it (`SeatRelay`): it tells the
-bridge who your machines and their bots are, carries what it sends by the same rules, and the
-Mac's agents mail carries its bots' `id` and `look` and its `features`. (Since bridge 0.9.61 that
-connection is the box's: the app's mail goes out on it, `kuvo/link/send`, "The relay, on this
-Mac's box".)
+on to that bridge as `kuvo-link.js` does. The box carries its group chats' mail (`seat`, "Peers")
+on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
+their bots are (bridge 0.9.63). Before, the app's phone link did (`SeatRelay`); the box takes the
+letters it kept (`run/seat-letters.json`) into its outbox as it starts.
 
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
@@ -1419,8 +1430,9 @@ application/json`:
     status), and its body as it comes, chunked (a followed route streams). One cut off partway
     (the engine went) ends without its last chunk, so the box tells the phone it was cut off. The
     box closing the request (the phone went) stops what it asked, before any answer too;
-  - `link/mailed {"from", "frame"}` (the sender's relay address, base64url; the mail frame whole,
-    base64) → `{}`.
+  - `link/moving {"session"}` → `{"moving": bool}`: whether one of this Mac's conversations is
+    moving to or from another computer now (bridge 0.9.63; the app runs the move). Before, mail
+    the box didn't take itself went to the app (`link/mailed`, 0.9.61 and 0.9.62).
 
 Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for another, and the app
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
@@ -1440,21 +1452,20 @@ frame that isn't one, the app away) stops the box's own routes.
 What a phone asks, it answers itself for the areas that have moved onto it and its phones
 (`kuvo/phones…`); the rest (the Mac's own routes, and those not on the box yet) it hands the app
 (`link/route`), as it comes, `503 {"message"}` at once when the app isn't answering. Mail your
-machines send it, it takes the documents of itself (from 0.9.62), and hands the app the rest
-(`link/mailed`) until that moves onto the box too.
-All three go through the app's `hello` proof first (the host interface, above), and the link's
-keys (`link/identity`) are never asked of a host that hasn't given it. When the app's host
-interface starts again (it failed, or Try Again), what the link has open through it ends: a phone's
-followed `link/route` streams end (the phone follows again), a request in the gap is a `503`, and
-mail for the app waits in the box's queue and is tried again, in order, a few times over about
-fifteen seconds before it's let go with a line in the box's log; past 200 waiting, the oldest is
-let go the same way.
+machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
+0.9.62), and their agents, letters and group chats' mail (from 0.9.63).
+What it asks the app goes through the app's `hello` proof first (the host interface, above), and
+the link's keys (`link/identity`) are never asked of a host that hasn't given it. When the app's
+host interface starts again (it failed, or Try Again), what the link has open through it ends: a
+phone's followed `link/route` streams end (the phone follows again), and a request in the gap is a
+`503`.
 
 For the app only (anyone else gets `403`):
 
-- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app"}`: whether the phone link is
-  on, whether there are machines to meet, the relay (`ws:` or `wss:`), and the Mac's name and
-  version as phones are told them. The link is up while the phone link's on with a phone paired or a
+- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app", "features"?}`: whether the
+  phone link is on, whether there are machines to meet, the relay (`ws:` or `wss:`), the Mac's
+  name and version as phones are told them, and what it answers (`kuvo/info`'s features, which its
+  agents' mail carries). The link is up while the phone link's on with a phone paired or a
   pairing waiting, or there are machines. Its keys are asked for before this answers, so a pairing
   link can be made right after. The box keeps none of it: the app says it again each time the box
   starts. Answers the link's state.
@@ -1469,8 +1480,22 @@ For the app only (anyone else gets `403`):
   views, left}`, as `phone-link.json` keeps them: the box's counts only ever go up). The app keeps
   `phone-link.json` in step with the box (`kuvo/link/phones` carries `documents` too), so going back
   to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
-- `POST kuvo/link/send {"to", "frame"}`: a mail frame the app sealed itself (base64), to a relay
-  address (base64url): `200`, `503` while not on the relay, `413` for one too big for it.
+- `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
+  one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
+  key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once; with
+  `wait` (and `from`), once its answer comes: `{"id", "text"}`, or `{"id", "failed"}` or `{"id",
+  "note"}` when it didn't get there or no answer can come, or `{"id", "text": null}` after eleven
+  minutes or the request closed (its turn stopped), when it goes on without waiting and an answer
+  that comes later reaches the conversation as a message. `404` for a `peer` that isn't one of this
+  Mac's machines.
+- `POST kuvo/link/letters/take {"letters": [{id, from, to, text, peer, at, answers?}], "seen": {"<id>":
+  <at>}}`: the letters an older Kuvo Code sent itself and had on their way (`agent-letters.json`),
+  into the box's outbox, and those it delivered, remembered so one sent again isn't twice
+  (`agent-letters-seen.json`).
+- `GET kuvo/link/agents` → `{"peers": [{key, id, at, list, features}]}`: the agents each of this
+  Mac's machines told it of ("Peers": "Agents"), by its key and its id here.
+- `POST kuvo/link/agents/refresh`: this Mac's own agents worked out again, and `box/run/agents.json`
+  with them, before a group chat here names someone with `&`.
 - `PUT kuvo/link/peers {"peers": [{key, sign, address, name, id}], "moved": [{session, key}]}`
   (bridge 0.9.62): your machines the app set up over SSH that sign their documents, and the
   conversations being moved, for the Mac's peers document. One no longer there is one this Mac
@@ -1482,8 +1507,7 @@ For the app only (anyone else gets `403`):
   machine's setup answer gave of documents (`from`, its key), taken as if by mail; `404` for one
   that isn't one of this Mac's machines.
 - `GET kuvo/link/documents` → `{"own", "held", "views", "left", "have"}`: this Mac's documents as the
-  box keeps them, its own brought up to date first, and its digest, which the app's agents' mail
-  carries until that mail moves here too.
+  box keeps them, its own brought up to date first, and its digest.
 
 The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
 phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone
