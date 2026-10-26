@@ -24,6 +24,7 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 - See it yourself in a demo copy before calling it done, and look at it as the user will.
 - When a visible choice isn't obvious, mock the options and let the user pick.
 - When the machinery makes the right UI hard, change the machinery. Don't bend the UI around it.
+- **The right panel is only for common tools**: the browser, terminals, files, and Changes for coding sessions. A feature's own view goes where it belongs, never in a new panel tab: a popover or sheet on the conversation (like Artifacts), or a page in Settings.
 
 ## Reviews at checkpoints
 

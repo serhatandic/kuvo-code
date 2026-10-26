@@ -221,12 +221,29 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Takes a session's notifications away once you've looked at it.
     func clear(session: String) {
         Task {
-            let center = UNUserNotificationCenter.current()
-            let delivered = await center.deliveredNotifications()
-            let ids = delivered.filter { $0.request.content.threadIdentifier == session }.map(\.request.identifier)
-            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+            let ids = await delivered().filter { $0.thread == session }.map(\.id)
+            if !ids.isEmpty { removeDelivered(ids) }
         }
     }
+
+    /// A notification in Notification Center: its thread (a session's, a chat's), and the request,
+    /// question or ask it answers, if it does.
+    struct Delivered {
+        var id: String
+        var thread: String
+        var answers: [String] = []
+    }
+
+    /// What Notification Center shows of this app, and taking some of it away: macOS's; a test
+    /// gives its own.
+    var delivered: () async -> [Delivered] = {
+        await UNUserNotificationCenter.current().deliveredNotifications().map { notification in
+            let info = notification.request.content.userInfo
+            return Delivered(id: notification.request.identifier, thread: notification.request.content.threadIdentifier,
+                             answers: ["request", "form", "ask"].compactMap { info[$0] as? String })
+        }
+    }
+    var removeDelivered: ([String]) -> Void = { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: $0) }
 
     /// Takes a request's or a question's notification away once it's answered (in the app, say).
     func clear(request: String) {
@@ -235,14 +252,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             UNUserNotificationCenter.current().setNotificationCategories(Set(categories + questionCategories.values))
         }
         Task {
-            let center = UNUserNotificationCenter.current()
-            let delivered = await center.deliveredNotifications()
-            let ids = delivered.filter { notification in
-                let info = notification.request.content.userInfo
-                return info["request"] as? String == request || info["form"] as? String == request || info["ask"] as? String == request
-            }
-            .map(\.request.identifier)
-            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+            let ids = await delivered().filter { $0.answers.contains(request) }.map(\.id)
+            if !ids.isEmpty { removeDelivered(ids) }
         }
     }
 
