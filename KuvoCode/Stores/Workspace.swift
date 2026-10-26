@@ -2095,6 +2095,9 @@ final class Workspace {
                     )
                 }
             }
+        // Read on another client (the phone, another Mac): read here too, its notification gone.
+        case "session.viewed":
+            if let viewed = try? event.payload(as: EventPayload.Viewed.self) { sawViewed(id, idle: viewed.idle) }
         case "session.usage.updated":
             if let usage = try? event.payload(as: EventPayload.Usage.self), let index = sessions.firstIndex(where: { $0.id == id }) {
                 sessions[index].cost = usage.cost
@@ -2402,6 +2405,15 @@ final class Workspace {
         // Its engine away (a machine out of reach): told once it's back (see `refresh`).
         guard let api = api(forSession: id) else { return unsentViews[id] = idle }
         Task { try? await api.markViewed(id, idle: idle) }
+    }
+
+    /// Read elsewhere, as its box says: the same as `markViewed`, without telling the box again.
+    private func sawViewed(_ id: String, idle: Milliseconds) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }), idle > (sessions[index].time.viewed ?? 0) else { return }
+        sessions[index].time.viewed = idle
+        guard !sessions[index].isUnread else { return }
+        Notifier.shared.clear(session: id)
+        if replyPreviews[id] != nil { replyPreviews[id] = nil }
     }
 
     /// Sessions read while their machine was away, with what was read, to tell it when it's back.

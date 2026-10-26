@@ -613,6 +613,15 @@ host serves:
   done, it carries on), `POST api/session/<id>/interrupt` to stop it (the agent waiting on it
   hears it was cancelled, and carries on), and choose its model. Choose it without interrupting:
   an interrupt, even with `resume`, ends that agent's wait, and it gives up on the subagent.
+- **What's been read** is the box's, never a client's, so a conversation read on one client is
+  read on all of them, a machine's with the Mac closed too. A session (a bot's too) is unread
+  while `time.idle` is later than `time.viewed`. Read it with `POST api/session/<id>/view`
+  (`{"idle"}`, the `time.idle` it was read at; `kuvo/agents/api/…` for a coding agent's): the box
+  keeps the later of that and what it had, and tells every client with `session.viewed`
+  (`{"sessionID", "idle"}`) on `api/event` (an older coding agents' bridge keeps it without
+  telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
+  it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
+  changes in `kuvo/groups/events` (below).
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the

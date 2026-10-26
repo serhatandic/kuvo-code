@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A conversation or bot you read on your phone or another Mac stops showing as unread on this one at once, and its notification goes, on your machines too, with sessions from your coding agents as well.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.
 - Restarting the engine while it's still starting, or the engine stopping while it finishes starting, starts it again rather than leaving it stopped with nothing said.
 - Your personalities are kept by your Mac's background service, as a machine keeps them, so a change from your phone or another computer shows in Edit Bot at once and reaches your bots with the window closed. Those you wrote before are brought over as Kuvo Code starts, and a copy stays where they were.

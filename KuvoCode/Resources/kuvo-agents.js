@@ -9399,8 +9399,11 @@ class Sessions {
   }
   view(id, idle) {
     const session = this.record(id).session;
-    session.time.viewed = Math.max(idle, session.time.viewed ?? 0);
+    if (idle <= (session.time.viewed ?? 0))
+      return;
+    session.time.viewed = idle;
     this.store.save(id);
+    emit("session.viewed", { sessionID: id, idle }, session.location.directory);
   }
   active() {
     const ids = [...this.live.keys()].filter((id) => this.atWork(id));
@@ -15447,4 +15450,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 73851ca40bb76c90a982eb0fde271f6b4ad3a519a502493f7857e29a6f1cc492
+// Built from Agents/src 58df8edc33cd41eb3b53db5c6265997343696e3ae28b55e7bec9d3c0f27f8793
