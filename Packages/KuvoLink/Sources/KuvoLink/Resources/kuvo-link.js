@@ -7902,6 +7902,8 @@ async function* agentsRoute(context) {
 async function* engineRoute(context) {
   const { request, signal, route, readEngine, bridge, json, text } = context;
   const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
+  if (!stop && route.startsWith("kuvo/") && canonicalPath(request.path) === request.path)
+    return yield* json(404, {});
   if (!stop && !allowed(request.path, request.method))
     return yield* text(403, "That isn't available over the link.");
   let engine = null;

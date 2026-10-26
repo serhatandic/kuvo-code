@@ -298,10 +298,13 @@ test("requests go to the engine with its password, all of its API; paths that ar
     phone.send({ t: "req", id, m: "GET", p, h: {} });
     assert.equal((await phone.response()).head.s, 200, p);
   }
-  for (const [id, p] of [[4, "api/session/../credential"], [5, "kuvo/nothing"], [6, "api/session#x"]]) {
+  for (const [id, p] of [[4, "api/session/../credential"], [6, "api/session#x"]]) {
     phone.send({ t: "req", id, m: "GET", p, h: {} });
     assert.equal((await phone.response()).head.s, 403, p);
   }
+  // A route this box doesn't have, as every box answers it.
+  phone.send({ t: "req", id: 5, m: "GET", p: "kuvo/nothing", h: {} });
+  assert.equal((await phone.response()).head.s, 404, "kuvo/nothing");
   assert.ok(!engine.asked.some(a => a.url?.includes("..") || a.url?.includes("nothing")));
 
   // An event stream runs until the phone cancels it, and then the engine sees it close.
@@ -972,6 +975,18 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   const status = async (method, route, body = {}) => {
     for await (const part of handle({ method, path: route, headers: {}, body: Buffer.from(JSON.stringify(body)) }, {}, undefined)) if (part.head) return part.head.status;
   };
+  // Whether it's a route here: not refused as a path (403), nor answered as one this box doesn't
+  // have (404 with nothing to say); a route's own 404 (no such bot) says why.
+  // (Only a 404's body is read: an event stream never ends.)
+  const isRoute = async (method, route, body = {}) => {
+    let status = 0, said = "";
+    for await (const part of handle({ method, path: route, headers: {}, body: Buffer.from(JSON.stringify(body)) }, {}, undefined)) {
+      if (part.head) status = part.head.status;
+      if (status !== 404) break;
+      if (part.body) said += part.body.toString();
+    }
+    return status !== 403 && !(status === 404 && said === "{}");
+  };
   // Where each one is reached: a route a client would ask first, answered with whatever this box
   // has now, never as one it doesn't have (403).
   const routes = {
@@ -990,9 +1005,9 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
-  for (const [feature, [method, route]] of Object.entries(routes)) assert.notEqual(await status(method, route), 403, `${feature}: ${method} ${route}`);
-  // The Mac's own aren't here.
-  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/usage"]) assert.equal(await status("GET", route), 403, route);
+  for (const [feature, [method, route]] of Object.entries(routes)) assert.ok(await isRoute(method, route), `${feature}: ${method} ${route}`);
+  // The Mac's own aren't here: a route this box doesn't have.
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/usage"]) assert.equal(await status("GET", route), 404, route);
   fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
 });
 

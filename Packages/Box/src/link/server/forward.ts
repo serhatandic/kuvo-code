@@ -115,6 +115,9 @@ export async function* agentsRoute(context) {
 export async function* engineRoute(context) {
   const { request, signal, route, readEngine, bridge, json, text } = context;
   const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
+  // A route of a box's own that this box doesn't have: 404, as every box answers it (one whose
+  // path isn't what it seems is refused, below).
+  if (!stop && route.startsWith("kuvo/") && canonicalPath(request.path) === request.path) return yield* json(404, {});
   if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
   let engine = null;
   try {

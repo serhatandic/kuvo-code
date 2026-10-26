@@ -165,13 +165,12 @@
       "steps": [
         {
           "send": "GET kuvo/nothing",
-          "why": "A Mac says 404 and a machine 403 for a route it doesn't have; the phone takes 403, 404 and 405 alike, as a route this box doesn't have (HostModel.isMissingRoute).",
-          "expect": { "mac": { "status": 404 }, "machine": { "status": 403 } }
+          "expect": { "status": 404, "whole": true, "json": {} }
         },
         {
           "send": "GET kuvo/hosts",
           "why": "Only a Mac reaches your machines for a phone (kuvo/hosts, kuvo/machines).",
-          "expect": { "mac": { "status": 200, "json": { "hosts": [] } }, "machine": { "status": 403 } }
+          "expect": { "mac": { "status": 200, "json": { "hosts": [] } }, "machine": { "status": 404, "whole": true, "json": {} } }
         }
       ]
     }
