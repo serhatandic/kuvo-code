@@ -36,7 +36,9 @@ import Testing
         let cases = read["cases"] as? [[String: Any]] ?? [], fills = read["filled"] as? [[String: Any]] ?? []
         #expect(cases.count > 40 && fills.count > 5)
         for each in cases {
-            #expect((RouteMatch.mismatch(each["expected"] ?? NSNull(), each["actual"]) == nil) == (each["matches"] as? Bool), "\(each)")
+            let expected = each["expected"] ?? NSNull()
+            let why = RouteMatch.mismatch(expected, each["actual"]) ?? (each["whole"] as? Bool == true ? RouteMatch.unnamed(expected, each["actual"]) : nil)
+            #expect((why == nil) == (each["matches"] as? Bool), "\(each)")
         }
         let written = { (value: Any) in try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]) }
         for each in fills {
@@ -246,7 +248,8 @@ final class MacBox {
                     if let type = expect["type"] as? String { #expect(answer.type.hasPrefix(type), "\(at): content-type \(answer.type), not \(type)") }
                     if let text = expect["text"] as? String { #expect(String(decoding: answer.body, as: UTF8.self) == text, "\(at): body") }
                     if let json = expect["json"] {
-                        let why = RouteMatch.mismatch(json, try? JSONSerialization.jsonObject(with: answer.body, options: .fragmentsAllowed))
+                        let actual = try? JSONSerialization.jsonObject(with: answer.body, options: .fragmentsAllowed)
+                        let why = RouteMatch.mismatch(json, actual) ?? (expect["whole"] as? Bool == true ? RouteMatch.unnamed(json, actual) : nil)
                         #expect(why == nil, "\(at): \(why ?? "")")
                     }
                 }
@@ -698,6 +701,24 @@ nonisolated enum RouteMatch {
         }
     }
 
+    /// The first field an answer has that `expected` doesn't name, for a step that names it whole
+    /// (`"whole": true`), so both boxes are held to the very same answer; nil when there's none.
+    static func unnamed(_ expected: Any, _ actual: Any?, at: String = "body") -> String? {
+        if let list = expected as? [Any], let items = actual as? [Any] {
+            for (index, each) in list.enumerated() where index < items.count {
+                if let why = unnamed(each, items[index], at: "\(at)[\(index)]") { return why }
+            }
+            return nil
+        }
+        guard let object = expected as? [String: Any], let values = actual as? [String: Any],
+              !["<includes>", "<excludes>", "<length>", "<contains>"].contains(where: { object[$0] != nil }) else { return nil }
+        for key in values.keys.sorted() {
+            guard let inner = object[key] else { return "\(at).\(key) is there, but the whole answer doesn't name it" }
+            if let why = unnamed(inner, values[key], at: "\(at).\(key)") { return why }
+        }
+        return nil
+    }
+
     /// Two JSON documents alike, whatever their spacing and order.
     static func same(_ one: Data, _ other: Data) throws -> Bool {
         let sorted = { (data: Data) in try JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: data), options: [.sortedKeys]) }
@@ -719,13 +740,6 @@ nonisolated enum RouteShapes {
     private static func isBool(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber else { return false }
         return CFGetTypeID(number) == CFBooleanGetTypeID()
-    }
-
-    /// Whether a shape takes null: a field that does may be left out too (null and left out are
-    /// the same to a client's optionals, and this Mac's encoder leaves a nil out).
-    private static func takesNull(_ shape: Any) -> Bool {
-        if let kind = shape as? String { return kind == "null" || kind == "any" }
-        return ((shape as? [String: Any])?["oneOf"] as? [Any])?.contains(where: takesNull) ?? false
     }
 
     private static func shown(_ value: Any?) -> String {
@@ -775,7 +789,7 @@ nonisolated enum RouteShapes {
         }
         if let fields = shape["object"] as? [String: Any] {
             guard let values = value as? [String: Any] else { return "\(at) should be an object, but is \(shown(value))" }
-            let named = Dictionary(uniqueKeysWithValues: fields.map { name, each in (name.hasSuffix("?") ? String(name.dropLast()) : name, (shape: each, optional: name.hasSuffix("?") || takesNull(each))) })
+            let named = Dictionary(uniqueKeysWithValues: fields.map { name, each in (name.hasSuffix("?") ? String(name.dropLast()) : name, (shape: each, optional: name.hasSuffix("?"))) })
             for key in values.keys.sorted() where named[key] == nil { return "\(at).\(key) isn't a field it has" }
             for name in named.keys.sorted() {
                 let field = named[name]!
@@ -809,9 +823,9 @@ nonisolated enum RouteShapes {
         let json = isJSON ? try? JSONSerialization.jsonObject(with: body, options: .fragmentsAllowed) : nil
         let verb = method.uppercased()
         let found = routes.first { matches($0["route"] as? String ?? "", verb, route) }
-        // A refusal says why in the one way all do, or in its route's own where it has one; one
-        // with no body says nothing, as `{}` does. A HEAD's answer has no body.
-        if status >= 400 { return isJSON && !body.isEmpty ? unshaped((found?["answers"] as? [String: Any])?[String(status)] ?? file["error"] ?? NSNull(), json, at: "the refusal") : nil }
+        // A refusal says why in the one way all do, or in its route's own where it has one. A
+        // HEAD's answer has no body.
+        if status >= 400 { return isJSON ? unshaped((found?["answers"] as? [String: Any])?[String(status)] ?? file["error"] ?? NSNull(), json, at: "the refusal") : nil }
         if verb == "HEAD", body.isEmpty { return found == nil ? "HEAD \(route) has no shape in Packages/Box/src/shared/routes" : nil }
         guard let known = found else {
             return "\(verb) \(route) has no shape in Packages/Box/src/shared/routes"

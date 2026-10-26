@@ -845,9 +845,7 @@ final class PhoneLink {
                 Task { @MainActor in
                     let posts = request.method.uppercased() == "POST"
                     let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
+                    Self.sendJSON(status, body, to: continuation)
                 }
             }
         }
@@ -858,9 +856,7 @@ final class PhoneLink {
             return AsyncThrowingStream { continuation in
                 let task = Task { @MainActor in
                     let (status, body) = await link?.answerMachines(request) ?? (503, Data())
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
+                    Self.sendJSON(status, body, to: continuation)
                 }
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
             }
@@ -872,9 +868,7 @@ final class PhoneLink {
             return AsyncThrowingStream { continuation in
                 Task { @MainActor in
                     let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON(for: machine) ?? (503, Data()) : (405, Data("{}".utf8))
-                    continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body(body))
-                    continuation.finish()
+                    Self.sendJSON(status, body, to: continuation)
                 }
             }
         }
@@ -883,9 +877,7 @@ final class PhoneLink {
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
                 let (status, body) = link?.answer(routed) ?? (503, Data())
-                continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(body))
-                continuation.finish()
+                Self.sendJSON(status, body, to: continuation)
             }
         }
     }
@@ -1008,6 +1000,14 @@ final class PhoneLink {
         return URLSession(configuration: configuration)
     }()
 
+    /// One of this Mac's own answers, as JSON: what it says, or `{}` for a refusal that says nothing,
+    /// as a machine's box answers (PROTOCOL.md, "Messages in a session").
+    nonisolated private static func sendJSON(_ status: Int, _ body: Data, to continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) {
+        continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+        continuation.yield(.body(status >= 400 && body.isEmpty ? Data("{}".utf8) : body))
+        continuation.finish()
+    }
+
     nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
@@ -1039,8 +1039,9 @@ final class PhoneLink {
         struct Info: Encodable {
             var kind = "mac"; var name: String; var app: String; var engine: String; var chats: String
             var agents = false
-            /// When the engine running now came up, in seconds since 1970: a restart changes it.
-            var started: Double?
+            /// When the engine running now came up, in seconds since 1970: a restart changes it
+            /// (null while none runs).
+            @SentAsNull var started: Double? = nil
             /// Integrations' names by their MCP server's, for what a server asks.
             var integrations = Dictionary(uniqueKeysWithValues: Integrations.all.map { ($0.id, $0.title) })
             /// What this Mac answers (PROTOCOL.md, "Features"), which a client checks rather than versions.

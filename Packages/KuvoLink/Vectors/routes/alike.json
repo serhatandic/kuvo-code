@@ -1,0 +1,44 @@
+{
+  "about": "Answers both boxes give alike, whole (\"whole\": true: a field the scenario doesn't name fails it), so a client reads this Mac's box as it reads a machine's, field for field.",
+  "scenarios": [
+    {
+      "name": "a session's wake-ups and watches, and the conversations that have some",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "given": { "wake": { "session": "ses_plan", "in": 7200, "note": "Check the build", "letters": "Wk1", "every": "1d" } } },
+        { "given": { "watch": { "session": "ses_plan", "letters": "Wt1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } } },
+        {
+          "send": "GET kuvo/wakes/ses_plan",
+          "expect": { "status": 200, "whole": true, "json": {
+            "wakes": [ { "id": "<string>", "due": "<number>", "note": "Check the build", "every": "1d" } ],
+            "watches": [ { "letters": "Wt1", "every": "30m", "check": "curl -s https://example.invalid/status", "note": "When it's up" } ],
+            "paused": false
+          } }
+        },
+        { "send": "GET kuvo/wakes", "expect": { "status": 200, "whole": true, "json": { "sessions": [ { "session": "ses_plan", "next": "<number>", "watching": true } ] } } }
+      ]
+    },
+    {
+      "name": "a wake-up added, one that doesn't come back, and one that isn't there cancelled",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        { "send": "POST kuvo/wakes/ses_plan", "body": { "due": "{{now+3600}}", "note": "Morning digest" }, "expect": { "status": 200, "whole": true, "json": { "wakes": [ { "id": "<string>", "due": "<number>", "note": "Morning digest" } ], "watches": [], "paused": false } } },
+        { "send": "POST kuvo/wakes/ses_plan/cancel", "body": { "wake": "nothing" }, "expect": { "status": 404, "whole": true, "json": {} } }
+      ]
+    },
+    {
+      "name": "whether a client's in use here, and how many notices wait",
+      "steps": [
+        { "send": "GET kuvo/attention", "expect": { "status": 200, "whole": true, "json": { "inUse": false, "held": 0 } } },
+        { "send": "POST kuvo/attention", "body": { "for": 45, "sessions": [] }, "expect": { "status": 200, "whole": true, "json": { "for": 45 } } },
+        { "send": "PUT kuvo/attention", "expect": { "status": 405, "whole": true, "json": {} } }
+      ]
+    },
+    {
+      "name": "the phones paired here, none yet",
+      "steps": [
+        { "send": "GET kuvo/phones", "expect": { "status": 200, "whole": true, "json": { "phones": [] } } }
+      ]
+    }
+  ]
+}

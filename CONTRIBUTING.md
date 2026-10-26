@@ -145,7 +145,9 @@ stand-in, the same small one on each. To add one:
 - `json` names only what matters. `"<string>"`, `"<number>"`, `"<bool>"`, `"<object>"`,
   `"<array>"`, `"<any>"`, `"<absent>"` stand for volatile values; lists match in order, or with
   `{"<includes>": […]}`, `{"<excludes>": […]}`, `{"<length>": n}`; `{"<contains>": "…"}` in a
-  string. `null` matches null or left out. `{{name}}` fills in what was saved, the box's places
+  string. `"whole": true` beside `json` names the answer whole: a field it doesn't name fails it,
+  so both boxes are held to the very same answer (`alike.json`). `null` matches null or left out.
+  `{{name}}` fills in what was saved, the box's places
   (`chats`, `skills`, `work`, `keys`) and `{{now+3600}}`. Both runners match by
   `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
@@ -155,7 +157,9 @@ stand-in, the same small one on each. To add one:
   type, which the box's code takes its types from too. A new route, or a new field in an answer,
   goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
   runners (CI checks it's current), and both hold an answer to a shape by
-  `routes/shapes/cases.json`.
+  `routes/shapes/cases.json`. A field that can be null is sent as `null`, never left out (this
+  Mac's encoder leaves a nil out, so its fields that can be null are `@SentAsNull`), and a refusal
+  is JSON, `{}` at least.
 - Run the runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
   machine, and the kit this Mac's app gives its own box, which the bridge's runners use) after a
   change to the integrations, the MCP catalog, a bot's kit or how a conversation's rules are made

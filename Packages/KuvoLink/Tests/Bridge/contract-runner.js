@@ -384,9 +384,6 @@ async function ask(handle, method, requestPath, body) {
 const shapes = JSON.parse(read(vectors, "shapes/answers.json"));
 const show = value => (value === undefined ? "missing" : JSON.stringify(value)?.slice(0, 200));
 const isPlain = value => value !== null && typeof value === "object" && !Array.isArray(value);
-// Whether a shape takes null: a field that does may be left out too (null and left out are the same
-// to a client's optionals, and the Mac's encoder leaves a nil out).
-const takesNull = shape => shape === "null" || shape === "any" || (isPlain(shape) && "oneOf" in shape && shape.oneOf.some(takesNull));
 // Why `value` isn't of `shape`, at its first difference, or null when it is.
 function unshaped(shape, value, at = "body") {
   if (value === undefined) return `${at} is missing`;
@@ -413,7 +410,7 @@ function unshaped(shape, value, at = "body") {
   }
   if ("object" in shape) {
     if (!isPlain(value)) return `${at} should be an object, but is ${show(value)}`;
-    const fields = new Map(Object.entries(shape.object).map(([name, each]) => [name.replace(/\?$/, ""), { shape: each, optional: name.endsWith("?") || takesNull(each) }]));
+    const fields = new Map(Object.entries(shape.object).map(([name, each]) => [name.replace(/\?$/, ""), { shape: each, optional: name.endsWith("?") }]));
     for (const key of Object.keys(value)) if (!fields.has(key)) return `${at}.${key} isn't a field it has`;
     for (const [name, field] of fields) {
       if (!(name in value)) {
@@ -444,15 +441,35 @@ function offShape(method, requestPath, answer) {
   if (shapes.passedOn.some(prefix => route.startsWith(prefix))) return null;
   const isJSON = answer.type.startsWith("application/json");
   const known = shapes.routes.find(each => routeOf(each.route, method.toUpperCase(), route));
-  // A refusal says why in the one way all do, or in its route's own where it has one; one with no
-  // body says nothing, as `{}` does. A HEAD's answer has no body.
-  if (answer.status >= 400) return isJSON && answer.text !== "" ? unshaped(known?.answers[answer.status] ?? shapes.error, answer.json, "the refusal") : null;
+  // A refusal says why in the one way all do, or in its route's own where it has one. A HEAD's
+  // answer has no body.
+  if (answer.status >= 400) return isJSON ? unshaped(known?.answers[answer.status] ?? shapes.error, answer.json, "the refusal") : null;
   if (method.toUpperCase() === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in Packages/Box/src/shared/routes`;
   if (!known) return `${method.toUpperCase()} ${route} has no shape in Packages/Box/src/shared/routes`;
   const shape = known.answers[answer.status];
   if (shape === undefined) return `${known.route} has no shape for ${answer.status}`;
   if (shape === "bytes") return null;
   return isJSON ? unshaped(shape, answer.json, "the answer") : `${known.route} answered ${answer.type || "no type"}, not JSON`;
+}
+
+// The first field an answer has that `expected` doesn't name, for a step that names it whole
+// (`"whole": true`), so both boxes are held to the very same answer; null when there's none.
+function unnamed(expected, actual, at = "body") {
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    for (const [index, each] of expected.entries()) {
+      const why = unnamed(each, actual[index], `${at}[${index}]`);
+      if (why) return why;
+    }
+    return null;
+  }
+  const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!isObject(expected) || !isObject(actual) || ["<includes>", "<excludes>", "<length>", "<contains>"].some(key => key in expected)) return null;
+  for (const key of Object.keys(actual)) {
+    if (!(key in expected)) return `${at}.${key} is there, but the whole answer doesn't name it`;
+    const why = unnamed(expected[key], actual[key], `${at}.${key}`);
+    if (why) return why;
+  }
+  return null;
 }
 
 // What a step expects of this box: its own, where the boxes differ on purpose.
@@ -488,7 +505,7 @@ async function run(scenario) {
         if (expect.type) assert.ok(answer.type.startsWith(expect.type), `${where}: content-type ${answer.type}, not ${expect.type}`);
         if (expect.text !== undefined) assert.equal(answer.text, expect.text, `${where}: body`);
         if (expect.json !== undefined) {
-          const why = mismatch(expect.json, answer.json);
+          const why = mismatch(expect.json, answer.json) ?? (expect.whole ? unnamed(expect.json, answer.json) : null);
           assert.equal(why, null, `${where}: ${why}`);
         }
       }
@@ -539,7 +556,10 @@ export function contract({ box: as, root: folder, files }) {
   test("both runners match an answer and fill in a scenario alike (Vectors/routes/match/cases.json)", () => {
     const { cases, filled: fills } = JSON.parse(read(vectors, "match/cases.json"));
     assert.ok(cases.length > 40 && fills.length > 5);
-    for (const each of cases) assert.equal(mismatch(each.expected, "actual" in each ? each.actual : undefined) === null, each.matches, JSON.stringify(each));
+    for (const each of cases) {
+      const actual = "actual" in each ? each.actual : undefined;
+      assert.equal((mismatch(each.expected, actual) ?? (each.whole ? unnamed(each.expected, actual) : null)) === null, each.matches, JSON.stringify(each));
+    }
     for (const each of fills) assert.deepEqual(filled(each.template, each.vars), each.filled, JSON.stringify(each));
   });
 
@@ -577,7 +597,8 @@ export function contract({ box: as, root: folder, files }) {
             }
             for (const expect of perBox ? boxes.map(box => step.expect[box]) : [step.expect]) {
               assert.ok(Number.isInteger(expect?.status), `${where}: says what status it expects${perBox ? " of each box" : ""}`);
-              only(Object.keys(expect), ["status", "json", "type", "text"], where);
+              only(Object.keys(expect), ["status", "json", "type", "text", "whole"], where);
+              if (expect.whole) assert.ok(expect.json !== undefined, `${where}: a whole answer names its json`);
             }
           }
         }

@@ -591,8 +591,11 @@ like HTTP:
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
-and a method is read in any case. Both are held to the same route scenarios (`Vectors/routes`). A
-host serves:
+and a method is read in any case. Both are held to the same route scenarios (`Vectors/routes`), and
+every answer of a box's own routes to its route's shape (`Vectors/routes/shapes`, from
+`Packages/Box/src/shared/routes`): an object has only the fields its shape names; a field that can
+be null is sent as `null`, never left out; and a refusal says why as JSON (`{"message"}`, or `{}`
+when there's nothing to say), never with an empty body. A host serves:
 
 - `api/…`: passed to its engine, all of its API. A paired phone is yours, with the reach the app
   has on that computer: sessions, files, terminals and commands, accounts and their keys, the
@@ -1457,10 +1460,10 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
-| `hosts` | a Mac only: `kuvo/hosts…` |
+| `hosts` | a Mac only for now: `kuvo/hosts…` (a machine's box can't do this yet on Linux) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` |
-| `usage` | a Mac only, while it has the usage panel: `kuvo/usage…` |
+| `usage` | a Mac only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet on Linux) |
 
 The engine's own routes (`api/…`), sockets and `kuvo/info` itself are always there.
 
