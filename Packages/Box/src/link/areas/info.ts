@@ -1,21 +1,39 @@
-// @ts-nocheck
 // `kuvo/info`: what this box is, its bridge's and engine's versions, whether they run, and what
 // it answers (its features).
 
 import fs from "node:fs";
 import path from "node:path";
-import { FEATURES } from "../../shared/features";
+import { FEATURES, type Feature } from "../../shared/features";
 import { processRuns as runs } from "../../shared/platform";
+import type { EngineRecord } from "../../shared/records";
 import { ENGINE_FILE, K, RUN } from "../home";
+import type { AnswerPiece, RouteContext } from "../server/context";
 import { BRIDGE_VERSION } from "../version";
 
-export async function* infoRoute(context) {
+/** What `kuvo/info` answers: this box, its bridge's and engine's versions, whether the engine runs
+ * (and when it came up, in seconds since 1970) or is stopped on purpose, whether the coding agents'
+ * bridge runs, its folder of chats, and its features; with what the handler adds (its name). */
+export interface BoxInfo {
+  kind: "machine";
+  bridge: string;
+  engine: string | null;
+  started: number | null;
+  running: boolean;
+  stopped: boolean;
+  agents: boolean;
+  chats: string;
+  features: readonly Feature[];
+  name?: string;
+  [more: string]: unknown;
+}
+
+export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { readEngine, bridge, info } = context;
-  let engine = {};
+  let engine: Partial<EngineRecord> = {};
   try { engine = readEngine(); } catch {}
   // When the engine running now came up, in seconds since 1970 (each start writes its record):
   // a restart changes it.
-  let started = null;
+  let started: number | null = null;
   if (engine.pid) try { started = fs.statSync(ENGINE_FILE).mtimeMs / 1000; } catch {}
   // COMPAT(0.7 engine-stop): `stopped`, an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
   // Whether it runs now, and whether it's stopped on purpose (until it's started, from anywhere).
@@ -26,6 +44,6 @@ export async function* infoRoute(context) {
   const chats = path.join(K, "chats");
   try { fs.mkdirSync(chats, { recursive: true }); } catch {}
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info })) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info } satisfies BoxInfo)) };
   return;
 }

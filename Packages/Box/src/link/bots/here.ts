@@ -1,4 +1,3 @@
-// @ts-nocheck
 // A bot that lives here: what its folder has, whether it's moving, its model, and who follows its
 // changes.
 
@@ -13,13 +12,42 @@ import { BOTS } from "../home";
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
 export const DESCRIPTION = 1;
 
+/** A bot's description (`bot.json`), as the app writes it from its list (`Bot.Descriptor`) or as
+ * it's changed here: what this reads of it, and the rest as it's kept. */
+export interface BotDescription {
+  kuvo: typeof DESCRIPTION;
+  id: string;
+  name: string;
+  personality?: string;
+  model?: BotModel | null;
+  project?: string;
+  // (The rest of what the app writes: its job, its look, when it was made.)
+  [more: string]: unknown;
+}
+
+/** A model as a bot names it: its id, its provider, and the variant (effort) it runs at, if any. */
+export interface BotModel {
+  id: string;
+  providerID: string;
+  variant?: string;
+}
+
+/** A bot that lives here: its folder, its description, its conversation, and whether that runs
+ * with the coding agents. */
+export interface BotHere {
+  folder: string;
+  described: BotDescription;
+  session: string;
+  agents: boolean;
+}
+
 // A bot that lives here, as its folder has it now: its description (as the app last wrote it, or
 // as changed here), its conversation, and whether that runs with the coding agents; null for one
 // without a description (made before them, until the Mac connects) or a conversation.
-export function botHere(id) {
+export function botHere(id: unknown): BotHere | null {
   if (typeof id !== "string" || !/^bot_[A-Za-z0-9]+$/.test(id)) return null;
   const folder = path.join(BOTS, id);
-  let described;
+  let described: BotDescription;
   try {
     described = JSON.parse(textOf(path.join(folder, "bot.json")) ?? "");
   } catch {
@@ -32,13 +60,13 @@ export function botHere(id) {
 
 // On its way to another computer: a move holds its wake-ups (the Mac's Moves.hold), and nothing
 // reaches it or changes here until it's there, as on the Mac.
-export const isMoving = folder => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
+export const isMoving = (folder: string): boolean => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
 export const MOVING = "It’s moving to another computer. Try again once it’s there.";
 
-export const isModel = model => Boolean(model) && typeof model.id === "string" && typeof model.providerID === "string";
-export const sameModel = (a, b) => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
+export const isModel = (model: Partial<BotModel> | null | undefined): model is BotModel => Boolean(model) && typeof model!.id === "string" && typeof model!.providerID === "string";
+export const sameModel = (a: Partial<BotModel> | null | undefined, b: Partial<BotModel> | null | undefined): boolean => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
 
 // Those following this box's bots (`kuvo/bots/events`), told of a change made here at once (one
 // made beside it, by kuvo-wake or a move, they see as their folders change).
-export const botFollowers = new Set();
+export const botFollowers = new Set<() => void>();
 export const noteBotsChanged = () => { for (const tell of botFollowers) tell(); };

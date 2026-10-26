@@ -1,15 +1,15 @@
-// @ts-nocheck
 // A file on this box that an agent's reply or tool names (PROTOCOL.md, `kuvo/file`): its bytes, by its
 // `file://` address, for a client to show, a machine's with the Mac closed too.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AnswerPiece, RouteContext } from "../server/context";
 
 // The biggest file `kuvo/file` sends.
 export const FILE_LIMIT = 25 * 1024 * 1024;
 
-const TYPES = {
+const TYPES: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", heic: "image/heic",
   svg: "image/svg+xml", pdf: "application/pdf", mp4: "video/mp4", mov: "video/quicktime", mp3: "audio/mpeg",
   wav: "audio/wav", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json",
@@ -19,7 +19,7 @@ const TYPES = {
 // `kuvo/file?uri=<file:// URI>`: a file on this machine, as an agent's reply or tool names it:
 // its bytes with its type; 404 with a message for one that isn't there (or isn't a file), 413
 // over FILE_LIMIT.
-export async function* fileAt(requestPath, json) {
+export async function* fileAt(requestPath: string, json: RouteContext["json"]): AsyncGenerator<AnswerPiece> {
   const query = requestPath.includes("?") ? requestPath.slice(requestPath.indexOf("?") + 1) : "";
   const uri = new URLSearchParams(query).get("uri");
   let file;
@@ -39,7 +39,7 @@ export async function* fileAt(requestPath, json) {
   try {
     handle = await fs.promises.open(file, "r");
   } catch (error) {
-    const refused = ["EACCES", "EPERM"].includes(error?.code);
+    const refused = (["EACCES", "EPERM"] as (string | undefined)[]).includes((error as NodeJS.ErrnoException)?.code);
     return yield* json(refused ? 403 : 404, { message: refused ? "That file can’t be opened here." : "That file isn’t there anymore." });
   }
   yield { head: { status: 200, headers: { "content-type": type, "content-length": String(stat.size) } } };

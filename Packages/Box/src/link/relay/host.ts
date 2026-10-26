@@ -1,19 +1,116 @@
-// @ts-nocheck
 // The host: answers paired phones' sessions (PROTOCOL.md, "Sessions"; the Mac app's LinkServer, in
 // JavaScript): their handshakes, requests, streams and sockets.
 
 import { EMPTY } from "../crypto/keys";
 import { IKResponder, PROLOGUE } from "../crypto/noise";
+import type { Transport } from "../crypto/noise";
+import type { Answer, AnswerPiece, Asker, LinkRequest } from "../server/context";
 import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, relaySend } from "./frames";
+import type { Head } from "./frames";
+
+/** What a phone says as its session opens (PROTOCOL.md, "Sessions"): `pair` only while pairing. */
+export interface PhoneHello {
+  v: 1;
+  name?: string;
+  app?: string;
+  pair?: string;
+}
+
+/** What this box says back: what it is (`machine` or `mac`), its name, and its bridge's and engine's versions. */
+export interface BoxHello {
+  v: 1;
+  kind: "machine" | "mac";
+  name: string;
+  app: string;
+  engine: string | null;
+}
+
+/** A phone with a session here: its static key, the name it gave, and where it is on the relay. */
+export type SessionPhone = Required<Asker>;
+
+/** A socket opened for a phone, as the box's side gives it: what the phone sends, and its end. */
+export interface SocketHandle {
+  send: (data: Buffer) => void;
+  close: () => void;
+}
+
+/** What the box's side of a socket tells the phone: it's open, a message either way, its end. */
+export interface SocketEvents {
+  open: () => void;
+  text: (data: Buffer) => void;
+  binary: (data: Buffer) => void;
+  end: (error?: Error) => void;
+}
+
+/** What a LinkHost is made with (each said in the constructor's comment). */
+export interface LinkHostOptions {
+  key: Buffer;
+  hello: BoxHello;
+  authorize: (key: Buffer, hello: PhoneHello, address: Buffer) => boolean | Promise<boolean>;
+  handle: (request: LinkRequest, phone: SessionPhone, signal: AbortSignal) => Answer;
+  connect?: (request: LinkRequest, phone: SessionPhone, events: SocketEvents) => SocketHandle;
+  send: (bytes: Buffer) => boolean | void;
+  confirmed?: (phone: SessionPhone) => void;
+  mail?: (from: Buffer, body: Buffer, frame: Buffer) => void;
+}
+
+/** A message's head from a phone, as this host reads it (PROTOCOL.md, "Messages in a session"). */
+interface PhoneHead {
+  t?: "req" | "data" | "cancel" | "ping";
+  id: number;
+  m?: string;
+  p?: string;
+  h?: Record<string, string>;
+  end?: boolean;
+}
+
+/** One of a session's sockets: the box's side once it's made, and whether it's opened yet. */
+interface SessionSocket {
+  handle: SocketHandle | null;
+  opened: boolean;
+}
+
+/** One phone's session: where it is, its number on the relay, its keys, and what it has under way by id. */
+interface PhoneSession {
+  id: string;
+  from: Buffer;
+  number: number;
+  phone: SessionPhone;
+  transport: Transport;
+  /** Requests whose body is still coming. */
+  incoming: Map<number, LinkRequest>;
+  running: Map<number, AbortController>;
+  sockets: Map<number, SessionSocket>;
+  confirmed?: boolean;
+}
+
+/** An answer's piece, read alike whichever it is. */
+type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract<AnswerPiece, { body: unknown }>>;
 
 export class LinkHost {
+  declare key: Buffer;
+  declare hello: BoxHello;
+  declare authorize: LinkHostOptions["authorize"];
+  declare handle: LinkHostOptions["handle"];
+  declare connect: LinkHostOptions["connect"];
+  declare send: LinkHostOptions["send"];
+  declare confirmed: LinkHostOptions["confirmed"];
+  declare mail: LinkHostOptions["mail"];
+  declare sessions: Map<string, PhoneSession>;
+  /** While the relay has welcomed this host's connection (relay/connection.ts sets these three). */
+  declare welcomed?: boolean;
+  /** Ends its relay connection. */
+  declare disconnect?: () => void;
+  /** What's queued for the relay and not sent yet, in bytes. */
+  declare unsent?: () => number;
+
   // authorize(key, hello, address) → whether to let the phone in; handle(request, phone, signal) → an
   // async iterable of { head: { status, headers } } and { body }; connect(request, phone,
   // { open, text, binary, end }) → a socket's { send, close } (PROTOCOL.md, "Sockets");
   // send(bytes) → to the relay; confirmed(phone) → its session proved its own: its first message
   // opened with the handshake's keys, which a replayed first handshake message can't do.
   // mail(from, body, frame) → a mail frame sent to this machine (its Mac's phone list).
-  constructor({ key, hello, authorize, handle, connect, send, confirmed, mail }) {
+  constructor({ key, hello, authorize, handle, connect, send, confirmed, mail }: LinkHostOptions) {
     Object.assign(this, { key, hello, authorize, handle, connect, send, confirmed, mail });
     this.sessions = new Map();
   }
@@ -23,23 +120,23 @@ export class LinkHost {
     for (const session of this.sessions.values()) this.end(session, false);
   }
 
-  get active() { return this.sessions.size; }
+  get active(): number { return this.sessions.size; }
 
   // A phone the relay can't reach any more (asleep, gone), or whose relay connection the relay says
   // went or was replaced (it ended its sessions with it): what it asked for has nobody to go to.
   // While this host's own relay connection stays up, a session ends only with the phone told, or
   // by the phone's own doing: phones count on that rather than checking before each request
   // (PROTOCOL.md, "The relay").
-  forget(address) {
+  forget(address: Buffer) {
     for (const session of this.sessions.values()) if (session.from.equals(address)) this.end(session, false);
   }
 
   // Phones no longer paired (removed on the Mac) lose the sessions they have open.
-  keepOnly(keys) {
+  keepOnly(keys: Set<string>) {
     for (const session of this.sessions.values()) if (!keys.has(session.phone.key.toString("base64url"))) this.end(session, true);
   }
 
-  async receive(from, payload) {
+  async receive(from: Buffer, payload: Buffer) {
     try {
       await this.receiveFrame(from, payload);
     } catch {
@@ -47,7 +144,7 @@ export class LinkHost {
     }
   }
 
-  async receiveFrame(from, payload) {
+  async receiveFrame(from: Buffer, payload: Buffer) {
     const parsed = readFrame(payload);
     if (!parsed) return;
     const id = `${from.toString("base64url")}:${parsed.session}`;
@@ -57,7 +154,7 @@ export class LinkHost {
         return this.handshake(from, parsed.session, id, parsed.body);
       case Frame.transport: {
         if (!session) return this.send(relaySend(from, frame(Frame.close, parsed.session)));
-        let message;
+        let message: { head: unknown; body: Buffer } | null;
         try {
           message = decodeMessage(session.transport.open(parsed.body));
         } catch {
@@ -68,7 +165,7 @@ export class LinkHost {
           session.confirmed = true;
           this.confirmed?.(session.phone);
         }
-        return this.message(session, message);
+        return this.message(session, message as { head: PhoneHead; body: Buffer });
       }
       case Frame.close:
         if (session) this.end(session, false);
@@ -79,10 +176,10 @@ export class LinkHost {
     }
   }
 
-  async handshake(from, number, id, body) {
+  async handshake(from: Buffer, number: number, id: string, body: Buffer) {
     const refuse = () => this.send(relaySend(from, frame(Frame.close, number)));
     const responder = new IKResponder(this.key, PROLOGUE);
-    let hello;
+    let hello: PhoneHello | null;
     try {
       hello = JSON.parse(responder.readMessage1(body).toString("utf8"));
     } catch {
@@ -97,10 +194,10 @@ export class LinkHost {
     this.send(relaySend(from, frame(Frame.handshake2, number, message)));
   }
 
-  message(session, { head, body }) {
+  message(session: PhoneSession, { head, body }: { head: PhoneHead; body: Buffer }) {
     switch (head.t) {
       case "req": {
-        const request = { method: head.m ?? "GET", path: head.p ?? "", headers: head.h ?? {}, body };
+        const request: LinkRequest = { method: head.m ?? "GET", path: head.p ?? "", headers: head.h ?? {}, body };
         if (String(request.headers.upgrade ?? "").toLowerCase() === "websocket") this.open(session, head.id, request);
         else if (head.end === false) session.incoming.set(head.id, request);
         else this.run(session, head.id, request);
@@ -118,7 +215,7 @@ export class LinkHost {
         }
         const request = session.incoming.get(head.id);
         if (!request) return;
-        request.body = Buffer.concat([request.body, body]);
+        request.body = Buffer.concat([request.body!, body]);
         if (head.end === true) {
           session.incoming.delete(head.id);
           this.run(session, head.id, request);
@@ -137,19 +234,19 @@ export class LinkHost {
     }
   }
 
-  run(session, id, request) {
+  run(session: PhoneSession, id: number, request: LinkRequest) {
     const controller = new AbortController();
     session.running.set(id, controller);
     const live = () => !controller.signal.aborted && this.sessions.get(session.id) === session;
-    const reply = (head, body, end) => {
+    const reply = (head: Head, body: Buffer, end: boolean) => {
       if (!live()) return;
       for (const piece of pieces(head, body, end)) this.seal(session, piece);
     };
     (async () => {
-      let head = null;
+      let head: Head | null = null;
       let started = false;
       try {
-        for await (const part of this.handle(request, session.phone, controller.signal)) {
+        for await (const part of this.handle(request, session.phone, controller.signal) as AsyncIterable<AnyPiece> | Iterable<AnyPiece>) {
           if (!live()) return;
           if (part.head) {
             head = { t: "res", id, s: part.head.status, h: part.head.headers };
@@ -162,7 +259,7 @@ export class LinkHost {
         reply(started ? { t: "data", id } : head ?? { t: "data", id }, EMPTY, true);
       } catch (error) {
         if (!live()) return;
-        if (!started) reply({ t: "res", id, s: 502, h: { "content-type": "text/plain" } }, Buffer.from(String(error?.message ?? error)), true);
+        if (!started) reply({ t: "res", id, s: 502, h: { "content-type": "text/plain" } }, Buffer.from(String((error as Error | undefined)?.message ?? error)), true);
         else this.seal(session, encodeMessage({ t: "cancel", id }));
       } finally {
         if (session.running.get(id) === controller) session.running.delete(id);
@@ -171,15 +268,15 @@ export class LinkHost {
   }
 
   // A socket: open once the engine's is, then messages both ways until either side ends it.
-  open(session, id, request) {
-    const socket = { handle: null, opened: false };
+  open(session: PhoneSession, id: number, request: LinkRequest) {
+    const socket: SessionSocket = { handle: null, opened: false };
     session.sockets.set(id, socket);
     const live = () => this.sessions.get(session.id) === session && session.sockets.get(id) === socket;
-    const reply = (head, body, end) => {
+    const reply = (head: Head, body: Buffer, end: boolean) => {
       if (!live()) return;
       for (const piece of pieces(head, body, end)) this.seal(session, piece);
     };
-    const end = error => {
+    const end = (error?: Error) => {
       if (!live()) return;
       if (socket.opened) reply({ t: "data", id }, EMPTY, true);
       else reply({ t: "res", id, s: 502, h: { "content-type": "text/plain" } }, Buffer.from(String(error?.message ?? "It closed.")), true);
@@ -199,11 +296,11 @@ export class LinkHost {
     });
   }
 
-  seal(session, plaintext) {
+  seal(session: PhoneSession, plaintext: Buffer) {
     this.send(relaySend(session.from, frame(Frame.transport, session.number, session.transport.seal(plaintext))));
   }
 
-  end(session, notify) {
+  end(session: PhoneSession, notify: boolean) {
     if (this.sessions.get(session.id) !== session) return;
     this.sessions.delete(session.id);
     for (const controller of session.running.values()) controller.abort();

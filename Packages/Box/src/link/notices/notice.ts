@@ -1,4 +1,3 @@
-// @ts-nocheck
 // A notice for your phones (PROTOCOL.md, "Notifications"): its payload, masked and cut to fit a push,
 // and the relay's push of it, sealed for one phone.
 
@@ -8,6 +7,42 @@ import { sealOneWay } from "../crypto/noise";
 import { Frame, frame, relayPush } from "../relay/frames";
 import { masked } from "./mask";
 
+/** What a notice is about (PROTOCOL.md, "Notifications"), for its buttons: what's asked of you, or news. */
+export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "message";
+
+/** Where a notice opens (`session` or `group`), and what answering takes it back (`request`, `ask`). */
+export interface NoticeData {
+  session?: string;
+  group?: string;
+  request?: string;
+  /** The session asking, when it isn't the one shown (a subagent's). */
+  requestSession?: string;
+  /** "0": its notification mustn't answer it from buttons. */
+  answerable?: "0";
+  ask?: string;
+}
+
+/** A notice for your phones, as the box words it, before it's masked and cut. */
+export interface Notice {
+  title?: string;
+  subtitle?: string;
+  body?: string;
+  category: NoticeCategory;
+  thread?: string;
+  data?: NoticeData;
+}
+
+/** A notification's payload, as a phone gets it. */
+export interface NoticePayload {
+  t: "notify";
+  title: string;
+  subtitle?: string;
+  body?: string;
+  category: NoticeCategory;
+  thread: string;
+  data: NoticeData;
+}
+
 // The bridge tells your phones what happens in this machine's sessions, Mac connected or not: a
 // permission or a question asked, a run finished or failed, a bot's news (PROTOCOL.md,
 // "Notifications"). A Mac never tells them a machine's news, so each comes once, from here.
@@ -15,10 +50,10 @@ export const NOTICE_LIMIT = 2500;
 
 
 // A notification's JSON, under NOTICE_LIMIT bytes: what doesn't fit of the body ends in "…".
-export function noticeJSON(notice) {
+export function noticeJSON(notice: Notice): Buffer {
   // What it shows masked, as the Mac's own notifications are: a phone's lock screen never shows
   // a key.
-  const value = { t: "notify", title: cut(masked(String(notice.title ?? "")), 200), category: notice.category, thread: String(notice.thread ?? ""), data: notice.data ?? {} };
+  const value: NoticePayload = { t: "notify", title: cut(masked(String(notice.title ?? "")), 200), category: notice.category, thread: String(notice.thread ?? ""), data: notice.data ?? {} };
   if (notice.subtitle) value.subtitle = cut(masked(String(notice.subtitle)), 200);
   let body = masked(String(notice.body ?? ""));
   while (true) {
@@ -30,7 +65,7 @@ export function noticeJSON(notice) {
 }
 
 // The relay's push of `json` to a phone ({key, address}, base64url), sealed for it alone.
-export function pushTo(phone, json, hostKey) {
+export function pushTo(phone: { key: string; address: string }, json: Buffer, hostKey: Buffer): Buffer {
   const mail = frame(Frame.mail, 0, sealOneWay(json, hostKey, Buffer.from(phone.key, "base64url")).message);
   return relayPush(Buffer.from(phone.address, "base64url"), mail);
 }

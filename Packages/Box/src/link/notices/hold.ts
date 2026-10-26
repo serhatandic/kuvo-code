@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Notices held while you're at a computer (PROTOCOL.md, "kuvo/attention")
 // A client in use (the Mac app, while you're at the Mac) tells the box so, for a short lease it
 // renews. While one is, each notice waits a little before it goes to your phones, and doesn't go
@@ -11,6 +10,57 @@
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { RUN } from "../home";
+import type { Notice, NoticeCategory } from "./notice";
+
+/** A notification a client showed: of a conversation's news or what it asks (`ask`), or of one request. */
+export interface ShownNotice {
+  session: string;
+  ask: boolean;
+  request?: string;
+}
+
+/** What a client said of its use (`attentionGiven`): its lease, the conversations on its screen, its notifications. */
+export interface Attention {
+  seconds: number;
+  sessions: string[];
+  shown: ShownNotice[];
+}
+
+/** A notice held: when it came (`at` by the clock, `wall` by the date), when its hold ends, whether
+ * it was seen, and when it's tried again after it couldn't go. */
+export interface HeldNotice {
+  notice: Notice;
+  at: number;
+  wall: number;
+  due: number;
+  seen: boolean;
+  retry?: number;
+}
+
+/** What's kept of a held notice for a bridge that starts again (`run/held-notices.json`): when it
+ * came, by the date, and whether it was held for a client in use (`attended`; one kept before
+ * bridge 0.9.61 doesn't say). */
+export interface KeptNotice {
+  notice: Notice;
+  at: number;
+  seen: boolean;
+  attended?: boolean;
+}
+
+/** A timer of the hold's clock. */
+type Timer = ReturnType<typeof setTimeout>;
+
+/** What a NoticeHold is made with (each said in its constructor's comment). */
+export interface NoticeHoldOptions {
+  send: (notice: Notice) => boolean;
+  now?: () => number;
+  wall?: () => number;
+  setTimer?: (then: () => void, ms: number) => Timer;
+  clearTimer?: (timer: Timer) => void;
+  save?: (entries: KeptNotice[]) => void;
+  /** What a bridge before kept, as read from its file: checked here. */
+  held?: KeptNotice[];
+}
 
 // How long a notice waits while you're at a computer: what's asked of you less than news.
 export const ASK_HOLD = 30_000;
@@ -32,20 +82,20 @@ const TRY_FOR = 10 * 60_000;
 // asking first) never goes.
 const MOST_ANSWERED = 200;
 const ASKED = new Set(["permission", "question", "ask"]);
-export const holdFor = category => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
+export const holdFor = (category: NoticeCategory): number => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
 
 // What a notice is about (its conversation, or group chat), and what answering takes it back.
-const shownIn = notice => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
-const answeredBy = notice => notice?.data?.request ?? notice?.data?.ask;
+const shownIn = (notice: Notice): string | undefined => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
+const answeredBy = (notice: Notice): string | undefined => notice?.data?.request ?? notice?.data?.ask;
 // Whether a client's notification (`{session, ask, request?}`) is of this notice: the request or
 // ask it's about, when it names one; else its conversation, and asked of you or news alike.
-const showsNotice = (shown, notice) => shown.request !== undefined
+const showsNotice = (shown: ShownNotice, notice: Notice): boolean => shown.request !== undefined
   ? shown.request === answeredBy(notice)
   : shown.session === shownIn(notice) && shown.ask === ASKED.has(notice.category);
 
 // What a client said (`POST kuvo/attention`'s body, or a Mac's mail): `{seconds, sessions,
 // shown}`, its lease cut to the longest; null for what isn't that.
-export function attentionGiven(given) {
+export function attentionGiven(given: unknown): Attention | null {
   if (!isObject(given) || typeof given.for !== "number" || !Number.isFinite(given.for) || given.for < 0) return null;
   if (given.sessions !== undefined && (!Array.isArray(given.sessions) || !given.sessions.every(each => typeof each === "string"))) return null;
   if (given.shown !== undefined && (!Array.isArray(given.shown)
@@ -62,13 +112,29 @@ export function attentionGiven(given) {
 const monotonic = () => performance.now();
 
 export class NoticeHold {
+  declare send: NoticeHoldOptions["send"];
+  declare now: () => number;
+  declare wall: () => number;
+  declare setTimer: NonNullable<NoticeHoldOptions["setTimer"]>;
+  declare clearTimer: NonNullable<NoticeHoldOptions["clearTimer"]>;
+  declare save: NonNullable<NoticeHoldOptions["save"]>;
+  /** Until when each client is in use, by the clock. */
+  declare leases: Map<string, number>;
+  declare heard: Map<string, number>;
+  declare shown: (ShownNotice & { at: number })[];
+  declare answered: string[];
+  declare timer: Timer | null;
+  declare held: HeldNotice[];
+  /** What was last kept (`NoticeHold.kept`). */
+  declare saved: string;
+
   // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
   // the clock (a test's own), `now` for time gone by; `wall`, the date, for what's kept. `save(entries)`:
   // what's held, kept for a bridge that starts again, which gives them back as `held`: what was held
   // for a client in use with the rest of its hold, and what was seen kept seen, while its clients
   // have a moment to say they're still there (`RESTORED_WAIT`); what was only waiting for the relay,
   // at once.
-  constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
+  constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }: NoticeHoldOptions) {
     Object.assign(this, { send, now, wall, setTimer, clearTimer, save });
     this.leases = new Map();
     // When each client last spoke (its word's `at`): an older word, come late, is let go.
@@ -92,22 +158,22 @@ export class NoticeHold {
   }
 
   // What's kept of what's held, as JSON: when each was made, by the date.
-  static kept(entries) {
+  static kept(entries: HeldNotice[]): string {
     // `attended`: held because a client was in use, not only waiting for the relay.
     return JSON.stringify(entries.map(({ notice, wall, seen, at, due }) => ({ notice, at: wall, seen, attended: due > at })));
   }
 
   // Whether a client is in use now, and how many notices wait.
-  get inUse() {
+  get inUse(): boolean {
     const now = this.now();
     return [...this.leases.values()].some(until => until > now);
   }
-  get count() { return this.held.length; }
+  get count(): number { return this.held.length; }
 
   // `client` is in use for `seconds` more, with `sessions` on its screen and `shown` in its own
   // notifications just now; 0: it isn't any more. `at`: when it said so, by its own clock, for words
   // that can come out of order (mail).
-  attend(client, { seconds, sessions = [], shown = [] }, at) {
+  attend(client: string, { seconds, sessions = [], shown = [] }: { seconds: number; sessions?: string[]; shown?: ShownNotice[] }, at?: number): void {
     if (typeof at === "number") {
       if (at < (this.heard.get(client) ?? -Infinity)) return;
       this.heard.set(client, at);
@@ -115,7 +181,7 @@ export class NoticeHold {
     if (seconds > 0) {
       const now = this.now();
       this.leases.set(client, now + seconds * 1000);
-      const onScreen = new Set(sessions);
+      const onScreen = new Set<string | undefined>(sessions);
       for (const entry of this.held) if (onScreen.has(shownIn(entry.notice))) entry.seen = true;
       // Each notification stands for one notice: the oldest held of it, or the next to come.
       this.shown = this.shown.filter(each => now - each.at < SHOWN_WITHIN);
@@ -132,7 +198,7 @@ export class NoticeHold {
   }
 
   // A notice for your phones: it goes now, or once its hold ends. True: it's taken.
-  tell(notice) {
+  tell(notice: Notice): boolean {
     const answer = answeredBy(notice);
     if (answer !== undefined && this.answered.includes(answer)) return true;
     const now = this.now();
@@ -147,7 +213,7 @@ export class NoticeHold {
   }
 
   // A request or an ask answered (or gone): its notice, waiting, never goes.
-  resolve(id) {
+  resolve(id: unknown): void {
     if (typeof id !== "string" || !id) return;
     this.answered.push(id);
     if (this.answered.length > MOST_ANSWERED) this.answered.shift();
@@ -156,14 +222,14 @@ export class NoticeHold {
   }
 
   // Sends what's due, and wakes again when the next is (or a lease ends with something waiting).
-  settle() {
+  settle(): void {
     const now = this.now();
     for (const [client, until] of this.leases) if (until <= now) this.leases.delete(client);
     const waiting = this.leases.size > 0;
     // When an entry may go: its hold's end while a client's in use, else now; one that couldn't
     // go waits for its next try.
-    const when = entry => Math.max(waiting ? entry.due : -Infinity, entry.retry ?? -Infinity);
-    const kept = [];
+    const when = (entry: HeldNotice) => Math.max(waiting ? entry.due : -Infinity, entry.retry ?? -Infinity);
+    const kept: HeldNotice[] = [];
     for (const entry of this.held) {
       if (when(entry) > now) {
         kept.push(entry);

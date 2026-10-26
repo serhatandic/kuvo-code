@@ -1,13 +1,14 @@
-// @ts-nocheck
 // The relay connection: one at a time, served until it ends.
 
 import { addressOf, EMPTY } from "../crypto/keys";
 import { readRelay, relayHello, relaySend } from "./frames";
+import type { RelayMessage } from "./frames";
+import type { LinkHost } from "./host";
 
 // What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
 // gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
 // sent. What this connection sends itself, to check it's alive, is only that.
-export function fromRelay(host, message, self) {
+export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: RelayMessage, self: Buffer): void {
   if (message.address.equals(self)) return;
   if (message.kind === "deliver") host.receive(message.address, message.payload);
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
@@ -15,8 +16,8 @@ export function fromRelay(host, message, self) {
 
 // Connects once, serves until the connection ends (or `host.disconnect()`). Resolves whether it got
 // as far as welcome. `onWelcome(host)`: what's done then (a machine's `run` says, `machineWelcomed`).
-export function connectOnce(relay, secret, host, onWelcome = () => {}) {
-  return new Promise(resolve => {
+export function connectOnce(relay: string, secret: Buffer, host: LinkHost, onWelcome: (host: LinkHost) => void = () => {}): Promise<boolean> {
+  return new Promise<boolean>(resolve => {
     const self = addressOf(secret);
     let welcomed = false;
     let lastHeard = Date.now();
@@ -55,7 +56,7 @@ export function connectOnce(relay, secret, host, onWelcome = () => {}) {
         if (message.kind !== "welcome" || !message.address.equals(self)) return socket.close();
         welcomed = true;
         // Whether it went out (a connection that's closing takes nothing).
-        host.send = bytes => {
+        host.send = (bytes: Buffer) => {
           if (socket.readyState !== 1) return false;
           socket.send(bytes);
           return true;
