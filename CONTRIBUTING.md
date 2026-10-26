@@ -61,7 +61,7 @@ with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 it and prints the public key to pin): the app writes those files
 (`"Kuvo Code" --write-box-files <folder>`), and `scripts/sign-box.mjs` signs
 `boxes.json`, which names them. Machines take only
-what a key pinned in `kuvo-link.js` (`UPDATE_KEYS`) signed; see
+what a key pinned in the box's link (`UPDATE_KEYS`, in `Packages/Box/src`) signed; see
 `Packages/KuvoLink/PROTOCOL.md`, "Updates".
 
 Builds are signed ad hoc, so macOS treats every build as a new app and asks for
@@ -174,7 +174,8 @@ README says how.
 | `KuvoCode/` | The app: views, stores and the design system |
 | `Packages/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
 | `Packages/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
-| `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side and the machines' bridge |
+| `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side, and the box's link as built (`kuvo-link.js`) |
+| `Packages/Box/` | The box (TypeScript): its link's sources, built to `kuvo-link.js` (its `README.md`) |
 | `Agents/` | The agents bridge (TypeScript): Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API |
 | `Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
 | `Licenses/` | License texts for code copied into this repository |
@@ -205,7 +206,8 @@ that's running; `BrowserAgent`'s page scripts are shared with this Mac's browser
 
 Kuvo Code for iPhone reaches this Mac's engine, and your machines', through a relay, encrypted
 end to end ([Noise](https://noiseprotocol.org), `Packages/KuvoLink/PROTOCOL.md`). The Mac side
-is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource) runs with the engine's
+is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource, built from `Packages/Box/src`
+with `./scripts/build-box.sh`, which you run and commit after changing them) runs with the engine's
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
 JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
@@ -250,6 +252,7 @@ when you're there to answer.
 | Variable | Effect |
 | --- | --- |
 | `KUVO_OPENCODE_BINARY` | Use this opencode binary instead of the pinned download |
+| `KUVO_BOX_SCRIPT` | Run this Mac's box from this script (a checkout's `Packages/Box/src/link/main.ts`, or a built `kuvo-link.js`) instead of the app's |
 | `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Agents/src/main.ts`) instead of the app's bundle |
 | `KUVO_DEMO_FOLDER`, `KUVO_DEMO_PROMPT`, `KUVO_DEMO_MODEL` | Open a project and start a session with a prompt (`provider/model`) |
 | `KUVO_DEMO_WORKTREE` | Start that session in a worktree of its own |

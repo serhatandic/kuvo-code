@@ -19,7 +19,9 @@ cd "$(dirname "$0")/.."
 REPO=${REPO:-serhatandic/kuvo-code}
 SERVICE="Kuvo Code box signing key"
 ACCOUNT=kuvo-box
-PINS=Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js
+# Where the box's link pins it, in its sources (Packages/Box/src): change it there, then run
+# scripts/build-box.sh.
+PINS=$(grep -rl 'export const UPDATE_KEYS' Packages/Box/src | head -n 1)
 
 if ! command -v gh >/dev/null 2>&1; then
     echo "GitHub's command line tool isn't installed: brew install gh, then gh auth login." >&2
@@ -82,6 +84,6 @@ echo "Set KUVO_BOX_SIGNING_KEY on $REPO."
 if grep -q "\"$PUBLIC\"" "$PINS"; then
     echo "kuvo-link.js pins its public key already: releases carry what machines run, signed."
 else
-    echo "Its public key, for UPDATE_KEYS in $PINS:"
+    echo "Its public key, for UPDATE_KEYS in $PINS (then run scripts/build-box.sh):"
     echo "  $PUBLIC"
 fi

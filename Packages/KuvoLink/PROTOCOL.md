@@ -11,8 +11,9 @@ through a relay that can't read what passes through it.
   content. It also sends Apple push notifications, whose content it can't read either.
 
 Everything below is implemented twice, in Swift (`Sources/KuvoLink`, for the Mac app and
-the phone) and in JavaScript (`Sources/KuvoLink/Resources/kuvo-link.js`, for machines). `Vectors/` holds the
-test vectors both run against.
+the phone) and in the box's TypeScript (`Packages/Box/src`, built to
+`Sources/KuvoLink/Resources/kuvo-link.js`, which every box runs). `Vectors/` holds the test vectors
+both run against.
 
 ## Keys and addresses
 

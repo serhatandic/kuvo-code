@@ -39,8 +39,8 @@ final class BoxProcess {
     /// It was given what it starts with (the engine's start got that far): Try Again can start it.
     var canStartAgain: Bool { runtime != nil }
 
-    /// The box's script: KUVO_BOX_SCRIPT's (a checkout's `kuvo-link.js`) in a debug build, else
-    /// the app's own.
+    /// The box's script: KUVO_BOX_SCRIPT's (a checkout's `kuvo-link.js`, or its source,
+    /// `Packages/Box/src/link/main.ts`) in a debug build, else the app's own.
     private static var script: URL? {
         #if DEBUG
         if let path = ProcessInfo.processInfo.environment["KUVO_BOX_SCRIPT"] { return URL(filePath: path) }

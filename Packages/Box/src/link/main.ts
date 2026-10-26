@@ -1,3 +1,6 @@
+// @ts-nocheck
+// (Typed modules take its parts out one at a time: Packages/Box/README.md. Until then it's checked
+// as it runs, by the bridge's tests.)
 // Kuvo Code's link on a machine: lets the phones you've paired reach this machine's engine
 // through the relay, so its sessions and bots work from the phone with the Mac closed. The
 // engine's own runtime runs it, so the machine needs nothing else:
@@ -25,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.69";
+export const BRIDGE_VERSION = "0.9.70";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
