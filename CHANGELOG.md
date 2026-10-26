@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. The engine's own review is now **/review-quick**.
 - **Help › Report a Problem…** opens a short sheet: say what happened, see the versions that go with it, and open a new GitHub issue filled in with both, to read over and post. It says up front that issues are public.
 - Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
 - The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.

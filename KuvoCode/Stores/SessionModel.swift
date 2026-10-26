@@ -63,6 +63,11 @@ final class SessionModel {
     var hidesWakes = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
+    /// The side question's and the review's bars show only their lines.
+    var hidesSideQuestion = false
+    var hidesReview = false
+    /// The handoff whose bar was put away (its new conversation's ID, or "" for one that failed).
+    var putAwayHandoff: Handoff?
     /// A change to its goal is on its way to its computer.
     var isChangingGoal = false
     /// The subagents' bar shows only its line, which still says they work.
@@ -930,7 +935,7 @@ final class SessionModel {
             return
         }
         // A "!" or "/" command runs as typed; what you were replying to waits for a message.
-        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil
+        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil || typedKeyword(draftText) != nil
         let text = isCommand ? draftText : Quoting.message(quotes: draftQuotes, text: draftText)
         let files = draftFiles
         draftText = ""
@@ -946,6 +951,11 @@ final class SessionModel {
         if let goal = GoalCommand(text) {
             // For its computer's box, not the agent.
             runGoal(goal, written: text, files: files)
+        } else if let (keyword, rest) = typedKeyword(text) {
+            runKeyword(keyword, rest: rest, written: text, files: files, for: model, queue: queue)
+        } else if let arguments = Self.quickReview(in: text, commands: commands) {
+            // The engine's own /review, which ours took the name of.
+            runCommand("review", arguments: arguments, files: files, for: model, queue: queue, written: text)
         } else if let command = Self.shellCommand(in: text) {
             // A "!" command takes no files: they wait in the composer for a message.
             if !files.isEmpty { draftFiles = files + draftFiles.filter { file in !files.contains { $0.path == file.path } } }
@@ -955,6 +965,176 @@ final class SessionModel {
         } else {
             send(text, files: files, for: model, queue: queue)
         }
+    }
+
+    // MARK: Keywords
+
+    /// The keywords "/" offers here, as its computer's box runs them: a subagent's conversation
+    /// has none (its work is the conversation it works for's).
+    var keywords: [Keyword] {
+        guard session.parentID == nil else { return [] }
+        let keywordsRun = goalBridge().map { $0.api != nil && $0.runsKeywords == true } ?? false
+        return Keyword.allCases.filter { keyword in
+            switch keyword {
+            case .goal: takesGoals
+            case .review, .btw, .handoff: keywordsRun
+            case .loop, .plan, .compact: true
+            }
+        }
+    }
+
+    static func quickReview(in text: String, commands: [Command]) -> String? {
+        guard let (name, arguments) = SlashCommands.split(text), name == Keyword.quickReview, commands.contains(where: { $0.name == Keyword.quickReview }) else { return nil }
+        return arguments
+    }
+
+    /// The keyword a message starts with, of those offered here ("/goal" is the goal's own, above).
+    private func typedKeyword(_ text: String) -> (keyword: Keyword, rest: String)? {
+        guard let (keyword, rest) = Keyword.parse(text), keyword != .goal, keywords.contains(keyword) else { return nil }
+        return (keyword, rest)
+    }
+
+    /// A keyword sent: what it asks for, rather than a message to the agent. What can't be done
+    /// goes back to the composer as `written`, and says why. Only /plan and /loop's messages take
+    /// files: the others leave them in the composer.
+    private func runKeyword(_ keyword: Keyword, rest: String, written: String, files: [URL], for model: Model?, queue: Bool) {
+        if !files.isEmpty, keyword != .plan, keyword != .loop { restore(text: "", files: files) }
+        switch keyword {
+        case .goal:
+            break
+        case .plan:
+            selectAgent("plan")
+            if !rest.isEmpty { send(rest, files: files, for: model, queue: queue) } else if !files.isEmpty { restore(text: "", files: files) }
+        case .compact:
+            compact()
+        case .loop:
+            startLoop(LoopCommand(rest), written: written, files: files, for: model)
+        case .btw:
+            guard !rest.isEmpty else { return restore(text: Keyword.btw.typed + " ") }
+            askSideQuestion(rest, written: written)
+        case .handoff:
+            startHandoff(next: rest, written: written)
+        case .review:
+            startReview(written: written)
+        }
+        Analytics.shared.track("keyword_run", ["keyword": keyword.rawValue])
+    }
+
+    /// "/loop <how often> <what to do>": the message sent now for one every so long (and then
+    /// each time), and a wake-up on its computer that sends it again, by its clock.
+    private func startLoop(_ command: LoopCommand, written: String, files: [URL], for model: Model?) {
+        guard let schedule = command.schedule else {
+            restore(text: written, files: files)
+            failure = "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”, or pick one from the list after /loop."
+            return
+        }
+        guard !command.message.isEmpty else {
+            restore(text: written, files: files)
+            failure = "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”."
+            return
+        }
+        guard let wakeUps = AgentMail.shared.app?.wakeUps else { return restore(text: written, files: files) }
+        let owner = WakeUps.owner(of: session)
+        let now = Date.now
+        Task {
+            do {
+                try await wakeUps.add(to: owner, at: schedule.firstWake(now: now), every: schedule.every, note: command.message)
+                if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false) }
+            } catch {
+                restore(text: written, files: files)
+                fail(error)
+            }
+        }
+    }
+
+    /// The side questions asked about it ("/btw"), oldest first, as its computer's box keeps them.
+    var sideQuestions: [SideQuestion] { goalBridge()?.sideQuestions[id] ?? [] }
+    /// The one whose answer shows over the composer: the latest asked here, until it's put away.
+    var shownSideQuestion: String?
+
+    private func askSideQuestion(_ question: String, written: String) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
+        let session = id
+        Task {
+            do {
+                let asked = try await api.askSideQuestion(question, about: session)
+                bridge.took(asked)
+                shownSideQuestion = asked.id
+            } catch {
+                restore(text: written)
+                fail(error)
+            }
+        }
+    }
+
+    /// The side question bar's Ask Another: "/btw " in the composer, ready to finish.
+    func askAnotherSideQuestion() {
+        draftText = Keyword.btw.typed + " "
+        composerFocus += 1
+    }
+
+    /// Takes a side question away, or all of them (`id` nil).
+    func removeSideQuestion(_ id: String?) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return }
+        let session = self.id
+        if id == nil || id == shownSideQuestion { shownSideQuestion = nil }
+        Task {
+            do {
+                try await api.removeSideQuestion(id, of: session)
+                bridge.dropSideQuestion(id, of: session)
+            } catch { fail(error) }
+        }
+    }
+
+    /// Its handoff ("/handoff") while the note is written, or why it couldn't be.
+    var handoff: Handoff? { goalBridge()?.handoffs[id] }
+
+    private func startHandoff(next: String, written: String) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
+        let session = id
+        Task {
+            do {
+                bridge.took(try await api.handoff(session: session, next: next.isEmpty ? nil : next))
+            } catch {
+                restore(text: written)
+                fail(error)
+            }
+        }
+    }
+
+    /// Its latest review with fresh eyes ("/review"), until it's put away.
+    var review: Review? { goalBridge()?.reviews[id] }
+
+    private func startReview(written: String) {
+        guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
+        let session = id
+        Task {
+            do {
+                bridge.took(try await api.startReview(session: session))
+            } catch {
+                restore(text: written)
+                fail(error)
+            }
+        }
+    }
+
+    func dismissReview() {
+        guard let bridge = goalBridge(), let api = bridge.api else { return }
+        let session = id
+        bridge.dropReview(session)
+        Task { try? await api.dismissReview(session: session) }
+    }
+
+    /// The review's findings, sent to the agent as your message.
+    func fixReview() {
+        guard let fix = review?.fix else { return }
+        dismissReview()
+        send(fix, files: [], for: nil, queue: false)
+    }
+
+    private func keywordUnavailable(_ written: String) {
+        restore(text: written)
+        failure = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
     }
 
     // MARK: Goals

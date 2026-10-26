@@ -4,7 +4,7 @@ import Foundation
 /// other than a message to the agent: "/goal", "/loop", "/plan", "/review", "/handoff", "/btw" and
 /// "/compact". One list for every client, with what each says as you type it.
 public enum Keyword: String, CaseIterable, Sendable, Hashable {
-    case goal, loop, plan, review, handoff, btw, compact
+    case goal, loop, plan, review, btw, handoff, compact
 
     /// "/goal".
     public var typed: String { "/" + rawValue }
@@ -25,22 +25,22 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
     /// What it does, in a line, as the list of commands says it.
     public var summary: String {
         switch self {
-        case .goal: "Keep working until a goal is met"
-        case .loop: "Send a message again on a schedule"
-        case .plan: "Plan first, without changing files"
-        case .review: "A second look at the changes, with fresh eyes"
-        case .handoff: "Carry on in a fresh conversation"
-        case .btw: "Ask on the side, without adding to this conversation"
-        case .compact: "Summarize the conversation to make room"
+        case .goal: "Keep working until a condition is met"
+        case .loop: "Repeat a message on a schedule"
+        case .plan: "Explore and plan first, without changing files"
+        case .review: "A second model reviews your uncommitted changes"
+        case .handoff: "Go on in a fresh conversation from a summary"
+        case .btw: "A side question, kept out of this conversation"
+        case .compact: "Summarize the conversation to free up context"
         }
     }
 
-    /// What follows it, as the composer's placeholder says it.
+    /// What follows it, in grey after it until something's written: nil for one that takes nothing.
     public var argument: String? {
         switch self {
-        case .goal: "what it should achieve, like “all tests pass”"
-        case .loop: "what to send each time"
-        case .plan: "what to plan"
+        case .goal: "what should be true when it’s done, like “all tests pass”"
+        case .loop: "what to do each time"
+        case .plan: "what to plan (or nothing, to switch to Plan)"
         case .review: nil
         case .handoff: "what to do next (or nothing)"
         case .btw: "your question"
@@ -48,18 +48,35 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// Its mark, an SF Symbol.
+    /// What it will do, in the line under the field as it's typed. /loop's says its schedule
+    /// (`LoopCommand`), /review's its reviewer, so theirs are the client's.
+    public var hint: String {
+        switch self {
+        case .goal: "Checked after each turn. The agent keeps going until it’s met."
+        case .loop: "Sends it on a schedule, also with the window closed."
+        case .plan: "Switches to Plan: the agent explores and plans, and changes no files."
+        case .review: "Reads the changes not committed yet with fresh eyes, and lists what it finds."
+        case .handoff: "Writes a handoff note, then carries on in a fresh conversation from it."
+        case .btw: "Answered on the side: nothing is added to this conversation."
+        case .compact: "Summarizes the conversation so far to make room in its context."
+        }
+    }
+
+    /// Its mark, an SF Symbol: in the list, in place of its "/" as it's typed, and in the bubble.
     public var symbol: String {
         switch self {
         case .goal: "scope"
-        case .loop: "repeat"
+        case .loop: "arrow.clockwise"
         case .plan: "list.bullet.clipboard"
-        case .review: "eyes"
-        case .handoff: "arrow.right.doc.on.clipboard"
-        case .btw: "bubble.left.and.text.bubble.right"
-        case .compact: "rectangle.compress.vertical"
+        case .review: "text.magnifyingglass"
+        case .handoff: "arrow.forward.square"
+        case .btw: "bubble.left.and.bubble.right"
+        case .compact: "arrow.down.and.line.horizontal.and.arrow.up"
         }
     }
+
+    /// Drawn in Plan's orange, as the mode chip is, rather than the accent.
+    public var isPlan: Bool { self == .plan }
 
     /// The box feature it needs (`features` in `kuvo/info`): nil for one made of what every
     /// engine does (Plan mode, summarizing).
@@ -76,6 +93,18 @@ public enum Keyword: String, CaseIterable, Sendable, Hashable {
 
     /// As the composer's list of commands shows it.
     public var command: Command { Command(name: rawValue, description: summary) }
+
+    /// "/review-quick": the engine's own review, where ours has the name.
+    public static let quickReview = "review-quick"
+
+    /// What "/" offers besides `keywords`: the engine's commands and yours, its own /review as
+    /// /review-quick where the keyword has the name, and none a keyword hides.
+    public static func commands(_ own: [Command], keywords: [Keyword]) -> [Command] {
+        own.compactMap { command in
+            guard keywords.contains(where: { $0.rawValue == command.name }) else { return command }
+            return command.name == Keyword.review.rawValue ? Command(name: quickReview, description: "The engine’s own review, in this conversation") : nil
+        }
+    }
 
     /// The keyword a message starts with, and what follows it ("/btw why?" is (.btw, "why?")); nil
     /// for any other message.
@@ -115,9 +144,22 @@ public struct SideQuestionSummary: Codable, Sendable, Hashable {
 
 /// A conversation carried on in a fresh one ("/handoff").
 public struct Handoff: Codable, Sendable, Hashable {
+    public enum State: String, Codable, Sendable, Hashable { case writing, done, failed }
     public var from: String
-    public var to: String
-    public var title: String
+    public var state: State
+    /// The new conversation, once it's started.
+    public var to: String?
+    public var title: String?
+    /// Why it couldn't be, when it failed.
+    public var error: String?
+
+    public init(from: String, state: State, to: String? = nil, title: String? = nil, error: String? = nil) {
+        self.from = from
+        self.state = state
+        self.to = to
+        self.title = title
+        self.error = error
+    }
 }
 
 /// A review of a conversation's changes with fresh eyes ("/review").
@@ -146,6 +188,7 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
 /// `kuvo.btw.updated`, `kuvo.review.updated` (null once put away) and `kuvo.handoff`.
 public struct SideQuestionUpdate: Decodable, Sendable { public var sessionID: String; public var question: SideQuestion }
 public struct ReviewUpdate: Decodable, Sendable { public var sessionID: String; public var review: Review? }
+public struct HandoffUpdate: Decodable, Sendable { public var sessionID: String; public var handoff: Handoff }
 
 extension OpenCodeAPI {
     // On a box's agents bridge, as goals are (`kuvo/agents/api/kuvo/…` from a phone).
@@ -169,10 +212,20 @@ extension OpenCodeAPI {
         _ = try await client.send(try client.request("DELETE", "api/kuvo/btw/\(session.pathEscaped)" + (id.map { "/\($0.pathEscaped)" } ?? "")), as: Empty.self)
     }
 
-    /// Carries a conversation on in a fresh one, with what to do next; answers once it's started.
+    /// Carries a conversation on in a fresh one, with what to do next. Starts one: it answers while the note is written, and says when it's done (`kuvo.handoff`).
+    @discardableResult
     public func handoff(session: String, next: String?) async throws -> Handoff {
         struct Body: Encodable { var next: String? }
-        return try await client.send(try client.request("POST", "api/kuvo/handoff/\(session.pathEscaped)", body: Body(next: next)), as: DataEnvelope<Handoff>.self, patience: .seconds(240)).data
+        return try await client.send(try client.request("POST", "api/kuvo/handoff/\(session.pathEscaped)", body: Body(next: next)), as: DataEnvelope<Handoff>.self).data
+    }
+
+    /// A conversation's latest handoff, while its box runs; nil when it has none.
+    public func handoff(session: String) async throws -> Handoff? {
+        do {
+            return try await client.send(try client.request("GET", "api/kuvo/handoff/\(session.pathEscaped)"), as: DataEnvelope<Handoff>.self).data
+        } catch let error as ServerError where error.status == 404 {
+            return nil
+        }
     }
 
     @discardableResult

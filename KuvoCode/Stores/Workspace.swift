@@ -1225,6 +1225,13 @@ final class Workspace {
 
     /// A new session with `id`'s conversation before `message`, opened in a tab with the
     /// message in its composer, ready to try another way.
+    /// A handoff done ("/handoff"): its new conversation, opened as a fork's is.
+    func openHandoff(_ handoff: Handoff) async {
+        guard let to = handoff.to, let api = api(forSession: handoff.from) else { return }
+        if session(to) == nil, let session = try? await api.session(to) { upsert(session) }
+        tabs?.open(.session(to))
+    }
+
     func fork(_ id: String, from message: Message.User) async throws {
         Analytics.shared.track("session_branched")
         guard let api = api(forSession: id) else { return }
