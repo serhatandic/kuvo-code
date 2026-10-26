@@ -33,6 +33,14 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
 
+## When the user isn't around
+
+The user isn't always available, and work goes on without them. Never stop and wait on a question box (it holds the whole session until someone answers).
+
+- Keep a running note of every decision that needs the user: design choices (with the options mocked), brand, wording, pushes to kuvo-web, anything that needs a permission prompt or the user at the Mac. Say for each what you recommend and why.
+- Meanwhile build everything that doesn't depend on the answer, and pick the work order so the user's choices come last.
+- Hand the whole list over at once, in your report to the user or to the session coordinating yours, with the paths to the mocks, so nothing is lost when the user comes back.
+
 ## Subagents: two at a time
 
 Each session runs at most 2 subagents at once: workers, reviewers, and any that your subagents start themselves all count. Start another only when one finishes. This caps the subagents inside one session, not the number of sessions: several sessions can run side by side, each with its own two. A review split by area runs two reviewers at a time, and the rest wait for a free slot.
