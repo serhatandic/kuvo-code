@@ -133,6 +133,12 @@ public struct ArtifactVersion: Codable, Hashable, Identifiable, Sendable {
 
     public enum Status: String, Codable, Hashable, Sendable {
         case added, modified, deleted
+        /// One this app doesn't know yet (a newer box's): read as a change.
+        case other
+
+        public init(from decoder: Decoder) throws {
+            self = Status(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .other
+        }
     }
 
     public struct Lines: Codable, Hashable, Sendable {
@@ -185,6 +191,25 @@ public struct ArtifactList: Codable, Hashable, Sendable {
         var query = URLComponents()
         query.queryItems = [scope.item]
         return "kuvo/artifacts" + (events ? "/events" : "") + "?" + (query.percentEncodedQuery ?? "")
+    }
+}
+
+extension ArtifactList {
+    /// This first page as it is now, with the older ones already shown after it kept (Show More
+    /// read them): a change to what's newest doesn't take them away again.
+    public func keeping(_ shown: [ArtifactSummary]) -> [ArtifactSummary] {
+        guard let last = artifacts.last else { return artifacts }
+        let first = Set(artifacts.map(\.id))
+        return artifacts + shown.filter { !first.contains($0.id) && $0.pinned == nil && $0.updated <= last.updated }
+    }
+}
+
+extension ArtifactTimeline {
+    /// This first page as it is now, with the older entries already shown after it kept.
+    public func keeping(_ shown: [Entry]) -> [Entry] {
+        guard let last = entries.last else { return entries }
+        let first = Set(entries.map(\.id))
+        return entries + shown.filter { !first.contains($0.id) && $0.version.at <= last.version.at }
     }
 }
 
@@ -354,7 +379,7 @@ public enum ArtifactWords {
                 : version.via.contains("download") ? "downloaded it"
                 : version.via.contains("shell") ? "made it with a command"
                 : "wrote it"
-        case .modified: verb = version.edits > 1 ? "changed it \(version.edits) times" : "changed it"
+        case .modified, .other: verb = version.edits > 1 ? "changed it \(version.edits) times" : "changed it"
         }
         let sentence = (bot.map { $0 + " " } ?? "") + verb
         return sentence.prefix(1).uppercased() + sentence.dropFirst()

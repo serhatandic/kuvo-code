@@ -49,6 +49,21 @@ import Testing
         #expect(made.map(\.name) == ["notes.md", "shot.png", "config.ts"])
     }
 
+    @Test func olderThingsShowMoreReadStayWhenTheNewestChange() throws {
+        // A first page of two, and the one Show More read after it.
+        let all = try Self.list([("old.md", "document", ""), ("middle.md", "document", ""), ("new.md", "document", "")])
+        let shown = [all[2], all[1], all[0]]
+        // Then middle.md changes again (now newest) and fresh.md is made: the first page comes again.
+        var middle = all[1]
+        middle.updated = 2000
+        var fresh = all[2]
+        fresh.id = "art_fresh"
+        fresh.name = "fresh.md"
+        fresh.updated = 1999
+        let firstPage = try JSONDecoder().decode(ArtifactList.self, from: JSONEncoder().encode(ArtifactListShape(artifacts: [middle, fresh])))
+        #expect(firstPage.keeping(shown).map(\.name) == ["middle.md", "fresh.md", "new.md", "old.md"])
+    }
+
     @Test func aBotsMemoryIsCalledByItsBotsName() throws {
         let memory = try Self.list([("MEMORY.md", "memory", ""), ("notes.md", "memory", "")])
         // In a group chat, whose memory it is matters; on its own Shelf too, it reads as the bot's.
@@ -66,5 +81,15 @@ import Testing
         #expect(ArtifactWords.what(try decode(#"{"n": 0, "by": {"kind": "outside"}, "status": "added", "before": true, \#(base)}"#)) == "Before it was changed")
         // A reason this app doesn't know yet still reads.
         #expect(try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "reason": "a-reason-from-later", \#(base)}"#).reason == .other)
+        // So does what happened to it, from a newer box: the list it's in still shows.
+        let later = try decode(#"{"n": 2, "by": {"kind": "agent"}, "status": "a-status-from-later", \#(base)}"#)
+        #expect(later.status == .other)
+        #expect(ArtifactWords.what(later, bot: "Ada") == "Ada changed it")
     }
+}
+
+/// A list as a box sends it, for a page made here.
+private struct ArtifactListShape: Encodable {
+    var artifacts: [ArtifactSummary]
+    var next: String?
 }
