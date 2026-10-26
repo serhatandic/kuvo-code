@@ -1,0 +1,2953 @@
+{
+ "about": "What each route of a box answers (scripts/route-shapes.sh writes it from Packages/Box/src/shared/routes; never edit it): its JSON by status, or \"bytes\". A shape is \"string\", \"number\", \"bool\", \"null\", \"any\", {list}, {map}, {object} (those fields and no others; a name ending in ? may be left out), {oneOf} or {literal}. A refusal (400 and over) in JSON is `error`, unless its route has a shape of its own for that status; what starts with a `passedOn` path is the engine's or the agents bridge's own.",
+ "error": {
+  "object": {
+   "message?": "string",
+   "problem?": "string"
+  }
+ },
+ "passedOn": [
+  "api/",
+  "kuvo/agents/"
+ ],
+ "routes": [
+  {
+   "route": "GET kuvo/asks",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "signIn"
+           },
+           {
+            "literal": "code"
+           },
+           {
+            "literal": "action"
+           }
+          ]
+         },
+         "host": "string",
+         "machine?": "string",
+         "session?": "string",
+         "asker?": "string",
+         "username?": "bool",
+         "password?": "bool",
+         "saved?": {
+          "list": "string"
+         },
+         "offersToSave?": "bool",
+         "prompt?": "string",
+         "instruction?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/asks",
+   "answers": {
+    "200": {
+     "object": {
+      "asks": {
+       "list": {
+        "object": {
+         "id": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "signIn"
+           },
+           {
+            "literal": "code"
+           },
+           {
+            "literal": "action"
+           }
+          ]
+         },
+         "host": "string",
+         "machine?": "string",
+         "session?": "string",
+         "asker?": "string",
+         "username?": "bool",
+         "password?": "bool",
+         "saved?": {
+          "list": "string"
+         },
+         "offersToSave?": "bool",
+         "prompt?": "string",
+         "instruction?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/asks/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/bots",
+   "answers": {
+    "200": {
+     "object": {
+      "bots": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "name": "string",
+         "look": {
+          "object": {
+           "color": "string",
+           "shape": "string",
+           "face": "string"
+          }
+         },
+         "machine?": "string",
+         "job": "string",
+         "jobDetails": "string",
+         "paused": "bool",
+         "wakes?": "number",
+         "watching": "number",
+         "agents": "bool",
+         "personality?": "string",
+         "model?": {
+          "object": {
+           "id": "string",
+           "providerID": "string",
+           "variant?": "string"
+          }
+         },
+         "folder": "string",
+         "project?": "string",
+         "created?": "string",
+         "memoryJob?": {
+          "object": {
+           "line": "string",
+           "section": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/bots",
+   "answers": {
+    "200": {
+     "object": {
+      "bots": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "name": "string",
+         "look": {
+          "object": {
+           "color": "string",
+           "shape": "string",
+           "face": "string"
+          }
+         },
+         "machine?": "string",
+         "job": "string",
+         "jobDetails": "string",
+         "paused": "bool",
+         "wakes?": "number",
+         "watching": "number",
+         "agents": "bool",
+         "personality?": "string",
+         "model?": {
+          "object": {
+           "id": "string",
+           "providerID": "string",
+           "variant?": "string"
+          }
+         },
+         "folder": "string",
+         "project?": "string",
+         "created?": "string",
+         "memoryJob?": {
+          "object": {
+           "line": "string",
+           "section": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/bots",
+   "answers": {
+    "201": {
+     "object": {
+      "bot": {
+       "object": {
+        "id": "string",
+        "session": "string",
+        "name": "string",
+        "look": {
+         "object": {
+          "color": "string",
+          "shape": "string",
+          "face": "string"
+         }
+        },
+        "machine?": "string",
+        "job": "string",
+        "jobDetails": "string",
+        "paused": "bool",
+        "wakes?": "number",
+        "watching": "number",
+        "agents": "bool",
+        "personality?": "string",
+        "model?": {
+         "object": {
+          "id": "string",
+          "providerID": "string",
+          "variant?": "string"
+         }
+        },
+        "folder": "string",
+        "project?": "string",
+        "created?": "string",
+        "memoryJob?": {
+         "object": {
+          "line": "string",
+          "section": "string"
+         }
+        }
+       }
+      },
+      "firstMessage": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/bots/templates",
+   "answers": {
+    "200": {
+     "object": {
+      "templates": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "job": "string",
+         "instructions": "string",
+         "look": {
+          "object": {
+           "color": "string",
+           "shape": "string",
+           "face": "string"
+          }
+         },
+         "personality?": "string",
+         "wantsProject": "bool"
+        }
+       }
+      },
+      "personalities": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "description": "string",
+         "custom?": "bool"
+        }
+       }
+      },
+      "looks": {
+       "object": {
+        "colors": {
+         "list": "string"
+        },
+        "shapes": {
+         "list": "string"
+        },
+        "faces": {
+         "list": "string"
+        }
+       }
+      },
+      "startingModel": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "providerID": "string",
+           "variant?": "string"
+          }
+         },
+         "null"
+        ]
+       }
+      },
+      "projects": {
+       "list": {
+        "object": {
+         "directory": "string",
+         "name": "string",
+         "machine?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/bots/templates",
+   "answers": {
+    "200": {
+     "object": {
+      "templates": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "job": "string",
+         "instructions": "string",
+         "look": {
+          "object": {
+           "color": "string",
+           "shape": "string",
+           "face": "string"
+          }
+         },
+         "personality?": "string",
+         "wantsProject": "bool"
+        }
+       }
+      },
+      "personalities": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "description": "string",
+         "custom?": "bool"
+        }
+       }
+      },
+      "looks": {
+       "object": {
+        "colors": {
+         "list": "string"
+        },
+        "shapes": {
+         "list": "string"
+        },
+        "faces": {
+         "list": "string"
+        }
+       }
+      },
+      "startingModel": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "providerID": "string",
+           "variant?": "string"
+          }
+         },
+         "null"
+        ]
+       }
+      },
+      "projects": {
+       "list": {
+        "object": {
+         "directory": "string",
+         "name": "string",
+         "machine?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/bots/retell",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/bots/keys/refresh",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/bots/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "bot": {
+       "oneOf": [
+        {
+         "object": {
+          "id": "string",
+          "session": "string",
+          "name": "string",
+          "look": {
+           "object": {
+            "color": "string",
+            "shape": "string",
+            "face": "string"
+           }
+          },
+          "machine?": "string",
+          "job": "string",
+          "jobDetails": "string",
+          "paused": "bool",
+          "wakes?": "number",
+          "watching": "number",
+          "agents": "bool",
+          "personality?": "string",
+          "model?": {
+           "object": {
+            "id": "string",
+            "providerID": "string",
+            "variant?": "string"
+           }
+          },
+          "folder": "string",
+          "project?": "string",
+          "created?": "string",
+          "memoryJob?": {
+           "object": {
+            "line": "string",
+            "section": "string"
+           }
+          }
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/bots/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/bots/:id/arrived",
+   "answers": {
+    "200": {
+     "object": {
+      "bot": {
+       "oneOf": [
+        {
+         "object": {
+          "id": "string",
+          "session": "string",
+          "name": "string",
+          "look": {
+           "object": {
+            "color": "string",
+            "shape": "string",
+            "face": "string"
+           }
+          },
+          "machine?": "string",
+          "job": "string",
+          "jobDetails": "string",
+          "paused": "bool",
+          "wakes?": "number",
+          "watching": "number",
+          "agents": "bool",
+          "personality?": "string",
+          "model?": {
+           "object": {
+            "id": "string",
+            "providerID": "string",
+            "variant?": "string"
+           }
+          },
+          "folder": "string",
+          "project?": "string",
+          "created?": "string",
+          "memoryJob?": {
+           "object": {
+            "line": "string",
+            "section": "string"
+           }
+          }
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/bots/:id/keys",
+   "answers": {
+    "200": {
+     "object": {
+      "keys": {
+       "list": {
+        "object": {
+         "integration": "string",
+         "own": "bool",
+         "shared": "bool",
+         "title": "string",
+         "symbol": "string",
+         "keys": {
+          "list": {
+           "object": {
+            "name": "string",
+            "label": "string",
+            "prompt": "string"
+           }
+          }
+         },
+         "help?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/bots/:id/keys",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/bots/:id/keys/:integration",
+   "answers": {
+    "200": {
+     "object": {
+      "keys": {
+       "map": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "PUT kuvo/bots/:id/keys/:integration",
+   "answers": {
+    "200": {
+     "object": {
+      "integration": "string",
+      "own": "bool",
+      "shared": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/bots/:id/keys/:integration",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/info",
+   "answers": {
+    "200": {
+     "object": {
+      "kind": {
+       "oneOf": [
+        {
+         "literal": "mac"
+        },
+        {
+         "literal": "machine"
+        }
+       ]
+      },
+      "name": "string",
+      "engine": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "app?": "string",
+      "bridge?": "string",
+      "features": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "accounts.credentials"
+         },
+         {
+          "literal": "accounts.ended"
+         },
+         {
+          "literal": "agents"
+         },
+         {
+          "literal": "asks"
+         },
+         {
+          "literal": "attention"
+         },
+         {
+          "literal": "bots"
+         },
+         {
+          "literal": "bots.edit"
+         },
+         {
+          "literal": "bots.keys"
+         },
+         {
+          "literal": "bots.make"
+         },
+         {
+          "literal": "btw"
+         },
+         {
+          "literal": "config"
+         },
+         {
+          "literal": "config.apply"
+         },
+         {
+          "literal": "engine.restart"
+         },
+         {
+          "literal": "engine.start"
+         },
+         {
+          "literal": "file"
+         },
+         {
+          "literal": "folders"
+         },
+         {
+          "literal": "goals"
+         },
+         {
+          "literal": "groups"
+         },
+         {
+          "literal": "groups.delete"
+         },
+         {
+          "literal": "groups.edit"
+         },
+         {
+          "literal": "groups.joinable"
+         },
+         {
+          "literal": "groups.make"
+         },
+         {
+          "literal": "groups.seats"
+         },
+         {
+          "literal": "handoff"
+         },
+         {
+          "literal": "integrations"
+         },
+         {
+          "literal": "keys"
+         },
+         {
+          "literal": "mcp.catalog"
+         },
+         {
+          "literal": "named"
+         },
+         {
+          "literal": "personalities"
+         },
+         {
+          "literal": "plugins.search"
+         },
+         {
+          "literal": "personalities.events"
+         },
+         {
+          "literal": "phones"
+         },
+         {
+          "literal": "phones.pair"
+         },
+         {
+          "literal": "projects"
+         },
+         {
+          "literal": "reviews"
+         },
+         {
+          "literal": "sessions.agents"
+         },
+         {
+          "literal": "shell.stop"
+         },
+         {
+          "literal": "sign-in.return"
+         },
+         {
+          "literal": "skills"
+         },
+         {
+          "literal": "skills.trash"
+         },
+         {
+          "literal": "update"
+         },
+         {
+          "literal": "wakes"
+         },
+         {
+          "literal": "wakes.edit"
+         },
+         {
+          "literal": "wakes.events"
+         },
+         {
+          "literal": "worktrees"
+         },
+         {
+          "literal": "worktrees.events"
+         },
+         {
+          "literal": "worktrees.where"
+         },
+         {
+          "literal": "bots.events"
+         },
+         {
+          "literal": "bots.job"
+         },
+         {
+          "literal": "accounts.ended"
+         },
+         {
+          "literal": "claude-code"
+         },
+         {
+          "literal": "hosts"
+         },
+         {
+          "literal": "mac"
+         },
+         {
+          "literal": "machines"
+         },
+         {
+          "literal": "usage"
+         }
+        ]
+       }
+      },
+      "agents": "bool",
+      "started": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "chats": "string",
+      "running?": "bool",
+      "stopped?": "bool",
+      "integrations?": {
+       "map": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/update",
+   "answers": {
+    "200": {
+     "object": {
+      "setUp": "bool",
+      "version": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "engine": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "latest": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "last": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "result": {
+           "oneOf": [
+            {
+             "literal": "updated"
+            },
+            {
+             "literal": "current"
+            },
+            {
+             "literal": "waiting"
+            },
+            {
+             "literal": "busy"
+            },
+            {
+             "literal": "off"
+            },
+            {
+             "literal": "blocked"
+            },
+            {
+             "literal": "failed"
+            }
+           ]
+          },
+          "version?": "string",
+          "message?": "string",
+          "from?": "string",
+          "to?": "string"
+         }
+        },
+        "null"
+       ]
+      },
+      "updating": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "checking"
+          },
+          {
+           "literal": "downloading"
+          },
+          {
+           "literal": "downloading the engine"
+          },
+          {
+           "literal": "checking it"
+          },
+          {
+           "literal": "installing"
+          },
+          {
+           "literal": "starting"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "blocked": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/update",
+   "answers": {
+    "202": {
+     "object": {
+      "setUp": "bool",
+      "version": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "engine": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "latest": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "last": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "result": {
+           "oneOf": [
+            {
+             "literal": "updated"
+            },
+            {
+             "literal": "current"
+            },
+            {
+             "literal": "waiting"
+            },
+            {
+             "literal": "busy"
+            },
+            {
+             "literal": "off"
+            },
+            {
+             "literal": "blocked"
+            },
+            {
+             "literal": "failed"
+            }
+           ]
+          },
+          "version?": "string",
+          "message?": "string",
+          "from?": "string",
+          "to?": "string"
+         }
+        },
+        "null"
+       ]
+      },
+      "updating": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "checking"
+          },
+          {
+           "literal": "downloading"
+          },
+          {
+           "literal": "downloading the engine"
+          },
+          {
+           "literal": "checking it"
+          },
+          {
+           "literal": "installing"
+          },
+          {
+           "literal": "starting"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "blocked": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/file",
+   "answers": {
+    "200": "bytes"
+   }
+  },
+  {
+   "route": "GET kuvo/phones",
+   "answers": {
+    "200": {
+     "object": {
+      "phones": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "added": {
+          "oneOf": [
+           "number",
+           "null"
+          ]
+         },
+         "pairing": "string",
+         "you": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/phones/remove",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/phones/pair",
+   "answers": {
+    "200": {
+     "object": {
+      "link": "string",
+      "ends": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/phones/pair",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/attention",
+   "answers": {
+    "200": {
+     "object": {
+      "inUse": "bool",
+      "held": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/attention",
+   "answers": {
+    "200": {
+     "object": {
+      "inUse": "bool",
+      "held": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/attention",
+   "answers": {
+    "200": {
+     "object": {
+      "for": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/attention/notice",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/attention/answered",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/named",
+   "answers": {
+    "200": {
+     "object": {
+      "agents": {
+       "list": {
+        "object": {
+         "session": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "session"
+           }
+          ]
+         },
+         "machine": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "project": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "about": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/accounts/ended",
+   "answers": {
+    "200": {
+     "object": {
+      "providers": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/accounts/ended",
+   "answers": {
+    "200": {
+     "object": {
+      "providers": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/accounts/:provider/forget",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/accounts/credentials",
+   "answers": {
+    "200": {
+     "object": {
+      "credentials": {
+       "list": {
+        "object": {
+         "id": "string",
+         "integrationID": "string",
+         "label": "string",
+         "active": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/accounts/credentials",
+   "answers": {
+    "200": {
+     "object": {
+      "credentials": {
+       "list": {
+        "object": {
+         "id": "string",
+         "integrationID": "string",
+         "label": "string",
+         "active": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/engine/:control",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/shell/:id/stop",
+   "answers": {
+    "200": {
+     "object": {
+      "stopped": {
+       "oneOf": [
+        {
+         "literal": "signal"
+        },
+        {
+         "literal": "removed"
+        }
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/hosts",
+   "answers": {
+    "200": {
+     "object": {
+      "hosts": {
+       "list": {
+        "object": {
+         "kind": {
+          "literal": "machine"
+         },
+         "name": "string",
+         "address": "string",
+         "key": "string",
+         "relay": "string",
+         "machine": "string",
+         "anotherMac": "bool",
+         "removed": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/hosts/:machine",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/usage",
+   "answers": {
+    "200": "any"
+   }
+  },
+  {
+   "route": "POST kuvo/usage/refresh",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/groups",
+   "answers": {
+    "200": {
+     "object": {
+      "groups": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "purpose?": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "members": {
+          "list": {
+           "object": {
+            "id": "string",
+            "name": "string",
+            "look?": {
+             "object": {
+              "color": "string",
+              "shape": "string",
+              "face": "string"
+             }
+            },
+            "session": "string",
+            "directory": "string",
+            "agents": "bool",
+            "computer?": "string"
+           }
+          }
+         },
+         "speaking?": "string",
+         "discussing": "bool",
+         "paused": "bool",
+         "unread": "bool",
+         "last?": {
+          "object": {
+           "id": "string",
+           "author?": {
+            "oneOf": [
+             "string",
+             "null"
+            ]
+           },
+           "text": "string",
+           "time": "number",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "message"
+             },
+             {
+              "literal": "wrapUp"
+             },
+             {
+              "literal": "note"
+             },
+             {
+              "literal": "meeting"
+             }
+            ]
+           },
+           "steps?": {
+            "list": "any"
+           },
+           "tasks?": {
+            "list": {
+             "object": {
+              "id": "string",
+              "bot": "string",
+              "task": "string",
+              "state": {
+               "oneOf": [
+                {
+                 "literal": "proposed"
+                },
+                {
+                 "literal": "waiting"
+                },
+                {
+                 "literal": "working"
+                },
+                {
+                 "literal": "done"
+                },
+                {
+                 "literal": "failed"
+                }
+               ]
+              },
+              "prompt?": "string",
+              "started?": "number",
+              "finished?": "number",
+              "after?": {
+               "list": "string"
+              }
+             }
+            }
+           },
+           "report?": "string"
+          }
+         },
+         "meeting?": {
+          "object": {
+           "next": "number",
+           "every?": {
+            "oneOf": [
+             "string",
+             "null"
+            ]
+           },
+           "topic": "string",
+           "at?": {
+            "oneOf": [
+             "number",
+             "null"
+            ]
+           },
+           "weekday?": {
+            "oneOf": [
+             "number",
+             "null"
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups",
+   "answers": {
+    "201": {
+     "object": {
+      "group": {
+       "oneOf": [
+        {
+         "object": {
+          "id": "string",
+          "name": "string",
+          "purpose?": {
+           "oneOf": [
+            "string",
+            "null"
+           ]
+          },
+          "members": {
+           "list": {
+            "object": {
+             "id": "string",
+             "name": "string",
+             "look?": {
+              "object": {
+               "color": "string",
+               "shape": "string",
+               "face": "string"
+              }
+             },
+             "session": "string",
+             "directory": "string",
+             "agents": "bool",
+             "computer?": "string"
+            }
+           }
+          },
+          "speaking?": "string",
+          "discussing": "bool",
+          "paused": "bool",
+          "unread": "bool",
+          "last?": {
+           "object": {
+            "id": "string",
+            "author?": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "text": "string",
+            "time": "number",
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "message"
+              },
+              {
+               "literal": "wrapUp"
+              },
+              {
+               "literal": "note"
+              },
+              {
+               "literal": "meeting"
+              }
+             ]
+            },
+            "steps?": {
+             "list": "any"
+            },
+            "tasks?": {
+             "list": {
+              "object": {
+               "id": "string",
+               "bot": "string",
+               "task": "string",
+               "state": {
+                "oneOf": [
+                 {
+                  "literal": "proposed"
+                 },
+                 {
+                  "literal": "waiting"
+                 },
+                 {
+                  "literal": "working"
+                 },
+                 {
+                  "literal": "done"
+                 },
+                 {
+                  "literal": "failed"
+                 }
+                ]
+               },
+               "prompt?": "string",
+               "started?": "number",
+               "finished?": "number",
+               "after?": {
+                "list": "string"
+               }
+              }
+             }
+            },
+            "report?": "string"
+           }
+          },
+          "meeting?": {
+           "object": {
+            "next": "number",
+            "every?": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "topic": "string",
+            "at?": {
+             "oneOf": [
+              "number",
+              "null"
+             ]
+            },
+            "weekday?": {
+             "oneOf": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          }
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/groups/joinable",
+   "answers": {
+    "200": {
+     "object": {
+      "bots": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "look?": {
+          "object": {
+           "color": "string",
+           "shape": "string",
+           "face": "string"
+          }
+         },
+         "session": "string",
+         "directory": "string",
+         "agents": "bool",
+         "computer?": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/groups/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "messages": {
+       "list": {
+        "object": {
+         "id": "string",
+         "author?": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "text": "string",
+         "time": "number",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "message"
+           },
+           {
+            "literal": "wrapUp"
+           },
+           {
+            "literal": "note"
+           },
+           {
+            "literal": "meeting"
+           }
+          ]
+         },
+         "steps?": {
+          "list": "any"
+         },
+         "tasks?": {
+          "list": {
+           "object": {
+            "id": "string",
+            "bot": "string",
+            "task": "string",
+            "state": {
+             "oneOf": [
+              {
+               "literal": "proposed"
+              },
+              {
+               "literal": "waiting"
+              },
+              {
+               "literal": "working"
+              },
+              {
+               "literal": "done"
+              },
+              {
+               "literal": "failed"
+              }
+             ]
+            },
+            "prompt?": "string",
+            "started?": "number",
+            "finished?": "number",
+            "after?": {
+             "list": "string"
+            }
+           }
+          }
+         },
+         "report?": "string"
+        }
+       }
+      },
+      "speaking?": "string",
+      "discussing": "bool",
+      "paused": "bool",
+      "activity?": {
+       "list": {
+        "oneOf": [
+         {
+          "object": {
+           "kind": {
+            "literal": "tool"
+           },
+           "call": "any"
+          }
+         },
+         {
+          "object": {
+           "kind": {
+            "literal": "thinking"
+           },
+           "text": "string"
+          }
+         },
+         {
+          "object": {
+           "kind": {
+            "literal": "writing"
+           }
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/groups/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "group": {
+       "oneOf": [
+        {
+         "object": {
+          "id": "string",
+          "name": "string",
+          "purpose?": {
+           "oneOf": [
+            "string",
+            "null"
+           ]
+          },
+          "members": {
+           "list": {
+            "object": {
+             "id": "string",
+             "name": "string",
+             "look?": {
+              "object": {
+               "color": "string",
+               "shape": "string",
+               "face": "string"
+              }
+             },
+             "session": "string",
+             "directory": "string",
+             "agents": "bool",
+             "computer?": "string"
+            }
+           }
+          },
+          "speaking?": "string",
+          "discussing": "bool",
+          "paused": "bool",
+          "unread": "bool",
+          "last?": {
+           "object": {
+            "id": "string",
+            "author?": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "text": "string",
+            "time": "number",
+            "kind": {
+             "oneOf": [
+              {
+               "literal": "message"
+              },
+              {
+               "literal": "wrapUp"
+              },
+              {
+               "literal": "note"
+              },
+              {
+               "literal": "meeting"
+              }
+             ]
+            },
+            "steps?": {
+             "list": "any"
+            },
+            "tasks?": {
+             "list": {
+              "object": {
+               "id": "string",
+               "bot": "string",
+               "task": "string",
+               "state": {
+                "oneOf": [
+                 {
+                  "literal": "proposed"
+                 },
+                 {
+                  "literal": "waiting"
+                 },
+                 {
+                  "literal": "working"
+                 },
+                 {
+                  "literal": "done"
+                 },
+                 {
+                  "literal": "failed"
+                 }
+                ]
+               },
+               "prompt?": "string",
+               "started?": "number",
+               "finished?": "number",
+               "after?": {
+                "list": "string"
+               }
+              }
+             }
+            },
+            "report?": "string"
+           }
+          },
+          "meeting?": {
+           "object": {
+            "next": "number",
+            "every?": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "topic": "string",
+            "at?": {
+             "oneOf": [
+              "number",
+              "null"
+             ]
+            },
+            "weekday?": {
+             "oneOf": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          }
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/groups/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id/stop",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id/keep-going",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id/viewed",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id/undo",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/groups/:id/start",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/integrations",
+   "answers": {
+    "200": {
+     "object": {
+      "integrations": {
+       "list": {
+        "object": {
+         "id": "string",
+         "title": "string",
+         "summary": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "Mail and Calendar"
+           },
+           {
+            "literal": "Chat"
+           },
+           {
+            "literal": "Social"
+           },
+           {
+            "literal": "Code and Work"
+           }
+          ]
+         },
+         "symbol": "string",
+         "site": "string",
+         "how": "string",
+         "way": {
+          "oneOf": [
+           {
+            "literal": "official"
+           },
+           {
+            "literal": "token"
+           },
+           {
+            "literal": "app"
+           },
+           {
+            "literal": "package"
+           },
+           {
+            "literal": "browser"
+           }
+          ]
+         },
+         "keys?": {
+          "list": {
+           "object": {
+            "name": "string",
+            "label": "string",
+            "prompt": "string"
+           }
+          }
+         },
+         "help?": "string",
+         "redirect?": "string",
+         "by?": "string",
+         "macOnly?": "bool",
+         "added": "bool",
+         "keysSaved?": "bool",
+         "siteSignedIn?": "bool",
+         "health?": {
+          "oneOf": [
+           {
+            "literal": "connected"
+           },
+           {
+            "literal": "starting"
+           },
+           {
+            "literal": "waitsForCode"
+           },
+           {
+            "literal": "needsSignIn"
+           },
+           {
+            "literal": "failed"
+           },
+           {
+            "literal": "disabled"
+           }
+          ]
+         },
+         "signIn?": "string"
+        }
+       }
+      },
+      "engineDown?": "bool",
+      "problem?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/integrations/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "integration": {
+       "object": {
+        "id": "string",
+        "title": "string",
+        "summary": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "Mail and Calendar"
+          },
+          {
+           "literal": "Chat"
+          },
+          {
+           "literal": "Social"
+          },
+          {
+           "literal": "Code and Work"
+          }
+         ]
+        },
+        "symbol": "string",
+        "site": "string",
+        "how": "string",
+        "way": {
+         "oneOf": [
+          {
+           "literal": "official"
+          },
+          {
+           "literal": "token"
+          },
+          {
+           "literal": "app"
+          },
+          {
+           "literal": "package"
+          },
+          {
+           "literal": "browser"
+          }
+         ]
+        },
+        "keys?": {
+         "list": {
+          "object": {
+           "name": "string",
+           "label": "string",
+           "prompt": "string"
+          }
+         }
+        },
+        "help?": "string",
+        "redirect?": "string",
+        "by?": "string",
+        "macOnly?": "bool",
+        "added": "bool",
+        "keysSaved?": "bool",
+        "siteSignedIn?": "bool",
+        "health?": {
+         "oneOf": [
+          {
+           "literal": "connected"
+          },
+          {
+           "literal": "starting"
+          },
+          {
+           "literal": "waitsForCode"
+          },
+          {
+           "literal": "needsSignIn"
+          },
+          {
+           "literal": "failed"
+          },
+          {
+           "literal": "disabled"
+          }
+         ]
+        },
+        "signIn?": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/integrations/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/folders",
+   "answers": {
+    "200": {
+     "object": {
+      "path": "string",
+      "home": "string",
+      "parent": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "folders": {
+       "list": {
+        "object": {
+         "name": "string",
+         "repository?": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/folders",
+   "answers": {
+    "200": {
+     "object": {
+      "path": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/plugins/search",
+   "answers": {
+    "200": {
+     "object": {
+      "packages": {
+       "list": {
+        "object": {
+         "name": "string",
+         "version?": "string",
+         "description?": "string",
+         "weekly?": "number"
+        }
+       }
+      },
+      "missing?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sign-in/return",
+   "answers": {
+    "200": {
+     "object": {
+      "status": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/personalities",
+   "answers": {
+    "200": {
+     "object": {
+      "personalities": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "description": "string",
+         "symbol": "string",
+         "updated": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/personalities",
+   "answers": {
+    "200": {
+     "object": {
+      "id": "string",
+      "name": "string",
+      "description": "string",
+      "symbol": "string",
+      "updated": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/personalities/document",
+   "answers": {
+    "200": {
+     "object": {
+      "kuvo": {
+       "literal": 1
+      },
+      "personalities": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "description": "string",
+         "symbol": "string",
+         "updated": "number"
+        }
+       }
+      },
+      "removed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "removed": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/personalities/take",
+   "answers": {
+    "200": {
+     "object": {
+      "changed": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/personalities/:id",
+   "answers": {
+    "200": {
+     "object": {
+      "id": "string",
+      "name": "string",
+      "description": "string",
+      "symbol": "string",
+      "updated": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/personalities/:id",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/projects",
+   "answers": {
+    "200": {
+     "object": {
+      "projects": {
+       "list": {
+        "object": {
+         "directory": "string",
+         "name?": "string",
+         "folders": {
+          "list": "string"
+         },
+         "run?": "string",
+         "terminal?": "string",
+         "removed?": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "PUT kuvo/projects",
+   "answers": {
+    "200": {
+     "object": {
+      "project": {
+       "object": {
+        "directory": "string",
+        "name?": "string",
+        "folders": {
+         "list": "string"
+        },
+        "run?": "string",
+        "terminal?": "string",
+        "removed?": "bool"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/projects",
+   "answers": {
+    "200": {
+     "object": {
+      "archived": "number"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "archived": "number",
+      "kept": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/agents",
+   "answers": {
+    "200": {
+     "object": {
+      "session": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/config",
+   "answers": {
+    "200": "any"
+   }
+  },
+  {
+   "route": "PATCH kuvo/config",
+   "answers": {
+    "200": "any"
+   }
+  },
+  {
+   "route": "POST kuvo/config/apply",
+   "answers": {
+    "200": {
+     "object": {
+      "made": {
+       "list": {
+        "object": {
+         "path": {
+          "list": "string"
+         },
+         "value": "any"
+        }
+       }
+      },
+      "leftOut": {
+       "list": {
+        "list": "string"
+       }
+      },
+      "kept": {
+       "list": {
+        "list": "string"
+       }
+      },
+      "macOnly": {
+       "list": "string"
+      },
+      "keys": {
+       "list": "string"
+      },
+      "applied": "bool",
+      "settings": "any"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/mcp/catalog",
+   "answers": {
+    "200": {
+     "object": {
+      "servers": {
+       "list": {
+        "object": {
+         "id": "string",
+         "title": "string",
+         "summary": "string",
+         "access": {
+          "oneOf": [
+           {
+            "literal": "signIn"
+           },
+           {
+            "literal": "open"
+           },
+           {
+            "literal": "local"
+           }
+          ]
+         },
+         "added": "bool",
+         "integration": "bool",
+         "macOnly": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/mcp/catalog/:id",
+   "answers": {
+    "200": "any"
+   }
+  },
+  {
+   "route": "GET kuvo/keys",
+   "answers": {
+    "200": {
+     "object": {
+      "keys": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/keys/:name",
+   "answers": {
+    "200": {
+     "object": {
+      "value": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "PUT kuvo/keys/:name",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/keys/:name",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skills",
+   "answers": {
+    "200": {
+     "object": {
+      "folder": "string",
+      "folders": {
+       "list": "string"
+      },
+      "github": {
+       "map": {
+        "object": {
+         "repository": "string",
+         "path": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skills/:name",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "PUT kuvo/skills/:name",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/skills/:name",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skill-trash",
+   "answers": {
+    "200": {
+     "object": {
+      "entries": {
+       "list": {
+        "object": {
+         "id": "string",
+         "folder": "string",
+         "name": "string",
+         "description?": "string",
+         "deleted": "number",
+         "goes": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/skill-trash/:id/restore",
+   "answers": {
+    "200": {
+     "object": {
+      "name": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skill-library",
+   "answers": {
+    "200": {
+     "object": {
+      "repositories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "owner": "string",
+         "name": "string",
+         "title": "string",
+         "summary": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/skill-library/install",
+   "answers": {
+    "200": {
+     "object": {
+      "name": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skill-library/:owner/:name",
+   "answers": {
+    "200": {
+     "object": {
+      "repository": {
+       "object": {
+        "id": "string",
+        "owner": "string",
+        "name": "string",
+        "title": "string",
+        "summary": "string"
+       }
+      },
+      "skills": {
+       "list": {
+        "object": {
+         "name": "string",
+         "path": "string",
+         "files": {
+          "list": "string"
+         },
+         "about": {
+          "object": {
+           "name?": "string",
+           "description?": "string"
+          }
+         }
+        }
+       }
+      },
+      "partial": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/skill-library/:owner/:name/about",
+   "answers": {
+    "200": {
+     "object": {
+      "name?": "string",
+      "description?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/wakes",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "list": {
+        "object": {
+         "session": "string",
+         "next?": "number",
+         "watching": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/wakes",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "list": {
+        "object": {
+         "session": "string",
+         "next?": "number",
+         "watching": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/wakes/:session",
+   "answers": {
+    "200": {
+     "object": {
+      "wakes": {
+       "list": {
+        "object": {
+         "id": "string",
+         "due": "number",
+         "note": "string",
+         "every?": "string"
+        }
+       }
+      },
+      "watches": {
+       "list": {
+        "object": {
+         "letters": "string",
+         "every": "string",
+         "check": "string",
+         "note": "string"
+        }
+       }
+      },
+      "paused": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "HEAD kuvo/wakes/:session",
+   "answers": {
+    "200": {
+     "object": {
+      "wakes": {
+       "list": {
+        "object": {
+         "id": "string",
+         "due": "number",
+         "note": "string",
+         "every?": "string"
+        }
+       }
+      },
+      "watches": {
+       "list": {
+        "object": {
+         "letters": "string",
+         "every": "string",
+         "check": "string",
+         "note": "string"
+        }
+       }
+      },
+      "paused": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/wakes/:session",
+   "answers": {
+    "200": {
+     "object": {
+      "wakes": {
+       "list": {
+        "object": {
+         "id": "string",
+         "due": "number",
+         "note": "string",
+         "every?": "string"
+        }
+       }
+      },
+      "watches": {
+       "list": {
+        "object": {
+         "letters": "string",
+         "every": "string",
+         "check": "string",
+         "note": "string"
+        }
+       }
+      },
+      "paused": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/wakes/:session/watch",
+   "answers": {
+    "200": {
+     "object": {
+      "wakes": {
+       "list": {
+        "object": {
+         "id": "string",
+         "due": "number",
+         "note": "string",
+         "every?": "string"
+        }
+       }
+      },
+      "watches": {
+       "list": {
+        "object": {
+         "letters": "string",
+         "every": "string",
+         "check": "string",
+         "note": "string"
+        }
+       }
+      },
+      "paused": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/wakes/:session/pause",
+   "answers": {
+    "200": {
+     "object": {
+      "wakes": {
+       "list": {
+        "object": {
+         "id": "string",
+         "due": "number",
+         "note": "string",
+         "every?": "string"
+        }
+       }
+      },
+      "watches": {
+       "list": {
+        "object": {
+         "letters": "string",
+         "every": "string",
+         "check": "string",
+         "note": "string"
+        }
+       }
+      },
+      "paused": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/wakes/:session/cancel",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/wakes/:session/now",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/worktrees",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "worktrees": {
+         "list": {
+          "object": {
+           "path": "string",
+           "folder": "string",
+           "project": "string",
+           "projectName": "string",
+           "branch": "string",
+           "base?": "string",
+           "sessions": "number",
+           "working": "bool",
+           "uncommitted?": "bool",
+           "ahead?": "number",
+           "size?": "number"
+          }
+         }
+        }
+       }
+      },
+      {
+       "object": {
+        "worktrees": {
+         "list": {
+          "object": {
+           "project": "string",
+           "root": "string",
+           "folder?": "string",
+           "branch": "string",
+           "base?": "string",
+           "made?": "string",
+           "prefix?": "string"
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/worktrees",
+   "answers": {
+    "200": {
+     "object": {
+      "project": "string",
+      "root": "string",
+      "folder?": "string",
+      "branch": "string",
+      "base?": "string",
+      "made?": "string",
+      "prefix?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/worktrees/remove",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/worktrees/record",
+   "answers": {
+    "200": {
+     "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/worktrees/where",
+   "answers": {
+    "200": {
+     "object": {
+      "directory": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "default": "string",
+      "home": "string",
+      "projects": {
+       "list": {
+        "object": {
+         "project": "string",
+         "name": "string",
+         "folder": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "exists?": "bool",
+         "canMake?": "bool",
+         "inside?": "bool",
+         "ignored?": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

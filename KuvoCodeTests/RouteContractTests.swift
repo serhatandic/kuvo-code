@@ -45,6 +45,18 @@ import Testing
         }
     }
 
+    /// Holding an answer to its shape as the machine's runner does (`routes/shapes/cases.json`).
+    @Test func bothRunnersHoldAnswersToShapesAlike() throws {
+        let file = try #require(RouteScenarios.folder).appending(path: "shapes/cases.json")
+        let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let cases = read["cases"] as? [[String: Any]] ?? []
+        #expect(cases.count > 20)
+        #expect(!RouteShapes.routes.isEmpty)
+        for each in cases {
+            #expect((RouteShapes.unshaped(each["shape"] ?? NSNull(), each["value"]) == nil) == (each["matches"] as? Bool), "\(each)")
+        }
+    }
+
     /// The machine's runner sets its box up with what a Mac leaves on a machine (`routes/box`):
     /// these say it's still what this Mac's code writes. `scripts/route-vectors.sh` writes them again.
     @Test func theMachinesRunnerHasWhatAMacLeavesThere() throws {
@@ -225,6 +237,8 @@ final class MacBox {
                 let parts = send.split(separator: " ", maxSplits: 1).map(String.init)
                 let path = RouteMatch.filled(parts.count > 1 ? parts[1] : "", vars) as? String ?? ""
                 let answer = try await ask(parts[0], path, body: step["body"].map { RouteMatch.filled($0, vars) })
+                let offShape = RouteShapes.offShape(parts[0], path, status: answer.status, type: answer.type, body: answer.body)
+                #expect(offShape == nil, "\(at): \(offShape ?? "")")
                 let expected = step["expect"] as? [String: Any]
                 let expect = (expected?["mac"] ?? expected?["machine"]) != nil ? expected?["mac"] as? [String: Any] : expected
                 if let expect = RouteMatch.filled(expect as Any, vars) as? [String: Any] {
@@ -690,3 +704,122 @@ nonisolated enum RouteMatch {
         return try sorted(one) == sorted(other)
     }
 }
+
+// MARK: Shapes
+
+/// What each route answers (`routes/shapes/answers.json`, from Packages/Box/src/shared/routes), held
+/// as the machine's runner holds it: every answer of a route, whole, not only what a scenario names.
+nonisolated enum RouteShapes {
+    nonisolated(unsafe) private static let file: [String: Any] = {
+        guard let folder = RouteScenarios.folder, let data = try? Data(contentsOf: folder.appending(path: "shapes/answers.json")) else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }()
+    nonisolated(unsafe) static let routes: [[String: Any]] = file["routes"] as? [[String: Any]] ?? []
+
+    private static func isBool(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
+    /// Whether a shape takes null: a field that does may be left out too (null and left out are
+    /// the same to a client's optionals, and this Mac's encoder leaves a nil out).
+    private static func takesNull(_ shape: Any) -> Bool {
+        if let kind = shape as? String { return kind == "null" || kind == "any" }
+        return ((shape as? [String: Any])?["oneOf"] as? [Any])?.contains(where: takesNull) ?? false
+    }
+
+    private static func shown(_ value: Any?) -> String {
+        guard let value else { return "missing" }
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]) else { return "\(value)" }
+        return String(decoding: data.prefix(200), as: UTF8.self)
+    }
+
+    /// Why `value` isn't of `shape`, at its first difference, or nil when it is.
+    static func unshaped(_ shape: Any, _ value: Any?, at: String = "body") -> String? {
+        guard let value else { return "\(at) is missing" }
+        if let kind = shape as? String {
+            switch kind {
+            case "any": return nil
+            case "string": return value is String ? nil : "\(at) should be a string, but is \(shown(value))"
+            case "number": return value is NSNumber && !isBool(value) ? nil : "\(at) should be a number, but is \(shown(value))"
+            case "bool": return isBool(value) ? nil : "\(at) should be true or false, but is \(shown(value))"
+            case "null": return value is NSNull ? nil : "\(at) should be null, but is \(shown(value))"
+            default: return "\(at): \(kind) isn't a shape"
+            }
+        }
+        guard let shape = shape as? [String: Any] else { return "\(at): \(shown(shape)) isn't a shape" }
+        if let literal = shape["literal"] {
+            let same: Bool
+            if let text = literal as? String {
+                same = value as? String == text
+            } else if let number = literal as? NSNumber, let other = value as? NSNumber {
+                same = isBool(number) == isBool(other) && number == other
+            } else {
+                same = false
+            }
+            return same ? nil : "\(at) should be \(shown(literal)), but is \(shown(value))"
+        }
+        if let item = shape["list"] {
+            guard let items = value as? [Any] else { return "\(at) should be a list, but is \(shown(value))" }
+            for (index, each) in items.enumerated() {
+                if let why = unshaped(item, each, at: "\(at)[\(index)]") { return why }
+            }
+            return nil
+        }
+        if let item = shape["map"] {
+            guard let values = value as? [String: Any] else { return "\(at) should be an object, but is \(shown(value))" }
+            for key in values.keys.sorted() {
+                if let why = unshaped(item, values[key], at: "\(at).\(key)") { return why }
+            }
+            return nil
+        }
+        if let fields = shape["object"] as? [String: Any] {
+            guard let values = value as? [String: Any] else { return "\(at) should be an object, but is \(shown(value))" }
+            let named = Dictionary(uniqueKeysWithValues: fields.map { name, each in (name.hasSuffix("?") ? String(name.dropLast()) : name, (shape: each, optional: name.hasSuffix("?") || takesNull(each))) })
+            for key in values.keys.sorted() where named[key] == nil { return "\(at).\(key) isn't a field it has" }
+            for name in named.keys.sorted() {
+                let field = named[name]!
+                guard let present = values[name] else {
+                    if field.optional { continue }
+                    return "\(at).\(name) is missing"
+                }
+                if let why = unshaped(field.shape, present, at: "\(at).\(name)") { return why }
+            }
+            return nil
+        }
+        if let options = shape["oneOf"] as? [Any] {
+            let whys = options.map { unshaped($0, value, at: at) }
+            return whys.contains { $0 == nil } ? nil : "\(at) is none of what it can be: \(whys.compactMap { $0 }.joined(separator: "; "))"
+        }
+        return "\(at): \(shown(shape)) isn't a shape"
+    }
+
+    private static func matches(_ pattern: String, _ method: String, _ route: String) -> Bool {
+        let wanted = pattern.split(separator: " ", maxSplits: 1).map(String.init)
+        guard wanted.count == 2, wanted[0] == method else { return false }
+        let pieces = wanted[1].split(separator: "/", omittingEmptySubsequences: false), parts = route.split(separator: "/", omittingEmptySubsequences: false)
+        return pieces.count == parts.count && zip(pieces, parts).allSatisfy { piece, part in piece.hasPrefix(":") ? !part.isEmpty : piece == part }
+    }
+
+    /// Why an answer isn't what its route answers, or nil when it is.
+    static func offShape(_ method: String, _ path: String, status: Int, type: String, body: Data) -> String? {
+        let route = String(path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+        if (file["passedOn"] as? [String] ?? []).contains(where: { route.hasPrefix($0) }) { return nil }
+        let isJSON = type.hasPrefix("application/json")
+        let json = isJSON ? try? JSONSerialization.jsonObject(with: body, options: .fragmentsAllowed) : nil
+        let verb = method.uppercased()
+        let found = routes.first { matches($0["route"] as? String ?? "", verb, route) }
+        // A refusal says why in the one way all do, or in its route's own where it has one; one
+        // with no body says nothing, as `{}` does. A HEAD's answer has no body.
+        if status >= 400 { return isJSON && !body.isEmpty ? unshaped((found?["answers"] as? [String: Any])?[String(status)] ?? file["error"] ?? NSNull(), json, at: "the refusal") : nil }
+        if verb == "HEAD", body.isEmpty { return found == nil ? "HEAD \(route) has no shape in Packages/Box/src/shared/routes" : nil }
+        guard let known = found else {
+            return "\(verb) \(route) has no shape in Packages/Box/src/shared/routes"
+        }
+        let name = known["route"] as? String ?? ""
+        guard let shape = (known["answers"] as? [String: Any])?[String(status)] else { return "\(name) has no shape for \(status)" }
+        if shape as? String == "bytes" { return nil }
+        return isJSON ? unshaped(shape, json, at: "the answer") : "\(name) answered \(type.isEmpty ? "no type" : type), not JSON"
+    }
+}
+

@@ -150,6 +150,12 @@ stand-in, the same small one on each. To add one:
   `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
+- Every answer, whole, is also held to its route's shape: `Packages/Box/src/shared/routes`, one
+  file an area, with each field an answer can have (one ending in `?` may be left out) and its
+  type, which the box's code takes its types from too. A new route, or a new field in an answer,
+  goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
+  runners (CI checks it's current), and both hold an answer to a shape by
+  `routes/shapes/cases.json`.
 - Run the runners. `./scripts/route-vectors.sh` writes `routes/box` (what a Mac leaves on a
   machine, and the kit this Mac's app gives its own box, which the bridge's runners use) after a
   change to the integrations, the MCP catalog, a bot's kit or how a conversation's rules are made

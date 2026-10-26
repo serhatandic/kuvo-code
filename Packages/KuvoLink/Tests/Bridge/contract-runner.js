@@ -379,6 +379,82 @@ async function ask(handle, method, requestPath, body) {
   return { status: parts[0].head.status, type: parts[0].head.headers?.["content-type"] ?? "", text, json };
 }
 
+// ---- What each route answers (Vectors/routes/shapes/answers.json): every answer, whole ----
+
+const shapes = JSON.parse(read(vectors, "shapes/answers.json"));
+const show = value => (value === undefined ? "missing" : JSON.stringify(value)?.slice(0, 200));
+const isPlain = value => value !== null && typeof value === "object" && !Array.isArray(value);
+// Whether a shape takes null: a field that does may be left out too (null and left out are the same
+// to a client's optionals, and the Mac's encoder leaves a nil out).
+const takesNull = shape => shape === "null" || shape === "any" || (isPlain(shape) && "oneOf" in shape && shape.oneOf.some(takesNull));
+// Why `value` isn't of `shape`, at its first difference, or null when it is.
+function unshaped(shape, value, at = "body") {
+  if (value === undefined) return `${at} is missing`;
+  if (shape === "any") return null;
+  if (shape === "string" || shape === "number") return typeof value === shape ? null : `${at} should be a ${shape}, but is ${show(value)}`;
+  if (shape === "bool") return typeof value === "boolean" ? null : `${at} should be true or false, but is ${show(value)}`;
+  if (shape === "null") return value === null ? null : `${at} should be null, but is ${show(value)}`;
+  if ("literal" in shape) return value === shape.literal ? null : `${at} should be ${show(shape.literal)}, but is ${show(value)}`;
+  if ("list" in shape) {
+    if (!Array.isArray(value)) return `${at} should be a list, but is ${show(value)}`;
+    for (const [index, each] of value.entries()) {
+      const why = unshaped(shape.list, each, `${at}[${index}]`);
+      if (why) return why;
+    }
+    return null;
+  }
+  if ("map" in shape) {
+    if (!isPlain(value)) return `${at} should be an object, but is ${show(value)}`;
+    for (const [key, each] of Object.entries(value)) {
+      const why = unshaped(shape.map, each, `${at}.${key}`);
+      if (why) return why;
+    }
+    return null;
+  }
+  if ("object" in shape) {
+    if (!isPlain(value)) return `${at} should be an object, but is ${show(value)}`;
+    const fields = new Map(Object.entries(shape.object).map(([name, each]) => [name.replace(/\?$/, ""), { shape: each, optional: name.endsWith("?") || takesNull(each) }]));
+    for (const key of Object.keys(value)) if (!fields.has(key)) return `${at}.${key} isn't a field it has`;
+    for (const [name, field] of fields) {
+      if (!(name in value)) {
+        if (field.optional) continue;
+        return `${at}.${name} is missing`;
+      }
+      const why = unshaped(field.shape, value[name], `${at}.${name}`);
+      if (why) return why;
+    }
+    return null;
+  }
+  if ("oneOf" in shape) {
+    const whys = shape.oneOf.map(each => unshaped(each, value, at));
+    return whys.includes(null) ? null : `${at} is none of what it can be: ${whys.join("; ")}`;
+  }
+  throw new Error(`not a shape: ${JSON.stringify(shape)}`);
+}
+
+const routeOf = (pattern, method, route) => {
+  const [wantedMethod, wantedPath] = pattern.split(" ");
+  const wanted = wantedPath.split("/"), parts = route.split("/");
+  return wantedMethod === method && wanted.length === parts.length && wanted.every((part, i) => part.startsWith(":") ? parts[i] !== "" : part === parts[i]);
+};
+// Why an answer isn't what its route answers (null when it is): every answer of every route, the
+// box's own, not only what a scenario names.
+function offShape(method, requestPath, answer) {
+  const route = requestPath.split("?")[0];
+  if (shapes.passedOn.some(prefix => route.startsWith(prefix))) return null;
+  const isJSON = answer.type.startsWith("application/json");
+  const known = shapes.routes.find(each => routeOf(each.route, method.toUpperCase(), route));
+  // A refusal says why in the one way all do, or in its route's own where it has one; one with no
+  // body says nothing, as `{}` does. A HEAD's answer has no body.
+  if (answer.status >= 400) return isJSON && answer.text !== "" ? unshaped(known?.answers[answer.status] ?? shapes.error, answer.json, "the refusal") : null;
+  if (method.toUpperCase() === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in Packages/Box/src/shared/routes`;
+  if (!known) return `${method.toUpperCase()} ${route} has no shape in Packages/Box/src/shared/routes`;
+  const shape = known.answers[answer.status];
+  if (shape === undefined) return `${known.route} has no shape for ${answer.status}`;
+  if (shape === "bytes") return null;
+  return isJSON ? unshaped(shape, answer.json, "the answer") : `${known.route} answered ${answer.type || "no type"}, not JSON`;
+}
+
 // What a step expects of this box: its own, where the boxes differ on purpose.
 const forBox = expect => (expect && ("mac" in expect || "machine" in expect) ? expect[box] : expect);
 const isOurs = only => only === undefined || only === box;
@@ -405,6 +481,8 @@ async function run(scenario) {
       const [method, ...rest] = step.send.split(" ");
       const answer = await ask(handle, method, filled(rest.join(" "), vars), step.body === undefined ? undefined : filled(step.body, vars));
       const expect = filled(forBox(step.expect), vars);
+      const offShaped = offShape(method, filled(rest.join(" "), vars), answer);
+      assert.equal(offShaped, null, `${where}: ${offShaped}`);
       if (expect) {
         assert.equal(answer.status, expect.status, `${where}: status ${answer.status}, not ${expect.status}: ${answer.text.slice(0, 400)}`);
         if (expect.type) assert.ok(answer.type.startsWith(expect.type), `${where}: content-type ${answer.type}, not ${expect.type}`);
@@ -449,6 +527,13 @@ export function contract({ box: as, root: folder, files }) {
 
   // Once, with the machine's runner: what holds both runners to the same scenarios.
   if (box !== "machine") return;
+
+  // Both runners hold answers to shapes alike.
+  test("both runners hold an answer to its shape alike (Vectors/routes/shapes/cases.json)", () => {
+    const { cases } = JSON.parse(read(vectors, "shapes/cases.json"));
+    assert.ok(cases.length > 20);
+    for (const each of cases) assert.equal(unshaped(each.shape, "value" in each ? each.value : undefined) === null, each.matches, JSON.stringify(each));
+  });
 
   // The Mac's runner holds its matching to the same cases.
   test("both runners match an answer and fill in a scenario alike (Vectors/routes/match/cases.json)", () => {
