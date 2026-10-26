@@ -286,12 +286,6 @@ nonisolated enum Integrations {
             return takesKeys ? .key : .connect
         }
 
-        /// What its row says while its keys can't be read on `computer` (by its name), as the
-        /// phone says it; nil while they can.
-        func keysNote(on computer: String) -> String? {
-            guard keysUnknown else { return nil }
-            return "Its keys can’t be read on \(computer) right now" + (added ? "." : ", so it can’t be added yet.") + " Try again in a moment."
-        }
     }
 
     /// Those a computer's box lists, and why its settings can't be changed, when they can't.
@@ -300,6 +294,14 @@ nonisolated enum Integrations {
         /// Its engine isn't running or answering, so an added one's health isn't known.
         var engineDown: Bool?
         var problem: String?
+
+        /// What the page says once, over its rows, while `computer` (by its name) can't read its
+        /// integrations' keys, as the phone says it; nil while it can. Its rows only dim what
+        /// needs keys.
+        func keysNote(on computer: String) -> String? {
+            guard integrations.contains(where: \.keysUnknown) else { return nil }
+            return "Integrations’ keys can’t be read on \(computer) right now. Those that use keys can’t be added or changed until they can."
+        }
     }
 
     /// On again, as its switch in MCP Servers turns it on.

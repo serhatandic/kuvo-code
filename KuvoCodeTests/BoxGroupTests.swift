@@ -285,7 +285,8 @@ import Testing
         #expect(app.chats.group("grp_box0000001")?.viewed == seen)
     }
 
-    /// Read on the phone, with this Mac looking on: the machine says so, and it's read here too.
+    /// Read on the phone, with this Mac looking on: the machine says so, and it's read here too,
+    /// its notification gone.
     @Test func aChatReadElsewhereIsReadHere() async throws {
         defer { Self.clean(); mac.stop() }
         try saveBots([("bot_pal", "Pal", "box"), ("bot_lb", "Lokum Builder", "box")])
@@ -293,11 +294,15 @@ import Testing
         let app = app()
         await app.boxGroups.connected("box")
         #expect(app.chats.isUnread(app.chats.group("grp_box0000001")!))
+        let shown = ShownNotifications(threads: [BotGroups.tabKey("grp_box0000001"), "ses_other"])
+        defer { shown.done() }
         var group = Self.group("grp_box0000001", members: ["bot_pal", "bot_lb"])
         group["viewed"] = "2026-10-22T08:05:00Z"
         app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                                  "state": ["discussing": false, "paused": false]]), machine: "box")
         #expect(!app.chats.isUnread(app.chats.group("grp_box0000001")!))
+        try await until { shown.threads == ["ses_other"] }
+        #expect(shown.threads == ["ses_other"], "its notification gone from Notification Center, the other's kept")
     }
 
     @Test func aChatWhoseBotsLiveOnAMachineMovesThereAndBack() async throws {

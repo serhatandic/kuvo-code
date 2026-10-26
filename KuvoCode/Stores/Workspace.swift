@@ -162,7 +162,11 @@ final class Workspace {
     }
     private(set) var isLoaded = false
 
-    private var models: [String: SessionModel] = [:]
+    /// Each open conversation's model, made the first time it's asked for: a cache, not what a
+    /// view follows (views follow the model itself). Followed, keeping a new one would tell the
+    /// window as it's kept, which asks for it again before it's there and keeps a second, empty
+    /// one on screen while the conversation goes to the first.
+    @ObservationIgnored private var models: [String: SessionModel] = [:]
     /// Current git branch per project folder, when it has one.
     private(set) var branches: [String: String] = [:]
     /// The repository's main branch per project folder, when git knows it.

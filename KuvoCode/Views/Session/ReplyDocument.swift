@@ -543,10 +543,13 @@ enum ReplyAttachments {
     }
 
     /// A file's icon, the symbol filling its slot in the text as Textual draws it, in the accent.
-    private static func fileIcon(_ size: CGSize) -> NSImage {
-        let key = "file-icon|\(size.width)x\(size.height)"
+    private static func fileIcon(_ size: CGSize) -> NSImage { symbolIcon("doc", size) }
+
+    /// A symbol filling a slot in the text, in the accent: a file's document, a site's globe.
+    private static func symbolIcon(_ name: String, _ size: CGSize) -> NSImage {
+        let key = "\(name)-icon|\(size.width)x\(size.height)"
         if let known = images[key] { return known }
-        let symbol = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)?
+        let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: size.height * 2, weight: .light))
         let image = NSImage(size: size, flipped: false) { rect in
             guard let symbol else { return false }
@@ -619,6 +622,9 @@ enum ReplyAttachments {
         let offset = attachment.baselineOffset(in: environment)
         if attachment.base is FileIconAttachment {
             item.image = fileIcon(bounds)
+        } else if let site = attachment.base as? SiteIconAttachment {
+            let cell = SiteIconCell(url: site.url, size: bounds, globe: symbolIcon("globe", bounds), baseline: offset)
+            item.attachmentCell = cell
         } else {
             let key = "\(attachment.hashValue)|\(bounds.width)x\(bounds.height)|\(dark)"
             item.image = images[key] ?? {
