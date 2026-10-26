@@ -836,7 +836,6 @@ struct SidebarView: View {
                     Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session) }
                 }
             }
-            .task { await bridge?.loadSideQuestions(of: session.id) }
         }
     }
 

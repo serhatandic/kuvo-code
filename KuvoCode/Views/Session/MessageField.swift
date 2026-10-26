@@ -411,8 +411,8 @@ final class MessageTextView: NSTextView {
             let span = NSRange(location: 0, length: token.length)
             let ink: NSColor = token.orange ? .systemOrange : NSColor(Color.accentColor)
             storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
+            // Not one piece for Backspace: what's typed stays text you can correct a letter at a time.
             face(Self.symbol(token.symbol, size: size, ink: ink), at: span)
-            marks.append(span)
         }
         if mayMark, length > 0 {
             for (range, _) in length < Self.longest ? WebLinks.find(in: text) : [] {

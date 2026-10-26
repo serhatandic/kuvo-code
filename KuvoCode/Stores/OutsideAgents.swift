@@ -100,8 +100,11 @@ final class OutsideAgents {
     private(set) var handoffs: [String: Handoff] = [:]
     /// False for one from before side questions, handoffs and reviews; nil until it has said.
     private(set) var runsKeywords: Bool?
-    /// A handoff done: its new conversation, to open (`kuvo.handoff`).
+    /// A handoff asked for from this Mac, done: its new conversation, to open (`kuvo.handoff`).
+    /// One asked for elsewhere (the phone) opens nothing here.
     @ObservationIgnored var onHandoff: ((Handoff) -> Void)?
+    /// The conversations handed off from this Mac, until theirs is done or failed.
+    @ObservationIgnored private var opensWhenDone: Set<String> = []
 
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
@@ -404,8 +407,18 @@ final class OutsideAgents {
             if read != reviews { reviews = read }
             let counts = Dictionary(try await api.sideQuestionSummary().map { ($0.session, $0.count) }, uniquingKeysWith: { $1 })
             if counts != sideQuestionCounts { sideQuestionCounts = counts }
+            // Each one's list, for the sidebar's Side Questions menu (which can't read as it opens).
+            for session in counts.keys.prefix(40) where sideQuestions[session] == nil { await loadSideQuestions(of: session) }
             // A conversation's list read before is read again: some may have come meanwhile.
             for session in sideQuestions.keys { await loadSideQuestions(of: session) }
+            // A handoff whose end came while this was away: as the box has it now (gone, after
+            // the box restarted).
+            for (session, handoff) in handoffs where handoff.state == .writing {
+                // Unchanged when it can't be read now; gone (nil) after the box restarted.
+                guard let now = try? await api.handoff(session: session) else { continue }
+                handoffs[session] = now
+                if let now { ended(now) } else { opensWhenDone.remove(session) }
+            }
         } catch let error as ServerError where error.status == 404 {
             // From before them.
             runsKeywords = false
@@ -422,21 +435,46 @@ final class OutsideAgents {
 
     /// One as its route answered, before its event comes.
     func took(_ question: SideQuestion) {
-        var list = sideQuestions[question.session] ?? []
+        guard var list = sideQuestions[question.session] else {
+            // A conversation whose list isn't read here (asked from the phone): its count, one more
+            // for a new one.
+            if question.state == .answering { sideQuestionCounts[question.session, default: 0] += 1 }
+            return
+        }
         if let index = list.firstIndex(where: { $0.id == question.id }) { list[index] = question } else { list.append(question) }
         sideQuestions[question.session] = list
         sideQuestionCounts[question.session] = list.count
     }
 
     func dropSideQuestion(_ id: String?, of session: String) {
-        let left = id.map { id in (sideQuestions[session] ?? []).filter { $0.id != id } } ?? []
+        guard let id else {
+            sideQuestions[session] = sideQuestions[session].map { _ in [] }
+            sideQuestionCounts[session] = nil
+            return
+        }
+        guard let list = sideQuestions[session] else {
+            let left = (sideQuestionCounts[session] ?? 1) - 1
+            sideQuestionCounts[session] = left > 0 ? left : nil
+            return
+        }
+        let left = list.filter { $0.id != id }
         sideQuestions[session] = left
         sideQuestionCounts[session] = left.isEmpty ? nil : left.count
     }
 
     func took(_ review: Review) { reviews[review.session] = review }
     func dropReview(_ session: String) { reviews[session] = nil }
-    func took(_ handoff: Handoff) { handoffs[handoff.from] = handoff }
+    /// One just asked for here: the box's answer, before its events.
+    func startedHandoff(_ handoff: Handoff) {
+        handoffs[handoff.from] = handoff
+        opensWhenDone.insert(handoff.from)
+        ended(handoff)
+    }
+
+    private func ended(_ handoff: Handoff) {
+        guard handoff.state != .writing, opensWhenDone.remove(handoff.from) != nil, handoff.state == .done else { return }
+        onHandoff?(handoff)
+    }
 
     private func keywordEvent(_ event: ServerEvent) {
         switch event.type {
@@ -449,9 +487,8 @@ final class OutsideAgents {
             if let update = try? event.payload(as: ReviewUpdate.self) { reviews[update.sessionID] = update.review }
         case "kuvo.handoff":
             guard let update = try? event.payload(as: HandoffUpdate.self) else { return }
-            let before = handoffs[update.sessionID]
             handoffs[update.sessionID] = update.handoff
-            if update.handoff.state == .done, before?.state != .done { onHandoff?(update.handoff) }
+            ended(update.handoff)
         default:
             break
         }

@@ -20,8 +20,8 @@ enum SlashItem: Identifiable, Equatable {
     static func matches(_ query: String, keywords: [Keyword], commands: [Command]) -> [SlashItem] {
         let query = query.lowercased()
         let words = keywords.filter { $0.rawValue.hasPrefix(query) } + keywords.filter { !$0.rawValue.hasPrefix(query) && $0.rawValue.contains(query) }
-        let own = SlashCommands.matches(query, in: commands.filter { command in !keywords.contains { $0.rawValue == command.name } })
-        return words.map(SlashItem.keyword) + own.map(SlashItem.command)
+        // `commands` are the project's less those a keyword hides (`Keyword.commands`).
+        return words.map(SlashItem.keyword) + SlashCommands.matches(query, in: commands).map(SlashItem.command)
     }
 }
 
@@ -221,47 +221,72 @@ struct CustomLoopRow: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
-            HStack(spacing: 8) {
-                Text("Every")
-                if unit != .weekdays {
-                    TextField("Number", value: $count, format: .number)
-                        .textFieldStyle(.plain)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 44)
-                        .padding(.vertical, 4)
-                        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 6))
-                        .focused($countFocused)
-                        .onSubmit(pick)
-                        .accessibilityLabel("How many")
+            // On one line where there's room; in a narrow window, the buttons go under it.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    controls
+                    Spacer(minLength: 8)
+                    buttons
                 }
-                Picker("Unit", selection: $unit) {
-                    ForEach(Unit.allCases) { Text($0.title).tag($0) }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) { controls }
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        buttons
+                    }
                 }
-                .labelsHidden()
-                .fixedSize()
-                if unit == .days || unit == .weekdays {
-                    Text("at")
-                    DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                        .labelsHidden()
-                        .datePickerStyle(.field)
-                        .fixedSize()
-                }
-                Spacer(minLength: 8)
-                Button("Cancel", action: cancel)
-                    .buttonStyle(.glass)
-                    .keyboardShortcut(.cancelAction)
-                Button("Use", action: pick)
-                    .buttonStyle(.glassProminent)
-                    .disabled(schedule == nil)
             }
             .font(.system(size: 13))
             if schedule == nil {
-                Text(unit == .minutes ? "At least every 5 minutes." : "That’s more than a wake-up can wait.")
+                Text(problem)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         }
         .onAppear { countFocused = true }
+    }
+
+    /// Why Use waits.
+    private var problem: String {
+        if count < 1 { return "At least 1." }
+        if unit == .minutes, count < 5 { return "At least every 5 minutes." }
+        return "That’s more than a wake-up can wait."
+    }
+
+    @ViewBuilder private var controls: some View {
+        Text("Every")
+        if unit != .weekdays {
+            TextField("Number", value: $count, format: .number)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .frame(width: 44)
+                .padding(.vertical, 4)
+                .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 6))
+                .focused($countFocused)
+                .onSubmit(pick)
+                .accessibilityLabel("How many")
+        }
+        Picker("Unit", selection: $unit) {
+            ForEach(Unit.allCases) { Text($0.title).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+        if unit == .days || unit == .weekdays {
+            Text("at")
+            DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .datePickerStyle(.field)
+                .fixedSize()
+        }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        Button("Cancel", action: cancel)
+            .buttonStyle(.glass)
+            .keyboardShortcut(.cancelAction)
+        Button("Use", action: pick)
+            .buttonStyle(.glassProminent)
+            .disabled(schedule == nil)
     }
 
     private func pick() {

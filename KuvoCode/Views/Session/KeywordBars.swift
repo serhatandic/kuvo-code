@@ -5,6 +5,74 @@ import SwiftUI
 // ("/btw"), a review's findings ("/review") and a handoff under way ("/handoff"). Each box runs
 // them, so they go on with the window closed.
 
+/// What the keywords started, in bars over the composer: a handoff under way, a review's
+/// findings and a side question's answer (below).
+struct KeywordBars: View {
+    @Bindable var model: SessionModel
+    let glass: Namespace.ID
+    @Environment(Workspace.self) private var workspace
+    @Environment(AppModel.self) private var app
+
+    /// The side question whose answer shows over the composer.
+    private var shownSideQuestion: SideQuestion? {
+        guard let id = model.shownSideQuestion else { return nil }
+        return model.sideQuestions.first { $0.id == id }
+    }
+
+    /// The handoff to show: under way, failed, or done, until it's put away.
+    private var shownHandoff: Handoff? {
+        guard let handoff = model.handoff, handoff != model.putAwayHandoff else { return nil }
+        return handoff
+    }
+
+    /// A finding's file in the conversation's folder: on its machine for one there, as the
+    /// panel opens a machine's files.
+    static func file(_ path: String, in folder: String) -> URL? {
+        if let (machine, base) = RemoteFolder.parse(folder) {
+            return RemoteFolder.url(RemoteFolder.folder(path.hasPrefix("/") ? path : base + "/" + path, on: machine))
+        }
+        let full = path.hasPrefix("/") ? path : folder + "/" + path
+        return FileManager.default.fileExists(atPath: full) ? URL(filePath: full) : nil
+    }
+
+    var body: some View {
+        if let handoff = shownHandoff {
+            HandoffBar(handoff: handoff) {
+                Task { await workspace.openHandoff(handoff) }
+            } done: {
+                model.putAwayHandoff = handoff
+            }
+            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+            .glassEffectID("handoff", in: glass)
+            .transition(.opacity)
+        }
+        if let review = model.review {
+            ReviewBar(review: review, isHidden: $model.hidesReview) {
+                model.fixReview()
+            } done: {
+                model.dismissReview()
+            } open: { finding in
+                if let url = Self.file(finding.file, in: model.session.location.directory) { app.utilities.show(url) }
+            }
+            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+            .glassEffectID("review", in: glass)
+            .transition(.opacity)
+        }
+        if let question = shownSideQuestion {
+            SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: $model.hidesSideQuestion) {
+                model.askAnotherSideQuestion()
+            } remove: {
+                model.removeSideQuestion(question.id)
+            } done: {
+                model.shownSideQuestion = nil
+            }
+            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+            .glassEffectID("btw", in: glass)
+            .transition(.opacity)
+        }
+    }
+}
+
 /// A side question and its answer, which nothing adds to the conversation. Ask Another starts the
 /// next; Done puts the bar away (the question stays with the others, under the conversation in
 /// the sidebar).
@@ -295,7 +363,7 @@ struct HandoffBar: View {
         .padding(.leading, 14)
         .padding(.trailing, 12)
         .frame(minHeight: 36)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var title: String {

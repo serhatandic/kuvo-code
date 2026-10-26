@@ -24,6 +24,11 @@ private let british = Locale(identifier: "en_GB")
         ("weekdays at 8:30 standup notes", .weekdays, 8, 30, "standup notes"),
         ("every day at 2:15pm tidy the branch", .days(1), 14, 15, "tidy the branch"),
         ("daily", .days(1), 9, 0, ""),
+        // By the day or week with no time: at 9.
+        ("weekdays standup notes", .weekdays, 9, 0, "standup notes"),
+        ("2d tidy up", .days(2), 9, 0, "tidy up"),
+        ("1w sum up the week", .weeks(1), 9, 0, "sum up the week"),
+        ("every week at 17 sum up the week", .weeks(1), 17, 0, "sum up the week"),
     ]
     for (typed, every, hour, minute, message) in read {
         let command = LoopCommand(typed)
@@ -48,7 +53,7 @@ private let british = Locale(identifier: "en_GB")
 }
 
 @Test func whatThePickerWritesReadsBackTheSame() {
-    for schedule in LoopSchedule.presets + [LoopSchedule(every: .days(1), hour: 14, minute: 30), LoopSchedule(every: .weekdays, hour: 8, minute: 15), LoopSchedule(every: .hours(6)), LoopSchedule(every: .days(3), hour: 7, minute: 0)] {
+    for schedule in LoopSchedule.presets + [LoopSchedule(every: .days(1), hour: 14, minute: 30), LoopSchedule(every: .weekdays, hour: 8, minute: 15), LoopSchedule(every: .hours(6)), LoopSchedule(every: .days(3), hour: 7, minute: 0), LoopSchedule(every: .weeks(1), hour: 9, minute: 0), LoopSchedule(every: .weeks(2), hour: 10, minute: 30)] {
         #expect(LoopCommand(schedule.phrase + " do it").schedule == schedule, "\(schedule.phrase)")
     }
     #expect(LoopSchedule.presets.map(\.title) == ["Every 5 minutes", "Every 30 minutes", "Every hour", "Every morning at 9", "Weekdays at 9"])

@@ -573,6 +573,8 @@ final class AppModel {
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
+        // A handoff asked for here, done: its new conversation opens, wherever the window is.
+        agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         agents.onStopped = { [weak self] in
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()

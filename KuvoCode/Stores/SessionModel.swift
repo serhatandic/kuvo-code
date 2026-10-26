@@ -978,7 +978,9 @@ final class SessionModel {
             switch keyword {
             case .goal: takesGoals
             case .review, .btw, .handoff: keywordsRun
-            case .loop, .plan, .compact: true
+            case .loop, .plan: true
+            // Summarizing is the engine's: the coding agents keep their own context.
+            case .compact: !OutsideAgents.isAgentSession(session)
             }
         }
     }
@@ -1033,7 +1035,13 @@ final class SessionModel {
             failure = "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”."
             return
         }
-        guard let wakeUps = AgentMail.shared.app?.wakeUps else { return restore(text: written, files: files) }
+        guard let wakeUps = AgentMail.shared.app?.wakeUps else {
+            restore(text: written, files: files)
+            failure = "Wake-ups can’t be set from here now. Try again in a moment."
+            return
+        }
+        // A wake-up sends words: what's attached goes with the message sent now, or stays here.
+        if schedule.keepsTimeOfDay, !files.isEmpty { restore(text: "", files: files) }
         let owner = WakeUps.owner(of: session)
         let now = Date.now
         Task {
@@ -1094,7 +1102,7 @@ final class SessionModel {
         let session = id
         Task {
             do {
-                bridge.took(try await api.handoff(session: session, next: next.isEmpty ? nil : next))
+                bridge.startedHandoff(try await api.handoff(session: session, next: next.isEmpty ? nil : next))
             } catch {
                 restore(text: written)
                 fail(error)

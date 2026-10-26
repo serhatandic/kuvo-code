@@ -223,11 +223,17 @@ struct Composer: View {
                     loopIndex = 0
                     dismissedLoop = false
                     customLoop = false
+                } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
+                    // Typed in the field meanwhile: Custom… has nothing left to ask.
+                    customLoop = false
                 }
             }
             .onChange(of: session) { agents.reset() }
-            if let keywordHint {
-                KeywordHint(text: keywordHint.text, isProblem: keywordHint.isProblem)
+            if keywordHint != nil {
+                // Read again each minute: /loop's says when it first sends.
+                TimelineView(.everyMinute) { _ in
+                    if let keywordHint { KeywordHint(text: keywordHint.text, isProblem: keywordHint.isProblem) }
+                }
             }
 
             HStack(spacing: 4) {
@@ -509,7 +515,9 @@ struct Composer: View {
                 return ("Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”.", true)
             }
             let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { "on \($0), with this Mac closed too" } ?? "on this Mac, also with the window closed"
-            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)", false)
+            // A wake-up sends words: what's attached goes with the first message, or stays.
+            let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
+            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)\(attached)", false)
         case .review:
             let reader = currentModel?.name ?? "The conversation’s model"
             return ("\(reader) reads the changes not committed yet with fresh eyes, without this conversation, and lists what it finds.", false)

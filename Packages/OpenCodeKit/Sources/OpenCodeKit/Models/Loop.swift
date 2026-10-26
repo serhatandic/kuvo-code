@@ -125,12 +125,15 @@ public struct LoopCommand: Equatable, Sendable {
     static func schedule(_ words: [String]) -> LoopSchedule? {
         switch words {
         case ["hourly"], ["every", "hour"]: return LoopSchedule(every: .hours(1))
-        case ["daily"]: return LoopSchedule(every: .days(1), hour: 9, minute: 0)
+        // By the day or week with no time said: at 9, as a morning's.
+        case ["daily"], ["every", "day"], ["every", "morning"]: return LoopSchedule(every: .days(1), hour: 9, minute: 0)
+        case ["weekdays"], ["every", "weekday"]: return LoopSchedule(every: .weekdays, hour: 9, minute: 0)
+        case ["weekly"], ["every", "week"]: return LoopSchedule(every: .weeks(1), hour: 9, minute: 0)
         default: break
         }
         // "30m", "2h", "every 30 min", "every 2 hours".
         let spoken = words.first == "every" ? Array(words.dropFirst()) : words
-        if spoken.count == 1, let every = Wakes.Repeat(spoken[0]), !every.keepsTimeOfDay { return LoopSchedule(every: every) }
+        if spoken.count == 1, let every = Wakes.Repeat(spoken[0]) { return every.keepsTimeOfDay ? LoopSchedule(every: every, hour: 9, minute: 0) : LoopSchedule(every: every) }
         if spoken.count == 2, let n = Int(spoken[0]), n > 0 {
             let unit = spoken[1]
             if ["m", "min", "mins", "minute", "minutes"].contains(unit), let every = Wakes.Repeat("\(n)m") { return LoopSchedule(every: every) }
@@ -141,9 +144,10 @@ public struct LoopCommand: Equatable, Sendable {
         switch Array(words[..<at]) {
         case ["every", "morning"], ["mornings"], ["every", "day"], ["daily"]: return LoopSchedule(every: .days(1), hour: hour, minute: minute)
         case ["weekdays"], ["every", "weekday"], ["on", "weekdays"]: return LoopSchedule(every: .weekdays, hour: hour, minute: minute)
-        case let days where days.count == 3 && days[0] == "every" && ["days", "day"].contains(days[2]):
-            // "every 2 days at 9".
-            guard let n = Int(days[1]), let every = Wakes.Repeat("\(n)d") else { return nil }
+        case ["every", "week"], ["weekly"]: return LoopSchedule(every: .weeks(1), hour: hour, minute: minute)
+        case let days where days.count == 3 && days[0] == "every" && ["days", "day", "weeks", "week"].contains(days[2]):
+            // "every 2 days at 9", "every 2 weeks at 9".
+            guard let n = Int(days[1]), let every = Wakes.Repeat("\(n)\(days[2].hasPrefix("day") ? "d" : "w")") else { return nil }
             return LoopSchedule(every: every, hour: hour, minute: minute)
         default: return nil
         }

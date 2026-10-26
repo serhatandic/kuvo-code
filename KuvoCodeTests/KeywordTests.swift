@@ -80,6 +80,15 @@ import Testing
         await bridge.agents.loadSideQuestions(of: id)
         #expect(model.sideQuestions.map(\.id) == [question.id])
 
+        // Asked from another client (the phone) in a conversation whose list isn't read here:
+        // counted, not mistaken for its whole list.
+        engine.on("GET", "/api/session/ses_other", json: ["data": StubEngine.session("ses_other", directory: "/tmp", extra: ["model": ["id": "m", "providerID": "p"]])])
+        engine.on("GET", "/api/session/ses_other/message", json: ["data": []])
+        engine.on("POST", "/api/session/ses_other/generate", json: ["data": ["text": "Elsewhere."]])
+        try await bridge.api?.askSideQuestion("And here?", about: "ses_other")
+        try await bridge.api?.askSideQuestion("And again?", about: "ses_other")
+        try await until { bridge.agents.sideQuestionCounts["ses_other"] == 2 }
+
         // "/btw" alone leaves what to type.
         model.draftText = "/btw"
         model.submitDraft(for: nil, queue: false, commands: [])
@@ -148,10 +157,14 @@ import Testing
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
+        // Opened where the window is, not only while this conversation is in view.
+        var opened: [String] = []
+        bridge.agents.onHandoff = { opened.append($0.to ?? "") }
 
         model.draftText = "/handoff write the test"
         model.submitDraft(for: nil, queue: false, commands: [])
-        try await until { model.handoff?.state == .done }
+        try await until { model.handoff?.state == .done && !opened.isEmpty }
+        #expect(opened == ["ses_next"])
         #expect(model.handoff?.to == "ses_next")
         #expect(model.handoff?.title == "Pause on blur (continued)")
         let note = try #require(engine.requests("POST", "/api/session/ses_next/synthetic").first)
