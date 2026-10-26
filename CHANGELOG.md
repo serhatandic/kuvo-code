@@ -6,6 +6,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- After you quote part of a reply (or reply to all of it), you can start typing your answer at once: it has the keyboard, with the cursor ready. Quoting the same part again takes you back to its answer.
+- A picture you paste, drop or attach is named in your message where you're writing, like Image 1, so you can say which one you mean; its chip shows the same name, and removing the picture takes its name out and renumbers the rest. Your message shows the names the same way once it's sent.
+- Web addresses you write show as links, in the composer and in your message once it's sent, where a click opens them.
+- The card you're working in now looks it as soon as you click anything in it, a reply's words too, rather than staying dimmed until you clicked the composer; opening a session from the sidebar leaves its conversation looking ready.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.
 - Restarting the engine while it's still starting, or the engine stopping while it finishes starting, starts it again rather than leaving it stopped with nothing said.
 - Your personalities are kept by your Mac's background service, as a machine keeps them, so a change from your phone or another computer shows in Edit Bot at once and reaches your bots with the window closed. Those you wrote before are brought over as Kuvo Code starts, and a copy stays where they were.

@@ -35,8 +35,9 @@ for Linux's tools).
 | B17 A folder that isn't a git repository | SessionEditsTests | |
 | B18 Rename, archive, restore, delete, search | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
-| C1–C3 Attach pictures, PDFs, files | AttachmentRoutesTests, AttachmentsTests, SentFilesTests | |
-| C4 Quote part of a reply and answer it | QuotingTests | |
+| C1–C3 Attach pictures, PDFs, files; a picture named where you write ("[Image 1]"), its name gone with it | AttachmentRoutesTests, AttachmentsTests, SentFilesTests, ComposerFieldTests | how the names and links look in the field and your bubble (a look before and after) |
+| C4 Quote part of a reply and answer it, the answer taking the keyboard | QuotingTests, ComposerFieldTests | |
+| The card you work in looks it: a click anywhere in it (a reply's words too), a conversation opened from the sidebar | WindowFocusTests | |
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests | |
 | D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Agents/test |
 | Math in a reply: formulas drawn in a line or on their own; prices, the shell's `$$`, code and links kept as written; lists, quotes and tables keep their shape | ReplyMathTests | how a formula looks (a look before and after) |
