@@ -38,9 +38,10 @@ extension EnvironmentValues {
 }
 
 /// Above the sidebar's pages, staying put while they slide: your computers by name, in a line that
-/// wraps around, the one in view lit, the one before peeking in at the start and those after it
-/// trailing off. It follows a two-finger swipe as the pages do; a name clicked goes there. A
-/// computer that needs you or has something new is marked, one that isn't connected says so.
+/// wraps around, the one in view lit at the start and those after it trailing off (after the
+/// last, the first again). It follows a two-finger swipe as the pages do; a name clicked goes
+/// there. A computer that needs you or has something new is marked, one that isn't connected
+/// says so.
 struct BoxNameStrip: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox
@@ -51,69 +52,124 @@ struct BoxNameStrip: View {
     @Environment(AppModel.self) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var widths: [SidebarBox: CGFloat] = [:]
+    /// Where the line stands: which of the names, laid out three times over, is the one in view.
+    /// It moves to the nearest copy of the one picked, so the line only ever slides a step, and is
+    /// brought back to the middle copy (which looks the same) once it rests.
+    @State private var position = 0
+
+    var body: some View {
+        let names = boxes.map(name)
+        NameTrack(names: names, widths: widths, position: position, motion: reduceMotion ? nil : motion) { index in
+            pick(boxes[index % boxes.count])
+        } measured: { box, width in
+            widths[box] = width
+        }
+        .onAppear { position = boxes.count + (boxes.firstIndex(of: selected) ?? 0) }
+        .onChange(of: boxes) { position = boxes.count + (boxes.firstIndex(of: selected) ?? 0) }
+        .onChange(of: selected) { _, box in
+            guard let at = boxes.firstIndex(of: box) else { return }
+            let n = boxes.count
+            // The copy of it nearest where the line stands.
+            let nearest = [at, at + n, at + 2 * n].min { abs($0 - position) < abs($1 - position) }!
+            withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) {
+                position = nearest
+            } completion: {
+                // Back to the middle copy, which looks the same: there's always a line either side.
+                if position < n || position >= 2 * n { position = n + at }
+            }
+        }
+        .padding(.horizontal, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Computers")
+    }
+
+    private func pick(_ box: SidebarBox) {
+        guard box != selected else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) { selected = box }
+    }
+
+    /// A computer's name as the line shows it.
+    private func name(_ box: SidebarBox) -> NameTrack.Name {
+        let engine = app.machines.engine(box.machine)
+        let isAway = engine.map { !$0.isReady } ?? false
+        return NameTrack.Name(box: box, title: app.name(of: box), isOn: box == selected, isAway: isAway, isStopped: engine?.isStopped == true,
+                              connection: isAway ? engine?.connection : nil, news: marksNews ? app.news(on: box) : nil)
+    }
+}
+
+/// The names themselves, three times over, slid to where the line stands and pulled along with a
+/// swipe. Only this reads the swipe's offset, so a swipe redraws the line and nothing else.
+private struct NameTrack: View {
+    struct Name {
+        var box: SidebarBox
+        var title: String
+        var isOn: Bool
+        var isAway: Bool
+        var isStopped: Bool
+        var connection: MachineEngine.Connection?
+        var news: BoxNews?
+    }
+
+    let names: [Name]
+    let widths: [SidebarBox: CGFloat]
+    let position: Int
+    /// The pages' swipe, to follow; none with Reduce Motion.
+    let motion: BoxPagerMotion?
+    let pick: (Int) -> Void
+    let measured: (SidebarBox, CGFloat) -> Void
 
     private static let spacing: CGFloat = 2
     private static let inset: CGFloat = 4
 
-    /// In the order they stand: the one before (with three or more), the one in view, the rest.
-    private var order: [SidebarBox] {
-        guard let at = boxes.firstIndex(of: selected) else { return boxes }
-        let around = (0..<boxes.count).map { boxes[(at + $0) % boxes.count] }
-        return boxes.count > 2 ? [around.last!] + around.dropLast() : around
+    /// Where the `index`th name starts along the line.
+    private func start(of index: Int) -> CGFloat {
+        guard !names.isEmpty else { return 0 }
+        return (0..<index).reduce(0) { $0 + (widths[names[$1 % names.count].box] ?? 0) + Self.spacing }
     }
 
-    private var before: SidebarBox? { boxes.count > 2 ? order.first : nil }
-
     var body: some View {
-        let lead = before.map { (widths[$0] ?? 0) + Self.spacing } ?? 0
+        let n = names.count
         // Pulled left, the next one comes toward the start; right, the one before.
-        let pulled = reduceMotion || motion.width <= 0 ? 0 : max(-1, min(1, motion.offset / motion.width))
-        let shift = pulled < 0 ? (widths[selected] ?? 0) + Self.spacing : lead
+        let pulled = motion.map { $0.width > 0 ? max(-1, min(1, $0.offset / $0.width)) : 0 } ?? 0
+        let here = start(of: position)
+        let shift = pulled < 0 ? start(of: position + 1) - here : here - start(of: max(position - 1, 0))
         // Over a line of the sidebar's width, so however long the names run they never widen it.
         Color.clear
             .frame(maxWidth: .infinity)
             .frame(height: 24)
             .overlay(alignment: .leading) {
                 HStack(spacing: Self.spacing) {
-                    ForEach(order) { box in
-                        name(box)
-                            .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[box] = $0 }
+                    ForEach(0..<(3 * n), id: \.self) { index in
+                        let name = names[index % n]
+                        label(name, lit: index == position) { pick(index) }
+                            // One copy of each for VoiceOver and the keyboard: the middle one.
+                            .accessibilityHidden(index / n != 1)
+                            .onGeometryChange(for: CGFloat.self, of: \.size.width) { if index < n { measured(name.box, $0) } }
                     }
                 }
                 .fixedSize()
-                .offset(x: Self.inset - lead + pulled * shift)
+                .offset(x: Self.inset - here + pulled * shift)
             }
             .clipped()
-        .mask {
-            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04),
-                                   .init(color: .black, location: 0.86), .init(color: .clear, location: 1)],
-                           startPoint: .leading, endPoint: .trailing)
-        }
-        .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9), value: selected)
-        .padding(.horizontal, 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Computers")
+            .mask {
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04),
+                                       .init(color: .black, location: 0.86), .init(color: .clear, location: 1)],
+                               startPoint: .leading, endPoint: .trailing)
+            }
     }
 
-    private func name(_ box: SidebarBox) -> some View {
-        let isOn = box == selected
-        let engine = app.machines.engine(box.machine)
-        let isAway = engine.map { !$0.isReady } ?? false
-        let news = marksNews ? app.news(on: box) : nil
-        return Button {
-            guard !isOn else { return }
-            withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) { selected = box }
-        } label: {
+    private func label(_ name: Name, lit: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 5) {
-                Text(app.name(of: box))
-                    .font(.system(size: 12.5, weight: isOn ? .semibold : .medium))
-                    .foregroundStyle(isOn ? AnyShapeStyle(.primary) : isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+                Text(name.title)
+                    .font(.system(size: 12.5, weight: lit ? .semibold : .medium))
+                    .foregroundStyle(lit ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: 150, alignment: .leading)
-                if let connection = engine?.connection, isAway {
+                if let connection = name.connection {
                     MachineIndicator(connection: connection, size: 5, quiet: true)
-                } else if let news {
+                } else if let news = name.news {
                     Circle()
                         .fill(news == .needsYou ? AnyShapeStyle(.orange) : AnyShapeStyle(.tint))
                         .frame(width: 6, height: 6)
@@ -123,16 +179,16 @@ struct BoxNameStrip: View {
             .padding(.horizontal, 8)
             .frame(height: 22)
             .background {
-                if isOn { RoundedRectangle(cornerRadius: 6).fill(Pressable.hoverFill) }
+                if lit { RoundedRectangle(cornerRadius: 6).fill(Pressable.hoverFill) }
             }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help(app.name(of: box))
-        .accessibilityLabel(app.name(of: box))
-        .accessibilityValue(isAway ? (engine?.isStopped == true ? "Stopped" : "Not connected") : news?.said ?? "")
-        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .help(name.title)
+        .accessibilityLabel(name.title)
+        .accessibilityValue(name.isAway ? (name.isStopped ? "Stopped" : "Not connected") : name.news?.said ?? "")
+        .accessibilityAddTraits(name.isOn ? .isSelected : [])
     }
 }
 
@@ -241,13 +297,16 @@ struct BoxPager<Page: View>: View {
                 TrackpadSwipe(onDrag: drag, onEnd: settle)
             }
         }
-        .animation(.spring(response: 0.38, dampingFraction: 0.9), value: index)
+        .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9), value: index)
     }
 
-    /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so). Past the
-    /// first or the last there's another (the line wraps around), so no end gives.
+    /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), with give past
+    /// the first and the last, where no page lies beside (let go far enough, the line wraps round).
     private func drag(_ moved: CGFloat) {
-        motion.offset += reverses ? -moved : moved
+        let dx = reverses ? -moved : moved
+        let pulled = motion.offset + dx
+        let pastEnd = (pulled > 0 && index == 0) || (pulled < 0 && index == boxes.count - 1)
+        motion.offset = pastEnd ? motion.offset + dx * 0.3 : pulled
     }
 
     /// Fingers lifted, moving at `velocity` points a step: on to the next box when pulled far
@@ -255,12 +314,15 @@ struct BoxPager<Page: View>: View {
     /// in rather than slid past every page between.
     private func settle(_ speed: CGFloat) {
         let velocity = reverses ? -speed : speed
-        let threshold = max(width * 0.22, 40)
+        // Past an end the pages give, so less pull goes there.
+        let pastEnd = (motion.offset > 0 && index == 0) || (motion.offset < 0 && index == boxes.count - 1)
+        let threshold = pastEnd ? max(width * 0.22 * 0.3, 24) : max(width * 0.22, 40)
         var step = 0
         if motion.offset < -threshold || velocity < -6 { step = 1 }
         if motion.offset > threshold || velocity > 6 { step = -1 }
         let target = (index + step + boxes.count) % boxes.count
-        let wraps = step != 0 && abs(target - index) != 1
+        // Round the end: forward to the first, or back to the last (so with two, the other side).
+        let wraps = (step == 1 && target < index) || (step == -1 && target > index)
         if wraps || reduceMotion {
             var quiet = Transaction()
             quiet.disablesAnimations = true
