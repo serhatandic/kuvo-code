@@ -356,9 +356,11 @@ export function handler(context: Context) {
             return json({})
           }
           case "generate": {
-            const prompt = String((await body()).prompt ?? "")
+            const input = await body()
+            const prompt = String(input.prompt ?? "")
             if (!prompt.trim()) throw new BadRequest("Say what to write.")
-            return json({ data: { text: await sessions.generate(id, prompt) } })
+            // `orAnother`: another agent you're signed in to may answer, where this one can't.
+            return json({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } })
           }
           case "command": {
             // One of yours (Settings › Commands): what it says, with what you wrote after it. Any

@@ -1263,7 +1263,11 @@ host serves:
 A conversation's goal ("/goal all tests in test/auth pass"): its agent works toward it on its own,
 turn after turn, until a check after each turn finds it met. Each box runs its own, in its agents
 bridge beside the engine, for the engine's sessions and the coding agents' alike, with no client
-there (a machine's with the Mac closed too). A client reaches them as `kuvo/agents/api/kuvo/goals…`
+there (a machine's with the Mac closed too). The check reads the conversation and runs nothing: on
+the engine, the session's model afresh, apart from the agent (OpenCode's free models answer only in
+the session's own context, so there it's asked there); with the coding agents, their one-off
+answer, another agent you're signed in to answering for one that has none (Antigravity, Cursor,
+Grok). With none to answer, the goal pauses and says so. A client reaches them as `kuvo/agents/api/kuvo/goals…`
 (the Mac app at `api/kuvo/goals…` on the bridge itself), on the box the conversation lives on, while
 `kuvo/info` has `agents: true` (503 otherwise), where `features` has `goals`.
 
@@ -1271,10 +1275,12 @@ there (a machine's with the Mac closed too). A client reaches them as `kuvo/agen
   it's put away. `GET …/goals/<session>` → `{data: goal}`, or 404 when it has none.
 - `PUT …/goals/<session>` with `{"condition"}` (at most 4,000 characters) sets it, in place of one
   it had, and starts the agent on it at once: `{data: goal}`; 400 `{message}` for no condition or
-  one too long, 404 for a conversation that isn't there, 503 when it can't be reached.
+  one too long, 404 for a conversation that isn't there, 409 for a subagent's (the conversation it
+  works for has the goal), 503 when it can't be reached. A turn already under way counts only if
+  the agent read the goal in it.
 - `POST …/goals/<session>/pause` holds it (the turn under way ends as it would, and no other
-  starts); `…/resume` lets it go: its last turn is checked (however it ended), and it carries on
-  unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
+  starts; a note already on its way to the agent still is); `…/resume` lets it go: its last turn
+  is checked (however it ended), and it carries on unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
   again instead).
 - `DELETE …/goals/<session>` puts it away, over or not: `{}`, or 404.
 - A goal: `{session, condition, state, note?, pausedBy?, started, ended?, turns, checking, last?}`.
@@ -1288,7 +1294,8 @@ there (a machine's with the Mac closed too). A client reaches them as `kuvo/agen
   each change, `goal` null once it's put away (or its conversation deleted).
 - In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
   with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
-  you stop pauses it; so does one that fails.
+  you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
+  stopped is checked once it's back, as any turn, and one is never checked twice.
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).

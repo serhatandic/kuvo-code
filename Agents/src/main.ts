@@ -232,6 +232,8 @@ let stopping = false
 function stop() {
   if (stopping) return
   stopping = true
+  // Goals first: the turns cut short as it stops aren't theirs to read as yours.
+  goals.stopAll()
   cancelSignIns()
   // (Unless a newer bridge has put its own there.)
   try {

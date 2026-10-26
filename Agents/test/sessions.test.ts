@@ -790,6 +790,8 @@ describe("titles and one-off answers", () => {
     await until(() => sessions.get(third).title === "Something else entirely")
     expect(asked).toBeUndefined()
     await expect(sessions.generate(third, "a commit message")).rejects.toThrow()
+    // A goal's check may have another agent answer, as the title was.
+    expect(await sessions.generate(third, "is the goal met?", { orAnother: true })).toBe("Something else entirely")
     // Not if it's signed out: no title from the bridge (the app names it).
     b.signedIn = false
     const fourth = create()
