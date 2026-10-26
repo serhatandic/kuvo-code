@@ -12,6 +12,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
 - **So every feature lives on the box**: in the engine, the bridges and `kuvo-link.js`. It works on every box, including a machine with the Mac closed, and every client can reach it.
   - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
+  - **Box code runs on both macOS and Linux.** This Mac's box and each Linux machine's run the same code, so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on lokum) before calling it done.
 
 ## UI and UX come first (strict)
 
@@ -32,6 +33,14 @@ Have your work reviewed by reviewer agents by default, without being asked.
 - Split a large change by area, one reviewer each, and give each the commits and what the change is for.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
+
+## When the user isn't around
+
+The user isn't always available, and work goes on without them. Never stop and wait on a question box (it holds the whole session until someone answers).
+
+- Keep a running note of every decision that needs the user: design choices (with the options mocked), brand, wording, pushes to kuvo-web, anything that needs a permission prompt or the user at the Mac. Say for each what you recommend and why.
+- Meanwhile build everything that doesn't depend on the answer, and pick the work order so the user's choices come last.
+- Hand the whole list over at once, in your report to the user or to the session coordinating yours, with the paths to the mocks, so nothing is lost when the user comes back.
 
 ## Subagents: two at a time
 
