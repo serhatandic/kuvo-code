@@ -9,6 +9,9 @@ import type { EngineLink } from "./engine"
 import type { Roster } from "./roster"
 import { emit, feed } from "./events"
 import { goalRoutes, type Goals } from "./goals"
+import { sideQuestionRoutes, type SideQuestions } from "./btw"
+import { handoffRoutes, type Handoffs } from "./handoff"
+import { reviewRoutes, type Reviews } from "./reviews"
 import { isOutdated, type Maintenance } from "./maintenance"
 import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
@@ -33,6 +36,10 @@ export interface Context {
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
   /** Goals that conversations here and on the engine work toward (goals.ts). */
   goals?: Goals
+  /** The box's other keywords: side questions, handoffs and reviews (btw.ts, handoff.ts, reviews.ts). */
+  sideQuestions?: SideQuestions
+  handoffs?: Handoffs
+  reviews?: Reviews
 }
 
 const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created: number; expires: number }>()
@@ -446,6 +453,9 @@ export function handler(context: Context) {
       // Where Kuvo Code's own tools are (the app says each time they start), for every agent here.
       // The group chats that live on this machine.
       if (area === "kuvo" && a === "goals") return await goalRoutes(context.goals, method, parts.slice(3), body)
+      if (area === "kuvo" && a === "btw") return await sideQuestionRoutes(context.sideQuestions, method, parts.slice(3), body)
+      if (area === "kuvo" && a === "handoff") return await handoffRoutes(context.handoffs, method, parts.slice(3), body)
+      if (area === "kuvo" && a === "reviews") return await reviewRoutes(context.reviews, method, parts.slice(3), body)
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)
