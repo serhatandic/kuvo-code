@@ -94,6 +94,8 @@ export const macLink: {
   hold?: NoticeHold;
   /** Stopped for good (a test's, as it ends): the link's loop goes. */
   stopped?: boolean;
+  /** Stops this Mac's box's part among your other computers (`runMacPeers`). */
+  stopPeers?: (() => void) | null;
   wake: (() => void) | null;
   statusFollowers: Set<() => void>;
   phoneFollowers: Set<() => void>;

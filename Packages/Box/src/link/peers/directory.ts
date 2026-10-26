@@ -40,7 +40,7 @@ export interface GivenAgent {
 
 /** A conversation as the engine (or the agents bridge) lists it, as far as whether it's put away. */
 export interface PutAwayable {
-  metadata?: { "kuvo.archived"?: unknown; kuvo?: { archived?: unknown } };
+  metadata?: { "kuvo.archived"?: unknown; kuvo?: { archived?: unknown } } | null;
   time?: { archived?: unknown };
 }
 

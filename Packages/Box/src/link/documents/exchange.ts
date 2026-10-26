@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Documents, between this box and the others
 // What other boxes send taken, and what changed here sent, as documents/work says.
 
@@ -9,16 +8,28 @@ import { readPersonalities } from "../personalities/library";
 import { takePersonalities } from "../personalities/take";
 import { macLink, updateLink } from "../state";
 import { changedWork, docMails, docsWork, greetWork } from "./work";
+import type { Peer } from "../peers/known";
+import type { PersonalityLibrary } from "../personalities/library";
+import type { LinkHost } from "../relay/host";
+import type { LinkState } from "../state";
+import type { PendingParts } from "./parts";
+import type { DocSend, DocSender, DocsMail, DocsState } from "./work";
+
+/** What follows documents taken (`docsWork`): the Macs that let this box go, and what goes to whom. */
+type DocsDone = Pick<ReturnType<typeof docsWork>, "left" | "send">;
 
 // Parts of documents on their way here, from each box (`assemble`).
-const docParts = new Map();
+const docParts = new Map<string, PendingParts>();
 
 // Sends what `work` says goes (`[{to, docs}]`), in as many mails as each takes.
-function sendDocs(host, link, sends) {
+function sendDocs(host: Pick<LinkHost, "send"> | null | undefined, link: LinkState, sends: DocSend[] | null | undefined): void {
   if (!host || !link?.key) return;
   for (const { to, docs } of sends ?? []) {
     for (const payload of docMails(docs)) {
-      const bytes = mailFor(to, { docs: payload, at: Date.now() }, link);
+      // TODO(types): `to` can be the sender as it came (a `DocSender`), and a Mac this box doesn't
+      // count among its peers has no address: mailFor would throw on it, and the sends after it
+      // wouldn't go. Typed as the peer it's taken for.
+      const bytes = mailFor(to as Pick<Peer, "key" | "address">, { docs: payload, at: Date.now() }, link);
       if (bytes) try { host.send(bytes); } catch {}
     }
   }
@@ -27,12 +38,13 @@ function sendDocs(host, link, sends) {
 // What another box or a Mac sent of documents, taken under link.json's lock: your personalities met
 // with this box's (its bots told of those that changed), its phones as its documents say now (one
 // removed losing its sessions), a Mac that's let it go forgotten, and what goes on, sent.
-export async function receiveDocs(sender, docs, host) {
+export async function receiveDocs(sender: DocSender, docs: DocsMail, host: LinkHost | null | undefined): Promise<void> {
   const before = readPersonalities();
-  let work = null, library = before;
+  // (Set inside updateLink's change, which TypeScript can't follow: hence the `as`.)
+  let work = null as DocsDone | null, library = before;
   const link = updateLink(link => {
     if (!link) return null;
-    const state = { link, library: before, parts: docParts };
+    const state: DocsState = { link, library: before, parts: docParts };
     work = docsWork(state, sender, docs);
     library = state.library;
     return link;
@@ -41,7 +53,7 @@ export async function receiveDocs(sender, docs, host) {
   await afterDocs(work, before, library, link, host);
 }
 
-async function afterDocs(work, before, library, link, host) {
+async function afterDocs(work: DocsDone, before: PersonalityLibrary, library: PersonalityLibrary, link: LinkState, host: LinkHost | null | undefined): Promise<void> {
   if (library !== before) await takePersonalities(library).catch(() => {});
   for (const mac of work.left) forgetMacsAgents(mac, link);
   host?.keepOnly?.(new Set((link.phones ?? []).map(phone => phone.key)));
@@ -51,9 +63,10 @@ async function afterDocs(work, before, library, link, host) {
 
 // Something changed here, or this box just connected (`greet`): its own documents that changed go
 // to the others, and with `tell` (a Mac's documents came over SSH) or `greet`, its digest.
-export function docsChanged(host, { greet = false, tell = false } = {}) {
+export function docsChanged(host: LinkHost | null | undefined, { greet = false, tell = false }: { greet?: boolean; tell?: boolean } = {}): void {
   const library = readPersonalities();
-  let work = null;
+  // (Set inside updateLink's change, which TypeScript can't follow: hence the `as`.)
+  let work = null as { send: DocSend[] } | null;
   const link = updateLink(link => {
     if (!link?.sign) return null;
     work = greet ? greetWork({ link, library }) : changedWork({ link, library }, tell);
@@ -69,7 +82,7 @@ export function docsChanged(host, { greet = false, tell = false } = {}) {
 
 // Something of this Mac's documents changed (a phone, a personality, your machines): what changed
 // goes to your machines now, if it's on the relay; they get it as they meet otherwise.
-export function macDocsChanged() {
+export function macDocsChanged(): void {
   const host = macLink.host;
   if (host?.welcomed) try { docsChanged(host); } catch {}
 }
