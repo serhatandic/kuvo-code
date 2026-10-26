@@ -3,20 +3,27 @@ import SwiftUI
 
 /// A conversation's goal ("/goal …"), in a bar over the composer like the others that say what
 /// goes on out of sight: one line with where it stands (working, being checked, paused, met), and
-/// under it the goal and what the last check found. Pause, Resume and Stop are on the line; a goal
-/// that's over is put away with Done. The box runs it, so it goes on with the window closed.
+/// under it the goal and what the last check found. Pause and Stop are on the line (Resume once
+/// paused); a goal that's over is put away with Done. The box runs it, so it goes on with the
+/// window closed.
 struct GoalBar: View {
     let goal: Goal
     @Binding var isHidden: Bool
+    /// A change asked for is on its way: the buttons wait for it.
+    var isChanging = false
     let pause: () -> Void
     let resume: () -> Void
-    let clear: () -> Void
+    /// Takes the goal away, and stops the turn under way.
+    let stop: () -> Void
+    /// Puts away a goal that's over.
+    let done: () -> Void
 
     var body: some View {
         // Kept current: how long it has been at it.
         TimelineView(.periodic(from: .now, by: 30)) { context in
             VStack(alignment: .leading, spacing: 0) {
-                header(now: context.date)
+                BarLine(mark: AnyView(mark), title: title, progress: progress(now: context.date), detail: detail.map { Text($0.replacingOccurrences(of: "\n", with: " ")) },
+                        accessory: AnyView(actions), showHelp: "Show the goal, and what the last check found", hideHelp: "Hide them: this line stays", isHidden: $isHidden)
                 if !isHidden {
                     details
                         .padding(.leading, 42)
@@ -32,48 +39,9 @@ struct GoalBar: View {
 
     // MARK: The line
 
-    private func header(now: Date) -> some View {
-        HStack(spacing: 0) {
-            Button {
-                withAnimation(.ui) { isHidden.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    mark
-                        .frame(width: 18)
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                    Text(progress(now: now))
-                        .font(.system(size: 13).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    if isHidden, let detail {
-                        Text(detail.replacingOccurrences(of: "\n", with: " "))
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    Spacer(minLength: 8)
-                }
-                .padding(.leading, 14)
-                .frame(height: 36)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .clickablePointer()
-            .help(isHidden ? "Show the goal, and what the last check found" : "Hide them: this line stays")
-            .accessibilityLabel("\(title), \(progress(now: now))")
-            .accessibilityValue(isHidden ? "Hidden" : "Shown")
-            actions
-            Image(systemName: "chevron.down")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isHidden ? 180 : 0))
-                .padding(.leading, 6)
-                .padding(.trailing, 16)
-                .contentShape(.rect)
-                .onTapGesture { withAnimation(.ui) { isHidden.toggle() } }
-                .accessibilityHidden(true)
-        }
+    /// Paused by the box (a turn failed, the agent stopped making progress): it needs you.
+    private var needsYou: Bool {
+        goal.state == .paused && (goal.pausedBy == .error || goal.pausedBy == .stalled)
     }
 
     @ViewBuilder private var mark: some View {
@@ -84,6 +52,10 @@ struct GoalBar: View {
             Image(systemName: "scope")
                 .font(.system(size: 13))
                 .foregroundStyle(.tint)
+        case .paused where needsYou, .unmet:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.orange)
         case .paused:
             Image(systemName: "pause.circle")
                 .font(.system(size: 13))
@@ -92,10 +64,6 @@ struct GoalBar: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.green)
-        case .unmet:
-            Image(systemName: "exclamationmark.circle")
-                .font(.system(size: 13))
-                .foregroundStyle(.orange)
         }
     }
 
@@ -109,13 +77,18 @@ struct GoalBar: View {
         }
     }
 
-    /// Its turns so far, and how long it has been at it (or took).
-    private func progress(now: Date) -> String {
+    /// Its turns so far, and how long it has been at it (or took). Paused, the clock doesn't
+    /// count: only its turns.
+    private func progress(now: Date) -> String? {
         let turns = goal.turns == 1 ? "1 turn" : "\(goal.turns) turns"
-        let time = Self.duration(from: goal.startedDate, to: goal.endedDate ?? now)
         switch goal.state {
-        case .working, .paused: return goal.turns == 0 ? time : "\(turns) · \(time)"
-        case .met, .unmet: return "in \(turns) · \(time)"
+        case .working:
+            let time = Self.duration(from: goal.startedDate, to: now)
+            return goal.turns == 0 ? time : "\(turns) · \(time)"
+        case .paused:
+            return goal.turns == 0 ? nil : turns
+        case .met, .unmet:
+            return "in \(turns) · \(Self.duration(from: goal.startedDate, to: goal.endedDate ?? now))"
         }
     }
 
@@ -128,27 +101,27 @@ struct GoalBar: View {
         }
     }
 
-    @ViewBuilder private var actions: some View {
+    private var actions: some View {
         HStack(spacing: 2) {
             switch goal.state {
             case .working:
                 Button("Pause", systemImage: "pause", action: pause)
-                    .help("Hold the goal: the turn under way ends as it would, and no other starts")
-                Button("Stop", systemImage: "xmark.circle", action: clear)
-                    .help("Take the goal away: the agent carries on only with what you ask")
+                    .help("Let the turn under way finish, then hold the goal")
+                Button("Stop", systemImage: "stop.circle", action: stop)
+                    .help("Stop the agent and take the goal away")
             case .paused:
                 Button("Resume", systemImage: "play", action: resume)
                     .help("Check what it last did, and carry on unless that met the goal")
-                Button("Stop", systemImage: "xmark.circle", action: clear)
-                    .help("Take the goal away: the agent carries on only with what you ask")
+                Button("Stop", systemImage: "stop.circle", action: stop)
+                    .help("Take the goal away")
             case .met, .unmet:
-                Button("Done", systemImage: "checkmark", action: clear)
+                Button("Done", systemImage: "checkmark", action: done)
                     .help("Put the goal away")
             }
         }
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
-        .labelStyle(.titleOnly)
+        .disabled(isChanging)
     }
 
     // MARK: Under the line
@@ -160,6 +133,7 @@ struct GoalBar: View {
                 .lineLimit(6)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(goal.condition)
             if let (symbol, words) = finding {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: symbol)
@@ -184,7 +158,7 @@ struct GoalBar: View {
             if let last = goal.last, last.verdict == .notMet { return ("arrow.turn.down.right", "Not met yet: \(last.reason)") }
             return ("scope", "Checked after each turn. The agent keeps going until it’s met.")
         case .paused:
-            return ("pause", goal.note.map { $0 + (goal.pausedBy == .you ? "" : " Resume to carry on.") } ?? "Paused.")
+            return ("pause", goal.note ?? "Paused.")
         case .met:
             return goal.last.map { ("checkmark", $0.reason) }
         case .unmet:

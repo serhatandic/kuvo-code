@@ -35,6 +35,10 @@ import Testing
     for word in ["clear", "stop", "off", "reset", "none", "cancel"] { #expect(GoalCommand("/goal \(word)") == .clear) }
     // A goal that only starts with one of those words is a goal.
     #expect(GoalCommand("/goal stop the flaky test from failing") == .set("stop the flaky test from failing"))
+    #expect(GoalCommand("/goal\tthe build is green") == .set("the build is green"))
+    // Only setting one needs the conversation's model.
+    #expect(GoalCommand("/goal tests pass")?.needsModel == true)
+    #expect(GoalCommand("/goal clear")?.needsModel == false)
     #expect(GoalCommand("/goals") == nil)
     #expect(GoalCommand("set a /goal") == nil)
 }

@@ -79,7 +79,7 @@ public enum GoalCommand: Equatable, Sendable {
     /// "/goal …" as typed, or nil for anything else.
     public init?(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.lowercased() == "/goal" || text.lowercased().hasPrefix("/goal ") || text.lowercased().hasPrefix("/goal\n") else { return nil }
+        guard text.lowercased().hasPrefix("/goal"), text.dropFirst("/goal".count).first.map(\.isWhitespace) ?? true else { return nil }
         let rest = text.dropFirst("/goal".count).trimmingCharacters(in: .whitespacesAndNewlines)
         switch rest.lowercased() {
         case "": self = .show
@@ -88,6 +88,11 @@ public enum GoalCommand: Equatable, Sendable {
         case let word where Self.clearing.contains(word): self = .clear
         default: self = .set(rest)
         }
+    }
+
+    /// Whether it needs the conversation's model to run (setting a goal starts the agent on it).
+    public var needsModel: Bool {
+        if case .set = self { true } else { false }
     }
 }
 

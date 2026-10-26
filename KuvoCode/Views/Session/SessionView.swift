@@ -155,7 +155,8 @@ private struct BottomStack: View {
     /// What the composer offers after "/": the engine's commands and yours, and "/goal" where
     /// its computer runs goals.
     private var commands: [Command] {
-        catalog.commands(in: model.session.location.directory) + (model.takesGoals ? [Goal.command] : [])
+        let own = catalog.commands(in: model.session.location.directory)
+        return model.takesGoals ? own.filter { $0.name != Goal.command.name } + [Goal.command] : own
     }
 
     /// Subagents its agent handed work to that are at it now.
@@ -204,11 +205,13 @@ private struct BottomStack: View {
                         .transition(.opacity)
                 }
                 if let goal = model.goal {
-                    GoalBar(goal: goal, isHidden: $model.hidesGoal) {
+                    GoalBar(goal: goal, isHidden: $model.hidesGoal, isChanging: model.isChangingGoal || offlineMachine != nil) {
                         model.changeGoal(.pause)
                     } resume: {
                         model.changeGoal(.resume)
-                    } clear: {
+                    } stop: {
+                        model.stopGoal()
+                    } done: {
                         model.changeGoal(.clear)
                     }
                     .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
@@ -439,6 +442,12 @@ struct DraftSessionView: View {
 
     private func send() {
         guard !isCreating else { return }
+        // "/goal" with nothing to give the agent (alone, pause, resume, clear): a new conversation
+        // has no goal to act on, so none is made for it.
+        if let goal = GoalCommand(Drafts.shared[draftKey].text), !goal.needsModel {
+            if goal == .show { Drafts.shared[draftKey].text = "/goal " } else { failure = "There’s no goal yet. Type /goal and what it should achieve, like “/goal all tests pass”." }
+            return
+        }
         isCreating = true
         // On its way: the composer empties, as it does for a message, and the message is kept
         // until the session has it (a quit meanwhile puts it back). What's written while the

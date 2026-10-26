@@ -93,7 +93,8 @@ import Testing
         // The agent was given the goal, then told what was left after its first turn.
         #expect(conversation.told.count == 2)
         #expect(conversation.told.first?.hasPrefix(Goal.marker + "all tests in test/auth pass") == true)
-        #expect(conversation.told.last?.hasPrefix(Goal.marker + "Not met yet: 2 tests in test/auth still fail.") == true)
+        #expect(conversation.told.last?.hasPrefix(Goal.marker + "Not met yet.") == true)
+        #expect(conversation.told.last?.contains("2 tests in test/auth still fail.") == true)
         let goal = try #require(model.goal)
         #expect(goal.condition == "all tests in test/auth pass")
         #expect(goal.turns == 2)
@@ -104,6 +105,34 @@ import Testing
         model.changeGoal(.clear)
         try await until { model.goal == nil }
         #expect(try await bridge.api?.goals().isEmpty == true)
+    }
+
+    @Test func theBarsButtonsPauseResumeAndPutItAwayAtOnce() async throws {
+        defer { clean() }
+        serve(Conversation(verdicts: [#"{"verdict": "not_met", "reason": "Tests still fail."}"#]))
+        let bridge = try await RealBridge.start(engine: engine, folder: folder)
+        defer { bridge.stop() }
+        let model = try session()
+        model.goalBridge = { bridge.agents }
+        model.draftText = "/goal the build is green"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.goal != nil && !model.isChangingGoal }
+
+        // Pause shows at once, as the box answered.
+        model.changeGoal(.pause)
+        try await until { !model.isChangingGoal }
+        #expect(model.goal?.state == .paused)
+        #expect(model.goal?.pausedBy == .you)
+        model.changeGoal(.resume)
+        try await until { !model.isChangingGoal }
+        #expect(model.failure == nil)
+        try await until { model.goal?.state == .met }
+
+        // Done clicked twice: put away once, and nothing goes wrong.
+        model.changeGoal(.clear)
+        model.changeGoal(.clear)
+        try await until { model.goal == nil && !model.isChangingGoal }
+        #expect(model.failure == nil)
     }
 
     @Test func slashGoalAloneLeavesWhatToTypeAndAGoalThatCantBeSetComesBack() async throws {

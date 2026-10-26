@@ -83,8 +83,11 @@ final class OutsideAgents {
     private(set) var auto = AutoList()
 
     /// The goals conversations on its computer work toward, by session: the bridge runs them,
-    /// for the engine's sessions there and the agents' alike (`Goal`).
+    /// for the engine's sessions there and the agents' alike (`Goal`). As last heard while its
+    /// machine is away: they go on there.
     private(set) var goals: [String: Goal] = [:]
+    /// False for one from before goals (a machine's not set up again); nil until it has said.
+    private(set) var runsGoals: Bool?
 
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
@@ -273,7 +276,7 @@ final class OutsideAgents {
         downSince = nil
         isDown = false
         api = nil
-        goals = [:]
+        runsGoals = nil
     }
 
     /// A machine's bridge hasn't answered for a while (it stopped there, and didn't start again).
@@ -350,10 +353,23 @@ final class OutsideAgents {
 
     /// Its goals, as its bridge has them (each change comes as `kuvo.goal.updated` after).
     func loadGoals() async {
-        guard let api, let list = try? await api.goals() else { return }
-        let read = Dictionary(list.map { ($0.session, $0) }, uniquingKeysWith: { $1 })
-        if read != goals { goals = read }
+        guard let api else { return }
+        do {
+            let read = Dictionary(try await api.goals().map { ($0.session, $0) }, uniquingKeysWith: { $1 })
+            runsGoals = true
+            if read != goals { goals = read }
+        } catch let error as ServerError where error.status == 404 {
+            // From before goals: nothing of them to show.
+            runsGoals = false
+            goals = [:]
+        } catch {}
     }
+
+    /// A goal as a change to it answered, before its event comes.
+    func took(_ goal: Goal) { goals[goal.session] = goal }
+
+    /// A goal put away, as its route answered.
+    func dropGoal(_ session: String) { goals[session] = nil }
 
     /// A Custom Auto list to show in Settings › Custom Auto as it opens (one picked to edit, or
     /// just made), with these agents' lists in view.

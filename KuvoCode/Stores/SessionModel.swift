@@ -63,6 +63,8 @@ final class SessionModel {
     var hidesWakes = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
+    /// A change to its goal is on its way to its computer.
+    var isChangingGoal = false
     /// The subagents' bar shows only its line, which still says they work.
     var hidesSubagents = false
     private(set) var forms: [FormRequest] = []
@@ -919,7 +921,8 @@ final class SessionModel {
     /// engine would take the message and drop it without a word. A "!" command needs no model.
     func submitDraft(for model: Model?, queue: Bool, commands: [Command], unavailable: String? = nil) {
         failure = nil
-        if let unavailable, Self.shellCommand(in: draftText) == nil {
+        // (Nor does pausing, resuming or taking away a goal.)
+        if let unavailable, Self.shellCommand(in: draftText) == nil, GoalCommand(draftText)?.needsModel ?? true {
             failure = unavailable
             return
         }
@@ -956,8 +959,9 @@ final class SessionModel {
     /// The goal it works toward, or the one it met, until it's put away: as its computer's box has it.
     var goal: Goal? { goalBridge()?.goals[id] }
 
-    /// Whether its computer runs goals now (its agents bridge is up): "/goal" is offered then.
-    var takesGoals: Bool { goalBridge()?.api != nil }
+    /// Whether its computer runs goals now (its agents bridge is up, and new enough): "/goal" is
+    /// offered then.
+    var takesGoals: Bool { goalBridge().map { $0.api != nil && $0.runsGoals != false } ?? false }
 
     /// "/goal …" sent: its computer's box sets the goal and starts the agent on it, or pauses,
     /// resumes or takes away the one there. "/goal" alone shows it; with none, what to type is
@@ -972,27 +976,40 @@ final class SessionModel {
         }
         guard takesGoals else {
             restore(text: written)
-            failure = "Goals run beside the engine on its computer, and that part isn’t running now: \(goalBridge()?.failure ?? "try again in a moment.")"
+            failure = goalBridge()?.api != nil
+                ? "This computer’s agents bridge is from before goals. Set it up again in Settings › Machines to update it."
+                : "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
             return
         }
         changeGoal(command) { [weak self] in self?.restore(text: written) }
     }
 
+    /// The goal bar's Stop: the goal taken away, and the turn under way stopped.
+    func stopGoal() {
+        changeGoal(.clear)
+        if isRunning { stop() }
+    }
+
     /// Changes the goal on its computer's box (the goal bar's buttons too); what can't be done is
     /// said over the composer.
     func changeGoal(_ command: GoalCommand, failed: @escaping () -> Void = {}) {
-        guard let api = goalBridge()?.api else { return }
+        guard let bridge = goalBridge(), let api = bridge.api, !isChangingGoal else { return failed() }
         let session = id
         failure = nil
+        isChangingGoal = true
         Task {
+            defer { isChangingGoal = false }
             do {
+                // Shown as the box answered, before its event comes.
                 switch command {
                 case .set(let condition):
-                    try await api.setGoal(session: session, condition: condition)
+                    bridge.took(try await api.setGoal(session: session, condition: condition))
                     hidesGoal = false
-                case .pause: try await api.pauseGoal(session: session)
-                case .resume: try await api.resumeGoal(session: session)
-                case .clear: try await api.clearGoal(session: session)
+                case .pause: bridge.took(try await api.pauseGoal(session: session))
+                case .resume: bridge.took(try await api.resumeGoal(session: session))
+                case .clear:
+                    try await api.clearGoal(session: session)
+                    bridge.dropGoal(session)
                 case .show: break
                 }
             } catch {
