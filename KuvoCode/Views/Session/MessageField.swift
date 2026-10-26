@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import SwiftUI
 
 /// Where a message is written: a composer's field (a session's, a bot's, a chat's or a group
@@ -147,7 +148,9 @@ struct MessageField: NSViewRepresentable {
         }
     }
 
-    private func update(_ view: MessageTextView, coordinator: Coordinator) {
+    /// The field as the app has it now (`coordinator`'s field). For the tests too, which hand it
+    /// what SwiftUI would.
+    func update(_ view: MessageTextView, coordinator: Coordinator) {
         coordinator.parent = self
         view.onKey = onKey
         view.onFocus = onFocus
@@ -159,7 +162,8 @@ struct MessageField: NSViewRepresentable {
             view.font = font
             changed = true
         }
-        if view.string != text, !view.hasMarkedText() {
+        // A change from the app (a message sent, a draft brought back), not the field's own typing.
+        if !coordinator.isEcho(text), view.string != text, !view.hasMarkedText() {
             view.replace(with: text)
             changed = true
         }
@@ -199,12 +203,31 @@ struct MessageField: NSViewRepresentable {
         var focus: FocusRequest?
         var blur = 0
         var styled: Styled?
+        /// What the field has told the draft that SwiftUI hasn't handed back yet, oldest first.
+        var typed: [String] = []
 
         init(parent: MessageField) { self.parent = parent }
 
+        /// Whether `text`, handed to the field by SwiftUI, is one of its own words coming back
+        /// late: a busy app hands the field the draft as it was a key or two ago, in order, and
+        /// putting that back would lose the keys since. What it has told the draft up to there is
+        /// back, so it's let go. Anything else is a change from the app, and lets all of it go.
+        func isEcho(_ text: String) -> Bool {
+            guard let index = typed.firstIndex(of: text) else {
+                typed.removeAll()
+                return false
+            }
+            typed.removeFirst(index + 1)
+            return true
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? MessageTextView else { return }
-            if parent.text != view.string { parent.text = view.string }
+            if parent.text != view.string {
+                typed.append(view.string)
+                if typed.count > 64 { typed.removeFirst() }
+                parent.text = view.string
+            }
             // The keyword as it was until its owner reads the new text: one that's no longer whole
             // goes back to plain text.
             let token = parent.token.flatMap { view.string.utf16.count >= $0.length && view.string.hasPrefix("/") ? $0 : nil }

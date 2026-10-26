@@ -80,6 +80,7 @@ The app, the engine client and the usage tracker have tests:
 ./scripts/test-app.sh
 cd Packages/OpenCodeKit && swift test
 cd Packages/UsageKit && swift test
+cd Packages/KuvoClient && swift test
 cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
 cd Agents && bun install && bun test && bunx tsc --noEmit
 ```
@@ -174,6 +175,7 @@ README says how.
 | `KuvoCode/` | The app: views, stores and the design system |
 | `Packages/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
 | `Packages/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
+| `Packages/KuvoClient/` | What the Mac app and the iPhone app share as code: `ClientText`, the rules for what a message says (its `README.md`) |
 | `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side, and the box's link as built (`kuvo-link.js`) |
 | `Packages/Box/` | The box (TypeScript): its link's sources, built to `kuvo-link.js` (its `README.md`) |
 | `Agents/` | The agents bridge (TypeScript): Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API |

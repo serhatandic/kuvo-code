@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		4B0A00000000000000000010 /* OpenCodeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000011 /* OpenCodeKit */; };
 		4B0A00000000000000000015 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000016 /* Textual */; };
+		4B0A0000000000000000007E /* ClientText in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000007F /* ClientText */; };
 		4B0A00000000000000000060 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000061 /* SwiftUIMath */; };
 		4B0A00000000000000000018 /* UsageKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000019 /* UsageKit */; };
 		4B0A0000000000000000001B /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000001C /* SwiftTerm */; };
@@ -55,6 +56,7 @@
 				4B0A0000000000000000001B /* SwiftTerm in Frameworks */,
 				4B0A00000000000000000042 /* Sparkle in Frameworks */,
 				4B0A00000000000000000050 /* KuvoLink in Frameworks */,
+				4B0A0000000000000000007E /* ClientText in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +128,7 @@
 				4B0A0000000000000000001C /* SwiftTerm */,
 				4B0A00000000000000000041 /* Sparkle */,
 				4B0A00000000000000000051 /* KuvoLink */,
+				4B0A0000000000000000007F /* ClientText */,
 			);
 			productName = KuvoCode;
 			productReference = 4B0A00000000000000000001 /* $(APP_NAME).app */;
@@ -187,6 +190,7 @@
 				4B0A0000000000000000001A /* XCLocalSwiftPackageReference "Packages/UsageKit" */,
 				4B0A00000000000000000052 /* XCLocalSwiftPackageReference "Packages/KuvoLink" */,
 				4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Packages/Textual" */,
+				4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */,
 				4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				4B0A00000000000000000040 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -538,6 +542,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/Textual;
 		};
+		4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/KuvoClient;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -575,6 +583,10 @@
 		4B0A00000000000000000016 /* Textual */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Textual;
+		};
+		4B0A0000000000000000007F /* ClientText */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientText;
 		};
 		4B0A00000000000000000061 /* SwiftUIMath */ = {
 			isa = XCSwiftPackageProductDependency;

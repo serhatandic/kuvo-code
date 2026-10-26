@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import os
 import SwiftUI
 import Textual

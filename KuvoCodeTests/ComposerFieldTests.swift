@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import SwiftUI
 import Testing
 @testable import KuvoCode

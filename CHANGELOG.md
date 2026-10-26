@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Every key you type in the composer stays, also while Kuvo Code is busy, rather than one now and then going missing.
 - New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. The engine's own review is now **/review-quick**.
 - **Help › Report a Problem…** opens a short sheet: say what happened, see the versions that go with it, and open a new GitHub issue filled in with both, to read over and post. It says up front that issues are public.
 - With machines, the sidebar switches computers by name: a line of names at the top that follows your two-finger swipe and wraps around, from the last back to the first, with a dot on a computer that needs you or has something new. Settings' pages switch the same way.
