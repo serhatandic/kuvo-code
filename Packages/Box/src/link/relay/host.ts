@@ -4,7 +4,7 @@
 import { EMPTY } from "../crypto/keys";
 import { IKResponder, PROLOGUE } from "../crypto/noise";
 import type { Transport } from "../crypto/noise";
-import type { Answer, AnswerPiece, Asker, LinkRequest } from "../server/context";
+import type { Answer, AnyPiece, Asker, LinkRequest } from "../server/context";
 import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, relaySend } from "./frames";
 import type { Head } from "./frames";
 
@@ -83,9 +83,6 @@ interface PhoneSession {
   sockets: Map<number, SessionSocket>;
   confirmed?: boolean;
 }
-
-/** An answer's piece, read alike whichever it is. */
-type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract<AnswerPiece, { body: unknown }>>;
 
 export class LinkHost {
   declare key: Buffer;

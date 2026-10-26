@@ -1,6 +1,4 @@
-// @ts-nocheck
-// (The command line: what each command does is in the modules beside it, Packages/Box/README.md.
-// Until it's typed, it's checked as it runs, by the bridge's tests.)
+// (The command line: what each command does is in the modules beside it, Packages/Box/README.md.)
 // Kuvo Code's link on a machine: lets the phones you've paired reach this machine's engine
 // through the relay, so its sessions and bots work from the phone with the Mac closed. The
 // engine's own runtime runs it, so the machine needs nothing else:
@@ -69,6 +67,15 @@ import { serveBox } from "./server/serve";
 import { macLink, macSign, onLinkWritten, readLink, updateLink } from "./state";
 import { checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
+import type { AddressInfo } from "node:net";
+import type { SignedDoc } from "../shared/documents";
+import type { EngineRecord } from "../shared/records";
+import type { SettingChange } from "./areas/config";
+import type { KeptNotice } from "./notices/hold";
+import type { Notice } from "./notices/notice";
+import type { GivenLibrary } from "./personalities/library";
+import type { AnyPiece } from "./server/context";
+import type { LinkState, Phone } from "./state";
 
 // What moved into modules, as this file exported it (the bridge's tests import it from here).
 export { addressOf, newKey, publicOf } from "./crypto/keys";
@@ -175,15 +182,15 @@ onLinkWritten(link => {
 
 // What a machine's link does once the relay's welcomed it: your other computers hear who's here,
 // and it tells who's there; a new bridge an update put here says it's well.
-function machineWelcomed(host) {
+function machineWelcomed(host: LinkHost): void {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
   try { docsChanged(host, { greet: true }); } catch {}
   try { confirmUpdate(); } catch {}
 }
 
-async function run() {
+async function run(): Promise<void> {
   // One bridge at a time: a newer one (the engine restarted) takes over.
-  let old = null;
+  let old: number | null = null;
   try {
     old = Number(fs.readFileSync(PID_FILE, "utf8"));
     if (isBridge(old)) process.kill(old, "SIGTERM");
@@ -217,9 +224,9 @@ async function run() {
   // Stops when nothing's paired any more, or when another bridge took over; up while the engine
   // is down too, so a phone can start it. Phones removed since lose what they have open, and the
   // box's keeper, if it went, starts again (it keeps this bridge, and the engine, running).
-  let current = null;
+  let current: LinkHost | null = null;
   setInterval(() => {
-    let owner = null;
+    let owner: number | null = null;
     try { owner = Number(fs.readFileSync(PID_FILE, "utf8")); } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -227,14 +234,14 @@ async function run() {
       noLongerNeeded();
     }
     if (!needed(link) || owner !== process.pid) return cleanUp();
-    current?.keepOnly(new Set((link.phones ?? []).map(phone => phone.key)));
+    current?.keepOnly(new Set((link!.phones ?? []).map(phone => phone.key)));
     keepKeeper();
   }, 30_000);
 
   // Your phones' notifications, on whichever relay connection is up: the engine's news, and what
   // agents ask for as they browse.
   // False when it can't go now (the relay isn't there), to be tried again.
-  const tellPhones = notice => {
+  const tellPhones = (notice: Notice): boolean => {
     const link = readLink();
     const phones = (link?.phones ?? []).filter(phone => phone.address);
     if (!phones.length) return true;
@@ -244,7 +251,7 @@ async function run() {
     let sent = false;
     for (const phone of phones) {
       try {
-        current.send(pushTo(phone, json, key));
+        current.send(pushTo(phone as Phone & { address: string }, json, key));
         sent = true;
       } catch {}
     }
@@ -254,7 +261,7 @@ async function run() {
   // is kept in run/held-notices.json, for the next bridge to send if this one stops first: read
   // once the one before has gone (a few seconds at most), so it neither sends nor holds one more.
   for (let tries = 0; tries < 60 && old && isBridge(old); tries++) await sleep(50);
-  let held = [];
+  let held: KeptNotice[] = [];
   try { held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8")); } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -266,8 +273,8 @@ async function run() {
       } catch {}
     },
   });
-  const tell = notice => hold.tell(notice);
-  const answered = id => hold.resolve(id);
+  const tell = (notice: Notice): boolean => hold.tell(notice);
+  const answered = (id: string): void => hold.resolve(id);
   // Its engine and the coding agents here (their sessions, and group chats that live here),
   // through their bridge.
   watchBox({ tell, hold });
@@ -313,20 +320,20 @@ async function run() {
       noLongerNeeded();
       return cleanUp();
     }
-    let engine = {};
+    let engine: Partial<EngineRecord> = {};
     try { engine = readEngineFile(); } catch {}
     const host = new LinkHost({
-      key: Buffer.from(link.key, "base64url"),
-      hello: { v: 1, kind: "machine", name: link.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
+      key: Buffer.from(link!.key!, "base64url"),
+      hello: { v: 1, kind: "machine", name: link!.name || os.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
       mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
-      handle: engineHandler(readEngineFile, { name: link.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
+      handle: engineHandler(readEngineFile, { name: link!.name || os.hostname() }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {},
     });
     current = host;
-    const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
+    const welcomed = await connectOnce(link!.relay!, Buffer.from(link!.secret!, "base64url"), host, machineWelcomed);
     attempt = welcomed ? 0 : attempt + 1;
     await sleep(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
   }
@@ -336,17 +343,17 @@ async function run() {
 // phone's goes (one answer, JSON, on stdout). `adopt` (a seed on stdin), `read`, `change`
 // ({changes} on stdin), `key <name>` (its value on stdin; none removes it), `route` (a request,
 // {method, path, body?}, answered as a phone's is: {status, body}), `bot-keys-refresh`.
-async function box(command) {
-  const input = async () => {
-    const chunks = [];
+async function box(command: string): Promise<void> {
+  const input = async (): Promise<string> => {
+    const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk);
     return Buffer.concat(chunks).toString("utf8");
   };
-  const say = value => console.log(JSON.stringify(value));
+  const say = (value: unknown): void => console.log(JSON.stringify(value));
   switch (command) {
     // COMPAT(0.7 settings): `box adopt`, which a Mac runs over SSH. Goes 3 months after 0.8.0.
     case "adopt": {
-      let seed = null;
+      let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
       return say(adoptBox(seed));
     }
@@ -356,9 +363,10 @@ async function box(command) {
       return say(problem ? { status: 409, message: problem } : { status: 200, settings, own: ownsSettings() });
     }
     case "change": {
-      let given = {};
+      let given: { changes?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
-      return say(ownsSettings() ? changeSettings(given?.changes) : { status: 409, message: "This machine's settings aren't its own yet." });
+      // (Checked there.)
+      return say(ownsSettings() ? changeSettings(given?.changes as SettingChange[]) : { status: 409, message: "This machine's settings aren't its own yet." });
     }
     case "key": {
       const name = process.argv[4];
@@ -380,13 +388,13 @@ async function box(command) {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
       answerOnce();
-      let given = {};
+      let given: { method?: unknown; path?: unknown; body?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)) };
       let status = 502;
-      const chunks = [];
-      for await (const part of handle(request, {}, undefined)) {
+      const chunks: Buffer[] = [];
+      for await (const part of handle(request, {}, undefined) as AsyncIterable<AnyPiece>) {
         if (part.head) status = part.head.status;
         if (part.body) chunks.push(Buffer.from(part.body));
       }
@@ -409,7 +417,7 @@ async function box(command) {
     case "personalities": {
       // A Mac's copy met with this one's: both end up as one, and the bridge tells your other
       // computers if this one changed.
-      let given = null;
+      let given: GivenLibrary | null = null;
       try { given = JSON.parse((await input()) || "null"); } catch {}
       const before = JSON.stringify(readPersonalities());
       const met = changePersonalities(library => mergePersonalities(library, given));
@@ -422,7 +430,7 @@ async function box(command) {
   }
 }
 
-async function serve() {
+async function serve(): Promise<void> {
   const password = process.env.OPENCODE_PASSWORD;
   if (!password) {
     console.error("serve answers only with a password: set OPENCODE_PASSWORD.");
@@ -434,11 +442,11 @@ async function serve() {
   // This Mac's notices for your phones, held while you're at a computer, as a machine's are.
   if (IS_MAC) macLink.hold = macNoticeHold();
   const server = serveBox(password, engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile, () => {}, macLink.hold));
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
   // Its bots' folders' settings, as its keys and integrations are now (after an update, say), as a
   // machine's bridge does as it starts; where its keys can't be reached yet, they stay as they were.
   refreshBotsKeys().catch(() => {});
@@ -463,7 +471,7 @@ async function serve() {
   watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
   // Its app gone (its stdin closed): so is it, once what its link has queued for the relay is out
   // (a notice sent as the app quit), a moment at most.
-  const leave = async () => {
+  const leave = async (): Promise<void> => {
     for (let tries = 0; tries < 30 && (macLink.host?.unsent?.() ?? 0) > 0; tries++) await sleep(50);
     // What didn't get out in time isn't lost without a word.
     if ((macLink.host?.unsent?.() ?? 0) > 0) console.error("Kuvo Code quit before what its link had for your phones and machines went out.");
@@ -474,15 +482,33 @@ async function serve() {
   process.stdin.resume();
 }
 
+/** What a Mac's `setup` sends on stdin: the relay, this machine's name, the Mac's key and signing
+ * key, the documents it gives, its id for this machine, and (its ID) whether it leaves a newer box
+ * as it is; from a beta.1 Mac, its peers as it lists them. Each checked as it's read. */
+interface SetupInput {
+  relay?: string;
+  name?: string;
+  mac?: string;
+  macSign?: string;
+  docs?: SignedDoc[];
+  id?: string;
+  macID?: string;
+  tolerates?: number;
+  peers?: unknown[];
+  peersAt?: number;
+  at?: number;
+  moved?: unknown[];
+}
+
 // What the Mac sends: the relay, this machine's name, and the phones you've paired with the Mac,
 // which may reach it directly. Keeps the machine's own keys (made the first time, and never
 // leaving it) and phones paired with the machine itself, starts the bridge or restarts it (on
 // another relay, or a newer one), and prints the machine's address and public key for the Mac
 // to tell your phones. Nothing left to answer: the bridge stops, and the keys stay.
-async function setup() {
-  let input;
+async function setup(): Promise<void> {
+  let input: SetupInput;
   try {
-    const chunks = [];
+    const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk);
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
@@ -493,7 +519,7 @@ async function setup() {
   const running = runningBridge();
   const old = readLink();
   const before = readPersonalities();
-  let link = null, work = null, library = before;
+  let link = null as LinkState | null, work = null as ReturnType<typeof docsWork> | null, library = before;
   updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
@@ -522,7 +548,7 @@ async function setup() {
     // (The Mac setting it up wants it: a removal it signed before never counts here now.)
     work = docsWork(state, { key: mac ?? "", sign: mac ? macSign(next, mac) : undefined }, { give: Array.isArray(input.docs) ? input.docs : [] }, { stay: mac ?? null });
     library = state.library;
-    if (!next.phones.length && !peersOf(next).length) return current ? next : null;
+    if (!next.phones!.length && !peersOf(next).length) return current ? next : null;
     next.relay = String(input.relay);
     next.name = String(input.name || next.name || os.hostname()).slice(0, 100);
     link = next;
@@ -549,8 +575,8 @@ async function setup() {
     if (!running || restart) startBridge();
   }
   console.log(JSON.stringify({
-    address: addressOf(Buffer.from(link.secret, "base64url")).toString("base64url"),
-    key: publicOf(Buffer.from(link.key, "base64url")).toString("base64url"),
+    address: addressOf(Buffer.from(link.secret!, "base64url")).toString("base64url"),
+    key: publicOf(Buffer.from(link.key!, "base64url")).toString("base64url"),
     // Talks to other boxes itself (PROTOCOL.md, "Peers").
     peers: true,
     // Its signing key, and the documents it has, for the Mac to take (PROTOCOL.md, "Documents").
@@ -560,7 +586,7 @@ async function setup() {
 }
 
 // What setup gives back of documents: those this box keeps, and its own as they are now.
-function setupDocs(link) {
+function setupDocs(link: LinkState): SignedDoc[] {
   const state = { link, library: readPersonalities() };
   const own = ownDocs(state);
   return [...Object.values(link.docs ?? {}), ...Object.values(own).map(each => each.envelope)];
@@ -569,7 +595,7 @@ function setupDocs(link) {
 // `leave <mac>`: Mac `mac` removed this machine. It's no longer one of its Macs: its lists of
 // peers and phones no longer count here, and what peers only it named told goes. Another Mac's
 // stay; with no peers or phones left, the bridge stops.
-export function leave(mac) {
+export function leave(mac: unknown): boolean {
   if (typeof mac !== "string" || !KEY.test(mac)) return false;
   const link = updateLink(link => {
     if (!link || !macsOf(link).includes(mac)) return null;
@@ -584,7 +610,7 @@ export function leave(mac) {
   return true;
 }
 
-function pair(relay) {
+function pair(relay: string | undefined): void {
   const link = updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
@@ -597,13 +623,13 @@ function pair(relay) {
     console.error("Give the relay's address: kuvo-link.js pair wss://…");
     process.exit(1);
   }
-  console.log(pairingLink(link));
+  console.log(pairingLink(link as Parameters<typeof pairingLink>[0]));
   console.error(`Open this link on your phone within ${PAIRING_MINUTES} minutes. It works once.`);
   if (!runningBridge()) startBridge();
 }
 
 // Checks this runtime has what the link needs, both ends of a session and a mail.
-export function selftest() {
+export function selftest(): boolean {
   const phone = newKey(), host = newKey();
   const initiator = new IKInitiator(phone, publicOf(host), PROLOGUE);
   const responder = new IKResponder(host, PROLOGUE);
@@ -630,9 +656,9 @@ if (main) {
     // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
     // it's updated, the running bridge goes, for the keeper to start the new one.
     const args = process.argv.slice(3);
-    const option = name => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
+    const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
     const test = option("--url") && option("--key") && path.resolve(K) !== path.join(os.homedir(), ".kuvo-code");
-    const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")], blocked: null } : {}) });
+    const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
     noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome.result === "updated") {
       const pid = runningBridge();

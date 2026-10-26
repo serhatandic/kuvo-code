@@ -24,8 +24,7 @@ import { engineHandler } from "../server/router";
 import { macLink, readLink } from "../state";
 import { macKeys, macLinkCheck, macLinkWait, macNeeded, setLinkStatus, tellUntold } from "./link";
 import type { EngineRecord } from "../../shared/records";
-import type { AnswerPiece, Asker, LinkRequest } from "../server/context";
-import type { LinkHandler } from "../server/router";
+import type { AnswerPiece, Asker, LinkHandler, LinkRequest } from "../server/context";
 import type { LinkState } from "../state";
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's

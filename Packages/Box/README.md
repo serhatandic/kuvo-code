@@ -37,8 +37,9 @@ Bun's own.
 
 ## Where things go
 
-`src/link/main.ts` is today's `kuvo-link.js`, unchecked (`@ts-nocheck`). Its parts move out into
-typed modules one at a time, each move passing every suite, until it's only the command line:
+`src/link` is `kuvo-link.js`, every file of it type-checked (`bun run check`, and a test that none
+says `@ts-nocheck`); `main.ts` is the command line, and each route's answer has a shape in
+`src/shared/routes`, which both boxes are held to:
 
 ```
 src/shared/      what both programs and the contract suite read: run/ records, features, documents,

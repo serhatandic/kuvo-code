@@ -6,11 +6,7 @@ import os from "node:os";
 import { readEngineFile } from "../engine/client";
 import { canonicalPath } from "./paths";
 import { engineHandler } from "./router";
-import type { AnswerPiece } from "./context";
-import type { LinkHandler } from "./router";
-
-/** An answer's piece, read alike whichever it is (its head, its body). */
-type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract<AnswerPiece, { body: unknown }>>;
+import type { AnyPiece, LinkHandler } from "./context";
 
 // `serve`: this box's routes over HTTP, for a Mac, whose app starts its own box as it starts the
 // coding agents' bridge: on 127.0.0.1, `{"url"}` said once it listens, answering only with the

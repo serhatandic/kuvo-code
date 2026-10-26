@@ -27,6 +27,8 @@ export interface Asker {
 export type AnswerPiece = { head: { status: number; headers: Record<string, string> } } | { body: Buffer };
 /** An answer, as it comes. */
 export type Answer = AsyncIterable<AnswerPiece> | Iterable<AnswerPiece>;
+/** An answer's piece, read alike whichever it is (its head, its body). */
+export type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract<AnswerPiece, { body: unknown }>>;
 
 /** What an area's answer helper gives its route to send as JSON (`json(status, value)`): the
  * status, and the value as the body. */
@@ -55,3 +57,7 @@ export interface RouteContext {
   json: (status: number, value: unknown) => AnswerPiece[];
   text: (status: number, words: string) => AnswerPiece[];
 }
+
+/** What LinkHost (or this Mac's app's HTTP server) runs for each request: its answer, as it comes.
+ * `phone`: who asks, nothing for this Mac's app. */
+export type LinkHandler = (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal) => AsyncGenerator<AnswerPiece>;

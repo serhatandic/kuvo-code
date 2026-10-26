@@ -32,7 +32,7 @@ import { updateRoute } from "../updates/update";
 import { AGENTS, agentsRoute, engineRoute } from "./forward";
 import type { BridgeRecord, EngineRecord } from "../../shared/records";
 import type { NoticeHold } from "../notices/hold";
-import type { Answer, AnswerPiece, Asker, LinkRequest, RouteContext } from "./context";
+import type { Answer, AnswerPiece, Asker, LinkHandler, LinkRequest, RouteContext } from "./context";
 
 /** One of the box's routes: `when(route, request)` says whether it takes the request, and gives
  * what its `answer(context, match)` is given: the route's match for one with a part of its own
@@ -41,10 +41,6 @@ export interface Route<Match = true> {
   when: (route: string, request: LinkRequest) => Match | false | null;
   answer: (context: RouteContext, match: Match) => Answer;
 }
-
-/** What LinkHost (or this Mac's app's HTTP server) runs for each request: its answer, as it comes.
- * `phone`: who asks, nothing for this Mac's app. */
-export type LinkHandler = (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal) => AsyncGenerator<AnswerPiece>;
 
 // `when(route, request)`: whether it takes the request (a route's match, for one with a part of its
 // own); `answer(context, match)`: its answer, as it comes.
