@@ -416,6 +416,8 @@ function botHere(id) {
 var isMoving = (folder) => (textOf(path4.join(folder, "paused")) ?? "").trim() === "moving";
 var MOVING = "It’s moving to another computer. Try again once it’s there.";
 var isModel = (model) => Boolean(model) && typeof model.id === "string" && typeof model.providerID === "string";
+var botLook = (look) => ({ color: look.color, shape: look.shape, face: look.face });
+var botModel = (model) => ({ id: model.id, providerID: model.providerID, ...typeof model.variant === "string" ? { variant: model.variant } : {} });
 var sameModel = (a, b) => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
 var botFollowers = new Set;
 var noteBotsChanged = () => {
@@ -5477,8 +5479,8 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
     return no(400, "That project isn’t in Kuvo Code.");
   const looks = kit.looks;
   const pick = (list) => list[crypto13.randomInt(list.length)];
-  const look = fitsLook(looks, given.look) ? given.look : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
-  const model = isModel(given.model) ? given.model : kit.startingModel;
+  const look = fitsLook(looks, given.look) ? botLook(given.look) : template?.look ?? { color: pick(looks.colors), shape: pick(looks.shapes), face: pick(looks.faces) };
+  const model = isModel(given.model) ? botModel(given.model) : kit.startingModel;
   if (!model)
     return no(422, `There’s no model to start it on here: sign in to an account on ${HERE} first.`);
   const agents = runsWithAgents(model);
@@ -5558,7 +5560,7 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   if ("look" in given) {
     if (!fitsLook(kit.looks, given.look))
       return no(400, "That isn’t a look a bot can have.");
-    changed.look = { color: given.look.color, shape: given.look.shape, face: given.look.face };
+    changed.look = botLook(given.look);
   }
   const personalities = botPersonalities(kit);
   if ("personality" in given) {
@@ -5579,7 +5581,7 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   if ("model" in given) {
     if (!isModel(given.model))
       return no(400, "That isn’t a model.");
-    const model = { id: given.model.id, providerID: given.model.providerID, ...typeof given.model.variant === "string" ? { variant: given.model.variant } : {} };
+    const model = botModel(given.model);
     if (!sameModel(model, described.model)) {
       if (runsWithAgents(model)) {
         if (!here.agents) {

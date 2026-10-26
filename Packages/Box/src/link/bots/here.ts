@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { textOf } from "../files";
+import type { BotLook } from "../../shared/records";
 import { BOTS } from "../home";
 
 // What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
@@ -64,6 +65,10 @@ export const isMoving = (folder: string): boolean => (textOf(path.join(folder, "
 export const MOVING = "It’s moving to another computer. Try again once it’s there.";
 
 export const isModel = (model: Partial<BotModel> | null | undefined): model is BotModel => Boolean(model) && typeof model!.id === "string" && typeof model!.providerID === "string";
+// A look and a model as a bot keeps them, made or changed: their own fields, nothing else that came
+// with them.
+export const botLook = (look: BotLook): BotLook => ({ color: look.color, shape: look.shape, face: look.face });
+export const botModel = (model: BotModel): BotModel => ({ id: model.id, providerID: model.providerID, ...(typeof model.variant === "string" ? { variant: model.variant } : {}) });
 export const sameModel = (a: Partial<BotModel> | null | undefined, b: Partial<BotModel> | null | undefined): boolean => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
 
 // Those following this box's bots (`kuvo/bots/events`), told of a change made here at once (one

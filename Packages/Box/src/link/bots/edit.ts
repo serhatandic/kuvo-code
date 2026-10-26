@@ -13,7 +13,7 @@ import { BOTS, HERE, IS_MAC, K, RUN } from "../home";
 import { hostTrash } from "../host-interface";
 import { botVariable, deleteKey, keyNames } from "../keys";
 import { botPersonalities } from "../personalities/library";
-import { botHere, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
+import { botHere, botLook, botModel, isModel, isMoving, MOVING, noteBotsChanged, sameModel } from "./here";
 import { givenJob, jobOf, writeJob } from "./jobs";
 import { NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
@@ -40,7 +40,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   }
   if ("look" in given) {
     if (!fitsLook(kit.looks, given.look)) return no(400, "That isn’t a look a bot can have.");
-    changed.look = { color: given.look.color, shape: given.look.shape, face: given.look.face };
+    changed.look = botLook(given.look);
   }
   const personalities = botPersonalities(kit);
   if ("personality" in given) {
@@ -56,7 +56,7 @@ export async function changeBot(id, given, readEngine, readBridge, machine, sign
   }
   if ("model" in given) {
     if (!isModel(given.model)) return no(400, "That isn’t a model.");
-    const model = { id: given.model.id, providerID: given.model.providerID, ...(typeof given.model.variant === "string" ? { variant: given.model.variant } : {}) };
+    const model = botModel(given.model);
     // The one it has is kept, whatever; another has to run where its conversation does.
     if (!sameModel(model, described.model)) {
       if (runsWithAgents(model)) {
