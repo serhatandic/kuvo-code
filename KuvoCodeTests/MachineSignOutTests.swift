@@ -28,6 +28,39 @@ import Testing
         for path in kept { #expect(FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) went") }
     }
 
+    /// Removing a machine takes away everything that would start its engine again or sign in there
+    /// (its keeper and both of the keeper's own copies, how it launches, its keys), and leaves its
+    /// sessions. Run on a home of its own, with a crontab that answers nothing, so this Mac's
+    /// isn't touched.
+    @Test func removingAMachineLeavesNothingThatStartsItAgain() throws {
+        let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
+        let root = home.appending(path: RemoteEngineInstaller.root)
+        let gone = ["bin/kuvo-start", "bin/.kuvo-start-keeper", "bin/kuvo-launch", "bin/.kuvo-launch-keeper", "bin/.kuvo-boot",
+                    "run/launch.env", "run/launch.notes", "keys/settings.json", "box/keys/KUVO_KEY_LINEAR_TOKEN",
+                    "box/bot-keys/KUVO_KEY_LINEAR_TOKEN__BOT"]
+        let kept = ["data/opencode/opencode.db", "box/projects.json"]
+        for path in gone + kept {
+            let file = root.appending(path: path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: file)
+        }
+        let tools = home.appending(path: "tools")
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tools.appending(path: "crontab"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "crontab").path)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", Machines.leftoversScript]
+        process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        for path in gone { #expect(!FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) stayed") }
+        for path in kept { #expect(FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) went") }
+    }
+
     /// The removal scripts, connected or not, both sign the agents out.
     @Test func bothWaysOfRemovingSignThemOut() {
         #expect(Machines.removalScript.contains(Machines.agentsSignOut))

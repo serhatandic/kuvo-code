@@ -926,8 +926,8 @@ final class Machines {
         } ?? ""
         return leave + """
         rm -rf "$K/keys" "$K/box/keys" "$K/box/bot-keys"
-        # COMPAT(0.7 keeper): the keeper copy goes with it. Goes 3 months after 0.8.0.
-        rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-boot"
+        # COMPAT(0.7 keeper): the keeper copies go with it. Goes 3 months after 0.8.0.
+        rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-launch-keeper" "$K/bin/.kuvo-boot"
         \(RemoteServer.rebootCrontabRemoval)
         """
     }
