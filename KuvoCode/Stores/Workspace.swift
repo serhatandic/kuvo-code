@@ -956,6 +956,7 @@ final class Workspace {
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
             if let base = tree.base { record["base"] = base }
             do {
+                // COMPAT(0.7 worktrees): machines' worktrees this Mac kept before their boxes did. Goes 3 months after 0.8.0.
                 let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", record)
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
             } catch let refusal as BoxRefusal where refusal.status == 404 {
@@ -1225,6 +1226,13 @@ final class Workspace {
 
     private func saveSettings() {
         UserDefaults.standard.set(try? JSONEncoder().encode(settings), forKey: "projectSettings")
+    }
+
+    /// A handoff done ("/handoff"): its new conversation, opened as a fork's is.
+    func openHandoff(_ handoff: Handoff) async {
+        guard let to = handoff.to, let api = api(forSession: handoff.from) else { return }
+        if session(to) == nil, let session = try? await api.session(to) { upsert(session) }
+        tabs?.open(.session(to))
     }
 
     /// A new session with `id`'s conversation before `message`, opened in a tab with the

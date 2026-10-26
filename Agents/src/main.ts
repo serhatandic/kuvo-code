@@ -17,7 +17,10 @@ import { Auto } from "./auto"
 import { Deps } from "./deps"
 import { EngineAgent, EngineLink } from "./engine"
 import { subscribe } from "./events"
-import { Goals } from "./goals"
+import { Goals, type GoalPlaces } from "./goals"
+import { SideQuestions } from "./btw"
+import { Handoffs } from "./handoff"
+import { Reviews } from "./reviews"
 import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
@@ -49,6 +52,7 @@ if (onMachine) {
   // The bridge and its agents keep their folders in Kuvo Code's (XDG_… there); the commands the
   // agents run get the machine's own back (machine.ts).
   takeOwnFolders()
+  // COMPAT(0.7 agents-runtime): sign-ins an older Mac carried over (`.from-mac`). Goes 3 months after 0.8.0.
   // Each machine signs its agents in on its own: none a Mac carried over before stays.
   if (home) dropCarriedSignIns(home)
   // Kuvo Code's commands (kuvo-wake) first, as for the engine, and where bots' and sessions'
@@ -88,11 +92,13 @@ process.on("uncaughtException", (error) => {
 
 const deps = new Deps(join(home, "runtime"), join(home, "cache"))
 if (onMachine) {
+  // COMPAT(0.7 agents-runtime): the programs an older bridge installed in `agents/runtime`. Goes 3 months after 0.8.0.
   // The agents' programs are the machine's own now, found on its login shell's PATH (which a
   // command over SSH doesn't get), not copies of Kuvo Code's.
   dropOwnPrograms(join(home, "runtime"))
   void refreshLoginPath()
 }
+// COMPAT(0.7 agents-runtime): `cache/install`. Goes 3 months after 0.8.0.
 // What an earlier bridge left of its downloads (it kept them on this Mac): nothing installs yet.
 rmSync(join(home, "cache", "install"), { recursive: true, force: true })
 const context = { home, temporary, deps }
@@ -169,7 +175,7 @@ if (groupFolders) {
 
 // Goals conversations work toward, the engine's and the coding agents' here alike, kept in the
 // bridge's folder and run with no client there.
-const goals = new Goals(join(home, "goals.json"), {
+const places: GoalPlaces = {
   engine: {
     api: link,
     listen: (session, told) => link.listen(session, { event: (event) => told.event(event.type, event.data), reconnected: told.reconnected }),
@@ -186,7 +192,12 @@ const goals = new Goals(join(home, "goals.json"), {
       return false
     }
   },
-})
+}
+const goals = new Goals(join(home, "goals.json"), places)
+// Its other keywords, for the same conversations: side questions, handoffs and reviews.
+const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
+const handoffs = new Handoffs(places)
+const reviews = new Reviews(join(home, "reviews.json"), places)
 
 let server: ReturnType<typeof Bun.serve>
 try {
@@ -194,7 +205,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -207,12 +218,14 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
   goals.start()
+  sideQuestions.start()
   try {
     groups?.runner.start()
     groups?.peers.server.start()
     // What bots are still to be told of their chats, now and each minute, as your other computers' bots become known.
     if (groups) {
       const runner = groups.runner
+      // COMPAT(0.7 mac-group-chats): `pending-memory.json` from `GroupMigration`. Goes 3 months after 0.8.0.
       void runner.catchUpMemory().catch((error) => console.error("group memory:", error))
       setInterval(() => void runner.catchUpMemory().catch(() => {}), 60_000).unref?.()
     }
@@ -234,6 +247,8 @@ function stop() {
   stopping = true
   // Goals first: the turns cut short as it stops aren't theirs to read as yours.
   goals.stopAll()
+  sideQuestions.stopAll()
+  reviews.stopAll()
   cancelSignIns()
   // (Unless a newer bridge has put its own there.)
   try {

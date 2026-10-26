@@ -21,7 +21,7 @@ const host = await standInHost(PASSWORD);
 const engineConfig = path.join(root, "opencode", "config");
 const keyFiles = path.join(root, "app-temp", "integration-keys");
 const data = path.join(root, "integrations");
-Object.assign(process.env, { KUVO_HOME: home, KUVO_ENGINE_CONFIG: engineConfig, KUVO_KEYS: keyFiles, KUVO_INTEGRATIONS: data, KUVO_KEYS_ON_HOST: "1", KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD });
+Object.assign(process.env, { KUVO_HOME: home, KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: engineConfig, KUVO_KEYS: keyFiles, KUVO_INTEGRATIONS: data, KUVO_KEYS_ON_HOST: "1", KUVO_HOST_URL: host.url, KUVO_HOST_PASSWORD: PASSWORD });
 const link = await import(script);
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 

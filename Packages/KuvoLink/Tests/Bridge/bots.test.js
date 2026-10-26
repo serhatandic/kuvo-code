@@ -7,6 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { runningAs } from "./running-as.js";
 
 // The bridge reads Kuvo Code's folder from KUVO_HOME: one of this test's own.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bots-"));
@@ -256,7 +257,7 @@ test("Wake Up Now for one that runs with the coding agents goes to their bridge;
   assert.match(down.json.message, /coding agents/);
   assert.deepEqual(fs.readdirSync(path.join(scout, "wakes")), ["1792000500-AbC123"], "still waiting");
 
-  write(path.join(home, "run", "bridge.json"), JSON.stringify({ pid: process.pid, port: bridge.port, password: "agents" }));
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ pid: await runningAs("kuvo-agents", t), port: bridge.port, password: "agents" }));
   assert.equal((await ask(handle, "POST", "kuvo/wakes/ses_bot_scout00001/now", { wake: "AbC123" })).status, 200);
   assert.ok(bridge.asked.some(each => each.url === "/api/session/ses_bot_scout00001/prompt" && each.auth === `Basic ${Buffer.from("opencode:agents").toString("base64")}`));
   assert.equal(bridge.asked.some(each => each.url === "/api/mcp"), false, "their tools aren't the engine's to wait for");
@@ -579,7 +580,7 @@ test("a change that can't be is said, and nothing changes", async () => {
   }
 });
 
-test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… deletes it, and noted for the Mac", async () => {
+test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… deletes it, and noted for the Mac", async t => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const scout = bot("bot_scout00001", { name: "Scout" });
   bot("bot_ada0000001", { name: "Ada" });
@@ -590,8 +591,9 @@ test("with the Mac closed, a bot here is deleted from a phone as Delete Bot… d
   write(path.join(home, "box", "keys", "KUVO_KEY_GITHUB_TOKEN"), "shared");
   fs.rmSync(path.join(home, "trash"), { recursive: true, force: true });
   const engine = await makingEngine();
+  const agents = await runningAs("kuvo-agents", t);
   try {
-    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => ({ port: engine.port, password: "p", pid: process.pid }));
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => ({ port: engine.port, password: "p", pid: agents }));
     // A group chat of theirs here, as the coding agents' bridge runs it.
     const chat = { json: { group: { id: "grp_release001" } } };
     engine.chats.set("grp_release001", { group: { id: "grp_release001", name: "Release", members: ["bot_scout00001", "bot_ada0000001", "bot_ben0000001"] }, status: "active" });

@@ -30,7 +30,7 @@ name: Release
 # signed with it. With KUVO_BOX_SIGNING_KEY (an Ed25519 key, PEM) it also
 # publishes what remote machines run, for them to update themselves with
 # (boxes.json and box-<version>.tar.gz); machines take only what's signed with a
-# key pinned in kuvo-link.js (UPDATE_KEYS). scripts/set-box-key.sh makes that
+# key pinned in the box's link (UPDATE_KEYS, in Packages/Box/src). scripts/set-box-key.sh makes that
 # key once, keeps it in your login keychain, uploads it and prints the key to pin. scripts/set-update-key.sh uploads it; the signing and
 # notarization secrets come from scripts/set-signing-secrets.sh and
 # scripts/set-notary-secrets.sh.

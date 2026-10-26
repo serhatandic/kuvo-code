@@ -3,183 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EngineLink } from "../src/engine"
-import { emit, subscribe } from "../src/events"
+import { subscribe } from "../src/events"
 import { server } from "../src/groups/api"
 import { goalRoutes, Goals, quietLimit, transcript, type Goal, type GoalPlaces } from "../src/goals"
 import type { ServerEvent } from "../src/wire"
+import { StandIn } from "./support/standin"
 
 // Goals as a box runs them: a conversation given a goal works toward it turn after turn, checked
 // after each one, until it's met; against a stand-in engine (its HTTP API and live event feed),
 // through the bridge's real link to it, and as the bridge runs one of the coding agents'.
-
-type Turn = { text?: string; tool?: boolean; outcome?: "succeeded" | "failed" | "interrupted"; error?: string }
-
-/** The engine: a turn for each note, as `turns` script them, and the goal check's verdicts in turn. */
-class StandIn {
-  readonly conversations = new Map<string, any[]>()
-  readonly synthetic: { session: string; text: string; description?: string }[] = []
-  /** Each check asked: afresh on the session's model (`fresh`), or in the session's own context (`own`). */
-  readonly checks: { kind: "fresh" | "own"; prompt: string; model?: any }[] = []
-  verdicts: string[] = []
-  turns: Turn[] = []
-  /** Turns that wait for `finish` rather than ending at once. */
-  holding = false
-  /** Goal checks that wait for `answerChecks`. */
-  holdingChecks = false
-  /** Its model is one of OpenCode's free ones, which answer a check only in the session's own context. */
-  freeModel = false
-  /** A note sent while a turn runs waits for it to end (as the bridge's sessions take them), rather than joining it. */
-  queuesNotes = false
-  /** Sessions whose parent is another (a subagent's). */
-  readonly parents = new Map<string, string>()
-  /** Titles given to sessions, by session. */
-  readonly titles = new Map<string, string>()
-  /** Its events go out as the bridge's own (`emit`), not on its feed. */
-  emitsAsBridge = false
-  private held: (() => void)[] = []
-  private heldChecks: (() => void)[] = []
-  private queued = new Map<string, { text: string; description?: string }[]>()
-  private busy = new Set<string>()
-  private feeds = new Set<ReadableStreamDefaultController<Uint8Array>>()
-  private next = 1
-  private server: ReturnType<typeof Bun.serve>
-
-  constructor(private readonly beat: () => void) {
-    this.server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 0, fetch: (request) => this.answer(request) })
-  }
-
-  get url() {
-    return `http://127.0.0.1:${this.server.port}`
-  }
-
-  get listening() {
-    return this.feeds.size > 0
-  }
-
-  stop() {
-    for (const feed of this.feeds) feed.close()
-    this.server.stop(true)
-  }
-
-  session(id: string, messages: any[] = []) {
-    this.conversations.set(id, messages)
-  }
-
-  /** You (or another client) wrote to it: it takes a turn. */
-  write(session: string, text: string) {
-    this.add(session, { type: "user", text })
-    this.turn(session)
-  }
-
-  /** The turns held, ended. */
-  finish() {
-    for (const end of this.held.splice(0)) end()
-  }
-
-  /** A note that waited for the turn before it: its own turn now. */
-  deliver(session: string) {
-    const waiting = this.queued.get(session)?.shift()
-    if (!waiting) return
-    this.add(session, { type: "synthetic", text: waiting.text, description: waiting.description })
-    this.turn(session)
-  }
-
-  answerChecks() {
-    for (const answer of this.heldChecks.splice(0)) answer()
-  }
-
-  emit(type: string, data: any) {
-    if (this.emitsAsBridge) return void emit(type, data)
-    const line = new TextEncoder().encode(`data: ${JSON.stringify({ id: `evt_${this.next++}`, type, data })}\n\n`)
-    for (const feed of this.feeds) feed.enqueue(line)
-  }
-
-  private add(session: string, message: any) {
-    this.conversations.get(session)!.push({ id: `msg_${String(this.next++).padStart(4, "0")}`, time: { created: Date.now() }, ...message })
-  }
-
-  private note(session: string, text: string, description?: string) {
-    this.synthetic.push({ session, text, description })
-    this.add(session, { type: "synthetic", text, description })
-  }
-
-  private turn(session: string) {
-    const turn = this.turns.shift() ?? { tool: true, text: "Working on it." }
-    this.busy.add(session)
-    this.emit("session.execution.started", { sessionID: session })
-    const end = () => {
-      const content = [...(turn.tool ? [{ type: "tool", name: "bash", state: { status: "completed", input: { command: "npm test" }, content: [{ type: "text", text: "1 failing" }] } }] : []), ...(turn.text ? [{ type: "text", text: turn.text }] : [])]
-      if (content.length) this.add(session, { type: "assistant", content })
-      const outcome = turn.outcome ?? "succeeded"
-      this.add(session, { type: "idle", outcome, ...(turn.error ? { error: { message: turn.error } } : {}) })
-      this.busy.delete(session)
-      this.emit(`session.execution.${outcome}`, { sessionID: session })
-      this.beat()
-    }
-    if (this.holding) this.held.push(end)
-    else end()
-  }
-
-  private async answer(request: Request): Promise<Response> {
-    const url = new URL(request.url)
-    const parts = url.pathname.split("/").filter(Boolean)
-    if (url.pathname === "/api/event") {
-      let controller: ReadableStreamDefaultController<Uint8Array>
-      const stream = new ReadableStream<Uint8Array>({
-        start: (feed) => {
-          controller = feed
-          this.feeds.add(feed)
-          this.beat()
-        },
-        cancel: () => void this.feeds.delete(controller),
-      })
-      return new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
-    }
-    const body: any = request.method === "POST" ? await request.json() : undefined
-    try {
-      if (url.pathname === "/api/session/active") return Response.json({ data: Object.fromEntries([...this.busy].map((id) => [id, { type: "busy" }])) })
-      if (url.pathname === "/api/experimental/generate") {
-        if (this.freeModel) return Response.json({ message: "Free usage limit reached." }, { status: 503 })
-        return await this.check("fresh", body.prompt, body.model)
-      }
-      const [, , session, what] = parts
-      const conversation = this.conversations.get(session)
-      if (!conversation) return Response.json({ message: "No such session." }, { status: 404 })
-      if (!what && request.method === "PATCH") {
-        const { title } = (await request.json()) as any
-        this.titles.set(session, title)
-        return Response.json({ data: {} })
-      }
-      if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.titles.has(session) ? { title: this.titles.get(session) } : {}), ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}) } })
-      if (what === "message") return Response.json({ data: [...conversation].reverse() })
-      if (what === "synthetic") {
-        if (this.busy.has(session) && this.queuesNotes) {
-          this.synthetic.push({ session, text: body.text, description: body.description })
-          this.queued.set(session, [...(this.queued.get(session) ?? []), { text: body.text, description: body.description }])
-        } else if (this.busy.has(session)) {
-          // Steered into the turn under way: the agent reads it at its next step.
-          this.note(session, body.text, body.description)
-        } else {
-          this.note(session, body.text, body.description)
-          this.turn(session)
-        }
-        return Response.json({ data: {} })
-      }
-      if (what === "generate") return await this.check("own", body.prompt)
-      return Response.json({ data: {} })
-    } finally {
-      this.beat()
-    }
-  }
-
-  private async check(kind: "fresh" | "own", prompt: string, model?: any) {
-    this.checks.push({ kind, prompt, ...(model ? { model } : {}) })
-    this.beat()
-    if (this.holdingChecks) await new Promise<void>((resolve) => this.heldChecks.push(resolve))
-    // Met, once the script runs out.
-    return Response.json({ data: { text: this.verdicts.shift() ?? `{"verdict": "met", "reason": "Done."}` } })
-  }
-}
 
 let root: string
 let engine: StandIn
@@ -276,14 +108,18 @@ describe("a goal", () => {
     expect(engine.titles.get("ses_work")).toBe("all tests in test/auth pass")
   })
 
-  test("on one of OpenCode's free models, is checked in the session's own context, which can answer", async () => {
+  test("on one of OpenCode's free models, is checked afresh all the same", async () => {
     engine.freeModel = true
     engine.verdicts = [`{"verdict": "met", "reason": "Done."}`]
     await goals.set("ses_work", "README says hello")
     await until(() => goal()?.state === "met")
+    // Still apart from the agent: in a session of the engine's own, shown the conversation,
+    // hidden from lists, and gone once it answered.
     expect(engine.checks.map((check) => check.kind)).toEqual(["own"])
-    // It reads the conversation it's part of: it isn't sent it again.
-    expect(engine.checks[0].prompt).not.toContain("<conversation>")
+    expect(engine.checks[0].session).not.toBe("ses_work")
+    expect(engine.checks[0].prompt).toContain("<conversation>")
+    expect(engine.made[0]?.metadata).toEqual({ kuvo: { engineFor: "ses_work" } })
+    expect(engine.conversations.has(engine.checks[0].session!)).toBe(false)
   })
 
   test("that can't be met as asked ends, saying why", async () => {

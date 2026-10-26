@@ -61,7 +61,7 @@ with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 it and prints the public key to pin): the app writes those files
 (`"Kuvo Code" --write-box-files <folder>`), and `scripts/sign-box.mjs` signs
 `boxes.json`, which names them. Machines take only
-what a key pinned in `kuvo-link.js` (`UPDATE_KEYS`) signed; see
+what a key pinned in the box's link (`UPDATE_KEYS`, in `Packages/Box/src`) signed; see
 `Packages/KuvoLink/PROTOCOL.md`, "Updates".
 
 Builds are signed ad hoc, so macOS treats every build as a new app and asks for
@@ -174,7 +174,8 @@ README says how.
 | `KuvoCode/` | The app: views, stores and the design system |
 | `Packages/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
 | `Packages/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
-| `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side and the machines' bridge |
+| `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side, and the box's link as built (`kuvo-link.js`) |
+| `Packages/Box/` | The box (TypeScript): its link's sources, built to `kuvo-link.js` (its `README.md`) |
 | `Agents/` | The agents bridge (TypeScript): Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API |
 | `Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
 | `Licenses/` | License texts for code copied into this repository |
@@ -205,7 +206,8 @@ that's running; `BrowserAgent`'s page scripts are shared with this Mac's browser
 
 Kuvo Code for iPhone reaches this Mac's engine, and your machines', through a relay, encrypted
 end to end ([Noise](https://noiseprotocol.org), `Packages/KuvoLink/PROTOCOL.md`). The Mac side
-is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource) runs with the engine's
+is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource, built from `Packages/Box/src`
+with `./scripts/build-box.sh`, which you run and commit after changing them) runs with the engine's
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
 JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
@@ -217,6 +219,13 @@ quotes) is held to `Agents/test/box-vectors.json`: after changing one on either 
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
 This Mac's box carries its group chats' mail to your machines on its own relay connection, as a
 machine's bridge does (`kuvo-link.js`: `watchSeats`, `carrySeat`).
+
+Code that's there only for released Macs (PROTOCOL.md's "For released Macs": Kuvo Code 0.5 to
+0.7.2, and 0.8.0-beta.1) carries a marker where it is, on every side, `COMPAT(<version> <item>):
+what it does. Goes …` (`#` in a shell script), whose item that section names. `scripts/compat.sh
+[0.7 | beta.1]` lists them, so a version's paths go together, and `Tests/Bridge/compat.test.js`
+fails on an item without a marker or a marker without an item. Mark what you add for them the same
+way.
 
 It's off until the iPhone app is out: `defaults write run.kuvo.code phoneLink -bool true` (or
 `KUVO_DEMO_PHONE=1`) turns it on, with Settings › Phone, and `phoneLink.relay` points it at a
@@ -243,10 +252,12 @@ when you're there to answer.
 | Variable | Effect |
 | --- | --- |
 | `KUVO_OPENCODE_BINARY` | Use this opencode binary instead of the pinned download |
+| `KUVO_BOX_SCRIPT` | Run this Mac's box from this script (a checkout's `Packages/Box/src/link/main.ts`, or a built `kuvo-link.js`) instead of the app's |
 | `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Agents/src/main.ts`) instead of the app's bundle |
 | `KUVO_DEMO_FOLDER`, `KUVO_DEMO_PROMPT`, `KUVO_DEMO_MODEL` | Open a project and start a session with a prompt (`provider/model`) |
 | `KUVO_DEMO_WORKTREE` | Start that session in a worktree of its own |
 | `KUVO_DEMO_DRAFT` | With `KUVO_DEMO_FOLDER` and no prompt: a message typed, not sent, in the new session's composer |
+| `KUVO_DEMO_THEN`, `KUVO_DEMO_THEN_DRAFT` | With `KUVO_DEMO_PROMPT`: messages separated by `\|`, each sent once the turn before it ended (a keyword too, like `/btw what changed?`); then text left, not sent, in its composer |
 | `KUVO_DEMO_DRAFT_FILES` | With `KUVO_DEMO_FOLDER` and no prompt: comma-separated paths attached, not sent, in the new session's composer |
 | `KUVO_DEMO_SHOW_IN_PANEL` | `<path>\|folder` or `<path>\|file`: as if the agent of the session in view showed that in the panel |
 | `KUVO_DEMO_SCROLL` | Seconds after the conversation in view opens: it scrolls up through it in steps and writes how long that took to `KUVO_PERF_LOG` (a file); `KUVO_PERF_NO_GLASS`, `KUVO_PERF_PLAIN`, `KUVO_PERF_NO_EDGE` and `KUVO_PERF_NO_ANIM` turn parts of the transcript off to compare. A window behind others draws less often, so compare runs alike. Debug builds also log real dropped frames as you scroll (`log show --predicate 'subsystem == "run.kuvo.code" AND category == "scroll"'`) |
@@ -271,6 +282,7 @@ when you're there to answer.
 | `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT` |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
+| `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
 | `KUVO_DEMO_BOX_FAILED` | This Mac's box as if it had stopped for good, with this reason: how the sidebar shows it |
 | `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |
@@ -290,6 +302,8 @@ when you're there to answer.
 | `KUVO_DEMO_MCP_SERVER` | With `KUVO_DEMO_SETTINGS=mcp`: that server's editor, open (added, off, if it isn't there); `<name>\|web` switches it to On the web |
 | `KUVO_DEMO_SETTINGS_SCROLL` | `bottom`: with `KUVO_DEMO_SETTINGS`, each page scrolled to its end a few seconds after it opens |
 | `KUVO_DEMO_SKILLS_COLLECTION` | With `KUVO_DEMO_SETTINGS=skills`: that collection on GitHub (`owner/name`) opened, as if typed and opened; `owner/name\|skill` also adds that skill, as Add Skill does |
+| `KUVO_DEMO_ADD_PLUGIN` | With `KUVO_DEMO_SETTINGS=engine`: Add a Plugin open, with this typed in its search field (empty for none) |
+| `KUVO_DEMO_WORKTREES_FOLDER` | `browse`: with `KUVO_DEMO_SETTINGS=worktrees`, the folder browser a machine's page opens for Choose a Folder…, open |
 | `KUVO_DEMO_SKILLS_DELETED` | With `KUVO_DEMO_SETTINGS=skills`: `open` opens Recently Deleted; `restore:<folder>` also restores that skill, as Restore does |
 | `KUVO_DEMO_ACCOUNTS_MACHINE` | With `KUVO_DEMO_SETTINGS=accounts`: that machine's Accounts, in its own tab |
 | `KUVO_DEMO_WELCOME` | No tabs, so the welcome card shows |

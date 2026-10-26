@@ -23,6 +23,8 @@ export interface Ran {
   code: number
   stdout: string
   stderr: string
+  /** It ran past its `timeout` and was stopped. */
+  timedOut?: boolean
 }
 
 /** Runs a program to its end, or until `timeout` (then it's stopped). An `env` value left `undefined` is unset. */
@@ -40,7 +42,8 @@ export async function run(command: string, args: string[], options: { cwd?: stri
     child.stdin.write(options.input)
     child.stdin.end()
   }
-  const timer = options.timeout ? setTimeout(() => child.kill(), options.timeout) : undefined
+  let timedOut = false
+  const timer = options.timeout ? setTimeout(() => { timedOut = true; child.kill() }, options.timeout) : undefined
   let stdout = ""
   let stderr = ""
   const reads = Promise.all([new Response(child.stdout).text().then((text) => (stdout = text)), new Response(child.stderr).text().then((text) => (stderr = text))])
@@ -49,7 +52,7 @@ export async function run(command: string, args: string[], options: { cwd?: stri
   // what came by a moment after it ended is all.
   await Promise.race([reads, Bun.sleep(2_000)])
   if (timer) clearTimeout(timer)
-  return { code, stdout, stderr }
+  return { code, stdout, stderr, ...(timedOut ? { timedOut } : {}) }
 }
 
 /** Runs a program as a process group of its own (an installer piping `curl` into `bash`): on `timeout`, all of it stops. */

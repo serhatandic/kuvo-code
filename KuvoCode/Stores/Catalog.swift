@@ -36,6 +36,9 @@ final class Catalog {
     private(set) var defaultModel: Model?
     private(set) var agents: [Agent] = []
     private(set) var commands: [Command] = []
+    /// The plugins its settings add, as the engine has them: loaded, or failed and why. One being
+    /// installed isn't among them yet. Nil until read.
+    private(set) var plugins: [PluginInfo]?
     /// Commands by project folder, with the project's own.
     private(set) var projectCommands: [String: [Command]] = [:]
     private(set) var isLoaded = false
@@ -315,6 +318,7 @@ final class Catalog {
         async let defaultModel = api.defaultModel()
         async let agents = api.agents()
         async let commands = api.commands()
+        async let plugins = api.plugins()
         do { engineIntegrations = try await integrations } catch { log.error("integrations: \(String(describing: error), privacy: .public)") }
         var starting = false
         var modelsRead = false
@@ -330,6 +334,7 @@ final class Catalog {
         do { self.defaultModel = try await defaultModel } catch { log.error("default model: \(String(describing: error), privacy: .public)") }
         do { self.agents = try await agents } catch { log.error("agents: \(String(describing: error), privacy: .public)") }
         do { self.commands = try await commands } catch { log.error("commands: \(String(describing: error), privacy: .public)") }
+        do { self.plugins = try await Self.added(plugins) } catch { log.error("plugins: \(String(describing: error), privacy: .public)") }
         // What's new shows at once; each folder's own commands follow (reading one can start its
         // tools there, so not before).
         merge()
@@ -338,6 +343,16 @@ final class Catalog {
         for directory in projectCommands.keys { await loadCommands(in: directory) }
         merge()
         if starting { waitForEngine() } else { unavailableSince = nil }
+    }
+
+    func refreshPlugins() async {
+        guard let api else { return }
+        do { plugins = try Self.added(await api.plugins()) } catch { log.error("plugins: \(String(describing: error), privacy: .public)") }
+    }
+
+    /// The plugins the settings add, without the engine's own.
+    private static func added(_ plugins: [PluginInfo]) -> [PluginInfo] {
+        plugins.filter { $0.source.type != "builtin" }
     }
 
     /// The outside agents' accounts and models, from their bridge.
@@ -459,6 +474,9 @@ final class Catalog {
         case "integration.updated", "credential.updated", "credential.switched", "provider.updated",
              "model.updated", "agent.updated", "command.updated", "config.updated":
             scheduleRefresh()
+        case "plugin.updated":
+            // One installed or failing to: its plugins alone.
+            Task { await refreshPlugins() }
         default:
             break
         }

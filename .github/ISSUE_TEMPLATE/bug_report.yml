@@ -37,8 +37,9 @@ body:
   - type: input
     id: macos
     attributes:
-      label: macOS version and Mac
-      placeholder: macOS 26.1, MacBook Air M2
+      label: System
+      description: macOS and your Mac, or iOS and your iPhone, and the engine's version.
+      placeholder: macOS 26.1, MacBook Air M2, engine 2.0.32
     validations:
       required: true
   - type: input

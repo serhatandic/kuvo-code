@@ -126,7 +126,6 @@ nonisolated enum AppInfo {
     /// Where Help points: the docs, what's new in each release, and reporting a problem.
     static let docs = URL(string: "https://kuvo.run/code/docs/")!
     static let releases = URL(string: "https://github.com/serhatandic/kuvo-code/releases")!
-    static let newIssue = URL(string: "https://github.com/serhatandic/kuvo-code/issues/new/choose")!
     /// Where to write to the people who make Kuvo Code.
     static let contact = URL(string: "mailto:info@kuvo.run")!
 }

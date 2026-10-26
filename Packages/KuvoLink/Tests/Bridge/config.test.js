@@ -42,7 +42,7 @@ async function macBox(t, { folder = fs.mkdtempSync(path.join(root, "mac-")), def
     fs.writeFileSync(path.join(config, "opencode", "opencode.json"), settings);
   }
   const child = spawn(process.execPath, [script.pathname, "serve"], {
-    env: { ...process.env, KUVO_HOME: box, KUVO_ENGINE_CONFIG: config, KUVO_KEYS: keys, OPENCODE_PASSWORD: "pw" }, stdio: ["pipe", "pipe", "inherit"],
+    env: { ...process.env, KUVO_HOME: box, KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: config, KUVO_KEYS: keys, OPENCODE_PASSWORD: "pw" }, stdio: ["pipe", "pipe", "inherit"],
   });
   t.after(() => child.kill());
   let out = "";

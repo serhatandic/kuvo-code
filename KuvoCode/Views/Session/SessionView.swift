@@ -152,12 +152,13 @@ private struct BottomStack: View {
         return waiting ? owner : nil
     }
 
-    /// What the composer offers after "/": the engine's commands and yours, and "/goal" where
-    /// its computer runs goals.
+    /// What the composer offers after "/" besides the keywords: the engine's commands and yours,
+    /// the engine's own /review as /review-quick where the keyword has the name.
     private var commands: [Command] {
-        let own = catalog.commands(in: model.session.location.directory)
-        return model.takesGoals ? own.filter { $0.name != Goal.command.name } + [Goal.command] : own
+        Keyword.commands(catalog.commands(in: model.session.location.directory), keywords: model.keywords)
     }
+
+
 
     /// Subagents its agent handed work to that are at it now.
     private var subagentsAtWork: [SessionModel.Subagent] {
@@ -218,6 +219,7 @@ private struct BottomStack: View {
                     .glassEffectID("goal", in: glass)
                     .transition(.opacity)
                 }
+                KeywordBars(model: model, glass: glass)
                 if !subagentsAtWork.isEmpty {
                     SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: $model.hidesSubagents)
                         .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
@@ -259,6 +261,7 @@ private struct BottomStack: View {
                     history: { model.sentMessages },
                     folders: [model.session.location.directory] + workspace.extraFolders(model.session.location.directory),
                     commands: commands,
+                    keywords: model.keywords,
                     focusRequest: model.composerFocus,
                     isOffline: offlineMachine != nil,
                     blurRequest: model.composerBlur,
@@ -305,7 +308,12 @@ private struct BottomStack: View {
             .animation(.ui, value: offlineMachine == nil)
             .animation(.ui, value: model.failure)
             .animation(.ui, value: model.goal == nil)
+            .animation(.ui, value: model.review == nil)
+            .animation(.ui, value: model.shownSideQuestion)
+            .animation(.ui, value: model.handoff == nil || model.handoff == model.putAwayHandoff)
             .animation(.ui, value: app.browserAsks.asks(for: model.session.id).map(\.id))
+            // Its side questions, for the bar's menu and the sidebar's.
+            .task(id: model.id) { await workspace.agents(forFolder: model.session.location.directory)?.loadSideQuestions(of: model.id) }
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.bottom, 16)
@@ -376,6 +384,12 @@ struct DraftSessionView: View {
     @State private var attempts = 1
     @State private var isCreating = false
 
+    /// What "/" offers a new conversation: a goal where its computer runs them, a loop, and Plan.
+    private var newSessionKeywords: [Keyword] {
+        let goals = workspace.agents(forFolder: directory).map { $0.api != nil && $0.runsGoals != false } ?? false
+        return Keyword.allCases.filter { $0 == .loop || $0 == .plan || ($0 == .goal && goals) }
+    }
+
     /// Worktrees are for git repositories.
     private var isRepository: Bool { workspace.branches[directory] != nil || workspace.defaultBranches[directory] != nil }
 
@@ -405,7 +419,8 @@ struct DraftSessionView: View {
                 model: startingModel,
                 isRunning: isCreating,
                 folders: [directory] + workspace.extraFolders(directory),
-                commands: catalog.commands(in: directory) + (workspace.agents(forFolder: directory)?.api != nil ? [Goal.command] : []),
+                commands: Keyword.commands(catalog.commands(in: directory), keywords: newSessionKeywords),
+                keywords: newSessionKeywords,
                 focusRequest: focusRequest,
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { approval = $0 },

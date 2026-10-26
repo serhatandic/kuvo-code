@@ -1,0 +1,16 @@
+{
+  "name": "kuvo-box",
+  "private": true,
+  "type": "module",
+  "description": "What runs on each of your computers beside the engine: its link (kuvo-link.js), and the shapes it shares with the agents bridge.",
+  "scripts": {
+    "check": "tsc --noEmit && tsc --noEmit -p test",
+    "build": "../../scripts/build-box.sh",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.3",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}

@@ -128,6 +128,7 @@ public enum RemoteEngineError: LocalizedError {
     case exited(status: Int32, output: String)
     case unreadableHandshake(String)
     case timedOut
+    // COMPAT(0.7 engine-stop): an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
     /// Its engine is stopped on purpose (Stop), and stays so until it's started.
     case stopped
 
@@ -150,6 +151,7 @@ public enum RemoteEngineError: LocalizedError {
             return "The engine on the machine said something unexpected when starting: \(line)"
         case .timedOut:
             return "The engine on the machine took too long to start."
+        // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
         case .stopped:
             return "The engine on the machine is stopped."
         }
@@ -323,17 +325,20 @@ public enum BoxVersion {
         return text.isEmpty ? nil : text
     }
 
+    // COMPAT(0.7 files): `run/mac-installing`, so the box doesn't take this Mac's files for an older Mac's. Goes 3 months after 0.8.0.
     /// Notes there that this app puts its files in place now (`run/mac-installing`), so the box
     /// doesn't take them for an older Mac's, put back over what it updated itself to.
     public static func installing(on connection: SSHConnection) async throws {
         try await connection.run("R=\"$HOME/\(RemoteEngineInstaller.root)/run\"; mkdir -p \"$R\" && touch \"$R/mac-installing\"")
     }
 
+    // COMPAT(0.7 files): `run/mac-installing` taken back. Goes 3 months after 0.8.0.
     /// Takes `installing`'s note back, for a connect that ends before it puts its files in place.
     public static func notInstalling(on connection: SSHConnection) async throws {
         try await connection.run("rm -f \"$HOME/\(RemoteEngineInstaller.root)/run/mac-installing\"")
     }
 
+    // COMPAT(0.7 files): the tools an older Mac puts its own over, which the box keeps copies of in `bin/.own`. Goes 3 months after 0.8.0.
     /// The box's tools that an older Kuvo Code on a Mac (0.7 and before) puts its own over as it
     /// connects. The box keeps copies of its own (`bin/.own`), which its keeper puts back.
     public static let ownTools = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"]
@@ -348,8 +353,10 @@ public enum BoxVersion {
     }
 
     static func markScript(marks: [String: String]) -> String {
+        // COMPAT(0.7 files): this app's tools kept in `bin/.own`, or the box's put back over an older Mac's. Goes 3 months after 0.8.0.
         let keep = ownTools.map { tool in
             let kept = "cp -p \"$B/\(tool)\" \"$O/.\(tool).new\" && mv -f \"$O/.\(tool).new\" \"$O/\(tool)\" || exit 1"
+            // COMPAT(0.7 files): `kuvo-npx` kept only with this version's engine there. Goes 3 months after 0.8.0.
             // Put there by this script only with this version's engine there, which it runs.
             if tool == "kuvo-npx" { return "if [ -n \"$npx\" ]; then \(kept); fi" }
             guard let mark = marks[tool].map(SSHConnection.quoted) else {
@@ -368,7 +375,9 @@ public enum BoxVersion {
         \(Launcher.installScript)
         npx=1
         fi
+        # COMPAT(0.7 files): bin/.own, the box copies of its tools. Goes 3 months after 0.8.0.
         B="$K/bin"; O="$B/.own"; mkdir -p "$O" || exit 1
+        # COMPAT(0.7 visits): run/older-mac, an older Mac visit the mark would hide. Goes 3 months after 0.8.0.
         # An older Mac here since the box was last marked: noted for the box (its updates), which
         # the mark that follows would hide.
         if [ -f "$B/box-version" ] && [ "$K/run/attached" -nt "$B/box-version" ]; then touch -r "$K/run/attached" "$K/run/older-mac"; fi
@@ -475,6 +484,7 @@ public final class RemoteServer: @unchecked Sendable {
 
     static var run: String { "$HOME/\(RemoteEngineInstaller.root)/run" }
 
+    // COMPAT(0.7 engine-stop): `stopped`, an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// What runs on the machine: its engine, or that it's stopped on purpose, or nothing.
     public enum Found: Sendable, Equatable {
         case running(Engine)
@@ -496,11 +506,13 @@ public final class RemoteServer: @unchecked Sendable {
             pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q opencode "/proc/$pid/cmdline" 2>/dev/null; then
               cat "$R/engine.json"
+            # COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
             elif [ -f "$R/stopped" ]; then
               echo stopped
             fi
             """)
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
         if line == "stopped" { return .stopped }
         guard !line.isEmpty, let engine = try? JSONDecoder().decode(Engine.self, from: Data(line.utf8)) else { return .none }
         return .running(engine)
@@ -533,6 +545,7 @@ public final class RemoteServer: @unchecked Sendable {
             environment["OPENCODE_CLIENT"] = "desktop"
             environment.removeValue(forKey: "OPENCODE_SERVER_PASSWORD")
             if let replace { environment["KUVO_REPLACE"] = String(replace) }
+            // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
             if start { environment["KUVO_START"] = "1" }
             // What's kept to find it again, but its process, which the script adds.
             struct Record: Encodable { var port: Int, password: String, version: String, notes: [String: String], agentsPort: Int?, agentsPassword: String? }
@@ -566,6 +579,7 @@ public final class RemoteServer: @unchecked Sendable {
                 // One started meanwhile (after a restart, or by another Mac): that one, as it is.
                 if let running = try await running(on: connection) { return running }
                 lastError = RemoteEngineError.timedOut
+            // COMPAT(0.7 engine-stop): an engine an older Mac stopped (status 6). Goes 3 months after 0.8.0.
             } catch RemoteEngineError.ssh(let status, _) where status == 6 {
                 throw RemoteEngineError.stopped
             } catch RemoteEngineError.ssh(let status, let message) where status == 75 {
@@ -704,6 +718,7 @@ public final class RemoteServer: @unchecked Sendable {
         keep)
           echo $$ >"$R/box.pid"
           boot=$(cat "$K/bin/.kuvo-boot" 2>/dev/null)
+          # COMPAT(0.7 keeper): its own copies, bin/.kuvo-start-keeper and bin/.kuvo-launch-keeper. Goes 3 months after 0.8.0.
           # A copy of itself and of its launcher, which it runs its starts from and puts back when an
           # older Kuvo Code on a Mac (0.7 and before) put its own there as it started the engine:
           # a kuvo-start that only starts the engine after a restart, and a launcher that knows
@@ -713,6 +728,7 @@ public final class RemoteServer: @unchecked Sendable {
             cp -f "$0" "$me.new" 2>/dev/null && mv -f "$me.new" "$me" || me=$0
             [ "$me" = "$0" ] || { cp -f "$K/bin/kuvo-launch" "$K/bin/.kuvo-launch-keeper.new" && mv -f "$K/bin/.kuvo-launch-keeper.new" "$K/bin/.kuvo-launch-keeper"; } 2>/dev/null
           fi
+          # COMPAT(0.7 keeper): the kuvo-start of an older Mac, replaced by the copy. Goes 3 months after 0.8.0.
           # Whether kuvo-start is a keeper; an older Mac's is replaced, with the launcher it put there
           # (one removed stays removed).
           mine() {
@@ -724,11 +740,13 @@ public final class RemoteServer: @unchecked Sendable {
             return 1
           }
           mine
+          # COMPAT(0.7 keeper): the watchdogs an older Mac start brings. Goes 3 months after 0.8.0.
           # The watchdogs engines had before, one each: this keeper does their work now.
           pkill -f "watchdog [0-9]+ $R" 2>/dev/null
           fails=0; next=0; started=; round=0
           while :; do
             [ -f "$K/bin/kuvo-start" ] && [ "$(cat "$R/box.pid" 2>/dev/null)" = "$$" ] || exit 0
+            # COMPAT(0.7 keeper): checked each round. Goes 3 months after 0.8.0.
             # Its script replaced: a newer keeper carries on; an older Mac's gets this one back (its
             # mark left as it is, so that Mac doesn't put its own there again).
             if mine; then
@@ -736,6 +754,7 @@ public final class RemoteServer: @unchecked Sendable {
             else
               boot=$(cat "$K/bin/.kuvo-boot" 2>/dev/null)
             fi
+            # COMPAT(0.7 files): the box tools put back from bin/.own. Goes 3 months after 0.8.0.
             # An older Kuvo Code on a Mac (which touches run/attached as it connects) put its own
             # tools over the box's since the box was last marked: the box's back, as the Kuvo Code
             # that marked it put them there (bin/.own). Not while a Mac puts its files in place, or
@@ -747,6 +766,7 @@ public final class RemoteServer: @unchecked Sendable {
                 if cmp -s "$f" "$t"; then touch -r "$f" "$t"; else cp -p "$f" "$K/bin/.$n.new" && mv -f "$K/bin/.$n.new" "$t"; fi
               done 2>/dev/null
             fi
+            # COMPAT(0.7 engine-stop): run/stopped taken away once an older Mac started the engine. Goes 3 months after 0.8.0.
             # Running though stopped: an older Kuvo Code on a Mac, which doesn't know Stop, started
             # it as it connected. It runs, so it isn't stopped (under the lock, so a stop under way
             # finishes first).
@@ -796,6 +816,7 @@ public final class RemoteServer: @unchecked Sendable {
             # beside this loop, which a slow watch never holds up, one round at a time.
             round=$((round + 1))
             if [ $((round % 4)) -eq 0 ] && up && ! is "${waking-}" kuvo-wake; then
+              # COMPAT(0.7 keeper): the watchdogs an older Mac start brings, stopped. Goes 3 months after 0.8.0.
               # (Not beside the watchdog an older Mac's start brings, which would also stop the
               # engine after a day without that Mac.)
               pkill -f "watchdog [0-9]+ $R" 2>/dev/null
@@ -915,6 +936,7 @@ public final class RemoteServer: @unchecked Sendable {
         # else would know to stop that one.
         trap 'rmdir "$R/.launching" 2>/dev/null; [ -z "${pid-}" ] || [ -n "${noted-}" ] || kill "$pid" 2>/dev/null' EXIT
         trap 'exit 1' HUP INT TERM PIPE
+        # COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
         # Stopped on purpose (Stop, from the Mac or a phone): it stays stopped, unless this is Start.
         if [ -f "$R/stopped" ]; then
           \(boot ? "exit 0" : "if [ -n \"$starting\" ]; then rm -f \"$R/stopped\"; else echo \"Its engine is stopped.\" >&2; exit 6; fi")
@@ -929,6 +951,7 @@ public final class RemoteServer: @unchecked Sendable {
           \(boot ? "" : "kill \"$old\"; n=0; while kill -0 \"$old\" 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done; kill -0 \"$old\" 2>/dev/null && kill -9 \"$old\" 2>/dev/null; rm -f \"$R/engine.json\"")
         fi
         \(boot ? "unset KUVO_BOOT" : "rm -rf \"$K/keys\"")
+        # COMPAT(0.7 settings): the settings an older Mac still sends, left out. Goes 3 months after 0.8.0.
         # A box of its own (KuvoLink's PROTOCOL.md, "Settings per box"): its own settings and keys,
         # in `box`, never a Mac's, which an older Mac may still send. What's below them goes as
         # this start begins, the engine that read it gone: the Mac's copy, and the global file once
@@ -1141,6 +1164,7 @@ public final class RemoteServer: @unchecked Sendable {
     static var stopScript: String {
         """
         K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
+        # COMPAT(0.7 keeper): a box whose kuvo-start has no off case, stopped the old way. Goes 3 months after 0.8.0.
         # Its keeper's script, if it's one that knows `off` (an older one would start the engine).
         if grep -q '^off)' "$K/bin/kuvo-start" 2>/dev/null; then sh "$K/bin/kuvo-start" off; exit 0; fi
         \(stopAgentsScript)
@@ -1166,6 +1190,7 @@ public final class RemoteServer: @unchecked Sendable {
         try await connection.run("sh \"$HOME/\(RemoteEngineInstaller.root)/bin/kuvo-start\" stop")
     }
 
+    // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts the machine's engine after a stop, as it was last started there (Start). False when
     /// it didn't come up.
     @discardableResult
