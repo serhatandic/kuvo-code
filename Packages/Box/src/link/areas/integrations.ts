@@ -1,21 +1,19 @@
 // @ts-nocheck
 // Integrations (PROTOCOL.md, "Integrations"), as the Mac's Settings › Integrations has them.
 
-import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { BOTS, IS_MAC, K } from "../home";
+import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
-import { deleteKey, keyNames, keyWork, writeKey } from "../keys";
-import { KeysUnavailable, STORED_KEY, siteSignIns } from "../host";
 import { listOf, writePrivate } from "../files";
-import { SERVERS, changeSettings, readSettings, valueAt } from "./config";
+import { BOTS, IS_MAC, K, SCRIPT } from "../home";
+import { INTEGRATION_DATA } from "../home";
+import { KeysUnavailable, siteSignIns } from "../host-interface";
+import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
+import { changeSettings, readSettings, SERVERS, valueAt } from "./config";
 
 export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
-// What integrations' servers keep (a sign-in), where the engine runs them with it (KUVO_INTEGRATIONS:
-// this Mac's in the app's own folder, a machine's in `integrations`).
-const INTEGRATION_DATA = process.env.KUVO_INTEGRATIONS || path.join(K, "integrations");
 
 /** The integrations this box offers, from the catalog its Mac leaves in `bin` (this Mac's app, as it
  * starts its box): on a machine, not those that use a Mac's own apps. */
@@ -110,8 +108,6 @@ async function keepsAll(variables) {
   return variables.every(variable => kept.includes(variable));
 }
 
-/** Runs `run` in `ms`, without keeping the bridge up for it. */
-export const soon = (run, ms) => setTimeout(run, ms).unref?.();
 
 // Set by `box route`, a command that answers once and ends: what waits a moment goes in a process
 // of its own, which outlives it.
@@ -124,7 +120,7 @@ export function answerOnce() {
 function reconnectLater(engine, id, later) {
   if (!engine) return;
   if (answersOnce && later === soon) {
-    spawn(process.execPath, [fileURLToPath(import.meta.url), "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn(process.execPath, [SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2_000);

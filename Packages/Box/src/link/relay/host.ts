@@ -2,9 +2,9 @@
 // The host: answers paired phones' sessions (PROTOCOL.md, "Sessions"; the Mac app's LinkServer, in
 // JavaScript): their handshakes, requests, streams and sockets.
 
-import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, relaySend } from "./frames";
 import { EMPTY } from "../crypto/keys";
 import { IKResponder, PROLOGUE } from "../crypto/noise";
+import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, relaySend } from "./frames";
 
 export class LinkHost {
   // authorize(key, hello, address) → whether to let the phone in; handle(request, phone, signal) → an

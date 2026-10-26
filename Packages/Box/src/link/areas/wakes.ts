@@ -5,17 +5,16 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { BOTS, K, RUN } from "../home";
 import { oneLine } from "../../shared/text";
 import { textOf, listOf } from "../files";
 import { watchFolders } from "../follow";
+import { BOTS, RUN } from "../home";
+import { SESSION_WAKES, WAKE_COMMAND } from "../home";
 
 // What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
 // the folders the app keeps on the machine, so a phone has them with the Mac closed: a bot's
 // description (`bot.json`, which the app writes from its list), its session, and the wake-ups,
 // watches and pause that `kuvo-wake` keeps beside them.
-export const SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
-export const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
 export const DESCRIPTION = 1;
 export const WAKE_MARKER = "[Wake-up] ";

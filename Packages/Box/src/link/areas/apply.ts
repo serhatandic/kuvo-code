@@ -9,10 +9,11 @@
 // machines; and a field of a server, agent, command or provider this box doesn't have isn't made.
 
 import fs from "node:fs";
-import { CATALOG_FILE, CONFIG_FILE, keysNamedHere, readSettings, settingAt, valueAt, writeSettings } from "./config";
-import { CONFIG_LOCK, IS_MAC } from "../home";
 import { isObject, sameJSON } from "../../shared/json";
 import { locked } from "../files";
+import { CONFIG_LOCK, IS_MAC } from "../home";
+import { CONFIG_FILE, keysNamedHere, readSettings, settingAt, valueAt, writeSettings } from "./config";
+import { CATALOG_FILE } from "./mcp-catalog";
 
 // The engine's own agents, on every computer whether its settings name them or not.
 const BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];

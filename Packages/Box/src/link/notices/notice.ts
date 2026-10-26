@@ -2,11 +2,11 @@
 // A notice for your phones (PROTOCOL.md, "Notifications"): its payload, masked and cut to fit a push,
 // and the relay's push of it, sealed for one phone.
 
+import { sortedJSON } from "../../shared/json";
 import { cut, prefixBytes } from "../../shared/text";
+import { sealOneWay } from "../crypto/noise";
 import { Frame, frame, relayPush } from "../relay/frames";
 import { masked } from "./mask";
-import { sealOneWay } from "../crypto/noise";
-import { sortedJSON } from "../../shared/json";
 
 // The bridge tells your phones what happens in this machine's sessions, Mac connected or not: a
 // permission or a question asked, a run finished or failed, a bot's news (PROTOCOL.md,

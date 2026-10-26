@@ -8,11 +8,11 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { BOTS, RUN } from "../home";
 import { isObject } from "../../shared/json";
-import { MOST_DOC } from "../documents/format";
 import { plainName } from "../../shared/text";
+import { MOST_DOC } from "../documents/format";
 import { textOf, locked, writePrivate } from "../files";
+import { BOTS, RUN } from "../home";
 
 // Beside the bots: where a Mac's app keeps them (KUVO_BOTS), a machine in its own folder.
 export const PERSONALITIES_FILE = path.join(BOTS, "personalities.json");

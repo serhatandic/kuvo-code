@@ -8,10 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../shared/json";
 import { oneLine } from "../shared/text";
-import { RUN } from "./home";
-
-/** The only names the box ever asks for. */
-export const STORED_KEY = /^KUVO_KEY_[A-Z0-9_]+$/;
+import { KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
 
 /** A key store's trouble, said in plain words: the caller answers `503 {"message"}` with it. */
 export class KeysUnavailable extends Error {}
@@ -19,15 +16,8 @@ export class KeysUnavailable extends Error {}
 // Where this Mac's app answers, as it writes it each time its host interface starts (`run/host.json`,
 // `{"url", "password"}`, only you can read it): read again for each call, so an app whose host
 // interface started again, at a new address, is reached without the box starting again. One started
-// with it in its environment (`KUVO_HOST_URL`, `KUVO_HOST_PASSWORD`) uses that while there's no file,
-// its password out of its environment at once, so nothing it runs (git, kuvo-wake) has it.
+// with it in its environment uses that while there's no file (`LAUNCH_HOST`, home.ts).
 const HOST_FILE = path.join(RUN, "host.json");
-const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
-  ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
-// A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
-// keys can't be reached, rather than kept in files of its own instead of your Keychain.
-export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
-delete process.env.KUVO_HOST_PASSWORD;
 
 export const NOT_ANSWERING = "Kuvo Code isn't answering for this Mac's keys. Try again in a moment.";
 

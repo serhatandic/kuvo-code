@@ -10,7 +10,7 @@ export const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 /** A new id: `prefix` and twenty letters and digits (`bot_…`, `grp_…`). */
 export const newID = (prefix: string) => prefix + Array.from(crypto.randomBytes(10), byte => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
 // A name as one line of plain text, as the Mac's name field has it.
-export const plainName = (text: unknown) => String(text ?? "").replace(/[\u0000-\u001f\u007f‎‏‪-‮⁦-⁩]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+export const plainName = (text: unknown) => String(text ?? "").replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, " ").split(/\s+/).filter(Boolean).join(" ");
 
 // The characters of `text` that fit in `bytes` of UTF-8.
 export function prefixBytes(text: string, bytes: number) {

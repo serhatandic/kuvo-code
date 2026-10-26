@@ -1,12 +1,10 @@
 // @ts-nocheck
 // Plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's packages its engine can load, found from this box.
 
-import os from "node:os";
-import path from "node:path";
-import { K } from "../home";
+import { IN_TEST_FOLDER } from "../home";
 
 // npm's registry, or a test's stand-in for it, in a test's folder only (never a machine's own).
-const testNpm = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_NPM : undefined;
+const testNpm = IN_TEST_FOLDER ? process.env.KUVO_TEST_NPM : undefined;
 const NPM = testNpm ?? "https://registry.npmjs.org";
 // A package as npm names it, with a version or tag after it or not.
 const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s@/]+))?$/;

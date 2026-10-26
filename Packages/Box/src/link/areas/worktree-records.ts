@@ -1,14 +1,13 @@
 // @ts-nocheck
-// git as the box runs it in your folders (never asking anything, taking no locks it needn't), and
-// where it keeps the worktrees it makes for sessions (`box/worktrees.json`, PROTOCOL.md "Worktrees")
-// and the branch prefix a client last gave.
+// What this box keeps of the worktrees it makes for sessions (`box/worktrees.json`, PROTOCOL.md
+// "Worktrees"), and the branch prefix a client last gave: read by the worktrees' routes, and by a
+// project's, which names a session in one after its project.
 
-import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { K } from "../home";
 import { isObject } from "../../shared/json";
 import { writePrivate } from "../files";
+import { K } from "../home";
 
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
 // The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
@@ -21,30 +20,6 @@ export const branchPrefix = () => {
     return "kuvo/";
   }
 };
-const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
-
-/** git in `folder`: what it printed (trimmed), or null when it failed. */
-export function gitIn(folder, args) {
-  const ran = spawnSync("git", args, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000 });
-  return ran.status === 0 ? String(ran.stdout ?? "").trim() : null;
-}
-
-/** The same without holding up the bridge, for what takes a while in a big worktree. */
-export function gitLater(folder, args) {
-  return new Promise(resolve => {
-    execFile("git", args, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
-  });
-}
-
-/** The room `folder` takes, in bytes; undefined when `du` can't say. */
-export function sizeLater(folder) {
-  return new Promise(resolve => {
-    execFile("du", ["-sk", folder], { encoding: "utf8", timeout: 60_000 }, (error, stdout) => {
-      const kilobytes = Number(String(stdout ?? "").split(/\s/)[0]);
-      resolve(!error && Number.isFinite(kilobytes) ? kilobytes * 1024 : undefined);
-    });
-  });
-}
 
 /** The worktrees this box keeps: `{project, root, folder, branch, base?}` each (`folder`: where
  * its session runs, the project's place in its repository; one made here also has `made`, the

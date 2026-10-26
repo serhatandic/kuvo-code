@@ -20,6 +20,10 @@ export const VERSION_FILE = path.join(RUN, "link.version");
 // writes: the engine reads the file (`OPENCODE_CONFIG`, over the global one) and reloads it when it
 // changes. Before a Mac made them the machine's own (`adoptBox`), its Mac's.
 export const BOX = path.join(K, "box");
+// The box's folder as its settings name it: "~/.kuvo-code", as the Mac's start wrote key paths.
+const home = os.homedir();
+export const shownRoot = K.startsWith(home + "/") ? "~" + K.slice(home.length) : K;
+
 // Its integrations' keys (KUVO_KEY_…), and its bots' own.
 export const BOX_KEYS = path.join(BOX, "keys");
 // Bots' own keys (`answerBotKeys`), the box's own beside its shared ones: a start from a Mac
@@ -27,6 +31,22 @@ export const BOX_KEYS = path.join(BOX, "keys");
 export const BOT_KEYS = path.join(K, "box", "bot-keys");
 // What the box's own updates keep: the files a rollback puts back, what was installed.
 export const UPDATES = path.join(K, "updates");
+// What integrations' servers keep (a sign-in), where the engine runs them with it (KUVO_INTEGRATIONS:
+// this Mac's in the app's own folder, a machine's in `integrations`).
+export const INTEGRATION_DATA = process.env.KUVO_INTEGRATIONS || path.join(K, "integrations");
+// The engine's own data (its sessions' database, and where new worktrees go): in this box's folder
+// on a machine, in the app's on a Mac (KUVO_ENGINE_DATA).
+export const ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode");
+// Conversations' own wake-ups and watches, beside them as `kuvo-wake` keeps them, and kuvo-wake
+// itself: in this box's folder on a machine, the app's on a Mac (KUVO_WAKES, KUVO_WAKE_COMMAND).
+export const SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
+export const WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
+// This Mac's: the files its app writes its Keychain's keys to, which the engine reads (KUVO_KEYS);
+// null on a machine.
+export const APP_KEY_FILES = process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : null;
+// A test's folder (not a machine's own `~/.kuvo-code`), where a test's stand-ins for npm and
+// GitHub are taken.
+export const IN_TEST_FOLDER = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code");
 // The engine's settings and keys change one at a time, whoever changes them.
 export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 
@@ -45,3 +65,23 @@ export const IS_MAC = process.env.KUVO_BOX === "mac";
 export const HERE = IS_MAC ? "this Mac" : "this machine";
 // Where its engine's settings are: this Mac's app's engine's (a machine's are in `box`).
 export const ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
+// (This Mac's box has them there, always: BoxProcess gives both.)
+if (IS_MAC && !ENGINE_CONFIG) throw new Error("This Mac's box was started without KUVO_ENGINE_CONFIG, the folder its engine's settings are in.");
+
+// This Mac's app's host interface, as it was given when the box started (`KUVO_HOST_URL`,
+// `KUVO_HOST_PASSWORD`), which it uses while there's no `run/host.json` (host-interface.ts): its
+// password out of the environment here, as the box loads, before anything copies the environment
+// for what it runs (git, kuvo-wake), so nothing it runs has it.
+export const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PASSWORD
+  ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
+// A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
+// keys can't be reached, rather than kept in files of its own instead of your Keychain.
+export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
+delete process.env.KUVO_HOST_PASSWORD;
+
+// The box's own script (kuvo-link.js, or its source in a debug run), for what it runs again as a
+// command of its own (`box reconnect`, `update`): said once as it starts, by main.ts.
+export let SCRIPT = "";
+export const scriptIs = (file: string) => {
+  SCRIPT = file;
+};

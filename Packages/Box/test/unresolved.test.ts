@@ -24,7 +24,7 @@ function* sources(folder: string): Generator<string> {
 const TSC = join(import.meta.dir, "../node_modules/typescript/bin/tsc")
 
 test("everything the files not checked yet use is declared there or imported", () => {
-  if (!existsSync(TSC)) throw new Error("TypeScript isn't installed here: run `bun install --frozen-lockfile` in Packages/Box (with Bun 1.4.2, as CI has: see its README).")
+  if (!existsSync(TSC)) throw new Error("TypeScript isn't installed here: run `bun install --frozen-lockfile` in Packages/Box, with the Bun its README names.")
   const unchecked = [...sources(src)].filter(file => readFileSync(file, "utf8").startsWith(PRAGMA))
   expect(unchecked).toContain(join(src, "link/main.ts"))
   const copies = unchecked.map(file => {

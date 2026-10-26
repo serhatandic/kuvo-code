@@ -6,29 +6,21 @@
 // `run/.config.lock`.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { BOX, BOX_KEYS, CONFIG_LOCK, ENGINE_CONFIG, IS_MAC, K, RUN } from "../home";
-import { deleteKey, keyNames, keyWork, readKey, writeKey } from "../keys";
 import { isObject, sameJSON, sortedJSON } from "../../shared/json";
-import { KeysUnavailable, STORED_KEY } from "../host";
 import { locked, writePrivate } from "../files";
+import { BOX, CONFIG_LOCK, ENGINE_CONFIG, IS_MAC } from "../home";
+import { shownRoot } from "../home";
+import { APP_KEY_FILES } from "../home";
 
 export const CONFIG_FILE = IS_MAC ? path.join(ENGINE_CONFIG, "opencode", "opencode.json") : path.join(BOX, "opencode.json");
 const OWN_MARK = IS_MAC ? null : CONFIG_FILE;
-// What a Mac's start used to write: its settings in the global file, the rest beside its keys.
-const GLOBAL_FILE = path.join(K, "config", "opencode", "opencode.json");
-const MAC_SETTINGS = path.join(K, "keys", "settings.json");
-const MAC_KEYS = path.join(K, "keys");
-const LAUNCH_LOCK = path.join(RUN, ".launching");
-// Settings › MCP Servers' popular servers, as the Mac lists them, which it puts here as it connects.
-export const CATALOG_FILE = path.join(K, "bin", "mcp-catalog.json");
 export const SERVERS = ["mcp", "servers"];
 
 // COMPAT(0.7 settings): the routes answer 409 until a Mac adopts the settings an older Mac's start left. Goes 3 months after 0.8.0.
 export const ownsSettings = (mark = OWN_MARK) => mark === null || fs.existsSync(mark);
 
-const sortedKeys = value => Array.isArray(value) ? value.map(sortedKeys)
+export const sortedKeys = value => Array.isArray(value) ? value.map(sortedKeys)
   : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedKeys(value[key])])) : value;
 
 // The file's settings: {settings}, none for a file that isn't there yet, or {problem} for one that
@@ -131,26 +123,11 @@ export function deepMerged(under, over) {
   return merged;
 }
 
-// The box's folder as its settings name it: "~/.kuvo-code", as the Mac's start wrote key paths.
-const home = os.homedir();
-export const shownRoot = K.startsWith(home + "/") ? "~" + K.slice(home.length) : K;
-
-// Key paths the Mac's start wrote (`<root>/keys/KUVO_KEY_…`), as the box keeps its keys now.
-function boxKeyPaths(value) {
-  if (typeof value === "string") {
-    return value.split(`{file:${shownRoot}/keys/KUVO_KEY_`).join(`{file:${shownRoot}/box/keys/KUVO_KEY_`)
-      .split(`{file:${K}/keys/KUVO_KEY_`).join(`{file:${shownRoot}/box/keys/KUVO_KEY_`);
-  }
-  if (Array.isArray(value)) return value.map(boxKeyPaths);
-  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, boxKeyPaths(inner)]));
-  return value;
-}
-
-const KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
+export const KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
 
 // Where this box's settings name its keys: its own keys' folder, or on a Mac the files the app
 // writes its Keychain's keys to (KUVO_KEYS).
-const KEYS_NAMED = IS_MAC && process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : `${shownRoot}/box/keys`;
+const KEYS_NAMED = IS_MAC && APP_KEY_FILES ? APP_KEY_FILES : `${shownRoot}/box/keys`;
 
 // A key named where another computer keeps its keys (`{file:<its folder>/KUVO_KEY_…}`, from Also
 // Apply), named where this box keeps them.
@@ -161,61 +138,6 @@ export function keysNamedHere(value) {
   return value;
 }
 
-
-// Makes the machine's settings its own, once (a box of its own: PROTOCOL.md, "Settings per box"):
-// what it runs with now, as its Mac's start left them (the global file under the Mac's own, which
-// wins), with the keys beside them, goes in its box; or, on a machine with none, `seed` ({settings,
-// keys}: the Mac's, as it would have sent them). The launch's lines for them go, so no start writes
-// them back. An engine running now keeps reading what it started with, untouched; the next start
-// reads the box, and clears what's below it (`global-adopted` says the global file came in whole).
-// Under the launch's lock and the settings' own, so no start or change comes between.
-// {status: "own" | "adopted", seeded, settings}.
-// COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
-export function adoptBox(seed) {
-  return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
-    if (fs.existsSync(CONFIG_FILE)) {
-      addDefaultRules();
-      return { status: "own", settings: readSettings().settings ?? {} };
-    }
-    const global = readSettings(GLOBAL_FILE);
-    const mac = readSettings(MAC_SETTINGS);
-    const before = deepMerged(global.settings ?? {}, mac.settings ?? {});
-    const seeded = !Object.keys(before).length && isObject(seed?.settings);
-    const settings = boxKeyPaths(seeded ? seed.settings : before);
-    fs.mkdirSync(BOX_KEYS, { recursive: true, mode: 0o700 });
-    fs.chmodSync(BOX, 0o700);
-    if (seeded) {
-      for (const [name, value] of Object.entries(isObject(seed.keys) ? seed.keys : {})) {
-        if (KEY_NAME.test(name) && typeof value === "string") writePrivate(path.join(BOX_KEYS, name), value);
-      }
-    } else {
-      // The shared keys; a bot's own (`…__<bot>`) stay where its folder names them.
-      let names = [];
-      try { names = fs.readdirSync(MAC_KEYS); } catch {}
-      for (const name of names) {
-        if (!KEY_NAME.test(name) || name.includes("__")) continue;
-        try { writePrivate(path.join(BOX_KEYS, name), fs.readFileSync(path.join(MAC_KEYS, name), "utf8")); } catch {}
-      }
-    }
-    // What it was made from, kept beside it.
-    const kept = path.join(BOX, "adopted-from");
-    fs.mkdirSync(kept, { recursive: true, mode: 0o700 });
-    for (const [file, name] of [[GLOBAL_FILE, "opencode.json"], [MAC_SETTINGS, "settings.json"]]) {
-      try { writePrivate(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
-    }
-    writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys(settings), null, 2) + "\n");
-    addDefaultRules();
-    // The global file came in whole: the next start empties it (one you edited by hand, with
-    // comments, it leaves as it is).
-    if (!global.problem) writePrivate(path.join(BOX, "global-adopted"), "");
-    const launchEnv = path.join(RUN, "launch.env");
-    try {
-      const lines = fs.readFileSync(launchEnv, "utf8").split("\n").filter(line => !/^KUVO_(PRIVATE_)?SETTINGS=/.test(line));
-      writePrivate(launchEnv, lines.join("\n"));
-    } catch {}
-    return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
-  }, { stale: 300_000, wait: 120_000 }));
-}
 
 // What a box starts its engine with, unless its settings set it, each once (`defaults-added` names
 // those done), so one you take out stays out:
@@ -228,7 +150,7 @@ export function adoptBox(seed) {
 // Under the settings' lock.
 export const BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
 const DEFAULTS_ADDED = path.join(BOX, "defaults-added");
-function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+export function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
   let done = [];
   try { done = fs.readFileSync(marks, "utf8").split("\n").filter(Boolean); } catch {}
   const wanted = mac ? ["bot-memory", "websearch", "search-exa"] : ["bot-memory"];
@@ -256,71 +178,4 @@ function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDE
 // This Mac's box, as it starts: its defaults, before any client reads its settings.
 export function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
   locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
-}
-
-// `kuvo/keys…`: the box's integrations' keys, through its key store (`keyNames`, `readKey`…), a
-// bot's own not among them; where they can't be reached now (this Mac's app not answering), `503`.
-export async function answerKeys(method, route, body) {
-  try {
-    if (route === "kuvo/keys") return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter(name => !name.includes("__")) } } : { status: 405, value: {} };
-    const parts = route.split("/");
-    let name = "";
-    try { name = parts.length === 3 ? decodeURIComponent(parts[2]) : ""; } catch {}
-    if (!STORED_KEY.test(name) || name.includes("__")) return { status: 400, value: { message: "That isn't a key's name." } };
-    switch (method) {
-      case "GET": {
-        const value = await readKey(name);
-        return value == null ? { status: 404, value: {} } : { status: 200, value: { value } };
-      }
-      case "PUT": {
-        const value = body?.value;
-        if (typeof value !== "string" || !value) return { status: 400, value: { message: "Send {\"value\": \"…\"}." } };
-        await keyWork(() => writeKey(name, value));
-        return { status: 200, value: {} };
-      }
-      case "DELETE":
-        await keyWork(() => deleteKey(name));
-        return { status: 200, value: {} };
-      default:
-        return { status: 405, value: {} };
-    }
-  } catch (error) {
-    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
-    throw error;
-  }
-}
-
-// A key of the box's own, set (`value`) or removed (null): integrations' servers read it there.
-export function setBoxKey(name, value) {
-  if (!KEY_NAME.test(String(name)) || String(name).includes("__")) return { status: 400, message: "That isn't a key's name." };
-  return locked(CONFIG_LOCK, () => {
-    if (value == null) fs.rmSync(path.join(BOX_KEYS, name), { force: true });
-    else writePrivate(path.join(BOX_KEYS, name), String(value));
-    return { status: 200 };
-  });
-}
-
-// The popular servers, as this box has them: on a machine, those that use the Mac's own apps left out.
-export function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
-  let servers = [];
-  try { servers = JSON.parse(fs.readFileSync(file, "utf8")).servers ?? []; } catch {}
-  return {
-    servers: servers.filter(server => typeof server?.id === "string" && (mac || !server.macOnly)).map(server => {
-      const added = valueAt(settings, [...SERVERS, server.id]) !== undefined;
-      return { id: server.id, title: String(server.title ?? ""), summary: String(server.summary ?? ""), access: String(server.access ?? "open"),
-        added, integration: added && Boolean(server.integration), macOnly: mac && Boolean(server.macOnly) };
-    }),
-  };
-}
-
-// One of them added, as its Add button does; one already there stays as it is.
-export function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = CONFIG_LOCK, mac = IS_MAC) {
-  let servers = [];
-  try { servers = JSON.parse(fs.readFileSync(catalog, "utf8")).servers ?? []; } catch {}
-  const server = servers.find(each => each?.id === id && (mac || !each.macOnly));
-  if (!server || !isObject(server.settings)) return { status: 404 };
-  const { settings, problem } = readSettings(file);
-  if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
-  if (valueAt(settings, [...SERVERS, id]) !== undefined) return { status: 200, settings };
-  return changeSettings([{ path: [...SERVERS, id], value: { codemode: false, ...server.settings } }], file, lock);
 }

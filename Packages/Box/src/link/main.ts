@@ -20,49 +20,53 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DOC_KINDS } from "../shared/documents";
-import { isObject, parsed, sameJSON, sortedJSON } from "../shared/json";
-import { alive, processRuns as runs, promptedFolders } from "../shared/platform";
-import { cut, newID, oneLine, plainName, prefixBytes, quote, stamp } from "../shared/text";
+import { isObject, parsed } from "../shared/json";
+import { alive, processRuns as runs } from "../shared/platform";
+import { cut, newID, plainName, prefixBytes, quote, stamp } from "../shared/text";
 import { pause, sleep } from "../shared/wait";
 import { asked, call, engineGet, fetched, readBridgeFile, readEngineFile } from "./engine/client";
 import { isHiddenRun } from "./engine/sessions";
-import { textOf, listOf, locked, writePrivate } from "./files";
-import { macLink, onLinkWritten, readLink, readLinkWith, updateLink, writeLink } from "./state";
-import { BOT_KEYS, BOTS, BOX, BOX_KEYS, BRIDGE_FILE, CONFIG_LOCK, UPDATES, ENGINE_CONFIG, ENGINE_FILE, HERE, IS_MAC, K, LINK_FILE, NEEDED_FILE, PID_FILE, RUN, VERSION_FILE } from "./home";
+import { listOf, locked, textOf, writePrivate } from "./files";
+import { macLink, onLinkWritten, readLink, updateLink } from "./state";
+import { BOTS, ENGINE_FILE, HERE, IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, UPDATES, VERSION_FILE } from "./home";
 import { addressOf, EMPTY, newKey, publicOf } from "./crypto/keys";
-import { CipherState, IKInitiator, IKResponder, MAIL_PROLOGUE, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
-import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRelay, relayHello, relayPush, relaySend } from "./relay/frames";
-import { masked, showsAll } from "./notices/mask";
-import { bodyHash, DOC_PART, docBytes, docKey, held, MOST_DOC, MOST_PARTS, newSigningSeed, ownSign, readDoc, shortHash, SIGN, signDoc, signingKeyOf } from "./documents/format";
+import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
+import { Frame, frame, readRelay, relayHello, relaySend } from "./relay/frames";
+import { showsAll } from "./notices/mask";
+import { bodyHash, DOC_PART, docKey, held, MOST_DOC, MOST_PARTS, newSigningSeed, ownSign, readDoc, shortHash, SIGN, signDoc } from "./documents/format";
 import { searchPlugins } from "./areas/plugins";
 import { listFolders, makeFolder } from "./areas/folders";
 import { endedProviders, forgetPlan, noteSignIn } from "./areas/accounts";
-import { ASKS_FILE, answerAsk, askAnswer, inConversation, listedAsk, readAsks, watchAsks } from "./areas/asks";
-import { KEYS_ON_HOST, KeysUnavailable, NOT_ANSWERING, STORED_KEY, appHost, askHost, forgetHostProof, hostTrash, proveHost, siteSignIns } from "./host";
-import { deleteKey, keyNames, keyWork, readKey, writeKey } from "./keys";
-import { CATALOG_FILE, CONFIG_FILE, SERVERS, addFromCatalog, addMacDefaults, adoptBox, answerKeys, changeSettings, keysNamedHere, mcpCatalog, ownsSettings, readSettings, setBoxKey, settingAt, shownRoot, valueAt, writeSettings } from "./areas/config";
+import { answerAsk, askAnswer, ASKS_FILE, inConversation, listedAsk, readAsks, watchAsks } from "./areas/asks";
+import { appHost, askHost, forgetHostProof, hostTrash, KeysUnavailable, proveHost } from "./host-interface";
+import { botVariable, deleteKey, keyNames, keyWork, readKey, STORED_KEY, writeKey } from "./keys";
+import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { applySettings } from "./areas/apply";
 import { noticeJSON, pushTo } from "./notices/notice";
-import { BRANCH_PREFIX_FILE, WORKTREES_FILE, branchPrefix, gitIn, gitLater, sizeLater } from "./areas/git";
+import { readRemovedWorktrees, readWorktrees, worktreeFollowers } from "./areas/worktree-records";
 import { LinkHost } from "./relay/host";
-import { followed, watchFolders } from "./follow";
-import { INTEGRATIONS_FILE, answerIntegrations, answerOnce, integrationCatalog, reconnectEverywhere, soon } from "./areas/integrations";
-import { DESCRIPTION, SESSION_WAKES, WAKE_COMMAND, WAKE_MARKER, allWakes, holdArchived, listWakes, listedWake, readWakes, sendWakes, wakeFolder, wakeFollowers, wakeOf, wakesChanged } from "./areas/wakes";
-import { readRemovedWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./areas/git";
+import { followed } from "./follow";
+import { answerIntegrations, answerOnce, integrationCatalog, INTEGRATIONS_FILE, reconnectEverywhere } from "./areas/integrations";
+import { allWakes, DESCRIPTION, holdArchived, listedWake, listWakes, readWakes, sendWakes, WAKE_MARKER, wakeFolder, wakeFollowers, wakeOf, wakesChanged } from "./areas/wakes";
 import { answerProjects, boxProjects, readProjects } from "./areas/projects";
 import { answerWorktrees, nameWorktreeBranch, tellWorktree, worktreesWhere } from "./areas/worktrees";
 import { answerSkills, keepSkillTrashClear } from "./areas/skills";
-import { REQUEST_HEADERS, RESPONSE_HEADERS, agentsAllowed, allowed, canonicalPath, signInReturn, socketAllowed } from "./server/paths";
+import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./server/paths";
 import { forgetPhones, phoneHere } from "./compat/leave-running";
 import { engineConnect, engineControl, engineDown, loadSignInReturn, stopShell } from "./areas/engine";
-import { FULL_LIBRARY, MOST_COUNT, PERSONALITIES_FILE, PERSONALITIES_LOCK, PERSONALITY_ID, botPersonalities, changePersonalities, fitsLibrary, keptPersonality, meetPersonalities, mergePersonalities, personalitiesDocument, personalityFollowers, readPersonalities } from "./personalities/library";
-import { botVariable } from "./keys";
+import { botPersonalities, changePersonalities, fitsLibrary, FULL_LIBRARY, keptPersonality, meetPersonalities, mergePersonalities, MOST_COUNT, PERSONALITIES_FILE, PERSONALITIES_LOCK, personalitiesDocument, PERSONALITY_ID, personalityFollowers, readPersonalities } from "./personalities/library";
+import { addFromCatalog, mcpCatalog } from "./areas/mcp-catalog";
+import { adoptBox } from "./compat/adopt-settings";
+import { answerKeys, setBoxKey } from "./areas/box-keys";
+import { shownRoot } from "./home";
+import { APP_KEY_FILES, SESSION_WAKES, WAKE_COMMAND } from "./home";
+import { soon } from "../shared/wait";
+import { macSign } from "./state";
 
 // What moved into modules, as this file exported it (the bridge's tests import it from here).
 export { addressOf, newKey, publicOf } from "./crypto/keys";
@@ -76,14 +80,17 @@ export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
 export { endedProviders, forgetPlan, noteSignIn } from "./areas/accounts";
 export { answerAsk, askAnswer, askNotice, listedAsk, readAsks, watchAsks } from "./areas/asks";
-export { BOT_MEMORY_RULE, addFromCatalog, addMacDefaults, adoptBox, changeSettings, deepMerged, keysNamedHere, mcpCatalog, ownsSettings, readSettings, setBoxKey } from "./areas/config";
+export { BOT_MEMORY_RULE, addMacDefaults, changeSettings, deepMerged, keysNamedHere, ownsSettings, readSettings } from "./areas/config";
+export { addFromCatalog, mcpCatalog } from "./areas/mcp-catalog";
+export { adoptBox } from "./compat/adopt-settings";
+export { setBoxKey } from "./areas/box-keys";
 export { applySettings, translateSettings } from "./areas/apply";
 export { NOTICE_LIMIT, noticeJSON, pushTo } from "./notices/notice";
 export { LinkHost } from "./relay/host";
 export { followed } from "./follow";
 export { answerIntegrations, reconnectEverywhere } from "./areas/integrations";
 export { allWakes, holdArchived, listWakes, nextWake, readWakes, repeatText, sendWakes, wakeFolder, wakeOf } from "./areas/wakes";
-export { readRemovedWorktrees, readWorktrees } from "./areas/git";
+export { readRemovedWorktrees, readWorktrees } from "./areas/worktree-records";
 export { answerProjects, boxProjects, changeProjects, readProjects } from "./areas/projects";
 export { answerWorktrees, branchSlug, nameWorktreeBranch, tellWorktree, worktreesWhere } from "./areas/worktrees";
 export { SKILL_REPOSITORIES, answerSkills, keepSkillTrashClear, skillAbout, skillName, skillTrashEntry, skillsIn } from "./areas/skills";
@@ -92,6 +99,9 @@ export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/lea
 export { engineConnect, engineControl, toolRun } from "./areas/engine";
 export { botPersonalities, changePersonalities, mergePersonalities, personalitiesDocument, readPersonalities } from "./personalities/library";
 export { botVariable } from "./keys";
+
+// This file, for what the box runs again as a command of its own.
+scriptIs(fileURLToPath(import.meta.url));
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
@@ -263,7 +273,7 @@ async function* forward(target, path, request, signal, allows, naming = null, do
 /** Where the engine reads a bot's own keys, as its settings name the folder: this Mac's app's
  * (`KUVO_KEYS`, where it keeps each key in a file named by its variable), or a machine's
  * `box/bot-keys`. */
-const BOT_KEY_FOLDER = process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : null;
+const BOT_KEY_FOLDER = APP_KEY_FILES;
 const botKeyFolder = () => BOT_KEY_FOLDER ?? `${shownRoot}/box/bot-keys`;
 
 /** The integrations a bot can have keys of its own for: those you bring a key for. */
@@ -2901,9 +2911,8 @@ export function answerPersonalities(method, id, body, file = PERSONALITIES_FILE,
 }
 
 
-// ---- State (link.json, ./state): what follows a change to it, and how an earlier bridge's is read ----
+// ---- State (link.json, ./state): what follows a change to it ----
 
-readLinkWith(migratedLink);
 onLinkWritten(link => {
   if (IS_MAC) {
     for (const tell of macLink.phoneFollowers) tell();
@@ -3097,10 +3106,6 @@ const ownPhones = link => ({
 // kind from. No clock decides anything: boxes tell each other what they have as they meet
 // (`have`), what changed as it changes (`give`), and what they have again with their agents.
 
-// COMPAT(beta.1 peers-list): a Mac that gave no signing key signs no documents. Goes when 0.8.0 ships.
-// The signing key a Mac of this box's gave in setup, over SSH; null for one that gave none yet (a
-// Mac with Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For released Macs").
-const macSign = (link, mac) => (typeof link?.macSigns?.[mac] === "string" && SIGN.test(link.macSigns[mac]) ? link.macSigns[mac] : null);
 function macDoc(link, mac, kind) {
   const sign = macSign(link, mac);
   return sign ? held(link.docs?.[docKey(sign, kind)]) : null;
@@ -3498,23 +3503,6 @@ export function peersOf(link) {
 // This box's own public key, as peers name it.
 function ownKey(link) {
   try { return publicOf(Buffer.from(link.key, "base64url")).toString("base64url"); } catch { return null; }
-}
-
-// COMPAT(beta.1 peers-list): link.json as the bridge beta.1 put on machines (0.9.23) left it. Goes when 0.8.0 ships.
-// link.json as an earlier bridge left it: each Mac's list it had (`peersFrom`) kept as that Mac's
-// word until it signs a document; what lists passed on and their dates needed, gone.
-function migratedLink(link) {
-  if (!isObject(link) || !(link.peersFrom || link.vouched || link.macAts)) return link;
-  for (const [mac, given] of Object.entries(link.peersFrom ?? {})) {
-    if (!macSign(link, mac) && isObject(given)) {
-      link.legacy ??= {};
-      link.legacy[mac] ??= { at: given.at ?? 0, peers: Array.isArray(given.peers) ? given.peers : [], moved: given.moved ?? [] };
-    }
-  }
-  delete link.peersFrom;
-  delete link.vouched;
-  delete link.macAts;
-  return link;
 }
 
 // A mail frame's body opened: from one of this box's Macs, or one of its peers. `{sender, payload}`,

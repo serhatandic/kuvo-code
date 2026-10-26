@@ -24,8 +24,9 @@ file isn't what the sources build, byte for byte (`build-box.sh --check`).
 
 `bun install --frozen-lockfile` here, then `bun run check` type-checks what's typed (Node's types:
 it must run on Node too), and `bun test` runs its own tests. The lockfile is Bun 1.4.2's too, which
-an older Bun refuses (`lockfile had changes`): install with that Bun, or with a demo copy's engine,
-which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install --frozen-lockfile`).
+an older Bun refuses (`lockfile had changes`): install with that Bun, or with the engine of a demo,
+perf or e2e copy, which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install
+--frozen-lockfile`), never the real Kuvo Code's.
 
 In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, which the
 engine's Bun runs as it is.

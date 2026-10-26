@@ -6,13 +6,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BRANCH_PREFIX_FILE, branchPrefix, gitIn, gitLater, sizeLater } from "./git";
 import { call, engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
-import { K } from "../home";
-import { readProjects } from "./projects";
-import { readWorktrees, updateWorktrees } from "./git";
 import { writePrivate } from "../files";
+import { gitIn, gitLater, sizeLater } from "../git";
+import { ENGINE_DATA } from "../home";
+import { readProjects } from "./projects";
+import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees } from "./worktree-records";
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
 function freeBranch(folder, name) {
@@ -242,7 +242,6 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
 // Where its engine keeps what's its own (its XDG_DATA_HOME's `opencode`): in this box's folder on
 // a machine, and in the app's on a Mac (KUVO_ENGINE_DATA). New worktrees go in its `worktree`
 // folder, unless Settings › Worktrees names another.
-const ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode");
 
 /** `kuvo/worktrees/where`: where new worktrees go with `directory` as Settings' Worktrees folder
  * (none: the engine's own), as the engine reads it, for each of this box's projects in a git

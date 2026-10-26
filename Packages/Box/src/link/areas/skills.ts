@@ -5,16 +5,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { K } from "../home";
 import { textOf, listOf } from "../files";
+import { K } from "../home";
+import { ENGINE_CONFIG, IN_TEST_FOLDER } from "../home";
 
 // Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
 // in this box's folder on a machine, and the app's engine's on a Mac (KUVO_ENGINE_CONFIG), so a
 // Mac's skills stay where they've always been.
-const SKILLS = path.join(process.env.KUVO_ENGINE_CONFIG || path.join(K, "config"), "opencode", "skills");
+const SKILLS = path.join(ENGINE_CONFIG || path.join(K, "config"), "opencode", "skills");
 const SKILL_SOURCE = ".kuvo-source.json";
 // GitHub, or a test's stand-in for it, in a test's folder only (never a machine's own).
-const testGitHub = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_GITHUB : undefined;
+const testGitHub = IN_TEST_FOLDER ? process.env.KUVO_TEST_GITHUB : undefined;
 const GITHUB = { api: testGitHub ?? "https://api.github.com", raw: testGitHub ?? "https://raw.githubusercontent.com" };
 // The well-known collections, roughly most popular first. Anyone can open another by name.
 export const SKILL_REPOSITORIES = [

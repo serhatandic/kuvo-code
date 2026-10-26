@@ -3,14 +3,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { call, readBridgeFile, readEngineFile } from "../engine/client";
-import { followed } from "../follow";
-import { holdArchived } from "./wakes";
 import { isObject, parsed } from "../../shared/json";
-import { K } from "../home";
-import { locked, writePrivate } from "../files";
 import { processRuns as runs } from "../../shared/platform";
-import { readWorktrees } from "./git";
+import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import { locked, writePrivate } from "../files";
+import { followed } from "../follow";
+import { K } from "../home";
+import { holdArchived } from "./wakes";
+import { readWorktrees } from "./worktree-records";
 
 const PROJECTS_FILE = path.join(K, "box", "projects.json");
 const PROJECTS_LOCK = PROJECTS_FILE + ".lock";

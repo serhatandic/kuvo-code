@@ -1,5 +1,6 @@
 // JSON with its keys sorted, as the Swift side writes it, so the same value is the same bytes on
 // every side (link frames' heads, a notice's payload, a setting compared with what was read).
+
 export function sortedJSON(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(sortedJSON).join(",")}]`;
   if (value && typeof value === "object") {

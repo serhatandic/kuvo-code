@@ -6,9 +6,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK } from "./home";
-import { KEYS_ON_HOST, KeysUnavailable, NOT_ANSWERING, STORED_KEY, appHost, askHost } from "./host";
 import { textOf, listOf, locked, writePrivate } from "./files";
+import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST } from "./home";
+import { KeysUnavailable, NOT_ANSWERING, appHost, askHost } from "./host-interface";
+
+/** The only names the box ever asks for. */
+export const STORED_KEY = /^KUVO_KEY_[A-Z0-9_]+$/;
 
 /** The app that keeps this box's keys, or null for its files; this Mac's box without its app says so. */
 function keyHost() {

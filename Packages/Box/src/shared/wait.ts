@@ -12,3 +12,6 @@ export const pause = (ms: number, signal?: AbortSignal) => new Promise<void>(res
     resolve();
   }, { once: true });
 });
+
+/** Runs `run` in `ms`, without keeping the process up for it. */
+export const soon = (run: () => void, ms: number) => setTimeout(run, ms).unref?.();
