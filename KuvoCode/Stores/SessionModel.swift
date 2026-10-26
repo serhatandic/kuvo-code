@@ -962,9 +962,9 @@ final class SessionModel {
     /// The goal it works toward, or the one it met, until it's put away: as its computer's box has it.
     var goal: Goal? { goalBridge()?.goals[id] }
 
-    /// Whether its computer runs goals now (its agents bridge is up, and new enough): "/goal" is
-    /// offered then.
-    var takesGoals: Bool { goalBridge().map { $0.api != nil && $0.runsGoals != false } ?? false }
+    /// Whether its computer runs goals now (its agents bridge is up, and new enough) for it (not a
+    /// subagent's, whose goal is the conversation it works for): "/goal" is offered then.
+    var takesGoals: Bool { session.parentID == nil && (goalBridge().map { $0.api != nil && $0.runsGoals != false } ?? false) }
 
     /// "/goal …" sent: its computer's box sets the goal and starts the agent on it, or pauses,
     /// resumes or takes away the one there. "/goal" alone shows it; with none, what to type is
@@ -979,7 +979,9 @@ final class SessionModel {
         }
         guard takesGoals else {
             restore(text: written)
-            failure = goalBridge()?.api != nil
+            failure = session.parentID != nil
+                ? "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for."
+                : goalBridge()?.api != nil
                 ? "This computer’s agents bridge is from before goals. Set it up again in Settings › Machines to update it."
                 : "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
             return
