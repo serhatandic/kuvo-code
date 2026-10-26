@@ -1138,7 +1138,7 @@ struct ReasoningView: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.ui) { isExpanded.toggle() }
             } label: {
@@ -1170,7 +1170,9 @@ struct ReasoningView: View {
                             .frame(width: 1)
                             .padding(.leading, 7.5)
                     }
-                    .transition(.opacity)
+                    // The space above it folds with it.
+                    .padding(.top, 6)
+                    .transition(.fold)
             }
         }
         #if DEBUG
@@ -1610,7 +1612,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     var body: some View {
         let folds = CardFolds.shared
         let open = folds.isOpen(id, otherwise: startsOpen)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Button {
                     withAnimation(.ui) { folds.set(id, open: !open) }
@@ -1647,8 +1649,10 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
             }
             .font(.callout)
             if open {
+                // The space above it folds with it.
                 content
-                    .transition(.opacity)
+                    .padding(.top, 6)
+                    .transition(.fold)
             }
         }
         .padding(.horizontal, 10)

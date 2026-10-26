@@ -63,10 +63,21 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
                 .frame(height: CGFloat(min(items.count, Self.visibleRows)) * Self.rowHeight)
                 .scrollBounceBehavior(.basedOnSize)
                 .padding(.bottom, 6)
-                .transition(.opacity)
+                .transition(.fold)
             }
         }
         .animation(.ui, value: items.map(\.id))
+        #if DEBUG
+        // KUVO_DEMO_FOLDS=<seconds>: its rows fold and open a few times, that far apart.
+        .task {
+            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
+            for _ in 0..<8 {
+                await DemoWait.pause(.asked(wait))
+                guard !Task.isCancelled else { return }
+                withAnimation(.ui) { isHidden.toggle() }
+            }
+        }
+        #endif
     }
 
     private var header: some View {
