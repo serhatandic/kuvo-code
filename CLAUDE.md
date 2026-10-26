@@ -171,6 +171,11 @@ conversation, cards, composer or sidebar look, change the phone's copy too (or t
 working on the phone), so the two stay one app. The same goes for the app icon: the phone's
 `KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
 
+What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
+against from this checkout as it does OpenCodeKit. Today that's `ClientText`, the rules for what a
+message says (picture names, web links, the site a link is on); its README says what belongs there.
+A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
+
 ## Upstreams stay up to date
 
 Kuvo Code is built on other projects, and keeping up with them is part of every task, without being asked. **At the start of each conversation, before the first task, check each upstream below for anything new**, and tell the user what you found.

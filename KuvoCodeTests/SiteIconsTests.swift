@@ -7,8 +7,9 @@ import Testing
 /// its /favicon.ico, fetched from the site itself and kept in the app's caches folder, so the next
 /// launch has it without asking again. A site with none, or only a colorless glyph (which would
 /// vanish on a dark or a light card), shows the globe, and isn't asked again for a while. A link
-/// is asked for by its site's main domain, and a link to this Mac or its network asks nothing.
-/// The sites are stand-ins; nothing reaches the network.
+/// is asked for by its site's main domain (which site that is, and that a link to this Mac or its
+/// network asks nothing, are KuvoClient's `ClientText`, tested there). The sites are stand-ins;
+/// nothing reaches the network.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct SiteIconsTests {
     let folder = AppInfo.testRoot.appending(path: "Caches/Site Icons \(UUID().uuidString.prefix(6))")
@@ -111,14 +112,6 @@ import Testing
         try await until { icons.isKnown("brand-icons.com") }
         #expect(icons.icon(for: "brand-icons.com") != nil)
         #expect(!StubWeb.asked.contains { $0.contains("docs.brand-icons.com") }, "the subdomain isn't asked")
-        #expect(SiteIcons.site(of: URL(string: "https://news.bbc.co.uk/x")!) == "bbc.co.uk")
-    }
-
-    /// A link to this Mac or its network (a dev server, a router, a name for the network) asks
-    /// nothing: no icon is fetched from there.
-    @Test(arguments: ["http://localhost:3000/", "http://127.0.0.1:8080/", "http://192.168.1.1/", "http://[::1]:5000/", "http://printer.local/", "http://intranet/", "file:///tmp/a.html"])
-    func localAddressesArentAsked(link: String) {
-        #expect(SiteIcons.site(of: URL(string: link)!) == nil)
     }
 
     /// A one-ink mark in a color (a blue whale) reads on a dark card and a light one: it shows.
@@ -130,21 +123,5 @@ import Testing
         icons.load(URL(string: "https://blue-icons.com/")!)
         try await until { icons.isKnown("blue-icons.com") }
         #expect(icons.icon(for: "blue-icons.com") != nil)
-    }
-
-    /// The icons a page declares, the best first: one near the size it's shown at before Apple's
-    /// touch icon, addresses as the page resolves them; a mask icon (one ink, for Safari's pins) not.
-    @Test func whatAPageDeclares() {
-        let html = """
-        <link rel="apple-touch-icon" sizes="180x180" href="/touch.png">
-        <link rel='icon' type='image/png' sizes='32x32' href='https://cdn.test/32.png'>
-        <link rel="mask-icon" href="/pin.svg" color="#000">
-        <link href=icon-16.png rel=icon sizes=16x16>
-        """
-        let found = SiteIcons.declaredIcons(in: html, page: URL(string: "https://site.test/blog/")!)
-        #expect(found.map(\.absoluteString) == ["https://cdn.test/32.png", "https://site.test/blog/icon-16.png", "https://site.test/touch.png"])
-        // One that scales comes first.
-        let svg = SiteIcons.declaredIcons(in: html + #"<link rel="icon" href="/logo.svg">"#, page: URL(string: "https://site.test/")!)
-        #expect(svg.first?.absoluteString == "https://site.test/logo.svg")
     }
 }

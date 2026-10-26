@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import SwiftUI
 
 /// Where a message is written: a composer's field (a session's, a bot's, a chat's or a group

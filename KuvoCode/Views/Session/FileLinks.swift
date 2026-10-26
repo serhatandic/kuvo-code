@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import Foundation
 import SwiftUI
 import Textual
@@ -188,7 +189,7 @@ struct SiteIconView: View {
             .frame(width: room.size.height, height: room.size.height)
         }
         .task(id: url) {
-            guard let site = SiteIcons.site(of: url) else { return }
+            guard let site = SiteAddresses.site(of: url) else { return }
             if case .icon(let shown)? = SiteIcons.shared.shown(site) { return icon = shown }
             SiteIcons.shared.load(url)
             for await note in NotificationCenter.default.notifications(named: SiteIcons.loaded) where note.object as? String == site {
