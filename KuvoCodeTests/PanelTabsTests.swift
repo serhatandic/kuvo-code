@@ -49,6 +49,20 @@ import Testing
         #expect(panel.visibleTabs.count == 1)
     }
 
+    /// A group chat has no project: its panel opens on a new tab (browser and tools), never on a
+    /// Changes tab saying "No Project", and Show Changes and Show Files don't add one there.
+    @Test func aGroupChatsPanelHasNoChangesOrFiles() {
+        panel.inView = .init(group: "group:grp_team")
+        #expect(!panel.visibleTabs.isEmpty)
+        #expect(!panel.visibleTabs.contains { $0.kind == .changes || $0.kind == .file(nil) })
+        panel.showChanges()
+        panel.showFiles()
+        #expect(!panel.visibleTabs.contains { $0.kind == .changes || $0.kind == .file(nil) })
+        // A session's panel still opens on Changes.
+        panel.inView = .init(session: "ses_a")
+        #expect(startTabs.count == 1)
+    }
+
     // MARK: Files
 
     private let a = URL(filePath: "/tmp/project/a.swift"), b = URL(filePath: "/tmp/project/b.swift")

@@ -24,14 +24,19 @@ struct NewTabPage: View {
                     section("Tools") {
                         // Two across when the panel has room for them, one when it doesn't.
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
-                            ToolCard(title: "Changes", symbol: "plus.forwardslash.minus", shortcut: "⌥⌘I") {
-                                replace { utilities.showChanges() }
+                            // (A group chat has no project: no changes or files to show.)
+                            if utilities.hasProject {
+                                ToolCard(title: "Changes", symbol: "plus.forwardslash.minus", shortcut: "⌥⌘I") {
+                                    replace { utilities.showChanges() }
+                                }
                             }
                             ToolCard(title: "Terminal", symbol: "apple.terminal", shortcut: "⌃`") {
                                 replace { utilities.newTerminal(in: directory, environment: environment) }
                             }
-                            ToolCard(title: "Files", symbol: "folder", shortcut: "⌥⌘F") {
-                                replace { utilities.showFiles() }
+                            if utilities.hasProject {
+                                ToolCard(title: "Files", symbol: "folder", shortcut: "⌥⌘F") {
+                                    replace { utilities.showFiles() }
+                                }
                             }
                             ToolCard(title: "Customize…", symbol: "slider.horizontal.3", shortcut: nil) {
                                 app.openSettings(.panel)

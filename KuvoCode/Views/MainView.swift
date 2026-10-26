@@ -933,6 +933,7 @@ struct MainView: View {
         return SessionActions(
             hasSession: model != nil,
             hasProject: focusedProject != nil,
+            panelHasProject: utilities.hasProject,
             canStop: model?.isRunning == true,
             canReopenTab: tabs.canReopenTab,
             newSession: { tabs.newSession(in: nil) },

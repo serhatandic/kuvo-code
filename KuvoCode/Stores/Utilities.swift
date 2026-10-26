@@ -170,9 +170,15 @@ final class Utilities {
 
     var selected: Tab? { visibleTabs.first { $0.id == selection } ?? visibleTabs.first }
 
+    /// The panel in view is a project's (a session's or a bot's), with changes and files to show;
+    /// not a group chat's, which has no project.
+    var hasProject: Bool { inView.group == nil }
+
     func isVisible(_ tab: Tab) -> Bool {
         let key = panelKey
         switch tab.kind {
+        // A group chat has no project: no changes, no file tree (a file a bot showed still shows).
+        case .changes, .file(nil): return hasProject && tab.owner == key
         // A group chat's bots browse beside it.
         case .browser: return place == nil && (tab.owner == key || (inView.group != nil && inView.bots.contains(tab.owner)))
         case .machinePage(let machine, _): return place == machine && (tab.owner == key || tab.owner == Self.unclaimed)
@@ -190,9 +196,10 @@ final class Utilities {
         }
     }
 
-    /// A conversation's panel as it opens: on Changes, or on a new tab if Settings › Panel says so.
+    /// A conversation's panel as it opens: on Changes, or on a new tab if Settings › Panel says so
+    /// (or it's a group chat's, which has no project for Changes).
     private func startOver() {
-        if UserDefaults.standard.string(forKey: PanelSettings.startsWith) == PanelSettings.Start.newTab.rawValue {
+        if !hasProject || UserDefaults.standard.string(forKey: PanelSettings.startsWith) == PanelSettings.Start.newTab.rawValue {
             newTab()
         } else {
             add(Tab(kind: .changes, owner: panelKey), at: 0)
@@ -211,6 +218,7 @@ final class Utilities {
 
     /// Shows the Changes tab, opening it again if it was closed.
     func showChanges() {
+        guard hasProject else { return }
         Analytics.shared.track("panel_opened", ["tool": "changes"])
         if let tab = visibleTabs.first(where: { $0.kind == .changes }) {
             selection = tab.id
@@ -438,6 +446,7 @@ final class Utilities {
 
     /// The file tree, in a tab of its own.
     func showFiles() {
+        guard hasProject else { return }
         Analytics.shared.track("panel_opened", ["tool": "files"])
         if let tab = visibleTabs.first(where: { $0.kind == .file(nil) }) {
             selection = tab.id
@@ -489,6 +498,12 @@ final class Utilities {
         } else {
             add(Tab(kind: .subagent(id, folder: folder), owner: owner))
         }
+        revealRequest += 1
+    }
+
+    /// Opens a file in a tab and brings the panel into view: you asked to see it.
+    func revealFile(_ url: URL) {
+        open(url)
         revealRequest += 1
     }
 

@@ -283,8 +283,10 @@ struct AppCommands: Commands {
             Group {
                 Button("Show Changes") { actions?.showChanges() }
                     .keyboardShortcut("i", modifiers: [.command, .option])
+                    .disabled(actions?.panelHasProject == false)
                 Button("Show Files") { actions?.showFiles() }
                     .keyboardShortcut("f", modifiers: [.command, .option])
+                    .disabled(actions?.panelHasProject == false)
                 Button("Run") { actions?.run() }
                     .keyboardShortcut("r")
                     .disabled(actions?.hasProject != true)
@@ -350,6 +352,8 @@ struct SessionActions {
     var hasSession: Bool
     /// A session or a new one is open, so there's a project to look in.
     var hasProject: Bool
+    /// The panel in view has changes and files to show (a group chat's has none).
+    var panelHasProject: Bool
     var canStop: Bool
     var canReopenTab: Bool
     var newSession: () -> Void
