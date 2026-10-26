@@ -5,8 +5,10 @@ import Testing
 
 /// The card you work in looks it (crisp, the others a warm ivory): the one you last clicked or
 /// typed in. A click on a reply's words makes the conversation that card, as a click anywhere in
-/// it does; a click on the sidebar makes the sidebar it; opening a conversation from there leaves
-/// you in it, where the keyboard goes. The window is the app's own (`MainView`), with its
+/// it does; a click on the sidebar makes the sidebar it; with Settings open, clicks there leave
+/// the cards as they were. (A session picked in the sidebar leaving you in its conversation isn't
+/// tried here: SwiftUI's buttons and gestures don't take queued clicks in a window that isn't key,
+/// and this one never is, so it can't take your keyboard.) The window is the app's own (`MainView`), with its
 /// sidebar and conversation, in a window of the test's own; the engine is stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct WindowFocusTests {
@@ -114,20 +116,6 @@ import Testing
         let handled = TestClick()
         NSApp.postEvent(handled.marker(in: window), atStart: false)
         try await until { handled.isHandled }
-        #expect(app.tabs.focus == .conversation)
-    }
-
-    /// New Session in the sidebar opens a new session's composer, and leaves you there, where the
-    /// keyboard goes, rather than in the sidebar. (Picking a session there does the same. The race
-    /// that left the sidebar focused, its tap ending after the session opened, can't be made
-    /// here: SwiftUI's gestures don't hear queued events. This keeps the outcome.) At the sidebar's
-    /// first row, under the window's buttons, with the tab bar hidden, as the test copy has it.
-    @Test func aConversationOpenedFromTheSidebarIsTheOneYouWorkIn() async throws {
-        defer { done() }
-        _ = try #require(reply)
-        click(at: NSPoint(x: 80, y: window.contentView!.bounds.height - 61))
-        try await until { app.tabs.selection?.draftFolder != nil }
-        try await until { (window.firstResponder as? MessageTextView)?.accessibilityIdentifier() == "composer" }
         #expect(app.tabs.focus == .conversation)
     }
 }
