@@ -28,16 +28,16 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.70";
+export const BRIDGE_VERSION = "0.9.71";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
+  "engine.restart", "engine.start", "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
+  "mcp.catalog", "named", "personalities", "plugins.search", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
+  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -1895,6 +1895,175 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
   return { status: 404, value: {} };
 }
 
+// Where its engine keeps what's its own (its XDG_DATA_HOME's `opencode`): in this box's folder on
+// a machine, and in the app's on a Mac (KUVO_ENGINE_DATA). New worktrees go in its `worktree`
+// folder, unless Settings › Worktrees names another.
+const ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode");
+
+/** `kuvo/worktrees/where`: where new worktrees go with `directory` as Settings' Worktrees folder
+ * (none: the engine's own), as the engine reads it, for each of this box's projects in a git
+ * repository: the folder, whether it's there or can be made, and whether it's in the repository's
+ * own checkout without git ignoring it (git would list them all as new files there). A relative
+ * one starts at the repository's own checkout, not at the project's folder in it. */
+export async function worktreesWhere(directory, engine, signal, projects = readProjects().filter(each => !each.removed).map(each => each.directory)) {
+  const value = typeof directory === "string" && directory !== "" ? directory : null;
+  const answer = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: os.homedir(), projects: [] };
+  // The engine's projects, by their own checkout, from one call about none of them (one about a
+  // folder would start the engine there): their ids name the engine's own folders.
+  const ids = new Map();
+  if (engine?.port) {
+    try {
+      for (const known of await call(engine, "GET", "/api/project", undefined, signal)) {
+        if (typeof known?.id === "string" && typeof known?.canonical === "string") ids.set(realOr(known.canonical), known.vcs === "git" && known.id !== "global" ? known.id : null);
+      }
+    } catch {}
+  }
+  for (const project of projects) {
+    if (!fs.existsSync(project)) continue;
+    // The repository's own checkout (of a worktree, or of a folder in it, its main one), which
+    // the engine resolves a relative folder from. (Without --path-format, which older git lacks.)
+    const common = await gitLater(project, ["rev-parse", "--git-common-dir"]);
+    if (!common) continue;
+    const gitFolder = path.resolve(project, common);
+    if (path.basename(gitFolder) !== ".git") continue;
+    const checkout = realOr(path.dirname(gitFolder));
+    // One the engine doesn't take for a repository has no worktrees: a repository with no commit
+    // yet is its "global" project.
+    const id = ids.get(checkout);
+    if (id === null) continue;
+    // The engine's own: a folder for each project, named by the start of its id.
+    const folder = value === null ? (id ? path.join(answer.default, id.slice(0, 6)) : null)
+      : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
+    const entry = { project, name: path.basename(project), folder };
+    if (folder) {
+      entry.exists = (() => { try { return fs.statSync(folder).isDirectory(); } catch { return false; } })();
+      if (!entry.exists) entry.canMake = canMake(folder);
+      if (inside(folder, checkout)) {
+        entry.inside = true;
+        // What's in it, as git sees a worktree there: ignored, or a new folder in the checkout.
+        entry.ignored = (await gitLater(checkout, ["check-ignore", "-q", path.join(folder, "worktree")])) !== null;
+      }
+    }
+    answer.projects.push(entry);
+  }
+  return answer;
+}
+
+/** A folder through any links in its path, as the engine names a checkout; as it is when it isn't there. */
+function realOr(folder) {
+  try { return fs.realpathSync(folder); } catch { return folder; }
+}
+
+/** Whether `folder` can be made: the nearest folder of it that's there is one you can write in. */
+function canMake(folder) {
+  for (let at = path.dirname(folder); ; at = path.dirname(at)) {
+    try {
+      if (!fs.statSync(at).isDirectory()) return false;
+      fs.accessSync(at, fs.constants.W_OK);
+      return true;
+    } catch (error) {
+      if (error?.code !== "ENOENT" || at === path.dirname(at)) return false;
+    }
+  }
+}
+
+// MARK: Folders (PROTOCOL.md, `kuvo/folders`): this box's folders, for a client to choose one.
+
+/** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
+ * starts there), as a client shows them to choose one: `{path, home, parent, folders: [{name,
+ * repository?}]}`, ordered as Finder orders names, hidden ones (starting with ".") only with
+ * `hidden=1`. `repository`: a git repository's own checkout. */
+export function listFolders(requestPath) {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = os.homedir();
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  let entries;
+  try {
+    entries = fs.readdirSync(at, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { status: 404, value: { message: `There's no folder ${at} here.` } };
+    return { status: 403, value: { message: `${at} can't be read here.` } };
+  }
+  const hidden = query.get("hidden") === "1";
+  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them
+  // (privacy prompts); Linux has none, so it looks into every folder.
+  const asks = process.platform === "darwin" && at === home ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set();
+  const isFolder = entry => entry.isDirectory() || (entry.isSymbolicLink() && (() => { try { return fs.statSync(path.join(at, entry.name)).isDirectory(); } catch { return false; } })());
+  const folders = entries
+    .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
+    .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders } };
+}
+
+/** `POST kuvo/folders {"path"}`: a new folder, in one that's there, as a folder panel's New Folder
+ * makes one: `{path}` (`~/` starts at the home folder). */
+export function makeFolder(body) {
+  const given = typeof body?.path === "string" ? body.path.trim() : "";
+  const home = os.homedir();
+  const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  // Platform: a Mac's disk usually ignores case, so "Trees" is taken by "trees" there, not on Linux.
+  if (fs.existsSync(at)) return { status: 409, value: { message: `There's already something called ${path.basename(at)} there.` } };
+  try {
+    fs.mkdirSync(at);
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: 404, value: { message: `There's no folder ${path.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
+  }
+  return { status: 200, value: { path: at } };
+}
+
+// MARK: Plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's packages its engine can load, found from this box.
+
+// npm's registry, or a test's stand-in for it, in a test's folder only (never a machine's own).
+const testNpm = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_NPM : undefined;
+const NPM = testNpm ?? "https://registry.npmjs.org";
+// A package as npm names it, with a version or tag after it or not.
+const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s@/]+))?$/;
+
+/** `kuvo/plugins/search?q=`: npm's packages for opencode that `q` finds (with none, the most used
+ * plugins), each `{name, version, description, weekly}`, the one it names exactly first. `q`
+ * that names a package npm doesn't have says so (`missing`). */
+export async function searchPlugins(query, signal) {
+  const text = String(query ?? "").trim().toLowerCase();
+  // A package's record as npm installs from it (its versions and tags, not its whole history).
+  const ask = async (address, headers = {}) => {
+    const answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) });
+    if (answered.status === 404) return null;
+    if (!answered.ok) throw new Error(`npm answered ${answered.status}.`);
+    return answered.json();
+  };
+  const spec = text.match(NPM_SPEC);
+  const [found, named] = await Promise.all([
+    ask(`${NPM}/-/v1/search?size=20&text=${encodeURIComponent(text ? `${text} keywords:opencode` : "keywords:opencode-plugin")}`),
+    // Not known (npm didn't answer) is not missing.
+    spec ? ask(`${NPM}/${spec[1].replace("/", "%2F")}`, { accept: "application/vnd.npm.install-v1+json" }).catch(() => undefined) : undefined,
+  ]);
+  const packages = (found?.objects ?? []).map(each => ({
+    name: each.package?.name,
+    version: each.package?.version,
+    description: each.package?.description || undefined,
+    weekly: each.downloads?.weekly,
+  })).filter(each => typeof each.name === "string");
+  const answer = { packages };
+  if (spec && named?.name) {
+    const listed = packages.find(each => each.name === named.name);
+    const version = spec[2] && named.versions?.[spec[2]] ? spec[2] : named["dist-tags"]?.[spec[2]] ?? named["dist-tags"]?.latest;
+    answer.packages = [{ name: named.name, version, description: listed?.description, weekly: listed?.weekly }, ...packages.filter(each => each !== listed)];
+    // A version or a tag it doesn't have (a range, like ^1.2.0, it may well have).
+    const exact = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(spec[2] ?? "") || /^[a-z][\w-]*$/i.test(spec[2] ?? "");
+    if (spec[2] && exact && !named.versions?.[spec[2]] && !named["dist-tags"]?.[spec[2]]) answer.missing = `${named.name}@${spec[2]}`;
+  } else if (named === null) {
+    answer.missing = spec[1];
+  }
+  return answer;
+}
+
 // MARK: Skills (PROTOCOL.md, "Skills"): every box's, a Mac's too, and every client's way to GitHub's collections.
 
 // Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
@@ -2338,6 +2507,22 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
+    // A folder of this box's to choose, for a setting that names one (PROTOCOL.md, `kuvo/folders`).
+    if (route === "kuvo/folders") {
+      const method = request.method.toUpperCase();
+      if (method !== "GET" && method !== "POST") return yield* json(405, {});
+      const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+      return yield* json(status, value);
+    }
+    // Settings › Engine's plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's, found from this box.
+    if (route === "kuvo/plugins/search") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      try {
+        return yield* json(200, await searchPlugins(new URLSearchParams(request.path.split("?")[1] ?? "").get("q"), signal));
+      } catch (error) {
+        return yield* json(502, { message: "npm couldn't be reached from here. Check this computer's internet connection, then try again." });
+      }
+    }
     // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
     // collections, which it reaches itself (a machine's with the Mac closed too).
     if (/^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path)) {
@@ -2628,9 +2813,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
     }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
-    if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
+    if (/^kuvo\/worktrees(\/(remove|record|where))?$/.test(route)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
+      if (route === "kuvo/worktrees/where") {
+        if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+        return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine, signal));
+      }
       const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
@@ -8598,7 +8787,7 @@ export function startUpdate(options = {}) {
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
+export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
   "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,

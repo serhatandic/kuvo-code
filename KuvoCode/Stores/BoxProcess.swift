@@ -85,6 +85,8 @@ final class BoxProcess {
         // engine's in its own folder): this Mac's settings and skills stay where they've always been. And
         // where the engine reads the keys you keep in the Keychain, which its settings name.
         env["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
+        // Where the engine keeps its own, new worktrees by default among it (Settings › Worktrees).
+        env["KUVO_ENGINE_DATA"] = AppModel.engineFolders.dataDirectory.path
         env["KUVO_KEYS"] = IntegrationKeys.folder.path
         // What integrations' servers keep (a sign-in), where the engine runs them with it.
         env["KUVO_INTEGRATIONS"] = Self.integrations.path

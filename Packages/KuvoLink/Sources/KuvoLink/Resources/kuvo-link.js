@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-var BRIDGE_VERSION = "0.9.70";
+var BRIDGE_VERSION = "0.9.71";
 var FEATURES = [
   "accounts.credentials",
   "accounts.ended",
@@ -25,6 +25,7 @@ var FEATURES = [
   "engine.restart",
   "engine.start",
   "file",
+  "folders",
   "goals",
   "groups",
   "groups.delete",
@@ -37,6 +38,7 @@ var FEATURES = [
   "mcp.catalog",
   "named",
   "personalities",
+  "plugins.search",
   "personalities.events",
   "phones",
   "phones.pair",
@@ -52,6 +54,7 @@ var FEATURES = [
   "wakes.events",
   "worktrees",
   "worktrees.events",
+  "worktrees.where",
   "bots.events",
   "bots.job"
 ];
@@ -1761,6 +1764,158 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
   }
   return { status: 404, value: {} };
 }
+var ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode");
+async function worktreesWhere(directory, engine, signal, projects = readProjects().filter((each) => !each.removed).map((each) => each.directory)) {
+  const value = typeof directory === "string" && directory !== "" ? directory : null;
+  const answer = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: os.homedir(), projects: [] };
+  const ids = new Map;
+  if (engine?.port) {
+    try {
+      for (const known of await call(engine, "GET", "/api/project", undefined, signal)) {
+        if (typeof known?.id === "string" && typeof known?.canonical === "string")
+          ids.set(realOr(known.canonical), known.vcs === "git" && known.id !== "global" ? known.id : null);
+      }
+    } catch {}
+  }
+  for (const project of projects) {
+    if (!fs.existsSync(project))
+      continue;
+    const common = await gitLater(project, ["rev-parse", "--git-common-dir"]);
+    if (!common)
+      continue;
+    const gitFolder = path.resolve(project, common);
+    if (path.basename(gitFolder) !== ".git")
+      continue;
+    const checkout = realOr(path.dirname(gitFolder));
+    const id = ids.get(checkout);
+    if (id === null)
+      continue;
+    const folder = value === null ? id ? path.join(answer.default, id.slice(0, 6)) : null : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
+    const entry = { project, name: path.basename(project), folder };
+    if (folder) {
+      entry.exists = (() => {
+        try {
+          return fs.statSync(folder).isDirectory();
+        } catch {
+          return false;
+        }
+      })();
+      if (!entry.exists)
+        entry.canMake = canMake(folder);
+      if (inside(folder, checkout)) {
+        entry.inside = true;
+        entry.ignored = await gitLater(checkout, ["check-ignore", "-q", path.join(folder, "worktree")]) !== null;
+      }
+    }
+    answer.projects.push(entry);
+  }
+  return answer;
+}
+function realOr(folder) {
+  try {
+    return fs.realpathSync(folder);
+  } catch {
+    return folder;
+  }
+}
+function canMake(folder) {
+  for (let at = path.dirname(folder);; at = path.dirname(at)) {
+    try {
+      if (!fs.statSync(at).isDirectory())
+        return false;
+      fs.accessSync(at, fs.constants.W_OK);
+      return true;
+    } catch (error) {
+      if (error?.code !== "ENOENT" || at === path.dirname(at))
+        return false;
+    }
+  }
+}
+function listFolders(requestPath) {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = os.homedir();
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder))
+    return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  let entries;
+  try {
+    entries = fs.readdirSync(at, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
+      return { status: 404, value: { message: `There's no folder ${at} here.` } };
+    return { status: 403, value: { message: `${at} can't be read here.` } };
+  }
+  const hidden = query.get("hidden") === "1";
+  const asks = process.platform === "darwin" && at === home ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set;
+  const isFolder = (entry) => entry.isDirectory() || entry.isSymbolicLink() && (() => {
+    try {
+      return fs.statSync(path.join(at, entry.name)).isDirectory();
+    } catch {
+      return false;
+    }
+  })();
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders } };
+}
+function makeFolder(body) {
+  const given = typeof body?.path === "string" ? body.path.trim() : "";
+  const home = os.homedir();
+  const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder))
+    return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  if (fs.existsSync(at))
+    return { status: 409, value: { message: `There's already something called ${path.basename(at)} there.` } };
+  try {
+    fs.mkdirSync(at);
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return { status: 404, value: { message: `There's no folder ${path.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
+  }
+  return { status: 200, value: { path: at } };
+}
+var testNpm = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_NPM : undefined;
+var NPM = testNpm ?? "https://registry.npmjs.org";
+var NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s@/]+))?$/;
+async function searchPlugins(query, signal) {
+  const text = String(query ?? "").trim().toLowerCase();
+  const ask = async (address, headers = {}) => {
+    const answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
+    if (answered.status === 404)
+      return null;
+    if (!answered.ok)
+      throw new Error(`npm answered ${answered.status}.`);
+    return answered.json();
+  };
+  const spec = text.match(NPM_SPEC);
+  const [found, named] = await Promise.all([
+    ask(`${NPM}/-/v1/search?size=20&text=${encodeURIComponent(text ? `${text} keywords:opencode` : "keywords:opencode-plugin")}`),
+    spec ? ask(`${NPM}/${spec[1].replace("/", "%2F")}`, { accept: "application/vnd.npm.install-v1+json" }).catch(() => {
+      return;
+    }) : undefined
+  ]);
+  const packages = (found?.objects ?? []).map((each) => ({
+    name: each.package?.name,
+    version: each.package?.version,
+    description: each.package?.description || undefined,
+    weekly: each.downloads?.weekly
+  })).filter((each) => typeof each.name === "string");
+  const answer = { packages };
+  if (spec && named?.name) {
+    const listed = packages.find((each) => each.name === named.name);
+    const version = spec[2] && named.versions?.[spec[2]] ? spec[2] : named["dist-tags"]?.[spec[2]] ?? named["dist-tags"]?.latest;
+    answer.packages = [{ name: named.name, version, description: listed?.description, weekly: listed?.weekly }, ...packages.filter((each) => each !== listed)];
+    const exact = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(spec[2] ?? "") || /^[a-z][\w-]*$/i.test(spec[2] ?? "");
+    if (spec[2] && exact && !named.versions?.[spec[2]] && !named["dist-tags"]?.[spec[2]])
+      answer.missing = `${named.name}@${spec[2]}`;
+  } else if (named === null) {
+    answer.missing = spec[1];
+  }
+  return answer;
+}
 var SKILLS = path.join(process.env.KUVO_ENGINE_CONFIG || path.join(K, "config"), "opencode", "skills");
 var SKILL_SOURCE = ".kuvo-source.json";
 var testGitHub = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_GITHUB : undefined;
@@ -2205,6 +2360,22 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine2, signal);
       return yield* json(status, value);
     }
+    if (route === "kuvo/folders") {
+      const method = request.method.toUpperCase();
+      if (method !== "GET" && method !== "POST")
+        return yield* json(405, {});
+      const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+      return yield* json(status, value);
+    }
+    if (route === "kuvo/plugins/search") {
+      if (request.method.toUpperCase() !== "GET")
+        return yield* json(405, {});
+      try {
+        return yield* json(200, await searchPlugins(new URLSearchParams(request.path.split("?")[1] ?? "").get("q"), signal));
+      } catch (error) {
+        return yield* json(502, { message: "npm couldn't be reached from here. Check this computer's internet connection, then try again." });
+      }
+    }
     if (/^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path)) {
       let engine2 = null;
       try {
@@ -2504,11 +2675,16 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
       return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
     }
-    if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
+    if (/^kuvo\/worktrees(\/(remove|record|where))?$/.test(route)) {
       let engine2 = null;
       try {
         engine2 = readEngine();
       } catch {}
+      if (route === "kuvo/worktrees/where") {
+        if (request.method.toUpperCase() !== "GET")
+          return yield* json(405, {});
+        return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine2, signal));
+      }
       const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine2, signal);
       return yield* json(status, value);
     }
@@ -8065,6 +8241,8 @@ function startUpdate(options = {}) {
 var MAC_BOX_ROUTES = [
   "kuvo/projects",
   "kuvo/worktrees",
+  "kuvo/plugins",
+  "kuvo/folders",
   "kuvo/wakes",
   "kuvo/config",
   "kuvo/mcp/catalog",
@@ -9468,6 +9646,7 @@ if (main) {
 export {
   writeLink,
   writeAgents,
+  worktreesWhere,
   watchSeats,
   watchEvents,
   watchBox,
@@ -9518,6 +9697,7 @@ export {
   selftest,
   seatPeers,
   seatPayloads,
+  searchPlugins,
   sealOneWay,
   runMacPeers,
   runMacLink,
@@ -9591,6 +9771,7 @@ export {
   maskedHexValues,
   masked,
   markingHashes,
+  makeFolder,
   makeBot,
   mailFor,
   macsOf,
@@ -9602,6 +9783,7 @@ export {
   macAnswers,
   listedAsk,
   listWakes,
+  listFolders,
   listBots,
   letterWent,
   letterMail,
@@ -9718,4 +9900,4 @@ export {
   BOT_MEMORY_RULE,
   ASK_HOLD
 };
-// Built from Packages/Box/src 4607d932fc97dd879ec176eed5bb08e2880dc33cf274388b8584d35b2b66ce47
+// Built from Packages/Box/src f062d06bb19769b3e0845e8a160ecc0f0d853a5e810f7437268dde5bfd5c7535
