@@ -19,7 +19,10 @@ cd "$(dirname "$0")/.."
 REPO=${REPO:-serhatandic/kuvo-code}
 SERVICE="Kuvo Code box signing key"
 ACCOUNT=kuvo-box
-PINS=Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js
+# Where the box's link pins it, in its sources (Packages/Box/src): change it there, then run
+# scripts/build-box.sh.
+PINS=$(grep -rl 'export const UPDATE_KEYS' Packages/Box/src | head -n 1)
+[ -n "$PINS" ] || { echo "No UPDATE_KEYS in Packages/Box/src: where the box's link pins its key has moved." >&2; exit 1; }
 
 if ! command -v gh >/dev/null 2>&1; then
     echo "GitHub's command line tool isn't installed: brew install gh, then gh auth login." >&2
@@ -50,7 +53,7 @@ else
         cp "$GIVEN" "$TMP/key.pem"
     elif grep -q 'UPDATE_KEYS = \["' "$PINS"; then
         # A new key wouldn't be the one machines trust.
-        echo "kuvo-link.js pins a key that isn't in your keychain: give its .pem file (scripts/set-box-key.sh path/to/key.pem). Nothing was changed." >&2
+        echo "The box's link pins a key that isn't in your keychain: give its .pem file (scripts/set-box-key.sh path/to/key.pem). Nothing was changed." >&2
         exit 1
     elif ! openssl genpkey -algorithm ed25519 -out "$TMP/key.pem" 2>/dev/null; then
         echo "This openssl can't make Ed25519 keys: brew install openssl, then this again." >&2
@@ -80,8 +83,8 @@ fi
 gh secret set KUVO_BOX_SIGNING_KEY --repo "$REPO" < "$TMP/key.pem"
 echo "Set KUVO_BOX_SIGNING_KEY on $REPO."
 if grep -q "\"$PUBLIC\"" "$PINS"; then
-    echo "kuvo-link.js pins its public key already: releases carry what machines run, signed."
+    echo "The box's link pins its public key already: releases carry what machines run, signed."
 else
-    echo "Its public key, for UPDATE_KEYS in $PINS:"
+    echo "Its public key, for UPDATE_KEYS in $PINS (then run scripts/build-box.sh):"
     echo "  $PUBLIC"
 fi
