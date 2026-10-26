@@ -33,26 +33,33 @@ struct StepsRow: View {
         let done = isLive ? Array(blocks.dropLast()) : blocks
         VStack(alignment: .leading, spacing: 10) {
             if !done.isEmpty {
-                Button {
-                    withAnimation(.ui) { isExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "list.bullet")
-                            .frame(width: 16)
-                        Text(detail == .minimal ? Self.count(done) : Self.summary(of: done))
-                            .lineLimit(1)
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                // The line and what it opens to, with no space between them but the fold's own.
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(.ui) { isExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "list.bullet")
+                                .frame(width: 16)
+                            Text(detail == .minimal ? Self.count(done) : Self.summary(of: done))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        }
+                        .font(.callout)
+                        .foregroundStyle(detail == .minimal ? .tertiary : .secondary)
                     }
-                    .font(.callout)
-                    .foregroundStyle(detail == .minimal ? .tertiary : .secondary)
-                }
-                .buttonStyle(TextButtonStyle(outset: true))
-                .help(isExpanded ? "Hide the steps" : "Show each step")
-                if isExpanded {
-                    ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
-                        .transition(.opacity)
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .help(isExpanded ? "Hide the steps" : "Show each step")
+                    if isExpanded {
+                        // Together, so they fold as one, the space above them too.
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(done.enumerated()), id: \.offset) { _, block in step(block) }
+                        }
+                        .padding(.top, 10)
+                        .transition(.fold)
+                    }
                 }
             }
             if let current { step(current) }
@@ -61,6 +68,15 @@ struct StepsRow: View {
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: each step shows, opened.
         .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_OPEN_STEPS"] != nil { isExpanded = true } }
+        // KUVO_DEMO_FOLDS=<seconds>: the steps open and fold a few times, that far apart.
+        .task {
+            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
+            for _ in 0..<8 {
+                await DemoWait.pause(.asked(wait))
+                guard !Task.isCancelled else { return }
+                withAnimation(.ui) { isExpanded.toggle() }
+            }
+        }
         #endif
     }
 

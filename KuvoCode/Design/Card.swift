@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The window's building block: a rounded pane floating on the window's glass,
@@ -253,6 +254,66 @@ enum TitleBarDoubleClick {
         case "None": break
         // Fill, Zoom ("Maximize"), or never changed.
         default: window.zoom(nil)
+        }
+    }
+}
+
+extension View {
+    /// A click anywhere in it makes it the card you work in, as the button goes down: on what
+    /// AppKit draws in it too (a reply's text, a terminal, a page), which a SwiftUI gesture never
+    /// hears, and before what the click does, so a session picked in the sidebar leaves you in its
+    /// conversation. Not while it's out of reach (under Settings or the expanded panel), nor for
+    /// the window's own buttons over it.
+    func onCardClick(_ action: @escaping () -> Void) -> some View {
+        background(CardClicks(clicked: action))
+    }
+}
+
+private struct CardClicks: NSViewRepresentable {
+    let clicked: () -> Void
+
+    func makeNSView(context: Context) -> Watcher { Watcher() }
+
+    func updateNSView(_ view: Watcher, context: Context) {
+        view.clicked = clicked
+        view.isOn = context.environment.isEnabled
+    }
+
+    static func dismantleNSView(_ view: Watcher, coordinator: ()) {
+        view.stop()
+    }
+
+    final class Watcher: NSView {
+        var clicked: () -> Void = {}
+        var isOn = true
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+                guard let self, self.isOn, let window = self.window, event.window === window,
+                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)),
+                      !Self.isWindowButton(at: event.locationInWindow, in: window) else { return event }
+                self.clicked()
+                return event
+            }
+        }
+
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        /// Close, minimize and zoom, which sit over the sidebar while the tab bar is hidden.
+        private static func isWindowButton(at point: NSPoint, in window: NSWindow) -> Bool {
+            [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].contains { type in
+                guard let button = window.standardWindowButton(type), let superview = button.superview else { return false }
+                return button.frame.contains(superview.convert(point, from: nil))
+            }
         }
     }
 }

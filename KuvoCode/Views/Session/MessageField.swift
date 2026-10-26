@@ -1,0 +1,456 @@
+import AppKit
+import SwiftUI
+
+/// Where a message is written: a composer's field (a session's, a bot's, a chat's or a group
+/// chat's) and the answers to quotes in it. What the message names looks as it will once sent:
+/// the agents named with "&" (a bot's face in place of its "&" and its name in bold in its color;
+/// a session's mark and its name in bold), the pictures it carries ("[Image 1]": a picture's mark
+/// and its name in bold) and web addresses, in the replies' link color. Only how it's drawn
+/// changes: the text stays as typed. It takes the keyboard when asked, wherever the keyboard is
+/// (the conversation's selection, another field), with the caret after what's written.
+///
+/// SwiftUI's TextField can't style part of its text, nor be sure to get the keyboard when it's
+/// asked for in the same moment it's made, so this is a text view of its own, as the phone's
+/// composer is (kuvo-code-ios's MentionField).
+struct MessageField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    var font: NSFont
+    /// Lines it grows to before it scrolls.
+    var maxLines = 12
+    /// Takes the keyboard when it's made with one, and each time it changes to another.
+    var focus: FocusRequest?
+    /// Lets go of the keyboard each time it changes.
+    var blur = 0
+    /// What it names stands out; not in a "!" command, whose "&" is the shell's.
+    var marks = true
+    /// How many pictures are attached: "[Image n]" up to that stands out.
+    var images = 0
+    /// A key, before the field has it: true when it's taken.
+    var onKey: (Key) -> Bool = { _ in false }
+    /// It took the keyboard (true) or let it go.
+    var onFocus: (Bool) -> Void = { _ in }
+    /// ⌘V: nil for words to paste; else what's on the pasteboard was taken as attachments, and
+    /// these words (their names) go where the caret is.
+    var onPaste: (NSPasteboard) -> [String]? = { _ in nil }
+    /// For its owner to write where the caret is.
+    var handle: Handle?
+    var identifier = "composer"
+    /// What VoiceOver calls it.
+    var label = "Message"
+
+    /// A request for the keyboard: each one made is another.
+    struct FocusRequest: Equatable {
+        private let id = UUID()
+    }
+
+    /// A key the owner may take before the field: Return (Shift and Option start a new line unless
+    /// taken), Tab, Escape, ↑ and ↓, with the modifiers held.
+    struct Key: Equatable {
+        enum Name { case `return`, tab, escape, up, down }
+        let name: Name
+        let modifiers: NSEvent.ModifierFlags
+
+        init(_ name: Name, _ modifiers: NSEvent.ModifierFlags = []) {
+            self.name = name
+            self.modifiers = modifiers
+        }
+
+        init?(_ event: NSEvent) {
+            let name: Name
+            switch event.keyCode {
+            case 36, 76: name = .return
+            case 48: name = .tab
+            case 53: name = .escape
+            case 126: name = .up
+            case 125: name = .down
+            default: return nil
+            }
+            self.init(name, event.modifierFlags.intersection([.shift, .option, .command, .control]))
+        }
+    }
+
+    /// Writes into the field from outside it, where its caret is.
+    @MainActor final class Handle {
+        fileprivate weak var view: MessageTextView?
+
+        /// `words` where the caret is (see `MessageTextView.write`); at the end, if the field
+        /// isn't there.
+        func write(_ words: String, into text: Binding<String>) {
+            guard let view else {
+                text.wrappedValue += MessageTextView.spaced(words, after: text.wrappedValue.last)
+                return
+            }
+            view.write(words)
+        }
+
+        /// Undo brings back nothing from before (another conversation's draft).
+        func forgetUndo() { view?.forgetUndo() }
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = FieldScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.verticalScrollElasticity = .none
+
+        let view = MessageTextView()
+        view.delegate = context.coordinator
+        view.isRichText = false
+        view.importsGraphics = false
+        view.allowsUndo = true
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        scroll.documentView = view
+        handle?.view = view
+        context.coordinator.focus = focus
+        context.coordinator.blur = blur
+        update(view, coordinator: context.coordinator)
+        if focus != nil { view.takeKeyboard() }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? MessageTextView else { return }
+        handle?.view = view
+        update(view, coordinator: context.coordinator)
+        if focus != context.coordinator.focus {
+            context.coordinator.focus = focus
+            if focus != nil { view.takeKeyboard() }
+        }
+        if blur != context.coordinator.blur {
+            context.coordinator.blur = blur
+            if let window = view.window, window.firstResponder === view { window.makeFirstResponder(nil) }
+        }
+    }
+
+    private func update(_ view: MessageTextView, coordinator: Coordinator) {
+        coordinator.parent = self
+        view.onKey = onKey
+        view.onFocus = onFocus
+        view.onPaste = onPaste
+        if view.placeholder != placeholder { view.placeholder = placeholder }
+        var changed = false
+        if view.font != font {
+            view.font = font
+            changed = true
+        }
+        if view.string != text, !view.hasMarkedText() {
+            view.replace(with: text)
+            changed = true
+        }
+        // A command is typed as is: no curly quotes, long dashes or corrections.
+        let plain = text.hasPrefix("!")
+        let checker = NSSpellChecker.self
+        view.isAutomaticQuoteSubstitutionEnabled = !plain && checker.isAutomaticQuoteSubstitutionEnabled
+        view.isAutomaticDashSubstitutionEnabled = !plain && checker.isAutomaticDashSubstitutionEnabled
+        view.isAutomaticTextReplacementEnabled = !plain && checker.isAutomaticTextReplacementEnabled
+        view.isAutomaticSpellingCorrectionEnabled = !plain && checker.isAutomaticSpellingCorrectionEnabled
+        if coordinator.styled != Styled(marks: marks, images: images) || changed {
+            coordinator.styled = Styled(marks: marks, images: images)
+            view.restyle(marks: marks, images: images)
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
+        guard let view = scroll.documentView as? MessageTextView else { return nil }
+        let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? max(scroll.frame.width, 100)
+        let line = view.lineHeight
+        let fitting = view.height(forWidth: width)
+        let most = line * CGFloat(maxLines)
+        scroll.hasVerticalScroller = fitting > most + 0.5
+        return CGSize(width: width, height: ceil(min(max(fitting, line), most)))
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    struct Styled: Equatable {
+        var marks: Bool
+        var images: Int
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MessageField
+        var focus: FocusRequest?
+        var blur = 0
+        var styled: Styled?
+
+        init(parent: MessageField) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? MessageTextView else { return }
+            if parent.text != view.string { parent.text = view.string }
+            view.restyle(marks: parent.marks, images: parent.images)
+            view.scrollRangeToVisible(view.selectedRange())
+        }
+    }
+}
+
+/// The field's scroll view: the wheel goes on to what's around it (the conversation, a list of
+/// quotes) while the field has nothing to scroll.
+final class FieldScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        let overflow = (documentView?.frame.height ?? 0) - contentView.bounds.height
+        if overflow > 0.5 { super.scrollWheel(with: event) } else { nextResponder?.scrollWheel(with: event) }
+    }
+}
+
+/// The text view under `MessageField`.
+final class MessageTextView: NSTextView {
+    var onKey: (MessageField.Key) -> Bool = { _ in false }
+    var onFocus: (Bool) -> Void = { _ in }
+    var onPaste: (NSPasteboard) -> [String]? = { _ in nil }
+    var placeholder = "" {
+        didSet {
+            setAccessibilityPlaceholderValue(placeholder)
+            needsDisplay = true
+        }
+    }
+    /// Asked for the keyboard before it was in a window.
+    private var wantsKeyboard = false
+    /// What's drawn in place of a mark's first character: a bot's face, a conversation's or a
+    /// picture's mark.
+    private var faces: [(at: Int, image: NSImage)] = []
+
+    var lineHeight: CGFloat {
+        layoutManager?.defaultLineHeight(for: font ?? .systemFont(ofSize: NSFont.systemFontSize)) ?? 17
+    }
+
+    /// How tall its text is at `width`.
+    func height(forWidth width: CGFloat) -> CGFloat {
+        guard let layoutManager, let textContainer else { return lineHeight }
+        if abs(textContainer.size.width - width) > 0.5 {
+            textContainer.size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        return layoutManager.usedRect(for: textContainer).height
+    }
+
+    /// The keyboard, with the caret after the text (not all of it selected, which typing would
+    /// replace). Once SwiftUI is done updating: it's asked for while SwiftUI updates the field,
+    /// and taking it tells the owner (`onFocus`), whose state mustn't change then.
+    func takeKeyboard() {
+        wantsKeyboard = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, wantsKeyboard, let window else { return }
+            wantsKeyboard = false
+            if window.firstResponder !== self { window.makeFirstResponder(self) }
+            setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
+            scrollRangeToVisible(selectedRange())
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if wantsKeyboard, window != nil { takeKeyboard() }
+    }
+
+    /// Its text changed from outside (a name picked from a list, a sent message gone, one brought
+    /// back, a picture's name taken out): only the part that changed is replaced, and the caret
+    /// moves with it, after what came in where it was typing. Undo starts over, as what it
+    /// remembers was in text that's gone.
+    func replace(with text: String) {
+        guard let storage = textStorage else { return }
+        let old = string as NSString, new = text as NSString
+        var prefix = 0
+        while prefix < old.length, prefix < new.length, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < old.length - prefix, suffix < new.length - prefix,
+              old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+        let changed = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let added = new.length - prefix - suffix
+        let caret = selectedRange().location
+        storage.replaceCharacters(in: changed, with: new.substring(with: NSRange(location: prefix, length: added)))
+        let moved = caret < changed.location ? caret : caret >= NSMaxRange(changed) ? caret + added - changed.length : prefix + added
+        setSelectedRange(NSRange(location: min(moved, new.length), length: 0))
+        forgetUndo()
+    }
+
+    func forgetUndo() {
+        undoManager?.removeAllActions(withTarget: self)
+        textStorage.map { undoManager?.removeAllActions(withTarget: $0) }
+    }
+
+    /// VoiceOver (and the end-to-end runs) setting what it says: as if typed, so its owner hears.
+    override func setAccessibilityValue(_ value: Any?) {
+        guard let text = value as? String else { return super.setAccessibilityValue(value) }
+        insertText(text, replacementRange: NSRange(location: 0, length: (string as NSString).length))
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocus(false) }
+        return resigned
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // An input method composing has its keys (Return picks, Escape cancels, arrows choose).
+        if !hasMarkedText(), let key = MessageField.Key(event) {
+            if onKey(key) { return }
+            // Escape that isn't taken does nothing here (a text view would list completions).
+            if key.name == .escape { return }
+        }
+        super.keyDown(with: event)
+    }
+
+    // Tab and Shift-Tab go on to the next control and back, as in a field, rather than typing a tab.
+    override func insertTab(_ sender: Any?) { window?.selectNextKeyView(self) }
+    override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(self) }
+
+    // A paste (⌘V, Paste and Match Style, a service): files and pictures are the owner's to
+    // attach, words come in plain.
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        attached(from: pboard) || super.readSelection(from: pboard)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        attached(from: pboard) || super.readSelection(from: pboard, type: type)
+    }
+
+    private func attached(from pboard: NSPasteboard) -> Bool {
+        guard let names = onPaste(pboard) else { return false }
+        if !names.isEmpty { write(names.joined(separator: " ")) }
+        return true
+    }
+
+    /// `words` where the caret is, in place of what's selected, as if typed (it can be undone):
+    /// a space before them after a word, and one after them.
+    func write(_ words: String) {
+        let range = selectedRange()
+        let before = range.location > 0 ? (string as NSString).substring(with: NSRange(location: range.location - 1, length: 1)).last : nil
+        insertText(Self.spaced(words, after: before), replacementRange: range)
+    }
+
+    static func spaced(_ words: String, after before: Character?) -> String {
+        (before.map { $0.isWhitespace ? "" : " " } ?? "") + words + " "
+    }
+
+    /// Backspace right after a mark, with nothing selected, takes the whole mark away, as one thing.
+    override func deleteBackward(_ sender: Any?) {
+        let caret = selectedRange()
+        if caret.length == 0, let mark = marks.first(where: { NSMaxRange($0) == caret.location }) {
+            setSelectedRange(mark)
+        }
+        super.deleteBackward(sender)
+    }
+
+    /// Where each mark is: the agents named and the pictures, for Backspace.
+    private var marks: [NSRange] = []
+    /// It has marks styled, so the next styling starts over from plain text.
+    private var styled = false
+    private var styledFont: NSFont?
+    /// Past this many characters (a pasted log), its addresses aren't looked for as you type.
+    private static let longest = 20_000
+
+    /// Styles what the text names, each time from the field's own look, so a mark no longer whole
+    /// goes back to plain text.
+    func restyle(marks shown: Bool, images: Int) {
+        guard let storage = textStorage, !hasMarkedText() else { return }
+        let font = font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let text = string
+        let length = storage.length
+        let all = NSRange(location: 0, length: length)
+        // Only where there's something to style, or was: typing in a long pasted log stays as
+        // quick as in any text. Addresses aren't looked for in one that long.
+        let mayMark = shown && (text.contains(AgentReferences.trigger) || text.contains("[Image ")
+            || (length < Self.longest && (text.contains("http") || text.contains("www."))))
+        guard mayMark || styled || font != styledFont else { return }
+        styledFont = font
+        var faces: [(at: Int, image: NSImage)] = []
+        var marks: [NSRange] = []
+        storage.beginEditing()
+        storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: all)
+        if mayMark, length > 0 {
+            let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            let size = (font.pointSize * 1.1).rounded()
+            /// The first character of a mark makes room for its face, unseen.
+            func face(_ image: NSImage?, at span: NSRange) {
+                guard let image else { return }
+                let first = (text as NSString).substring(with: NSRange(location: span.location, length: 1))
+                let width = (first as NSString).size(withAttributes: [.font: bold]).width
+                storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
+                faces.append((span.location, image))
+            }
+            for (range, _) in length < Self.longest ? WebLinks.find(in: text) : [] {
+                storage.addAttribute(.foregroundColor, value: ReplyDocument.Colors.link, range: NSRange(range, in: text))
+            }
+            if text.contains(AgentReferences.trigger) {
+                let agents = MessageMentions.agents(namedIn: text)
+                for (range, reference) in AgentReferences.find(in: text, references: agents.map(\.reference)) {
+                    let span = NSRange(range, in: text)
+                    guard span.upperBound <= length else { continue }
+                    let look = agents.first { $0.reference.session == reference.session }?.look
+                    let ink = look.map { NSColor(GroupMentions.ink($0)) } ?? NSColor(Color.accentColor)
+                    storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
+                    face(look.flatMap { MessageMentions.face($0, size: size) } ?? Self.symbol("bubble.left", size: size), at: span)
+                    marks.append(span)
+                }
+            }
+            for (range, number) in ImageReferences.find(in: text) where number <= images {
+                let span = NSRange(range, in: text)
+                storage.addAttributes([.font: bold, .foregroundColor: NSColor(Color.accentColor)], range: span)
+                face(Self.symbol("photo", size: size), at: span)
+                // Its "]" is left out, as in the message once sent.
+                let close = NSRange(location: NSMaxRange(span) - 1, length: 1)
+                let width = ("]" as NSString).size(withAttributes: [.font: bold]).width
+                storage.addAttributes([.foregroundColor: NSColor.clear, .kern: -width], range: close)
+                marks.append(span)
+            }
+        }
+        storage.endEditing()
+        self.faces = faces
+        self.marks = marks
+        styled = !faces.isEmpty || mayMark
+        // What you type next is plain, also right after a mark.
+        typingAttributes = [.font: font, .foregroundColor: NSColor.textColor]
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let origin = textContainerOrigin
+        if string.isEmpty, !placeholder.isEmpty {
+            let attributes: [NSAttributedString.Key: Any] = [.font: font ?? .systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.placeholderTextColor]
+            // One line, cut short with an ellipsis in a narrow window.
+            let line = NSRect(x: origin.x, y: origin.y, width: bounds.width - origin.x, height: lineHeight)
+            (placeholder as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
+        }
+        guard let layoutManager, let textContainer, !faces.isEmpty else { return }
+        let size = ((font?.pointSize ?? 13) * 1.1).rounded()
+        for (at, image) in faces where at < (string as NSString).length {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: at, length: 1), actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer).offsetBy(dx: origin.x, dy: origin.y)
+            // As wide as its room, as tall as its shape makes it (a symbol isn't square).
+            let height = image.size.width > 0 ? size * image.size.height / image.size.width : size
+            image.draw(in: NSRect(x: rect.minX, y: rect.midY - height / 2, width: size, height: height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+    }
+
+    /// A symbol as a mark, drawn in secondary ink as in a sent message.
+    private static func symbol(_ name: String, size: CGFloat) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .regular)
+            .applying(.init(hierarchicalColor: .secondaryLabelColor))
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+    }
+}
+
+extension MessageFont {
+    /// The font a message is written in, for `MessageField`.
+    var field: NSFont { ReplyDocument.Style.font(size, weight: .regular, design: typeface.systemDesign) }
+}

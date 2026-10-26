@@ -15,8 +15,8 @@ struct GroupChatView: View {
     @State private var listShown = false
     /// Goes up to have the composer take the keyboard.
     @State private var composerFocus = 0
-    /// The quote whose answer takes the keyboard: the one just added.
-    @State private var quoteFocus: UUID?
+    /// The quote whose answer takes the keyboard: the one just added, or quoted again.
+    @State private var quoteFocus: Drafts.QuoteFocus?
     /// Find in the chat (⌘F).
     @State private var find = ConversationFind()
 
@@ -132,7 +132,7 @@ struct GroupChatView: View {
     private func addQuote(_ text: String, how: String) {
         let count = Drafts.shared[draftKey].quotes.count
         guard let id = Drafts.shared.addQuote(text, to: draftKey) else { return }
-        quoteFocus = id
+        quoteFocus = Drafts.QuoteFocus(id)
         if Drafts.shared[draftKey].quotes.count > count { Analytics.shared.track("message_replied", ["group": true, "how": how]) }
     }
 
@@ -556,8 +556,8 @@ private struct GroupComposer: View {
     @Binding var text: String
     /// What you're replying to, each with your answer to it under it, as in a session.
     @Binding var quotes: [Drafts.Quote]
-    /// The quote whose answer takes the keyboard (the one just added).
-    var quoteFocus: UUID?
+    /// The quote whose answer takes the keyboard (the one just added, or quoted again).
+    var quoteFocus: Drafts.QuoteFocus?
     let placeholder: String
     let members: [Bot]
     /// Where the chat lives (nil: this Mac).
@@ -568,8 +568,10 @@ private struct GroupComposer: View {
     let send: () -> Void
     let stop: () -> Void
     @Environment(\.messageFont) private var messageFont
-    @FocusState private var isFocused: Bool
-    @FocusState private var answering: UUID?
+    /// Asks the field for the keyboard; nil once it has it.
+    @State private var fieldFocus: MessageField.FocusRequest?
+    /// The quote whose answer is to take the keyboard; nil once it has it.
+    @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
     /// "&" and the bots and sessions it names, as in a session.
     @State private var agents = AgentPicker()
 
@@ -587,33 +589,14 @@ private struct GroupComposer: View {
                     .preference(key: ComposerListShown.self, value: true)
             }
             if !quotes.isEmpty {
-                QuoteList(quotes: $quotes, answering: $answering, focus: quoteFocus, font: messageFont.body, onSubmit: send)
+                QuoteList(quotes: $quotes, focus: answerFocus, font: messageFont.field, onKey: answerKey) { id, focused in
+                    if focused, answerFocus?.id == id { answerFocus = nil }
+                }
             }
-            TextField(placeholder, text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(messageFont.body)
-                .lineLimit(1...10)
-                .focused($isFocused)
-                // As a session's composer, for the end-to-end tests.
-                .accessibilityIdentifier("composer")
-                .onChange(of: focusRequest) { focusAtEnd() }
-                .onKeyPress(.return, phases: .down) { press in
-                    if Composer.isComposing { return .ignored }
-                    // Return sends; Shift-Return starts a new line.
-                    if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
-                        Composer.newLine(in: $text)
-                        return .handled
-                    }
-                    send()
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    guard isTalking else { return .ignored }
-                    stop()
-                    return .handled
-                }
-                // Last, so its keys come before the ones above while its list is open.
-                .modifier(AgentPicking(picker: agents, text: $text, excluding: nil))
+            MessageField(text: $text, placeholder: placeholder, font: messageFont.field, maxLines: 10, focus: fieldFocus, onKey: key) { focused in
+                if focused { fieldFocus = nil }
+            }
+            .onChange(of: text) { _, new in agents.textChanged(new) }
             HStack(spacing: 2) {
                 // Each bot: a click asks it by name.
                 ForEach(members) { bot in
@@ -639,19 +622,42 @@ private struct GroupComposer: View {
         .padding(.bottom, 7)
         .modifier(ComposerSurface())
         .onAppear(perform: focusAtEnd)
-        .onChange(of: quoteFocus) { _, id in answering = id }
+        .onChange(of: focusRequest) { focusAtEnd() }
+        .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
     }
 
     /// The keyboard, with the cursor after what's written, as in a session.
     private func focusAtEnd() {
-        isFocused = true
-        Composer.cursorToEnd(of: text)
+        fieldFocus = MessageField.FocusRequest()
+    }
+
+    /// The field's keys: the "&" list's first while it's open; then Return sends (Shift- or
+    /// Option-Return starts a new line) and Escape stops the discussion.
+    private func key(_ key: MessageField.Key) -> Bool {
+        if agents.key(key, text: $text, excluding: nil, reaching: { AgentMail.shared.reachable($0, fromChatOn: machine) }) { return true }
+        return answerKey(key)
+    }
+
+    /// An answer's keys, as the field's without its list.
+    private func answerKey(_ key: MessageField.Key) -> Bool {
+        switch key.name {
+        case .return:
+            if key.modifiers.contains(.shift) || key.modifiers.contains(.option) { return false }
+            send()
+            return true
+        case .escape:
+            guard isTalking else { return false }
+            stop()
+            return true
+        default:
+            return false
+        }
     }
 
     /// "&Mira " where the message goes on.
     private func mention(_ bot: Bot) {
         if !text.isEmpty, !(text.last?.isWhitespace ?? true) { text += " " }
         text += "&\(bot.name) "
-        isFocused = true
+        focusAtEnd()
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// "&" in a composer's field: the bots and sessions it can name, in a list above the field. The
 /// same in every composer (a session's, a bot's, a chat's, a group chat's): each keeps one of
-/// these, shows `AgentReferenceList` while it has matches, and puts `AgentPicking` on its field.
+/// these, shows `AgentReferenceList` while it has matches, and asks it about its field's keys.
 @MainActor @Observable final class AgentPicker {
     var selected = 0
     /// Where the "&" whose list was closed (with Escape, or by picking from it) is, so it stays
@@ -35,51 +35,31 @@ import SwiftUI
         dismissed = nil
         typed = nil
     }
-}
 
-/// The keys of a composer's field while its "&" list is open: ↑ and ↓ choose, Return and Tab name
-/// the one chosen, Escape closes it. Otherwise they go on to the field's own. Put it on the field
-/// after its own keys: the key handler put on last hears a key first.
-struct AgentPicking: ViewModifier {
-    let picker: AgentPicker
-    @Binding var text: String
-    /// The conversation the message is written in.
-    let excluding: String?
-
-    private var matches: [AgentMail.Agent]? { picker.matches(in: text, excluding: excluding) }
-
-    func body(content: Content) -> some View {
-        content
-            .onKeyPress(.return, phases: .down) { press in
-                press.modifiers.isEmpty ? pick() : .ignored
-            }
-            .onKeyPress(.tab) { pick() }
-            .onKeyPress(.escape) {
-                guard !Composer.isComposing, matches != nil, let start = AgentReferences.query(in: text)?.start else { return .ignored }
-                picker.dismissed = text.distance(from: text.startIndex, to: start)
-                return .handled
-            }
-            .onKeyPress(.upArrow) { move(-1) }
-            .onKeyPress(.downArrow) { move(1) }
-            .onChange(of: text) { _, new in
-                guard let query = AgentReferences.query(in: new)?.query else { return picker.reset() }
-                if query != picker.typed { picker.selected = 0 }
-                picker.typed = query
-            }
-            .onChange(of: excluding) { picker.reset() }
-            .modifier(FieldMentions(text: text))
+    /// The field's text changed: a new "&" query chooses its list's first one again.
+    func textChanged(_ text: String) {
+        guard let query = AgentReferences.query(in: text)?.query else { return reset() }
+        if query != typed { selected = 0 }
+        typed = query
     }
 
-    private func pick() -> KeyPress.Result {
-        guard !Composer.isComposing, let matches else { return .ignored }
-        picker.insert(matches[min(picker.selected, matches.count - 1)], into: $text)
-        return .handled
-    }
-
-    private func move(_ step: Int) -> KeyPress.Result {
-        guard !Composer.isComposing, let matches else { return .ignored }
-        picker.selected = max(0, min(matches.count - 1, min(picker.selected, matches.count - 1) + step))
-        return .handled
+    /// A key of a composer's field while its "&" list is open: ↑ and ↓ choose, Return and Tab name
+    /// the one chosen, Escape closes it. False for the field's own keys. The composer asks this
+    /// before its own keys.
+    func key(_ key: MessageField.Key, text: Binding<String>, excluding: String?, reaching: (AgentMail.Agent) -> Bool = { _ in true }) -> Bool {
+        guard let matches = matches(in: text.wrappedValue, excluding: excluding, reaching: reaching) else { return false }
+        switch key.name {
+        case .return where key.modifiers.isEmpty, .tab:
+            insert(matches[min(selected, matches.count - 1)], into: text)
+        case .escape:
+            guard let start = AgentReferences.query(in: text.wrappedValue)?.start else { return false }
+            dismissed = text.wrappedValue.distance(from: text.wrappedValue.startIndex, to: start)
+        case .up, .down:
+            selected = max(0, min(matches.count - 1, min(selected, matches.count - 1) + (key.name == .up ? -1 : 1)))
+        default:
+            return false
+        }
+        return true
     }
 }
 

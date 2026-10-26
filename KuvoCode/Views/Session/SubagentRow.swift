@@ -77,7 +77,7 @@ struct SubagentRow: View {
                             .padding(.top, 3)
                             .padding(.leading, (Self.iconWidth - 1) / 2)
                     }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.fold)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

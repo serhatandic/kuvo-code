@@ -83,7 +83,7 @@ struct ToolCallView: View {
                             .padding(.top, 3)
                             .padding(.leading, (Self.iconWidth - 1) / 2)
                     }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.fold)
             }
         }
         // A subagent at work shows what it's doing; opened later, its steps stay folded.
