@@ -1,0 +1,302 @@
+// @ts-nocheck
+// What this Mac's app asks of its box's link (`kuvo/link/…`)
+// Whether it's wanted and how it's doing, the phones and documents an earlier Kuvo Code kept, your
+// machines, and the letters and agents of this Mac's conversations.
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { DOC_KINDS } from "../../shared/documents";
+import { isObject, parsed } from "../../shared/json";
+import { macDocsChanged, receiveDocs } from "../documents/exchange";
+import { ownSign, SIGN } from "../documents/format";
+import { digestOf, ownDocs, pruneDocs, takeDoc } from "../documents/work";
+import { readEngineFile } from "../engine/client";
+import { locked, writePrivate } from "../files";
+import { followed } from "../follow";
+import { cutText, LETTER_ID, LETTER_MEMORY, LETTERS_SEEN, SENDING } from "../letters/letter";
+import { lettersSeen } from "../letters/take";
+import { refreshOwn } from "../peers/agents";
+import { keptFeatures, PEER_LOCK, readPeerAgents } from "../peers/directory";
+import { ADDRESS, cleanMoved, cleanPeer, fitsPeer, KEY, MOST_PEERS, ownKey, peersOf } from "../peers/known";
+import { MOST_COUNT, readPersonalities } from "../personalities/library";
+import { fits, MOST_KEPT, pairPhone, removedAlready, takeOff } from "../phones";
+import { macLink, readLink, updateLink } from "../state";
+import { macKeys, macLinkCheck, tellGone } from "./link";
+import { OFFLINE_LETTER, macLetterAnswer, macSendOutbox } from "./peers";
+
+// Phones from where an earlier Kuvo Code kept them (`phone-link.json`), met with this box's: each
+// paired one in, unless a removal of its pairing is known; each removal noted, and taking off what
+// it removes.
+export function takePhones(link, given) {
+  const phones = Array.isArray(given?.phones) ? given.phones.slice(0, 64) : [];
+  const removed = Array.isArray(given?.removed) ? given.removed.slice(0, MOST_KEPT) : [];
+  for (const entry of removed) if (fits(entry, []) && typeof entry.pairing === "string") takeOff(link, entry.key, entry.pairing);
+  for (const phone of phones) {
+    if (!isObject(phone) || !fits(phone, []) || removedAlready(link, phone.key, phone.pairing ?? "")) continue;
+    const known = (link.phones ?? []).find(each => each.key === phone.key);
+    if (known && (known.pairing ?? "") === (phone.pairing ?? "")) continue;
+    pairPhone(link, {
+      key: phone.key,
+      name: String(phone.name ?? "").slice(0, 100),
+      added: Number.isFinite(phone.added) ? Math.floor(phone.added) : Math.floor(Date.now() / 1000),
+      from: "pair",
+      ...(ADDRESS.test(phone.address ?? "") ? { address: phone.address } : {}),
+      pairing: typeof phone.pairing === "string" ? phone.pairing : "",
+    });
+  }
+  return link;
+}
+
+// The phones as the app keeps a copy of them (all of each, with where it is, and every removal),
+// and whether Settings › Phone's pairing link is still waiting (a phone came in with it, or it ran
+// out: it's done).
+const macPhones = () => {
+  const link = readLink();
+  return {
+    phones: link?.phones ?? [],
+    removed: link?.removed ?? [],
+    pairing: Boolean(link?.appPairing && Date.now() < link.appPairing.expires),
+    // For the app's copy (an older Kuvo Code goes on from these counts, never back).
+    documents: { own: link?.own ?? {}, held: link?.docs ?? {}, views: link?.views ?? {}, left: link?.left ?? [] },
+  };
+};
+
+// What an earlier Kuvo Code kept of this Mac's documents (`phone-link.json`): how far each of its
+// own has come (never back: your machines would refuse what comes next), the phones documents its
+// machines signed, how far each machine's view of your personalities has come, and the machines it
+// removed. Its machines are this box's peers by then, so what they signed is checked as it's taken.
+export function takeMacDocuments(link, given) {
+  if (!isObject(given)) return link;
+  for (const [kind, had] of Object.entries(isObject(given.own) ? given.own : {})) {
+    if (!DOC_KINDS.includes(kind) || !isObject(had) || !Number.isSafeInteger(had.n) || had.n < 1 || had.n > MOST_COUNT) continue;
+    const now = link.own?.[kind];
+    if (!now || had.n > now.n) link.own = { ...(link.own ?? {}), [kind]: { n: had.n, h: String(had.h ?? ""), b: String(had.b ?? "") } };
+  }
+  for (const envelope of Object.values(isObject(given.held) ? given.held : {}).slice(0, 256)) takeDoc(link, envelope);
+  for (const [origin, seen] of Object.entries(isObject(given.views) ? given.views : {}).slice(0, 256)) {
+    if (!SIGN.test(origin) || !isObject(seen) || !Number.isSafeInteger(seen.n) || seen.n < 1) continue;
+    if (!link.views?.[origin] || seen.n > link.views[origin].n) link.views = { ...(link.views ?? {}), [origin]: { n: seen.n, h: String(seen.h ?? "") } };
+  }
+  const left = Array.isArray(given.left) ? given.left.filter(key => typeof key === "string" && KEY.test(key)) : [];
+  if (left.length) link.left = [...new Set([...(Array.isArray(link.left) ? link.left : []), ...left])].slice(-64);
+  return link;
+}
+
+// Your machines this Mac set up (over SSH), as its app says: those that sign their documents, each
+// `{key, sign, address, name, id}`; the conversations being moved, `{session, key}` each; and the
+// machines you removed, by key (`removed`): its peers document names them so they let this Mac go,
+// and they hear that once. One just missing from the list (it can't be reached to be set up, say)
+// isn't a peer now, and nothing more; one set up again is no longer removed. One that isn't a
+// machine's record is left out (a line in the box's log says so), never the rest with it. No link
+// for what isn't a list.
+export function setMacPeers(link, given) {
+  if (!isObject(given) || !Array.isArray(given.peers)) return { link: null, gone: [] };
+  const now = given.peers.slice(0, MOST_PEERS).map(peer => ({ ...peer, kind: "machine" }))
+    .filter(peer => fitsPeer(peer) && typeof peer.sign === "string" && SIGN.test(peer.sign)).map(cleanPeer);
+  const skipped = Math.min(given.peers.length, MOST_PEERS) - now.length;
+  if (skipped) console.error(`${skipped} of this Mac's machines weren't records the box could take, and were left out.`);
+  const removed = (Array.isArray(given.removed) ? given.removed : []).filter(key => typeof key === "string" && KEY.test(key) && !now.some(peer => peer.key === key));
+  const gone = peersOf(link).filter(peer => removed.includes(peer.key));
+  const kept = (Array.isArray(link.left) ? link.left : []).filter(key => !now.some(peer => peer.key === key) && !removed.includes(key));
+  link.left = [...kept, ...removed].slice(-64);
+  link.macPeers = now;
+  link.macMoved = cleanMoved(given.moved);
+  pruneDocs(link);
+  return { link, gone };
+}
+
+const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;
+
+// `kuvo/link/…`, for this Mac's app.
+export async function* macLinkRoute(route, request, signal) {
+  const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+  const method = request.method.toUpperCase();
+  switch (route) {
+    case "kuvo/link/config": {
+      if (method !== "PUT") return yield* json(405, {});
+      const given = parsed(request.body);
+      let relay = null;
+      try { relay = given?.relay ? new URL(String(given.relay)) : null; } catch {}
+      if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
+        return yield* json(400, { message: "Say whether the phone link is on (phones) and there are machines (machines), and the relay." });
+      }
+      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? ""),
+        ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
+      const before = macLink.config;
+      macLink.config = config;
+      if (macLink.overlay) macLink.overlay = { ...macLink.overlay, relay: config.relay, name: config.name };
+      // Phones not let in any more (the phone link off) lose what they have open; another relay
+      // means another connection.
+      if (!config.phones) macLink.host?.keepOnly(new Set());
+      if (before && (before.relay !== config.relay || before.name !== config.name)) macLink.host?.disconnect?.();
+      // Its keys before this answers, so a pairing link can be made right after.
+      await macKeys();
+      macLinkCheck();
+      macLink.wake?.();
+      // The phone link on or off: this Mac's phones document comes, or stops changing.
+      if (before?.phones !== config.phones) macDocsChanged();
+      return yield* json(200, macLink.status);
+    }
+    case "kuvo/link/status":
+      if (method !== "GET") return yield* json(405, {});
+      return yield* json(200, macLink.status);
+    case "kuvo/link/status/events":
+      if (method !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(() => macLink.status, macLink.statusFollowers, signal);
+    case "kuvo/link/phones":
+      if (method !== "GET") return yield* json(405, {});
+      return yield* json(200, macPhones());
+    case "kuvo/link/phones/events":
+      if (method !== "GET") return yield* json(405, {});
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      return yield* followed(macPhones, macLink.phoneFollowers, signal);
+    case "kuvo/link/phones/take": {
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (!isObject(given) || !Array.isArray(given.phones ?? []) || !Array.isArray(given.removed ?? [])) return yield* json(400, { message: "Send {phones, removed}." });
+      updateLink(link => takeMacDocuments(takePhones(link ?? { phones: [] }, given), given.documents));
+      macLink.wake?.();
+      macDocsChanged();
+      return yield* json(200, macPhones());
+    }
+    case "kuvo/link/peers": {
+      if (method !== "PUT") return yield* json(405, {});
+      let gone = [];
+      const changed = updateLink(link => {
+        const made = setMacPeers(link ?? { phones: [] }, parsed(request.body));
+        gone = made.gone;
+        return made.link;
+      });
+      if (!changed) return yield* json(400, { message: "Send {peers: [{key, sign, address, name, id}], moved}." });
+      macDocsChanged();
+      tellGone(gone);
+      return yield* json(200, {});
+    }
+    case "kuvo/link/setup": {
+      // What setting up a machine over SSH gives it: this Mac's key, the key its documents are
+      // signed with, its own documents as they are now and those it keeps of your machines.
+      if (method !== "GET") return yield* json(405, {});
+      await macKeys();
+      // `?key=`: a machine set up again, no longer one this Mac removed.
+      const again = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("key");
+      const library = readPersonalities();
+      let docs = [];
+      const link = updateLink(link => {
+        if (!link?.sign) return null;
+        if (again && Array.isArray(link.left)) link.left = link.left.filter(key => key !== again);
+        const own = ownDocs({ link, library });
+        docs = [...Object.values(own).map(made => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => (a.d < b.d ? -1 : 1))];
+        return link;
+      });
+      if (!link) return yield* json(503, { message: "This Mac's link has no keys yet." });
+      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs });
+    }
+    case "kuvo/link/docs": {
+      // Documents a machine gave as it was set up (over SSH): taken as if they'd come by mail.
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      const sender = peersOf(readLink()).find(peer => peer.key === given?.from);
+      if (!sender || !isObject(given.docs)) return yield* json(404, { message: "That isn't one of this Mac's machines." });
+      await receiveDocs(sender, given.docs, macLink.host);
+      return yield* json(200, {});
+    }
+    case "kuvo/link/documents": {
+      // This Mac's documents, its own brought up to date first, and its digest (what its agents'
+      // mail carries, so a machine that missed one gets it).
+      if (method !== "GET") return yield* json(405, {});
+      const library = readPersonalities();
+      updateLink(link => {
+        if (!link?.sign) return null;
+        const before = JSON.stringify(link.own ?? {});
+        ownDocs({ link, library });
+        return JSON.stringify(link.own ?? {}) === before ? null : link;
+      });
+      const link = readLink();
+      return yield* json(200, { ...macPhones().documents, have: link?.sign ? digestOf(link) : [] });
+    }
+    case "kuvo/link/letters": {
+      // A letter from one of this Mac's conversations for an agent on another of your computers
+      // (`peer`, its key), left in the outbox as a machine's tool leaves one: sent now, and each
+      // minute until it's there; with `wait`, its answer, for as long as this is asked.
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      const link = readLink();
+      const peer = peersOf(link).find(each => each.key === given?.peer);
+      const from = typeof given?.from === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(given.from) ? given.from : null;
+      if (!isObject(given) || typeof given.to !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(given.to) || typeof given.text !== "string" || !given.text.trim()) {
+        return yield* json(400, { message: "Send {peer, to, text}, and from, wait." });
+      }
+      if (!peer) return yield* json(404, { message: "That isn't one of this Mac's computers." });
+      const id = "ltr_" + crypto.randomBytes(16).toString("base64url");
+      // Off the relay now: it goes once this Mac's back on it, and its answer can't be waited for.
+      const online = Boolean(macLink.host?.welcomed);
+      const wait = given.wait === true && Boolean(from) && online;
+      try {
+        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+        writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ from, to: given.to, text: cutText(given.text), wait, at: Date.now(), peer: peer.key }));
+      } catch {
+        return yield* json(500, { message: "This Mac's box couldn't keep it." });
+      }
+      if (!wait) {
+        macSendOutbox();
+        return yield* json(200, given.wait === true && from && !online ? { id, note: OFFLINE_LETTER } : { id });
+      }
+      // Waited for: a line once it's kept (so a request cut off after it knows it went), then one
+      // with how it went.
+      const answer = macLetterAnswer(id, signal);
+      macSendOutbox();
+      yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+      yield { body: Buffer.from(JSON.stringify({ id }) + "\n") };
+      yield { body: Buffer.from(JSON.stringify(await answer) + "\n") };
+      return;
+    }
+    // COMPAT(beta.1 mac-letters): the letters an earlier Kuvo Code kept (`agent-letters.json`), into the outbox. Goes 3 months after 0.8.0.
+    case "kuvo/link/letters/take": {
+      // What an earlier Kuvo Code kept itself (PhoneLink, before this Mac's box took its peers): its
+      // letters on their way, and the letters it had delivered (so one sent again isn't twice).
+      if (method !== "POST") return yield* json(405, {});
+      const given = parsed(request.body);
+      if (!isObject(given)) return yield* json(400, { message: "Send {letters, seen}." });
+      const now = Date.now();
+      try {
+        fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
+        for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
+          if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string") continue;
+          const kept = { from: typeof letter.from === "string" ? letter.from : null, to: letter.to, text: cutText(letter.text), wait: false,
+            at: typeof letter.at === "number" ? letter.at : now, peer: letter.peer, ...(typeof letter.answers === "string" ? { answers: letter.answers } : {}) };
+          writePrivate(path.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+        }
+        if (isObject(given.seen)) {
+          locked(PEER_LOCK, () => {
+            const seen = lettersSeen(now);
+            for (const [id, at] of Object.entries(given.seen)) if (LETTER_ID.test(id) && typeof at === "number" && now - at < LETTER_MEMORY) seen[id] = Math.max(seen[id] ?? 0, at);
+            writePrivate(LETTERS_SEEN, JSON.stringify(seen));
+          });
+        }
+      } catch {
+        return yield* json(500, { message: "This Mac's box couldn't keep them." });
+      }
+      macSendOutbox();
+      return yield* json(200, {});
+    }
+    case "kuvo/link/agents/refresh": {
+      // The list of everyone made again from this Mac's conversations as they are now (one made a
+      // moment ago), before a group chat here names someone with &.
+      if (method !== "POST") return yield* json(405, {});
+      await refreshOwn(readEngineFile).catch(() => {});
+      return yield* json(200, {});
+    }
+    case "kuvo/link/agents": {
+      // The agents your other computers told this Mac of, by computer (its key, and its id here).
+      if (method !== "GET") return yield* json(405, {});
+      const link = readLink();
+      const told = readPeerAgents(undefined, undefined, link);
+      return yield* json(200, { peers: peersOf(link).map(peer => ({ key: peer.key, id: peer.id ?? null, at: told[peer.key]?.at ?? 0,
+        list: told[peer.key]?.list ?? [], features: told[peer.key]?.features ?? [] })) });
+    }
+    default:
+      return yield* json(404, {});
+  }
+}

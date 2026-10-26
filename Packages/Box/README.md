@@ -58,9 +58,12 @@ src/link/
   letters/       agents' messages to agents on other boxes: the outbox, and those that come here
   phones.ts      paired phones
   bots/ personalities/   bots, and the personalities library
-  server/        the route table (a path to its area, nothing else), forwarding to the engine, serve
+  server/        the route table (a path to its area, nothing else), forwarding to the engine and
+                 who a prompt names with "&", the server on a Mac
+  mac/           this Mac's box: its link on the relay, what its app asks of it, its notices, its
+                 part among your other computers
   areas/         one module per route family: projects, worktrees, skills, integrations, wakes,
                  groups, config, accounts, asks, artifacts, folders, plugins…
-  notices/ updates/ host-interface.ts mac-link.ts
+  notices/ updates/ host-interface.ts keeper.ts
   compat/        what's only for released Macs, where it's a whole thing
 ```

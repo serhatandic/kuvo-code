@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { isObject } from "../shared/json";
+import { addressOf, publicOf } from "./crypto/keys";
 import { noteDocsChanged } from "./documents/changed";
 import { NEEDED_FILE } from "./home";
 import { ADDRESS, KEY, macDoc, macsOf, needed, phoneDocs } from "./peers/known";
@@ -165,4 +166,23 @@ export function confirmPhone(phone) {
     known.address = where;
     return link;
   });
+}
+
+// How long a pairing waits for its phone.
+export const PAIRING_MINUTES = 10;
+
+// A pairing's token, good once, for `PAIRING_MINUTES`.
+export const newPairingToken = () => ({ token: crypto.randomBytes(16).toString("base64url"), expires: Date.now() + PAIRING_MINUTES * 60_000 });
+
+// The link a phone pairs with, for `link`'s pairing.
+export function pairingLink(link) {
+  const query = new URLSearchParams({
+    v: "1",
+    relay: link.relay,
+    host: addressOf(Buffer.from(link.secret, "base64url")).toString("base64url"),
+    key: publicOf(Buffer.from(link.key, "base64url")).toString("base64url"),
+    token: link.pairing.token,
+    name: link.name,
+  });
+  return `kuvo-link://pair?${query}`;
 }
