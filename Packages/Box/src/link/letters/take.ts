@@ -18,10 +18,13 @@ import type { Peer } from "../peers/known";
 import type { SessionPlace } from "./letter";
 import type { AnswerLetter, Delivered, OutboxLetter } from "./outbox";
 
-/** Who a letter came from: the box that sent it, by its key, and its name when it's a peer. */
+/** Who a letter came from: the box that sent it, by its key, its name when it's a peer, and where
+ * it is on the relay when this box knows (a Mac's mail can come before a peers document says):
+ * an answer goes back only to one with an address (`mailFor`). */
 export interface LetterSender {
   key: string;
   name?: string;
+  address?: string;
 }
 
 /** What `takeLetter` works with: how it mails the sender (`send`), where conversations here run
