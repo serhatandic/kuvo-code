@@ -20,8 +20,8 @@ final class MermaidView: NSView {
     private var shownStyle: ReplyDocument.Style?
     private var error: String?
     private var showsCode = false
-    /// How tall the diagram is, as it was drawn.
-    private var diagramHeight: CGFloat = 0
+    /// How big the diagram is, as it was drawn.
+    private var diagramSize: CGSize = .zero
     /// How wide the diagram was drawn: some diagrams (a Gantt chart) are drawn for the width they
     /// have, so they're drawn again, a moment after it changes.
     private var drawnWidth: CGFloat = 0
@@ -73,7 +73,7 @@ final class MermaidView: NSView {
         if sourceChanged {
             error = nil
             showsCode = false
-            diagramHeight = 0
+            diagramSize = .zero
             picture.image = nil
         }
         code.show(code: source, language: "mermaid", marks: [], style: style)
@@ -83,24 +83,31 @@ final class MermaidView: NSView {
 
     private func draw() {
         redraw?.cancel()
+        drawing?.cancel()
         // Not before it has its width (a diagram drawn into none comes out squeezed).
         guard let shown, bounds.width > 0 else { return }
         let width = bounds.width
         drawnWidth = width
-        drawing?.cancel()
+        // Drawn already (scrolled back to): at its height at once, rather than coming in short.
+        if let kept = MermaidRenderer.shared.known(shown.source, dark: shown.dark, width: width) { return apply(kept) }
         drawing = Task { [weak self] in
             let outcome = await MermaidRenderer.shared.render(shown.source, dark: shown.dark, width: width)
-            guard let self, !Task.isCancelled, let outcome else { return }
-            switch outcome {
-            case .drawn(let image):
-                error = nil
-                picture.image = image
-                diagramHeight = image.size.height
-            case .failed(let message):
-                error = message
-            }
-            changed()
+            // Still the diagram it was drawn for.
+            guard let self, !Task.isCancelled, let outcome, self.shown?.source == shown.source, self.shown?.dark == shown.dark else { return }
+            apply(outcome)
         }
+    }
+
+    private func apply(_ outcome: MermaidRenderer.Outcome) {
+        switch outcome {
+        case .drawn(let image):
+            error = nil
+            picture.image = image
+            diagramSize = image.size
+        case .failed(let message):
+            error = message
+        }
+        changed()
     }
 
     @objc private func toggleCode() {
@@ -134,7 +141,13 @@ final class MermaidView: NSView {
             // What's wrong is at the top, in the button bar's place.
             return (error != nil ? 0 : Self.bar) + problemHeight(for: width) + code.height(for: width)
         }
-        return Self.bar + (diagramHeight > 0 ? diagramHeight : Self.placeholder)
+        return Self.bar + (diagramSize.height > 0 ? pictureHeight(for: width) : Self.placeholder)
+    }
+
+    /// The diagram's height at `width`: as drawn, or smaller where it's narrower than that (until
+    /// it's drawn again for it, at about the same height).
+    private func pictureHeight(for width: CGFloat) -> CGFloat {
+        ceil(diagramSize.width > width ? diagramSize.height * width / diagramSize.width : diagramSize.height)
     }
 
     private func problemHeight(for width: CGFloat) -> CGFloat {
@@ -246,11 +259,21 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
         web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
     }
 
+    /// What's kept of `source` drawn `width` points wide: drawn, or what Mermaid said was wrong.
+    func known(_ source: String, dark: Bool, width: CGFloat) -> Outcome? {
+        (kept.object(forKey: Self.key(source, dark: dark, width: width)) ?? kept.object(forKey: Self.slowKey(source))
+            ?? kept.object(forKey: Self.failedKey(source)))?.outcome
+    }
+
+    private static func key(_ source: String, dark: Bool, width: CGFloat) -> NSString {
+        ("\(dark ? 1 : 0)|\(Int(width.rounded()))|" + source) as NSString
+    }
+
     /// `source` drawn `width` points wide, or why it can't be; nil if the call was canceled first.
     func render(_ source: String, dark: Bool, width: CGFloat) async -> Outcome? {
         let width = width.rounded()
-        let key = "\(dark ? 1 : 0)|\(Int(width))|" + source
-        if let hit = kept.object(forKey: key as NSString) ?? kept.object(forKey: Self.slowKey(source)) { return hit.outcome }
+        let key = Self.key(source, dark: dark, width: width)
+        if let hit = known(source, dark: dark, width: width) { return hit }
         let job = Job(source: source, dark: dark, width: width)
         let outcome: Outcome? = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -261,7 +284,7 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
         } onCancel: {
             Task { @MainActor in job.isCancelled = true }
         }
-        if let outcome, case .drawn(let image) = outcome { kept.setObject(Kept(outcome), forKey: key as NSString, cost: Self.bytes(of: image)) }
+        if let outcome, case .drawn(let image) = outcome { kept.setObject(Kept(outcome), forKey: key, cost: Self.bytes(of: image)) }
         return outcome
     }
 
@@ -303,7 +326,11 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
             return .failed(Self.tooLong)
         }
         guard let result = answer else { return .failed("The page didn't answer.") }
-        if let message = result.error { return .failed(message) }
+        if let message = result.error {
+            // Mermaid can't read it, at any width: not tried again.
+            kept.setObject(Kept(.failed(message)), forKey: Self.failedKey(job.source), cost: 1)
+            return .failed(message)
+        }
         guard let height = result.height.map({ CGFloat($0) }), height > 0 else { return .failed("It has nothing to show.") }
         web.frame.size.height = height
         let configuration = WKSnapshotConfiguration()
@@ -350,6 +377,7 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private static let patience: TimeInterval = 10
     private static let tooLong = "It took too long to draw."
     private static func slowKey(_ source: String) -> NSString { ("slow|" + source) as NSString }
+    private static func failedKey(_ source: String) -> NSString { ("failed|" + source) as NSString }
 
     /// What a picture takes in memory: its pixels, four bytes each.
     private static func bytes(of image: NSImage) -> Int {

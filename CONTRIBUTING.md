@@ -281,6 +281,7 @@ when you're there to answer.
 | `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT` |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
+| `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
 | `KUVO_DEMO_BOX_FAILED` | This Mac's box as if it had stopped for good, with this reason: how the sidebar shows it |
 | `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |
