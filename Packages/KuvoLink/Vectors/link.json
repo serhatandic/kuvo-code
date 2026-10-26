@@ -968,6 +968,12 @@
       "forwarded": "api/integration/claude-code@1f2e/connect/oauth"
     },
     {
+      "path": "api/kuvo/goals/ses_1/pause",
+      "allowed": true,
+      "method": "POST",
+      "forwarded": "api/kuvo/goals/ses_1/pause"
+    },
+    {
       "path": "api/kuvo/auto",
       "allowed": true,
       "method": "PUT",

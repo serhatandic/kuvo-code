@@ -168,6 +168,11 @@ public enum EventPayload {
         public var tokens: TokenUsage
     }
 
+    /// `session.viewed`: someone looked at the session, on any client, as it was at `idle`.
+    public struct Viewed: Decodable, Sendable {
+        public var idle: Milliseconds
+    }
+
     public struct Renamed: Decodable, Sendable {
         public var title: String
     }

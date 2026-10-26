@@ -152,6 +152,13 @@ private struct BottomStack: View {
         return waiting ? owner : nil
     }
 
+    /// What the composer offers after "/": the engine's commands and yours, and "/goal" where
+    /// its computer runs goals.
+    private var commands: [Command] {
+        let own = catalog.commands(in: model.session.location.directory)
+        return model.takesGoals ? own.filter { $0.name != Goal.command.name } + [Goal.command] : own
+    }
+
     /// Subagents its agent handed work to that are at it now.
     private var subagentsAtWork: [SessionModel.Subagent] {
         model.subagents.filter { workspace.isWorking($0, for: model.id) }
@@ -197,6 +204,20 @@ private struct BottomStack: View {
                         .glassEffectID("offline", in: glass)
                         .transition(.opacity)
                 }
+                if let goal = model.goal {
+                    GoalBar(goal: goal, isHidden: $model.hidesGoal, isChanging: model.isChangingGoal || offlineMachine != nil) {
+                        model.changeGoal(.pause)
+                    } resume: {
+                        model.changeGoal(.resume)
+                    } stop: {
+                        model.stopGoal()
+                    } done: {
+                        model.changeGoal(.clear)
+                    }
+                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                    .glassEffectID("goal", in: glass)
+                    .transition(.opacity)
+                }
                 if !subagentsAtWork.isEmpty {
                     SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: $model.hidesSubagents)
                         .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
@@ -237,7 +258,7 @@ private struct BottomStack: View {
                     hasQueue: !model.waiting.isEmpty,
                     history: { model.sentMessages },
                     folders: [model.session.location.directory] + workspace.extraFolders(model.session.location.directory),
-                    commands: catalog.commands(in: model.session.location.directory),
+                    commands: commands,
                     focusRequest: model.composerFocus,
                     isOffline: offlineMachine != nil,
                     blurRequest: model.composerBlur,
@@ -283,6 +304,7 @@ private struct BottomStack: View {
             .animation(.ui, value: subagentsAtWork.map(\.id))
             .animation(.ui, value: offlineMachine == nil)
             .animation(.ui, value: model.failure)
+            .animation(.ui, value: model.goal == nil)
             .animation(.ui, value: app.browserAsks.asks(for: model.session.id).map(\.id))
         }
         .padding(.horizontal, Metrics.gutter)
@@ -383,7 +405,7 @@ struct DraftSessionView: View {
                 model: startingModel,
                 isRunning: isCreating,
                 folders: [directory] + workspace.extraFolders(directory),
-                commands: catalog.commands(in: directory),
+                commands: catalog.commands(in: directory) + (workspace.agents(forFolder: directory)?.api != nil ? [Goal.command] : []),
                 focusRequest: focusRequest,
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { approval = $0 },
@@ -420,6 +442,12 @@ struct DraftSessionView: View {
 
     private func send() {
         guard !isCreating else { return }
+        // "/goal" with nothing to give the agent (alone, pause, resume, clear): a new conversation
+        // has no goal to act on, so none is made for it.
+        if let goal = GoalCommand(Drafts.shared[draftKey].text), !goal.needsModel {
+            if goal == .show { Drafts.shared[draftKey].text = "/goal " } else { failure = "There’s no goal yet. Type /goal and what it should achieve, like “/goal all tests pass”." }
+            return
+        }
         isCreating = true
         // On its way: the composer empties, as it does for a message, and the message is kept
         // until the session has it (a quit meanwhile puts it back). What's written while the

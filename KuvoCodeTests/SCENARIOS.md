@@ -31,7 +31,9 @@ for Linux's tools).
 | B14 Switch model mid-conversation, or elsewhere, to a coding agent too | SessionsTests, MoveToAgentsTests | |
 | The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Agents/test: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
 | B16 Find in a long conversation | ConversationFindTests | |
-| B19 A subagent at work, in the background too | SubagentsAtWorkTests | |
+| B19 A subagent at work, in the background too | SubagentsAtWorkTests, AgentAsksTests (one moved to the background still asks) | |
+| A message to an agent waiting on a long command or a subagent is read at once: the box moves what it waits on to the background | the bridge's steering.test.js | the engine's own background route (checked by hand against a real engine) |
+| Read on one client, read on all: a session, bot or group chat read on the phone or another Mac stops showing unread here | SessionLifecycleTests, BoxGroupTests; Agents' sessions test (a coding agent's look told) | the phone's side (its own tests) |
 | B17 A folder that isn't a git repository | SessionEditsTests | |
 | B18 Rename, archive, restore, delete, search | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
