@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import Textual
@@ -120,8 +121,82 @@ struct FileLinkingParser: MarkupParser {
             name.insert(icon + gap, at: name.startIndex)
             text.replaceSubrange(range, with: name)
         }
+        SiteIconAttachment.mark(&text)
         if let highlight { FindText.mark(&text, highlight, inCode: true) }
         return text
+    }
+}
+
+/// The icon of the site a web link in a reply leads to, before it, as a file's link has its
+/// document icon: the site's own (`SiteIcons`), or the globe while it comes, when it doesn't come
+/// within a second, or when it has none that reads well. The same square either way, so nothing
+/// moves when it comes.
+struct SiteIconAttachment: Attachment {
+    let url: URL
+    var description: String { "" }
+    var selectionStyle: AttachmentSelectionStyle { .text }
+
+    var host: String { url.host()?.lowercased() ?? "" }
+
+    /// Where a reply's text is drawn by SwiftUI rather than TextKit.
+    var body: some View { SiteIconView(url: url) }
+
+    func baselineOffset(in environment: TextEnvironmentValues) -> CGFloat {
+        FontScaled<CGFloat>.fontScaled(-0.12).resolve(in: environment)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, in environment: TextEnvironmentValues) -> CGSize {
+        FontScaled<CGSize>.fontScaled(width: 0.92, height: 0.92).resolve(in: environment)
+    }
+
+    /// Puts the icon before each web link in `text` (once for a link in several runs), outside the
+    /// link: Textual draws attachments only outside links.
+    static func mark(_ text: inout AttributedString) {
+        var starts: [(AttributedString.Index, URL, AttributeContainer)] = []
+        var previous: URL?
+        for run in text.runs {
+            defer { previous = run.link }
+            guard let url = run.link, url != previous, ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host() != nil else { continue }
+            starts.append((run.range.lowerBound, url, run.attributes))
+        }
+        for (start, url, attributes) in starts.reversed() {
+            var icon = AttributedString(FileLinks.icon, attributes: attributes)
+            icon.link = nil
+            icon.textual.attachment = AnyAttachment(SiteIconAttachment(url: url))
+            var gap = AttributedString(" ", attributes: attributes)
+            gap.link = nil
+            text.insert(icon + gap, at: start)
+        }
+    }
+}
+
+/// A site's icon in SwiftUI's text: the globe until it's here.
+struct SiteIconView: View {
+    let url: URL
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon).resizable().clipShape(.rect(cornerRadius: 3))
+            } else {
+                Image(systemName: "globe").resizable().fontWeight(.light).foregroundStyle(.tint)
+            }
+        }
+        .aspectRatio(contentMode: .fit)
+        .task(id: url) {
+            let host = url.host()?.lowercased() ?? ""
+            icon = SiteIcons.shared.icon(for: host)
+            guard icon == nil else { return }
+            let asked = ContinuousClock.now
+            SiteIcons.shared.load(url)
+            for await note in NotificationCenter.default.notifications(named: SiteIcons.loaded) {
+                guard note.object as? String == host else { continue }
+                // Within a second, or the globe stays (the next time it shows, it's here at once).
+                if ContinuousClock.now - asked < SiteIcons.wait { icon = SiteIcons.shared.icon(for: host) }
+                break
+            }
+        }
     }
 }
 

@@ -196,6 +196,11 @@ final class ReplyPieceView: NSView {
 /// Prose, as TextKit lays it out: selectable, its links clickable.
 final class ReplyTextView: NSTextView, NSTextViewDelegate {
     var openURL: (URL) -> Bool = { _ in false }
+    nonisolated(unsafe) private var siteIcons: NSObjectProtocol?
+
+    deinit {
+        if let siteIcons { NotificationCenter.default.removeObserver(siteIcons) }
+    }
 
     convenience init() {
         let storage = NSTextStorage()
@@ -218,6 +223,10 @@ final class ReplyTextView: NSTextView, NSTextViewDelegate {
         // The document colors its links (a bot's name in its color, Find's marks in black).
         linkTextAttributes = [.cursor: NSCursor.pointingHand]
         delegate = self
+        // A site's icon that came: its links show it (`SiteIconCell`).
+        siteIcons = NotificationCenter.default.addObserver(forName: SiteIcons.loaded, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
     }
 
     func show(_ text: NSAttributedString) {
