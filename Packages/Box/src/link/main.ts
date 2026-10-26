@@ -34,7 +34,7 @@ import { asked, call, engineGet, fetched, readBridgeFile, readEngineFile } from 
 import { isHiddenRun } from "./engine/sessions";
 import { textOf, listOf, locked, writePrivate } from "./files";
 import { macLink, onLinkWritten, readLink, readLinkWith, updateLink, writeLink } from "./state";
-import { BOT_KEYS, BOTS, BOX, BOX_KEYS, BRIDGE_FILE, CONFIG_LOCK, UPDATES, ENGINE_CONFIG, ENGINE_FILE, HERE, IS_MAC, K, LINK_FILE, NEEDED_FILE, ON_MAC, PID_FILE, RUN, VERSION_FILE } from "./home";
+import { BOT_KEYS, BOTS, BOX, BOX_KEYS, BRIDGE_FILE, CONFIG_LOCK, UPDATES, ENGINE_CONFIG, ENGINE_FILE, HERE, IS_MAC, K, LINK_FILE, NEEDED_FILE, PID_FILE, RUN, VERSION_FILE } from "./home";
 import { addressOf, EMPTY, newKey, publicOf } from "./crypto/keys";
 import { CipherState, IKInitiator, IKResponder, MAIL_PROLOGUE, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
 import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRelay, relayHello, relayPush, relaySend } from "./relay/frames";
@@ -1104,7 +1104,7 @@ export function listBots(machine, { memory = false } = {}) {
         session,
         name: described.name,
         look: described.look,
-        machine: ON_MAC ? undefined : machine || undefined,
+        machine: IS_MAC ? undefined : machine || undefined,
         job: job.line,
         jobDetails: job.details,
         paused,
@@ -1119,7 +1119,7 @@ export function listBots(machine, { memory = false } = {}) {
         project: typeof described.project === "string" ? described.project : undefined,
         created: typeof described.created === "string" ? described.created : undefined,
         // What a Mac of an earlier version reads a machine's bots' jobs by.
-        memoryJob: memory && !ON_MAC ? { line: job.line, section: job.details } : undefined,
+        memoryJob: memory && !IS_MAC ? { line: job.line, section: job.details } : undefined,
       },
     });
   }
@@ -1166,7 +1166,7 @@ function jobOf(here) {
   const memory = jobInMemory(textOf(path.join(here.folder, "MEMORY.md")) ?? "");
   // Without one in its memory, what its description said (a Mac kept a job Edit Bot gave it there).
   let job = memory ? { line: memory.line, details: detailsBeyond(memory.line, memory.section) } : { line: plainName(here.described.job ?? ""), details: "" };
-  if (ON_MAC && !memory) {
+  if (IS_MAC && !memory) {
     const listed = macListed().find(each => each?.id === here.described.id);
     if (listed && listed.jobInMemory !== true) job = { line: plainName(listed.job ?? ""), details: detailsBeyond(plainName(listed.job ?? ""), listed.instructions) };
   }
@@ -1212,7 +1212,7 @@ function givenJob(given) {
 
 // What New Bot needs here, which the Mac gives the machine as it connects (Bots.MachineKit), and
 // what's said while there's none.
-const NO_KIT = ON_MAC ? "Kuvo Code is still setting up bots on this Mac. Try again in a moment." : "Connect to this machine from your Mac once, then try again.";
+const NO_KIT = IS_MAC ? "Kuvo Code is still setting up bots on this Mac. Try again in a moment." : "Connect to this machine from your Mac once, then try again.";
 const KIT_FILE = path.join(BOTS, "kit.json");
 // The coding agents' providers (the Mac's OutsideAgents): a bot on one of theirs runs with them.
 const AGENT_PROVIDERS = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"];
@@ -1247,10 +1247,10 @@ export function readWords(file = WORDS_FILE) {
 export function readKit() {
   const words = readWords();
   const mac = readMacKit();
-  if (!words || (ON_MAC && !mac)) return null;
+  if (!words || (IS_MAC && !mac)) return null;
   const timeZone = zoneOf(mac);
   const machine = (typeof mac?.machine === "string" && mac.machine) || readLink()?.id || os.hostname();
-  const here = ON_MAC ? words.here.mac : words.here.machine;
+  const here = IS_MAC ? words.here.mac : words.here.machine;
   const fill = text => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? ""))
     .replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = each => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
@@ -1286,7 +1286,7 @@ function readMacKit() {
 // The time zone a machine's bots go by: yours, as a Mac's kit has it, or else the machine's own
 // ("" on a Mac, whose bots go by its own clock).
 function zoneOf(mac) {
-  if (ON_MAC) return "";
+  if (IS_MAC) return "";
   if (typeof mac?.timeZone === "string" && mac.timeZone) return mac.timeZone;
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
 }
@@ -1311,8 +1311,8 @@ export function botTemplates(kit, machine) {
     templates: kit.templates.map(({ firstMessage: _, ...template }) => template),
     personalities: botPersonalities(kit).map(({ instruction: _, ...personality }) => personality),
     looks: kit.looks,
-    startingModel: { [ON_MAC ? "mac" : machine || "machine"]: kit.startingModel ?? null },
-    projects: boxProjects(kit).map(project => ({ ...project, machine: ON_MAC ? undefined : machine || undefined })),
+    startingModel: { [IS_MAC ? "mac" : machine || "machine"]: kit.startingModel ?? null },
+    projects: boxProjects(kit).map(project => ({ ...project, machine: IS_MAC ? undefined : machine || undefined })),
   };
 }
 
@@ -1450,7 +1450,7 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
   const name = plainName(given.name);
   if (!name) return no(400, "A bot needs a name.");
   // This Mac's box makes this Mac's bots: one for a machine is made on that machine's box.
-  if (ON_MAC && given.machine !== undefined && given.machine !== null && given.machine !== "mac") {
+  if (IS_MAC && given.machine !== undefined && given.machine !== null && given.machine !== "mac") {
     return no(400, `This Mac makes only bots that live on it: make one for “${plainName(given.machine)}” there.`);
   }
   let template;
@@ -1502,8 +1502,8 @@ export async function makeBot(given, readEngine, readBridge, machine, signal) {
     noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
     fs.writeFileSync(path.join(folder, "directory"), directory);
     // A machine's wake-ups go by your time zone; this Mac's, by its own clock as you change it.
-    if (kit.timeZone && !ON_MAC) fs.writeFileSync(path.join(folder, "timezone"), kit.timeZone);
-    if (kit.zoneinfo && !ON_MAC) fs.writeFileSync(path.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
+    if (kit.timeZone && !IS_MAC) fs.writeFileSync(path.join(folder, "timezone"), kit.timeZone);
+    if (kit.zoneinfo && !IS_MAC) fs.writeFileSync(path.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
     if (agents) fs.writeFileSync(path.join(folder, "via"), "bridge");
     const now = stamp();
     const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project } : {}), updated: now };
@@ -1610,7 +1610,7 @@ function settleFolder(here, kit) {
   };
   try {
     write("directory", typeof here.described.project === "string" ? here.described.project : path.join(here.folder, "workspace"));
-    if (ON_MAC) {
+    if (IS_MAC) {
       for (const name of ["timezone", "zoneinfo"]) fs.rmSync(path.join(here.folder, name), { force: true });
     } else {
       const mac = readMacKit(), zone = zoneOf(mac);
@@ -2008,7 +2008,7 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   let trashed;
   try {
     // For a Mac to let go of it as it next connects (this Mac's own box needs no note).
-    if (!ON_MAC) noteDeleted(id);
+    if (!IS_MAC) noteDeleted(id);
     // To the trash as the Mac sends one there: a folder by when, and this process.
     const now = new Date();
     const two = number => String(number).padStart(2, "0");
@@ -2022,7 +2022,7 @@ export async function deleteBot(id, readEngine, readBridge, signal) {
   }
   // On this Mac, on to the Finder's Trash, where you look for what you deleted, and the folder that
   // held it here goes once it's empty.
-  if (ON_MAC) {
+  if (IS_MAC) {
     await hostTrash(trashed).catch(() => {});
     if (!fs.existsSync(trashed)) try { fs.rmdirSync(path.dirname(trashed)); } catch {}
   }

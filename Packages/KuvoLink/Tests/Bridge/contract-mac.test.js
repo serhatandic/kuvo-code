@@ -14,6 +14,7 @@ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-co
 const support = path.join(root, "support");
 Object.assign(process.env, {
   KUVO_BOX: "mac",
+  KUVO_ENGINE_CONFIG: path.join(support, "opencode"),
   KUVO_HOME: path.join(support, "box"),
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),

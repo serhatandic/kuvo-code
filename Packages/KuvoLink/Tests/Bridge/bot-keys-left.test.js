@@ -38,6 +38,7 @@ after(() => { host.closeAllConnections(); host.close(); });
 
 Object.assign(process.env, {
   KUVO_BOX: "mac",
+  KUVO_ENGINE_CONFIG: path.join(support, "opencode"),
   KUVO_HOME: path.join(support, "box"),
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),

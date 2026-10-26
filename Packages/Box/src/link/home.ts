@@ -34,17 +34,14 @@ export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // app's own kuvo-wake); a machine's, in its folder.
 export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
 
-// Whether this is a Mac's box, said two ways by two of what its app starts it with (both always
-// together; they could be one):
-// This Mac's box (BoxProcess says so as it starts it): its bots are the Mac's own, made with the
-// kit its app gives it and told they run on this Mac; it names no machine, keeps no notes for a
-// Mac to take in, and goes by the Mac's own clock.
-export const ON_MAC = process.env.KUVO_BOX === "mac";
+// This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
+// made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no
+// notes for a Mac to take in, and goes by the Mac's own clock. Its settings are the app's engine's,
+// where they've always been (KUVO_ENGINE_CONFIG, the engine's XDG_CONFIG_HOME), its own from the
+// start; its keys are in the Mac's Keychain, which the engine reads from the files the app writes
+// them to (KUVO_KEYS); and the servers that use a Mac's own apps run here.
+export const IS_MAC = process.env.KUVO_BOX === "mac";
 // This box's computer, as what it says names it.
-export const HERE = ON_MAC ? "this Mac" : "this machine";
-// This Mac's box: its settings are the app's engine's, where they've always been (KUVO_ENGINE_CONFIG,
-// the engine's XDG_CONFIG_HOME), its own from the start; its keys are in the Mac's Keychain, which
-// the engine reads from the files the app writes them to (KUVO_KEYS); and the servers that use a
-// Mac's own apps run here.
+export const HERE = IS_MAC ? "this Mac" : "this machine";
+// Where its engine's settings are: this Mac's app's engine's (a machine's are in `box`).
 export const ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
-export const IS_MAC = Boolean(ENGINE_CONFIG);

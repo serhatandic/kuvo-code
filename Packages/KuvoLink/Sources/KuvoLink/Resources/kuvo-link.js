@@ -106,10 +106,9 @@ var BOT_KEYS = path.join(K, "box", "bot-keys");
 var UPDATES = path.join(K, "updates");
 var CONFIG_LOCK = path.join(RUN, ".config.lock");
 var BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
-var ON_MAC = process.env.KUVO_BOX === "mac";
-var HERE = ON_MAC ? "this Mac" : "this machine";
+var IS_MAC = process.env.KUVO_BOX === "mac";
+var HERE = IS_MAC ? "this Mac" : "this machine";
 var ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
-var IS_MAC = Boolean(ENGINE_CONFIG);
 
 // Packages/Box/src/link/engine/client.ts
 var readEngineFile = () => JSON.parse(fs2.readFileSync(ENGINE_FILE, "utf8"));
@@ -4550,7 +4549,7 @@ function listBots(machine, { memory = false } = {}) {
         session,
         name: described.name,
         look: described.look,
-        machine: ON_MAC ? undefined : machine || undefined,
+        machine: IS_MAC ? undefined : machine || undefined,
         job: job.line,
         jobDetails: job.details,
         paused,
@@ -4562,7 +4561,7 @@ function listBots(machine, { memory = false } = {}) {
         folder,
         project: typeof described.project === "string" ? described.project : undefined,
         created: typeof described.created === "string" ? described.created : undefined,
-        memoryJob: memory && !ON_MAC ? { line: job.line, section: job.details } : undefined
+        memoryJob: memory && !IS_MAC ? { line: job.line, section: job.details } : undefined
       }
     });
   }
@@ -4596,7 +4595,7 @@ function jobOf(here) {
     return kept;
   const memory = jobInMemory(textOf(path20.join(here.folder, "MEMORY.md")) ?? "");
   let job = memory ? { line: memory.line, details: detailsBeyond(memory.line, memory.section) } : { line: plainName(here.described.job ?? ""), details: "" };
-  if (ON_MAC && !memory) {
+  if (IS_MAC && !memory) {
     const listed = macListed().find((each) => each?.id === here.described.id);
     if (listed && listed.jobInMemory !== true)
       job = { line: plainName(listed.job ?? ""), details: detailsBeyond(plainName(listed.job ?? ""), listed.instructions) };
@@ -4634,7 +4633,7 @@ function givenJob(given) {
     return { error: "That job is too long to keep: shorten its details." };
   return { job: { line, details } };
 }
-var NO_KIT = ON_MAC ? "Kuvo Code is still setting up bots on this Mac. Try again in a moment." : "Connect to this machine from your Mac once, then try again.";
+var NO_KIT = IS_MAC ? "Kuvo Code is still setting up bots on this Mac. Try again in a moment." : "Connect to this machine from your Mac once, then try again.";
 var KIT_FILE = path20.join(BOTS, "kit.json");
 var AGENT_PROVIDERS = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"];
 var runsWithAgents = (model) => model?.providerID === "auto" || AGENT_PROVIDERS.includes(String(model?.providerID ?? "").split("@")[0]);
@@ -4650,11 +4649,11 @@ function readWords(file = WORDS_FILE) {
 function readKit() {
   const words = readWords();
   const mac = readMacKit();
-  if (!words || ON_MAC && !mac)
+  if (!words || IS_MAC && !mac)
     return null;
   const timeZone = zoneOf(mac);
   const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os7.hostname();
-  const here = ON_MAC ? words.here.mac : words.here.machine;
+  const here = IS_MAC ? words.here.mac : words.here.machine;
   const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
@@ -4690,7 +4689,7 @@ function readMacKit() {
   }
 }
 function zoneOf(mac) {
-  if (ON_MAC)
+  if (IS_MAC)
     return "";
   if (typeof mac?.timeZone === "string" && mac.timeZone)
     return mac.timeZone;
@@ -4714,8 +4713,8 @@ function botTemplates(kit, machine) {
     templates: kit.templates.map(({ firstMessage: _, ...template }) => template),
     personalities: botPersonalities(kit).map(({ instruction: _, ...personality }) => personality),
     looks: kit.looks,
-    startingModel: { [ON_MAC ? "mac" : machine || "machine"]: kit.startingModel ?? null },
-    projects: boxProjects(kit).map((project) => ({ ...project, machine: ON_MAC ? undefined : machine || undefined }))
+    startingModel: { [IS_MAC ? "mac" : machine || "machine"]: kit.startingModel ?? null },
+    projects: boxProjects(kit).map((project) => ({ ...project, machine: IS_MAC ? undefined : machine || undefined }))
   };
 }
 function botInstructions(kit, name, folder, personality, project, job) {
@@ -4869,7 +4868,7 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
   const name = plainName(given.name);
   if (!name)
     return no(400, "A bot needs a name.");
-  if (ON_MAC && given.machine !== undefined && given.machine !== null && given.machine !== "mac") {
+  if (IS_MAC && given.machine !== undefined && given.machine !== null && given.machine !== "mac") {
     return no(400, `This Mac makes only bots that live on it: make one for “${plainName(given.machine)}” there.`);
   }
   let template;
@@ -4923,9 +4922,9 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
     fs22.writeFileSync(path20.join(folder, "session"), session.id);
     noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
     fs22.writeFileSync(path20.join(folder, "directory"), directory);
-    if (kit.timeZone && !ON_MAC)
+    if (kit.timeZone && !IS_MAC)
       fs22.writeFileSync(path20.join(folder, "timezone"), kit.timeZone);
-    if (kit.zoneinfo && !ON_MAC)
+    if (kit.zoneinfo && !IS_MAC)
       fs22.writeFileSync(path20.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
     if (agents)
       fs22.writeFileSync(path20.join(folder, "via"), "bridge");
@@ -5016,7 +5015,7 @@ function settleFolder(here, kit) {
   };
   try {
     write("directory", typeof here.described.project === "string" ? here.described.project : path20.join(here.folder, "workspace"));
-    if (ON_MAC) {
+    if (IS_MAC) {
       for (const name of ["timezone", "zoneinfo"])
         fs22.rmSync(path20.join(here.folder, name), { force: true });
     } else {
@@ -5410,7 +5409,7 @@ async function deleteBot(id, readEngine, readBridge, signal) {
     return no(409, MOVING);
   let trashed;
   try {
-    if (!ON_MAC)
+    if (!IS_MAC)
       noteDeleted(id);
     const now = new Date;
     const two = (number) => String(number).padStart(2, "0");
@@ -5422,7 +5421,7 @@ async function deleteBot(id, readEngine, readBridge, signal) {
   } catch (error) {
     return no(503, `The bot couldn’t be deleted: ${error?.message ?? error}`);
   }
-  if (ON_MAC) {
+  if (IS_MAC) {
     await hostTrash(trashed).catch(() => {});
     if (!fs22.existsSync(trashed))
       try {
