@@ -104,6 +104,9 @@ public struct LoopCommand: Equatable, Sendable {
     public init(_ rest: String) {
         let words = rest.split(whereSeparator: \.isWhitespace).map(String.init)
         for count in stride(from: min(words.count, 6), through: 1, by: -1) {
+            // "every morning at 25": a time was meant, and isn't one; not "every morning" with
+            // "at 25" to send.
+            if count < words.count, words[count].lowercased() == "at" { continue }
             if let schedule = Self.schedule(Array(words.prefix(count)).map { $0.lowercased() }) {
                 self.schedule = schedule
                 // The message as written after the schedule, its lines kept.
