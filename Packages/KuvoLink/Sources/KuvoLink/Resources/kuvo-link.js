@@ -7590,6 +7590,13 @@ function connectOnce(relay, secret, host, onWelcome = () => {}) {
 }
 
 // Packages/Box/src/link/relay/host.ts
+var requestOf = (head, body) => ({
+  method: typeof head.m === "string" ? head.m : "GET",
+  path: typeof head.p === "string" ? head.p : "",
+  headers: head.h !== null && typeof head.h === "object" && !Array.isArray(head.h) ? head.h : {},
+  body
+});
+
 class LinkHost {
   constructor({ key, hello, authorize, handle, connect, send, confirmed, mail }) {
     Object.assign(this, { key, hello, authorize, handle, connect, send, confirmed, mail });
@@ -7673,7 +7680,7 @@ class LinkHost {
   message(session, { head, body }) {
     switch (head.t) {
       case "req": {
-        const request = { method: head.m ?? "GET", path: head.p ?? "", headers: head.h ?? {}, body };
+        const request = requestOf(head, body);
         if (String(request.headers.upgrade ?? "").toLowerCase() === "websocket")
           this.open(session, head.id, request);
         else if (head.end === false)

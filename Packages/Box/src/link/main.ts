@@ -562,6 +562,7 @@ async function setup(): Promise<void> {
     // (The Mac setting it up wants it: a removal it signed before never counts here now.)
     work = docsWork(state, { key: mac ?? "", sign: mac ? macSign(next, mac) : undefined }, { give: Array.isArray(input.docs) ? input.docs : [] }, { stay: mac ?? null });
     library = state.library;
+    // (docsWork has folded its phones, so there's a list.)
     if (!next.phones!.length && !peersOf(next).length) return current ? next : null;
     next.relay = String(input.relay);
     next.name = String(input.name || next.name || os.hostname()).slice(0, 100);

@@ -305,6 +305,11 @@ test("requests go to the engine with its password, all of its API; paths that ar
   // A route this box doesn't have, as every box answers it.
   phone.send({ t: "req", id: 5, m: "GET", p: "kuvo/nothing", h: {} });
   assert.equal((await phone.response()).head.s, 404, "kuvo/nothing");
+  // A request whose path or method isn't text is refused, as a path that isn't what it seems.
+  phone.send({ t: "req", id: 7, m: "GET", p: 5, h: {} });
+  assert.equal((await phone.response()).head.s, 403, "a path that's a number");
+  phone.send({ t: "req", id: 8, m: ["GET"], p: "api/session", h: {} });
+  assert.equal((await phone.response()).head.s, 200, "a method that isn't text is read as GET");
   assert.ok(!engine.asked.some(a => a.url?.includes("..") || a.url?.includes("nothing")));
 
   // An event stream runs until the phone cancels it, and then the engine sees it close.

@@ -58,11 +58,22 @@ export interface LinkHostOptions {
 interface PhoneHead {
   t?: "req" | "data" | "cancel" | "ping";
   id: number;
-  m?: string;
-  p?: string;
-  h?: Record<string, string>;
+  /** As the phone sent them: each read only for what it is (`requestOf`). */
+  m?: unknown;
+  p?: unknown;
+  h?: unknown;
   end?: boolean;
 }
+
+// A request as a phone's head says it: its method and path only when they're text, its headers
+// only when they're an object (a path that isn't text is then refused, as one that isn't what it
+// seems).
+const requestOf = (head: PhoneHead, body: Buffer): LinkRequest => ({
+  method: typeof head.m === "string" ? head.m : "GET",
+  path: typeof head.p === "string" ? head.p : "",
+  headers: head.h !== null && typeof head.h === "object" && !Array.isArray(head.h) ? (head.h as LinkRequest["headers"]) : {},
+  body,
+});
 
 /** One of a session's sockets: the box's side once it's made, and whether it's opened yet. */
 interface SessionSocket {
@@ -194,7 +205,7 @@ export class LinkHost {
   message(session: PhoneSession, { head, body }: { head: PhoneHead; body: Buffer }) {
     switch (head.t) {
       case "req": {
-        const request: LinkRequest = { method: head.m ?? "GET", path: head.p ?? "", headers: head.h ?? {}, body };
+        const request = requestOf(head, body);
         if (String(request.headers.upgrade ?? "").toLowerCase() === "websocket") this.open(session, head.id, request);
         else if (head.end === false) session.incoming.set(head.id, request);
         else this.run(session, head.id, request);
