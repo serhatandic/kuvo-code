@@ -952,6 +952,7 @@ final class Workspace {
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
             if let base = tree.base { record["base"] = base }
             do {
+                // COMPAT(0.7 worktrees): machines' worktrees this Mac kept before their boxes did. Goes 3 months after 0.8.0.
                 let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", record)
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
             } catch let refusal as BoxRefusal where refusal.status == 404 {
