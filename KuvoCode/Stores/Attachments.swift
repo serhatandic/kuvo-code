@@ -334,6 +334,13 @@ nonisolated enum Attachments {
     ])
 
     /// A name like the system's screenshots: "Pasted Image 2026-10-13 at 15.32.10".
+    /// A picture pasted into a composer (saved here under `pastedImageName`), which has no name of
+    /// its own to go by.
+    static func isPasted(_ url: URL) -> Bool {
+        url.deletingLastPathComponent().standardizedFileURL.path == directory.standardizedFileURL.path
+            && url.lastPathComponent.hasPrefix("Pasted Image ")
+    }
+
     static var pastedImageName: String {
         "Pasted Image " + Date().formatted(.verbatim("\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) at \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)).\(minute: .twoDigits).\(second: .twoDigits)", timeZone: .current, calendar: .current))
     }

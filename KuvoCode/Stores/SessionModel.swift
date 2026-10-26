@@ -289,8 +289,8 @@ final class SessionModel {
         }
     }
 
-    /// The quote whose answer takes the keyboard: the one just added.
-    private(set) var quoteFocus: UUID?
+    /// The quote whose answer takes the keyboard: the one just added, or quoted again.
+    private(set) var quoteFocus: Drafts.QuoteFocus?
 
     /// Messages you sent here, oldest first, for going back through with ↑.
     var sentMessages: [String] {
@@ -346,7 +346,7 @@ final class SessionModel {
     func addQuote(_ text: String, how: String) {
         let count = draftQuotes.count
         guard let id = Drafts.shared.addQuote(text, to: self.id) else { return }
-        quoteFocus = id
+        quoteFocus = Drafts.QuoteFocus(id)
         if draftQuotes.count > count { Analytics.shared.track("message_replied", ["how": how]) }
     }
     /// Queued messages wait for Resume: after Stop, a failed run, or when the app finds them

@@ -12,11 +12,10 @@ struct Composer: View {
     var session: String? = nil
     @Binding var text: String
     @Binding var files: [URL]
-    /// What you're replying to, as a card over the text, with a way to drop it.
     /// What you're replying to, each with your answer to it under it.
     var quotes: Binding<[Drafts.Quote]> = .constant([])
-    /// The quote whose answer takes the keyboard (the one just added).
-    var quoteFocus: UUID?
+    /// The quote whose answer takes the keyboard (the one just added, or quoted again).
+    var quoteFocus: Drafts.QuoteFocus?
     let agent: String
     let approval: ToolApproval
     let model: ModelRef?
@@ -74,7 +73,12 @@ struct Composer: View {
     @Environment(\.cardIsFocused) private var cardIsFocused
     @Environment(\.messageFont) private var messageFont
     @Environment(\.bot) private var bot
-    @FocusState private var isFocused: Bool
+    /// Asks the field for the keyboard; nil once it has it.
+    @State private var fieldFocus: MessageField.FocusRequest?
+    /// The quote whose answer is to take the keyboard; nil once it has it.
+    @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
+    /// Writes a picture's name where the caret is.
+    @State private var field = MessageField.Handle()
 
     /// The models its picker offers, by where the conversation lives (see `ModelScope.at`): the
     /// same for a session, a chat and a bot's conversation.
@@ -86,7 +90,6 @@ struct Composer: View {
         }
         return .at(folders.first)
     }
-    @FocusState private var answering: UUID?
     @Environment(\.composerFocused) private var composerFocused
     @State private var isTargeted = false
     /// The sent message showing in the field, while going through them.
@@ -148,7 +151,8 @@ struct Composer: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(files, id: \.self) { file in
-                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel)) { files.removeAll { $0 == file } }
+                            ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel),
+                                               number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
                         }
                     }
                     // Room for each chip's remove button, which sits on its corner, and for
@@ -163,104 +167,42 @@ struct Composer: View {
 
             // Each quote with your answer to it, in the order they go.
             if !quotes.wrappedValue.isEmpty {
-                QuoteList(quotes: quotes, answering: $answering, focus: quoteFocus, font: messageFont.body, onSubmit: send)
+                QuoteList(quotes: quotes, focus: answerFocus, blur: blurRequest, font: messageFont.field, images: imageFiles.count,
+                          onKey: answerKey, onFocus: { id, focused in
+                              if focused, answerFocus?.id == id { answerFocus = nil }
+                              fieldFocused(focused)
+                          }, onPaste: pasteAttachments)
             }
-            TextField(placeholder, text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .accessibilityIdentifier("composer")
-                .font(isShell ? .system(size: messageFont.size - 0.5, design: .monospaced) : messageFont.body)
-                .lineLimit(1...12)
-                .focused($isFocused)
-                .onKeyPress(.return, phases: .down) { press in
-                    if Self.isComposing { return .ignored }
-                    if let commandMatches, press.modifiers.isEmpty {
-                        runCommand(commandMatches[min(commandIndex, commandMatches.count - 1)])
-                        return .handled
-                    }
-                    if let mention, press.modifiers.isEmpty, !mention.matches.isEmpty {
-                        insertMention(mention.matches[min(mentionIndex, mention.matches.count - 1)])
-                        return .handled
-                    }
-                    // Return sends; Shift-Return starts a new line; ⌘Return queues.
-                    if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
-                        Self.newLine(in: $text)
-                        return .handled
-                    }
-                    if press.modifiers.contains(.command) {
-                        queue()
-                        return .handled
-                    }
-                    send()
-                    return .handled
+            MessageField(
+                text: $text,
+                placeholder: placeholder,
+                font: isShell ? .monospacedSystemFont(ofSize: messageFont.size - 0.5, weight: .regular) : messageFont.field,
+                focus: fieldFocus,
+                blur: blurRequest,
+                marks: !isShell,
+                images: imageFiles.count,
+                onKey: key,
+                onFocus: { focused in
+                    if focused { fieldFocus = nil }
+                    fieldFocused(focused)
+                },
+                onPaste: pasteAttachments,
+                handle: field
+            )
+            // Editing a recalled message makes it a new one; the arrows move the cursor again.
+            .onChange(of: text) { _, new in
+                if let index = historyIndex {
+                    let history = history()
+                    if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
                 }
-                .onKeyPress(.tab) {
-                    if Self.isComposing { return .ignored }
-                    if let commandMatches {
-                        text = "/" + commandMatches[min(commandIndex, commandMatches.count - 1)].name + " "
-                        return .handled
-                    }
-                    guard let mention, !mention.matches.isEmpty else { return .ignored }
-                    insertMention(mention.matches[min(mentionIndex, mention.matches.count - 1)])
-                    return .handled
+                mentionTyped(in: new)
+                agents.textChanged(new)
+                if SlashCommands.query(in: new) == nil {
+                    commandIndex = 0
+                    if new.isEmpty { dismissedCommands = false }
                 }
-                .onKeyPress(.escape) {
-                    if Self.isComposing { return .ignored }
-                    // Closes the "/" or "@" list first; otherwise stops the agent, as ⌘. does.
-                    if commandMatches != nil {
-                        dismissedCommands = true
-                        return .handled
-                    }
-                    if let start = Mentions.query(in: text)?.start, mention != nil {
-                        dismissedMention = text.distance(from: text.startIndex, to: start)
-                        return .handled
-                    }
-                    // An open Find bar goes first; the next Escape stops.
-                    if ConversationFind.closeOpen() { return .handled }
-                    guard isRunning else { return .ignored }
-                    onStop()
-                    return .handled
-                }
-                .onKeyPress(.upArrow) {
-                    if Self.isComposing { return .ignored }
-                    if let commandMatches {
-                        commandIndex = max(0, min(commandIndex, commandMatches.count - 1) - 1)
-                        return .handled
-                    }
-                    if let mention, !mention.matches.isEmpty {
-                        mentionIndex = max(0, min(mentionIndex, mention.matches.count - 1) - 1)
-                        return .handled
-                    }
-                    // A waiting message comes back first; then what was sent before.
-                    if text.isEmpty, files.isEmpty, historyIndex == nil, onEditLast() { return .handled }
-                    return recall(-1) ? .handled : .ignored
-                }
-                .onKeyPress(.downArrow) {
-                    if Self.isComposing { return .ignored }
-                    if let commandMatches {
-                        commandIndex = min(commandMatches.count - 1, commandIndex + 1)
-                        return .handled
-                    }
-                    if let mention, !mention.matches.isEmpty {
-                        mentionIndex = min(mention.matches.count - 1, mentionIndex + 1)
-                        return .handled
-                    }
-                    return recall(1) ? .handled : .ignored
-                }
-                // Editing a recalled message makes it a new one; the arrows move the cursor again.
-                .onChange(of: text) { _, new in
-                    if let index = historyIndex {
-                        let history = history()
-                        if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
-                    }
-                    mentionTyped(in: new)
-                    if SlashCommands.query(in: new) == nil {
-                        commandIndex = 0
-                        if new.isEmpty { dismissedCommands = false }
-                    }
-                }
-                .onSubmit(send)
-                // Last, so its keys come before the ones above while its list is open.
-                .modifier(AgentPicking(picker: agents, text: $text, excluding: session))
+            }
+            .onChange(of: session) { agents.reset() }
 
             HStack(spacing: 4) {
                 if isShell {
@@ -311,15 +253,11 @@ struct Composer: View {
         // Files dropped anywhere on it are attached, on its text too (which would take them as
         // their paths).
         .overlay {
-            FileDropArea(isTargeted: { isTargeted = $0 }, drop: attach)
+            FileDropArea(isTargeted: { isTargeted = $0 }, drop: attachAndName)
         }
-        .modifier(PasteAttachments(isActive: isFocused, attach: attach))
         .onChange(of: focusRequest) { focusAtEnd() }
-        .onChange(of: blurRequest) {
-            isFocused = false
-            answering = nil
-        }
-        .onChange(of: quoteFocus) { _, id in answering = id }
+        // A quote just added: its answer takes the keyboard.
+        .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
         .onChange(of: session) {
             historyIndex = nil
             mentionFiles = []
@@ -330,14 +268,9 @@ struct Composer: View {
             dismissedCommands = false
             isTargeted = false
             // Undoing typing here brings back nothing from the session it was writing to before.
-            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor {
-                editor.undoManager?.removeAllActions(withTarget: editor)
-                editor.textStorage.map { editor.undoManager?.removeAllActions(withTarget: $0) }
-            }
+            field.forgetUndo()
             focusAtEnd()
         }
-        // Where you type is where you work: the window's commands follow.
-        .onChange(of: isFocused || answering != nil) { _, focused in if focused { composerFocused?() } }
         .onAppear {
             if focusesOnAppear { focusAtEnd() }
             #if DEBUG
@@ -349,11 +282,15 @@ struct Composer: View {
         }
     }
 
-    /// Puts the cursor in the field, after what's there. (Focusing a field selects all of it,
-    /// so typing would replace a draft.)
+    /// Puts the cursor in the field, after what's there.
     private func focusAtEnd() {
-        isFocused = true
-        Self.cursorToEnd(of: text)
+        fieldFocus = MessageField.FocusRequest()
+    }
+
+    /// The field or an answer took the keyboard, or let it go: where you type is where you work,
+    /// so the window's commands follow.
+    private func fieldFocused(_ focused: Bool) {
+        if focused { composerFocused?() }
     }
 
     /// An input method is composing in the field that has the keyboard (Japanese, Chinese,
@@ -364,31 +301,88 @@ struct Composer: View {
         (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
     }
 
-    /// A new line where the cursor is (Shift-Return), in the field that has the keyboard; at the
-    /// end if it can't be found. For every composer.
-    static func newLine(in text: Binding<String>) {
-        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor {
-            editor.insertNewlineIgnoringFieldEditor(nil)
-        } else {
-            text.wrappedValue += "\n"
+    /// The field's keys: the "&", "/" and "@" lists' first while one is open; then Return sends
+    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
+    /// through what was sent before.
+    private func key(_ key: MessageField.Key) -> Bool {
+        if agents.key(key, text: $text, excluding: session) { return true }
+        switch key.name {
+        case .return:
+            if let commandMatches, key.modifiers.isEmpty {
+                runCommand(commandMatches[min(commandIndex, commandMatches.count - 1)])
+                return true
+            }
+            if let mention, key.modifiers.isEmpty, !mention.matches.isEmpty {
+                insertMention(mention.matches[min(mentionIndex, mention.matches.count - 1)])
+                return true
+            }
+            if key.modifiers.contains(.shift) || key.modifiers.contains(.option) { return false }
+            if key.modifiers.contains(.command) { queue() } else { send() }
+            return true
+        case .tab:
+            if let commandMatches {
+                text = "/" + commandMatches[min(commandIndex, commandMatches.count - 1)].name + " "
+                return true
+            }
+            guard let mention, !mention.matches.isEmpty else { return false }
+            insertMention(mention.matches[min(mentionIndex, mention.matches.count - 1)])
+            return true
+        case .escape:
+            // Closes the "/" or "@" list first; otherwise stops the agent, as ⌘. does.
+            if commandMatches != nil {
+                dismissedCommands = true
+                return true
+            }
+            if let start = Mentions.query(in: text)?.start, mention != nil {
+                dismissedMention = text.distance(from: text.startIndex, to: start)
+                return true
+            }
+            return escape()
+        case .up:
+            if let commandMatches {
+                commandIndex = max(0, min(commandIndex, commandMatches.count - 1) - 1)
+                return true
+            }
+            if let mention, !mention.matches.isEmpty {
+                mentionIndex = max(0, min(mentionIndex, mention.matches.count - 1) - 1)
+                return true
+            }
+            // A waiting message comes back first; then what was sent before.
+            if text.isEmpty, files.isEmpty, historyIndex == nil, onEditLast() { return true }
+            return recall(-1)
+        case .down:
+            if let commandMatches {
+                commandIndex = min(commandMatches.count - 1, commandIndex + 1)
+                return true
+            }
+            if let mention, !mention.matches.isEmpty {
+                mentionIndex = min(mention.matches.count - 1, mentionIndex + 1)
+                return true
+            }
+            return recall(1)
         }
     }
 
-    /// Once the field holding `text` has the keyboard, its cursor after the text rather than all
-    /// of it selected (which typing would replace). For every composer. The field can take a
-    /// while to get the keyboard (at launch, or in a window that isn't in front), so it looks
-    /// again for up to a second.
-    static func cursorToEnd(of text: String) {
-        Task {
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .milliseconds(50))
-                let editor = NSApp.windows.lazy.compactMap { $0.firstResponder as? NSTextView }.first { $0.isFieldEditor && $0.string == text }
-                if let editor {
-                    editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
-                    return
-                }
-            }
+    /// An answer's keys: Return sends (Shift- or Option-Return starts a new line), Escape stops.
+    private func answerKey(_ key: MessageField.Key) -> Bool {
+        switch key.name {
+        case .return:
+            if key.modifiers.contains(.shift) || key.modifiers.contains(.option) { return false }
+            if key.modifiers.contains(.command) { queue() } else { send() }
+            return true
+        case .escape:
+            return escape()
+        default:
+            return false
         }
+    }
+
+    /// Escape with no list open: an open Find bar closes first; then it stops the agent.
+    private func escape() -> Bool {
+        if ConversationFind.closeOpen() { return true }
+        guard isRunning else { return false }
+        onStop()
+        return true
     }
 
     private var placeholder: String {
@@ -494,8 +488,35 @@ struct Composer: View {
         return true
     }
 
-    private func attach(_ urls: [URL]) {
-        files += urls.filter { !files.contains($0) }
+    /// Adds files to the message, and gives the names of the pictures among them ("[Image 2]"),
+    /// to write where you're writing.
+    private func attach(_ urls: [URL]) -> [String] {
+        var names: [String] = []
+        for url in urls where !files.contains(url) {
+            files.append(url)
+            if AttachmentItem.local(url).isImage { names.append(ImageReferences.name(imageFiles.count)) }
+        }
+        return names
+    }
+
+    /// Files dropped on the composer or chosen: attached, the pictures' names written in the message.
+    private func attachAndName(_ urls: [URL]) {
+        let names = attach(urls)
+        if !names.isEmpty { field.write(names.joined(separator: " "), into: $text) }
+    }
+
+    /// Takes a file off the message, and a picture's name with it.
+    private func detach(_ url: URL) {
+        ImageReferences.detach(url, files: &files, text: &text, quotes: &quotes.wrappedValue) { AttachmentItem.local($0).isImage }
+    }
+
+    /// The pictures attached, in order: the first is "[Image 1]".
+    private var imageFiles: [URL] { files.filter { AttachmentItem.local($0).isImage } }
+
+    /// ⌘V in the field or an answer: files and pictures on the pasteboard are attached, and the
+    /// pictures' names written there.
+    private func pasteAttachments(from board: NSPasteboard) -> [String]? {
+        Self.pastedFiles(from: board).map(attach)
     }
 
     private func chooseFiles() {
@@ -506,7 +527,7 @@ struct Composer: View {
         panel.prompt = "Attach"
         panel.message = "Choose files or folders to attach."
         guard panel.runModal() == .OK else { return }
-        attach(panel.urls)
+        attachAndName(panel.urls)
     }
 }
 
@@ -708,54 +729,13 @@ private struct CommandList: View {
     }
 }
 
-/// ⌘V with files or a picture on the pasteboard attaches them, instead of pasting
-/// their names (or nothing) into the message.
-private struct PasteAttachments: ViewModifier {
-    let isActive: Bool
-    let attach: ([URL]) -> Void
-    @State private var monitor: Any?
-    /// What attaching does now: the composer stays as you go to another session, and the monitor
-    /// made in one must attach to the draft of the one in view.
-    @State private var current = Current()
-
-    private final class Current {
-        var attach: ([URL]) -> Void = { _ in }
-    }
-
-    func body(content: Content) -> some View {
-        current.attach = attach
-        return content
-            .onChange(of: isActive, initial: true) { _, active in
-                if active { install() } else { remove() }
-            }
-            .onDisappear(perform: remove)
-    }
-
-    private func install() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [current] event in
-            // Only in the window it's in: not in a sheet over it, nor a panel, where the paste is
-            // that field's.
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                  event.charactersIgnoringModifiers == "v",
-                  let window = event.window, window.attachedSheet == nil, window.sheetParent == nil, !(window is NSPanel),
-                  let urls = Self.pastedFiles() else { return event }
-            current.attach(urls)
-            return nil
-        }
-    }
-
-    private func remove() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-    }
-
-    private static func pastedFiles() -> [URL]? {
-        let board = NSPasteboard.general
+extension Composer {
+    /// What ⌘V attaches rather than pastes into the message: files copied in the Finder, or a
+    /// picture without text (a copied screenshot, an image copied from Preview). Nil for text.
+    static func pastedFiles(from board: NSPasteboard) -> [URL]? {
         if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             return urls
         }
-        // A picture without text: a copied screenshot, an image copied from Preview.
         guard board.string(forType: .string) == nil, let image = NSImage(pasteboard: board) else { return nil }
         return Attachments.save(image, named: Attachments.pastedImageName).map { [$0] }
     }

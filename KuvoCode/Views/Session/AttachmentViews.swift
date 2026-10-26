@@ -141,19 +141,34 @@ nonisolated private extension String {
 struct ComposerAttachment: View {
     let url: URL
     var route: Attachments.Route = .content
+    /// A picture's place among the message's pictures: its name in the message, "[Image 2]".
+    var number: Int?
     let remove: () -> Void
     @State private var isHovering = false
+
+    /// A pasted picture goes by its name in the message; a file by its own name.
+    private var title: String {
+        if let number, Attachments.isPasted(url) { return "Image \(number)" }
+        return AttachmentItem.local(url).name
+    }
+
+    /// What it is, and a picture's name in the message when its title is the file's.
+    private var detail: String {
+        let detail = isPath ? "Sent as a path" : AttachmentItem.local(url).detail
+        guard let number, !Attachments.isPasted(url) else { return detail }
+        return "Image \(number) · " + detail
+    }
 
     var body: some View {
         let item = AttachmentItem.local(url)
         HStack(spacing: 8) {
             AttachmentIcon(item: item, size: 30)
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.name)
+                Text(title)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(isPath ? "Sent as a path" : item.detail)
+                Text(detail)
                     .font(.system(size: 11))
                     .foregroundStyle(isWarning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
@@ -182,8 +197,8 @@ struct ComposerAttachment: View {
         .help(reason.map { "\(url.path)\n\($0)" } ?? url.path)
         // One element for VoiceOver, whose remove button is there only on hover.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(item.name)
-        .accessibilityValue(isPath ? "Sent as a path" : item.detail)
+        .accessibilityLabel(title)
+        .accessibilityValue(detail)
         .accessibilityAction(named: "Remove", remove)
         .accessibilityAction { if item.isImage { ImageViewer.shared.show([item]) } }
     }
