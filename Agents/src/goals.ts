@@ -55,6 +55,8 @@ interface Kept extends Goal {
   recheck?: string
   /** Counts what you changed (set, paused, resumed): a look under way gives way to a change made since it began. */
   epoch?: number
+  /** The conversation's last message as the goal was set: what came after it is the goal's. */
+  since?: string
 }
 
 /** Where a session runs: the engine's API, or this bridge's own, and its events. */
@@ -147,10 +149,12 @@ export class Goals {
     // A subagent works for the conversation that started it: the goal is that one's to set.
     if (found?.data?.parentID) throw new GoalError(409, "A subagent's conversation can't have a goal of its own. Set it in the conversation it works for.")
     const messages = await this.messages(session, place).catch(unreachable)
-    const goal: Kept = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 }
+    const goal: Kept = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 }
     this.goals.set(session, goal)
     this.follow(session)
     this.changed(goal)
+    // A conversation that starts with its goal has no message of yours to be named from: it's named after the goal.
+    if (!found?.data?.title) await place.api.request("PATCH", at(session), { title: line(text, 60) }).catch(() => {})
     try {
       await place.api.request("POST", at(session) + "/synthetic", { text: brief(text), description: `Goal: ${line(text)}` })
     } catch (error: any) {
@@ -297,8 +301,11 @@ export class Goals {
       delete goal.recheck
     }
     const turn = turnOf(messages, idle)
-    // A turn from before the goal (one at work as it was set) isn't its to check.
-    if (!resumed && !turn.some((message) => (message.type === "user" || message.type === "synthetic") && (message.time?.created ?? 0) >= goal.started)) {
+    // A turn from before the goal (one at work as it was set, the goal waiting for it) isn't its
+    // to check: the goal's turns have something said after it was set.
+    const setAt = goal.since ? messages.findIndex((message) => message.id === goal.since) : -1
+    const said = (message: any) => (message.type === "user" || message.type === "synthetic") && messages.indexOf(message) > setAt
+    if (!resumed && !turn.some(said)) {
       settle()
       return this.save()
     }
@@ -443,7 +450,7 @@ export class Goals {
 const at = (session: string) => "/api/session/" + encodeURIComponent(session)
 
 function shown(goal: Kept): Goal {
-  const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, ...rest } = goal
+  const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, since: _since, ...rest } = goal
   return rest
 }
 

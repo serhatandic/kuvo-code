@@ -1216,10 +1216,12 @@ class Goals {
     if (found?.data?.parentID)
       throw new GoalError(409, "A subagent's conversation can't have a goal of its own. Set it in the conversation it works for.");
     const messages = await this.messages(session, place).catch(unreachable);
-    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 };
+    const goal = { session, condition: text, state: "working", started: this.now(), turns: 0, checking: false, quiet: 0, limit: turnLimit, checkedIdle: lastIdle(messages)?.id, since: messages.at(-1)?.id, epoch: (this.goals.get(session)?.epoch ?? 0) + 1 };
     this.goals.set(session, goal);
     this.follow(session);
     this.changed(goal);
+    if (!found?.data?.title)
+      await place.api.request("PATCH", at(session), { title: line(text, 60) }).catch(() => {});
     try {
       await place.api.request("POST", at(session) + "/synthetic", { text: brief(text), description: `Goal: ${line(text)}` });
     } catch (error) {
@@ -1356,7 +1358,9 @@ class Goals {
       delete goal.recheck;
     };
     const turn = turnOf(messages, idle);
-    if (!resumed && !turn.some((message) => (message.type === "user" || message.type === "synthetic") && (message.time?.created ?? 0) >= goal.started)) {
+    const setAt = goal.since ? messages.findIndex((message) => message.id === goal.since) : -1;
+    const said = (message) => (message.type === "user" || message.type === "synthetic") && messages.indexOf(message) > setAt;
+    if (!resumed && !turn.some(said)) {
       settle();
       return this.save();
     }
@@ -1490,7 +1494,7 @@ class Goals {
 }
 var at = (session) => "/api/session/" + encodeURIComponent(session);
 function shown(goal) {
-  const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, ...rest } = goal;
+  const { checkedIdle: _idle, quiet: _quiet, limit: _limit, recheck: _recheck, epoch: _epoch, since: _since, ...rest } = goal;
   return rest;
 }
 function lastIdle(messages) {
@@ -15989,4 +15993,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src e89596ee12a0b4398cc14e791db7752b9938910029f04a310bbf7a930cf839ff
+// Built from Agents/src 5dae6c9390ff5bc10dead89a3a09685f38b715e97b62aa5dc01aa4009ea0aba4

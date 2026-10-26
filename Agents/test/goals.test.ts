@@ -32,6 +32,8 @@ class StandIn {
   queuesNotes = false
   /** Sessions whose parent is another (a subagent's). */
   readonly parents = new Map<string, string>()
+  /** Titles given to sessions, by session. */
+  readonly titles = new Map<string, string>()
   /** Its events go out as the bridge's own (`emit`), not on its feed. */
   emitsAsBridge = false
   private held: (() => void)[] = []
@@ -143,7 +145,12 @@ class StandIn {
       const [, , session, what] = parts
       const conversation = this.conversations.get(session)
       if (!conversation) return Response.json({ message: "No such session." }, { status: 404 })
-      if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}) } })
+      if (!what && request.method === "PATCH") {
+        const { title } = (await request.json()) as any
+        this.titles.set(session, title)
+        return Response.json({ data: {} })
+      }
+      if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.titles.has(session) ? { title: this.titles.get(session) } : {}), ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}) } })
       if (what === "message") return Response.json({ data: [...conversation].reverse() })
       if (what === "synthetic") {
         if (this.busy.has(session) && this.queuesNotes) {
@@ -203,8 +210,9 @@ function places(bridge = false): GoalPlaces {
 
 function makeGoals(bridge = false) {
   const made = new Goals(join(root, "goals.json"), places(bridge))
+  // (A runner a test stopped may still finish a look: only the one in use counts.)
   made.onSettled = () => {
-    settled += 1
+    if (goals === made) settled += 1
     beat()
   }
   return made
@@ -246,6 +254,8 @@ describe("a goal", () => {
     // The agent is given the goal, as a note the conversation shows as the goal's.
     expect(engine.synthetic[0]).toMatchObject({ session: "ses_work", description: "Goal: all tests in test/auth pass" })
     expect(engine.synthetic[0].text).toStartWith("[Goal] all tests in test/auth pass")
+    // A conversation with nothing of yours to be named from is named after its goal; one named already keeps its name.
+    expect(engine.titles.get("ses_work")).toBe("all tests in test/auth pass")
     await until(() => goal()?.state === "met")
     // Not met after its first turn: told what's left, it took another; met after that.
     expect(nudges().map((message) => message.description)).toEqual(["Not met yet: 2 tests in test/auth still fail."])
@@ -261,6 +271,9 @@ describe("a goal", () => {
     // Clients heard each change, the last one met.
     expect(told()).toMatchObject({ state: "met" })
     expect(engine.synthetic).toHaveLength(2)
+    // A goal set again keeps the name it has.
+    await goals.set("ses_work", "and the lint is clean")
+    expect(engine.titles.get("ses_work")).toBe("all tests in test/auth pass")
   })
 
   test("on one of OpenCode's free models, is checked in the session's own context, which can answer", async () => {
