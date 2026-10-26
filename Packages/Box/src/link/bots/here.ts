@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { textOf } from "../files";
-import type { BotLook } from "../../shared/records";
+import type { BotLook, BotModel } from "../../shared/routes/bots";
 import { BOTS } from "../home";
 
 // What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
@@ -24,13 +24,6 @@ export interface BotDescription {
   project?: string;
   // (The rest of what the app writes: its job, its look, when it was made.)
   [more: string]: unknown;
-}
-
-/** A model as a bot names it: its id, its provider, and the variant (effort) it runs at, if any. */
-export interface BotModel {
-  id: string;
-  providerID: string;
-  variant?: string;
 }
 
 /** A bot that lives here: its folder, its description, its conversation, and whether that runs

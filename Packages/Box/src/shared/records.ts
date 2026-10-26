@@ -1,5 +1,7 @@
 // What a box's programs write in its `run` folder for each other, as each reads it.
 
+import type { BotLook } from "./routes/bots";
+
 /** `run/engine.json`: the engine running here, as its launch wrote it (this Mac's app, or a machine's keeper). */
 export interface EngineRecord {
   pid?: number;
@@ -21,13 +23,6 @@ export interface BridgeRecord {
 
 /** Where a box's program answers, with its password: the engine, or the agents bridge. */
 export type Target = Pick<EngineRecord, "port" | "password">;
-
-/** How a bot looks: its color, shape and face, among those the apps draw (BotLook). */
-export interface BotLook {
-  color: string;
-  shape: string;
-  face: string;
-}
 
 /** An agent as boxes list them for each other (a peer's mail, `run/agents.json`): a conversation,
  * by its session, a bot (with its id and look) or a session; its project, what it does (`about`),

@@ -11,7 +11,8 @@ import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 import { readLink } from "../state";
 import { macsOf } from "./known";
-import type { AgentsFile, BotLook, ListedAgent, ToldAgents } from "../../shared/records";
+import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
+import { type BotLook, LOOKS as LOOK_WORDS } from "../../shared/routes/bots";
 import type { LinkState } from "../state";
 import type { Peer } from "./known";
 
@@ -48,13 +49,9 @@ export const fitsAgent = (agent: unknown): agent is GivenAgent => isObject(agent
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
 // A bot's `id` too (`bot_…`, as group chats name their members), and how it looks (`look`: color,
 // shape, face), so a chat on another computer can have it and show it.
-// Only colors, shapes and faces the apps draw (BotLook): another (a newer computer's) is the plain
-// one's, so a phone can always read it.
-const LOOKS: Record<keyof BotLook, string[]> = {
-  color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
-  shape: ["round", "squircle", "pebble", "gem", "bloom"],
-  face: ["calm", "happy", "sleepy", "wink", "curious", "bright"],
-};
+// Only colors, shapes and faces the apps draw (BotLook, its words in shared/routes/bots): another (a
+// newer computer's) is the plain one's, so a phone can always read it.
+const LOOKS: { [Part in keyof BotLook]: readonly string[] } = { color: LOOK_WORDS.colors, shape: LOOK_WORDS.shapes, face: LOOK_WORDS.faces };
 const PLAIN_LOOK: BotLook = { color: "graphite", shape: "round", face: "calm" };
 const keptLook = (look: unknown): BotLook | undefined => (isObject(look)
   ? Object.fromEntries((Object.keys(LOOKS) as (keyof BotLook)[]).map(key => [key, LOOKS[key].includes(look[key] as string) ? look[key] as string : PLAIN_LOOK[key]])) as unknown as BotLook : undefined);

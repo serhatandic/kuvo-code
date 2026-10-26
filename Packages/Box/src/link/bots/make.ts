@@ -14,10 +14,11 @@ import { firstMessageOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
-import type { BotLook, Target } from "../../shared/records";
+import type { Target } from "../../shared/records";
+import type { BotLook, BotModel } from "../../shared/routes/bots";
 import type { MadeBot } from "../../shared/routes/bots";
 import type { JSONAnswer } from "../server/context";
-import type { BotDescription, BotModel } from "./here";
+import type { BotDescription } from "./here";
 import type { BotLooks, BotTemplate } from "./kit";
 
 /** A bot to make, as New Bot sends it (`POST kuvo/bots`): its name, and the template, job,

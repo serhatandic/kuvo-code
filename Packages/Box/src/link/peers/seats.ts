@@ -20,7 +20,8 @@ import { LETTER_ID, LETTER_MEMORY, SENDING, letterTries } from "../letters/lette
 import { readLink } from "../state";
 import { readPeerAgents } from "./directory";
 import { mailFor, peersOf } from "./known";
-import type { BotLook, ToldAgents } from "../../shared/records";
+import type { ToldAgents } from "../../shared/records";
+import type { BotLook } from "../../shared/routes/bots";
 import type { DocPart, PendingParts } from "../documents/parts";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";

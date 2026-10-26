@@ -4729,19 +4729,81 @@ function currentDigest() {
 // Packages/Box/src/link/peers/directory.ts
 import fs26 from "node:fs";
 import path25 from "node:path";
+
+// Packages/Box/src/shared/shape.ts
+var string = "string";
+var number = "number";
+var bool = "bool";
+var any = "any";
+var list = (of) => ({ list: of });
+var map = (of) => ({ map: of });
+var object = (fields) => ({ object: fields });
+var oneOf = (...of) => ({ oneOf: of });
+var words = (...each) => ({ oneOf: each.map((word) => ({ literal: word })) });
+var nullable = (shape) => oneOf(shape, "null");
+var NOTHING = object({});
+
+// Packages/Box/src/shared/routes/bots.ts
+var LOOKS = {
+  colors: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
+  shapes: ["round", "squircle", "pebble", "gem", "bloom"],
+  faces: ["calm", "happy", "sleepy", "wink", "curious", "bright"]
+};
+var LOOK = object({ color: words(...LOOKS.colors), shape: words(...LOOKS.shapes), face: words(...LOOKS.faces) });
+var MODEL = object({ id: string, providerID: string, "variant?": string });
+var BOT = object({
+  id: string,
+  session: string,
+  name: string,
+  look: LOOK,
+  "machine?": string,
+  job: string,
+  jobDetails: string,
+  paused: bool,
+  "wakes?": number,
+  watching: number,
+  agents: bool,
+  "personality?": string,
+  "model?": MODEL,
+  folder: string,
+  "project?": string,
+  "created?": string,
+  "memoryJob?": object({ line: string, section: string })
+});
+var BOTS2 = object({ bots: list(BOT) });
+var TEMPLATES = object({
+  templates: list(object({ id: string, name: string, job: string, instructions: string, look: LOOK, "personality?": string, wantsProject: bool })),
+  personalities: list(object({ id: string, name: string, description: string, "custom?": bool })),
+  looks: object({ colors: list(string), shapes: list(string), faces: list(string) }),
+  startingModel: map(nullable(MODEL)),
+  projects: list(object({ directory: string, name: string, "machine?": string }))
+});
+var MADE = object({ bot: BOT, firstMessage: nullable(string) });
+var CHANGED = object({ bot: nullable(BOT) });
+var BOT_KEYS2 = object({
+  keys: list(object({
+    integration: string,
+    own: bool,
+    shared: bool,
+    title: string,
+    symbol: string,
+    keys: list(object({ name: string, label: string, prompt: string })),
+    "help?": string
+  }))
+});
+var BOT_KEY_VALUES = object({ keys: map(string) });
+var BOT_KEY_KEPT = object({ integration: string, own: bool, shared: bool });
+
+// Packages/Box/src/link/peers/directory.ts
 var PEER_AGENTS_FILE = path25.join(RUN, "peer-agents.json");
 var MAC_AGENTS_FILE = path25.join(RUN, "mac-agents.json");
 var AGENTS_FILE = path25.join(RUN, "agents.json");
 var PEER_LOCK = path25.join(RUN, ".peers.lock");
 var MOST_AGENTS = 120;
 var fitsAgent = (agent) => isObject(agent) && typeof agent.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(agent.session) && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");
-var LOOKS = {
-  color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
-  shape: ["round", "squircle", "pebble", "gem", "bloom"],
-  face: ["calm", "happy", "sleepy", "wink", "curious", "bright"]
-};
+var LOOKS2 = { color: LOOKS.colors, shape: LOOKS.shapes, face: LOOKS.faces };
 var PLAIN_LOOK = { color: "graphite", shape: "round", face: "calm" };
-var keptLook = (look) => isObject(look) ? Object.fromEntries(Object.keys(LOOKS).map((key) => [key, LOOKS[key].includes(look[key]) ? look[key] : PLAIN_LOOK[key]])) : undefined;
+var keptLook = (look) => isObject(look) ? Object.fromEntries(Object.keys(LOOKS2).map((key) => [key, LOOKS2[key].includes(look[key]) ? look[key] : PLAIN_LOOK[key]])) : undefined;
 var keptAgent = ({ session, name, kind, project, about, machine, id, look }) => ({
   session,
   name: plainName(name).slice(0, 200),
@@ -8393,16 +8455,6 @@ import fs43 from "node:fs";
 // Packages/Box/src/link/areas/mcp-catalog.ts
 import fs42 from "node:fs";
 import path42 from "node:path";
-
-// Packages/Box/src/shared/shape.ts
-var string = "string";
-var bool = "bool";
-var any = "any";
-var list = (of) => ({ list: of });
-var map = (of) => ({ map: of });
-var object = (fields) => ({ object: fields });
-var words = (...each) => ({ oneOf: each.map((word) => ({ literal: word })) });
-var NOTHING = object({});
 
 // Packages/Box/src/shared/routes/settings.ts
 var CONFIG = map(any);

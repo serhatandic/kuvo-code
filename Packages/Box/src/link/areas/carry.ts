@@ -14,7 +14,7 @@ import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
 import type { Carried } from "../../shared/routes/sessions";
-import type { BotModel } from "../bots/here";
+import type { BotModel } from "../../shared/routes/bots";
 import type { EngineSession } from "../peers/agents";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 
