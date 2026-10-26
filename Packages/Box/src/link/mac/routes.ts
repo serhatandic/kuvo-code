@@ -76,9 +76,7 @@ export function takePhones(link: LinkState, given: KeptPhones | null | undefined
       name: String(phone.name ?? "").slice(0, 100),
       added: Number.isFinite(phone.added) ? Math.floor(phone.added as number) : Math.floor(Date.now() / 1000),
       from: "pair",
-      // TODO(types): the test reads what isn't a string as its text (an array of one address passes),
-      // and that's kept as it was given.
-      ...(ADDRESS.test((phone.address ?? "") as string) ? { address: phone.address as string } : {}),
+      ...(typeof phone.address === "string" && ADDRESS.test(phone.address) ? { address: phone.address } : {}),
       pairing: typeof phone.pairing === "string" ? phone.pairing : "",
     });
   }

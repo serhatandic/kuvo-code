@@ -4362,7 +4362,7 @@ function foldPhones(link, now = Date.now()) {
         added: known.get(phone.key)?.added ?? Math.floor(now / 1000),
         from: "mac",
         mac,
-        address: ADDRESS.test(phone.address ?? "") ? phone.address : known.get(phone.key)?.address,
+        address: typeof phone.address === "string" && ADDRESS.test(phone.address) ? phone.address : known.get(phone.key)?.address,
         pairing: typeof phone.pairing === "string" ? phone.pairing : ""
       });
     }
@@ -8162,7 +8162,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.73";
+var BRIDGE_VERSION = "0.9.74";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -8590,7 +8590,7 @@ function takePhones(link, given) {
       name: String(phone.name ?? "").slice(0, 100),
       added: Number.isFinite(phone.added) ? Math.floor(phone.added) : Math.floor(Date.now() / 1000),
       from: "pair",
-      ...ADDRESS.test(phone.address ?? "") ? { address: phone.address } : {},
+      ...typeof phone.address === "string" && ADDRESS.test(phone.address) ? { address: phone.address } : {},
       pairing: typeof phone.pairing === "string" ? phone.pairing : ""
     });
   }

@@ -140,7 +140,7 @@ export function foldPhones(link: LinkState, now = Date.now()): void {
         added: known.get(phone.key as string)?.added ?? Math.floor(now / 1000),
         from: "mac",
         mac,
-        address: ADDRESS.test((phone.address as string | undefined) ?? "") ? phone.address as string : known.get(phone.key as string)?.address,
+        address: typeof phone.address === "string" && ADDRESS.test(phone.address) ? phone.address : known.get(phone.key as string)?.address,
         pairing: typeof phone.pairing === "string" ? phone.pairing : "",
       });
     }

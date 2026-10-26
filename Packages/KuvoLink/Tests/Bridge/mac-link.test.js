@@ -399,6 +399,16 @@ test("phones from before are taken, a removal winning; the app removes as the Ma
   assert.equal((await ask("PUT", "kuvo/link/config", { phones: true, machines: false, relay: "https://example.com" })).status, 400);
 });
 
+test("a phone taken from before keeps where it is only when that's an address: never a list holding one", async () => {
+  const a = link.publicOf(link.newKey()).toString("base64url");
+  const b = link.publicOf(link.newKey()).toString("base64url");
+  const where = link.addressOf(crypto.randomBytes(32)).toString("base64url");
+  await ask("POST", "kuvo/link/phones/take", { phones: [{ key: a, name: "iPhone", pairing: "", address: where }, { key: b, name: "iPad", pairing: "", address: [where] }], removed: [] });
+  const phones = (await ask("GET", "kuvo/link/phones")).json.phones;
+  assert.equal(phones.find(each => each.key === a).address, where);
+  assert.ok(!("address" in phones.find(each => each.key === b)), "a list isn't where it is");
+});
+
 test("with the phone link off, phones are let go and refused, and no pairing link is made", async () => {
   const { it } = await paired();
   await config({ phones: false, machines: true });
