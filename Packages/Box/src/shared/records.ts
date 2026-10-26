@@ -7,6 +7,9 @@ export interface EngineRecord {
   password: string;
   version?: string;
   notes?: Record<string, unknown>;
+  /** On a machine, where its coding agents' bridge is too (RemoteEngine.swift writes them). */
+  agentsPort?: number;
+  agentsPassword?: string;
 }
 
 /** `run/bridge.json`: the coding agents' bridge beside the engine, when it runs. */
