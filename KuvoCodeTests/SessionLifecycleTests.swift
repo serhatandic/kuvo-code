@@ -72,8 +72,12 @@ import Testing
             StubEngine.session("ses_again", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
         ])
         #expect(workspace.waitingCount == 2)
+        let shown = ShownNotifications(threads: ["ses_done", "ses_again"])
+        defer { shown.done() }
         workspace.handle(try engine.event("session.viewed", session: "ses_done", ["idle": 9]))
         #expect(workspace.session("ses_done")?.isUnread == false)
+        try await until { shown.threads == ["ses_again"] }
+        #expect(shown.threads == ["ses_again"], "its notification gone from Notification Center, the other's kept")
         workspace.handle(try engine.event("session.viewed", session: "ses_again", ["idle": 6]))
         #expect(workspace.session("ses_again")?.isUnread == true, "it finished again after that look")
         #expect(workspace.waitingCount == 1)

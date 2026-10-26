@@ -532,7 +532,10 @@ final class BoxGroups {
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
         if let index {
             guard chats[index] != chat else { return }
+            let wasUnread = isUnread(chats[index].group)
             chats[index] = chat
+            // Read on another client (the phone, another Mac): its notifications go here too.
+            if wasUnread, !isUnread(group) { Notifier.shared.clear(session: BotGroups.tabKey(group.id)) }
         } else {
             chats.append(chat)
             if logs[group.id] == nil { setLog(group.id, []) }
