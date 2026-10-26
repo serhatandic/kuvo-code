@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 
 // What isn't type-checked yet (`// @ts-nocheck`: the link's main.ts, and parts just moved out of
@@ -21,7 +21,10 @@ function* sources(folder: string): Generator<string> {
   }
 }
 
+const TSC = join(import.meta.dir, "../node_modules/typescript/bin/tsc")
+
 test("everything the files not checked yet use is declared there or imported", () => {
+  if (!existsSync(TSC)) throw new Error("TypeScript isn't installed here: run `bun install --frozen-lockfile` in Packages/Box (with Bun 1.4.2, as CI has: see its README).")
   const unchecked = [...sources(src)].filter(file => readFileSync(file, "utf8").startsWith(PRAGMA))
   expect(unchecked).toContain(join(src, "link/main.ts"))
   const copies = unchecked.map(file => {
@@ -32,7 +35,7 @@ test("everything the files not checked yet use is declared there or imported", (
   try {
     // Its own runtime runs tsc, so it needs no node on PATH; no DOM, whose globals (`name`,
     // `status`, `origin`…) would stand in for names that went.
-    const tsc = Bun.spawnSync([process.execPath, join(import.meta.dir, "../node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck",
+    const tsc = Bun.spawnSync([process.execPath, TSC, "--noEmit", "--skipLibCheck",
       "--target", "ESNext", "--lib", "ESNext", "--module", "ESNext", "--moduleResolution", "bundler", "--types", "node", "--esModuleInterop", ...copies])
     const output = tsc.stdout.toString()
     // It ran, and found what an unchecked file always has: else nothing here would show.

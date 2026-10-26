@@ -20,10 +20,15 @@ The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for rele
 
 After changing anything in `src`, run `scripts/build-box.sh` and commit `kuvo-link.js` with it. It
 builds with the Bun CI has (1.4.2), so every computer builds the same file, and CI fails when the
-file isn't what the sources build, byte for byte (`build-box.sh --check`). `bun install
---frozen-lockfile` here, then `bun run check`, type-checks what's typed (Node's types: it must
-run on Node too), and `bun test` runs its own tests. In a debug build of the app, `KUVO_BOX_SCRIPT` can name
-`src/link/main.ts` itself, which the engine's Bun runs as it is.
+file isn't what the sources build, byte for byte (`build-box.sh --check`).
+
+`bun install --frozen-lockfile` here, then `bun run check` type-checks what's typed (Node's types:
+it must run on Node too), and `bun test` runs its own tests. The lockfile is Bun 1.4.2's too, which
+an older Bun refuses (`lockfile had changes`): install with that Bun, or with a demo copy's engine,
+which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install --frozen-lockfile`).
+
+In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, which the
+engine's Bun runs as it is.
 
 The bundle targets Node as well as Bun: the bridge's tests (`Packages/KuvoLink/Tests/Bridge`, `node
 --test`) import it, and machines run it with the engine's Bun. So it uses Node's modules, never
