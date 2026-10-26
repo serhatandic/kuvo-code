@@ -326,6 +326,54 @@ private struct WidgetPage: NSViewRepresentable {
     /// Libraries from the usual places, pictures from anywhere; nothing it can send to.
     private static let policy = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com; font-src https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:; img-src data: blob: https:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'"
 
+    /// The look a page starts from, Kuvo Code's: its text, buttons, fields, tables and headings,
+    /// and colors to draw with by name (`--kuvo-1`…`--kuvo-6` for a chart's series, `--kuvo-good`,
+    /// `--kuvo-bad`), in light and dark. Each rule counts for nothing against the page's own
+    /// (`:where`), so whatever it styles itself looks as it says. The same on the Mac and the
+    /// phone (kuvo-ai's and kuvo-code-ios's WidgetView): keep the two in step.
+    static let starter = """
+    :root {
+      color-scheme: light dark; accent-color: var(--kuvo-accent);
+      --kuvo-text: CanvasText;
+      --kuvo-secondary: color-mix(in srgb, CanvasText 62%, transparent);
+      --kuvo-tertiary: color-mix(in srgb, CanvasText 40%, transparent);
+      --kuvo-fill: color-mix(in srgb, CanvasText 5%, transparent);
+      --kuvo-fill-strong: color-mix(in srgb, CanvasText 10%, transparent);
+      --kuvo-line: color-mix(in srgb, CanvasText 12%, transparent);
+      --kuvo-radius: 8px;
+      --kuvo-1: #007AFF; --kuvo-2: #FF9500; --kuvo-3: #34C759; --kuvo-4: #AF52DE; --kuvo-5: #FF2D55; --kuvo-6: #5AC8FA;
+      --kuvo-good: #34C759; --kuvo-bad: #FF3B30; --kuvo-warn: #FF9500;
+    }
+    @media (prefers-color-scheme: dark) { :root {
+      --kuvo-1: #0A84FF; --kuvo-2: #FF9F0A; --kuvo-3: #30D158; --kuvo-4: #BF5AF2; --kuvo-5: #FF375F; --kuvo-6: #64D2FF;
+      --kuvo-good: #30D158; --kuvo-bad: #FF453A; --kuvo-warn: #FF9F0A;
+    } }
+    html, body { margin: 0; background: transparent; }
+    :where(h1, h2, h3, h4) { margin: 0 0 .5em; font-weight: 600; line-height: 1.25; }
+    :where(h1) { font-size: 1.3em; } :where(h2) { font-size: 1.15em; } :where(h3, h4) { font-size: 1em; }
+    :where(p) { margin: 0 0 .6em; }
+    :where(a) { color: var(--kuvo-accent); }
+    :where(small, .muted) { color: var(--kuvo-secondary); }
+    :where(code, kbd, pre) { font: .9em ui-monospace, Menlo, monospace; }
+    :where(pre code) { font-size: inherit; }
+    :where(hr) { border: 0; border-top: 1px solid var(--kuvo-line); margin: .8em 0; }
+    :where(button, select, input, textarea) { font: inherit; color: inherit; }
+    :where(button) { padding: .35em .85em; border: 0; border-radius: var(--kuvo-radius); background: var(--kuvo-fill-strong); cursor: default; }
+    :where(button:hover) { background: color-mix(in srgb, CanvasText 15%, transparent); }
+    :where(button:active) { background: color-mix(in srgb, CanvasText 20%, transparent); }
+    :where(button.primary) { background: var(--kuvo-accent); color: #fff; }
+    :where(button:disabled) { opacity: .45; }
+    :where(input:not([type=checkbox], [type=radio], [type=range], [type=color]), select, textarea) {
+      padding: .3em .55em; border: 1px solid var(--kuvo-line); border-radius: 6px; background: var(--kuvo-fill); }
+    :where(input, select, textarea, button):focus-visible { outline: 2px solid color-mix(in srgb, var(--kuvo-accent) 60%, transparent); outline-offset: 1px; }
+    :where(table) { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    :where(th) { text-align: left; font-weight: 600; color: var(--kuvo-secondary); font-size: .9em; }
+    :where(th, td) { padding: .4em .6em; border-bottom: 1px solid var(--kuvo-line); }
+    :where(.kuvo-card) { background: var(--kuvo-fill); border-radius: 10px; padding: 12px; }
+    :where(.kuvo-chip) { display: inline-flex; align-items: center; gap: .3em; padding: .15em .6em; border-radius: 999px; background: var(--kuvo-fill-strong); font-size: .9em; }
+    :where(.kuvo-row) { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    """
+
     /// `html` as a page: a fragment in a page of its own, or a whole page as it is; either way
     /// with the policy above, and the window's look to start from.
     static func page(_ html: String, accent: NSColor) -> String {
@@ -334,8 +382,8 @@ private struct WidgetPage: NSViewRepresentable {
         <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="\(policy)">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-        :root { color-scheme: light dark; --kuvo-accent: \(hex); }
-        html, body { margin: 0; background: transparent; }
+        :root { --kuvo-accent: \(hex); }
+        \(starter)
         body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: CanvasText; padding: 12px; box-sizing: border-box; }
         </style>
         """

@@ -73,6 +73,7 @@ struct ReplyDocument {
         var markdown: String
         var style: Style
         var folders: [String]
+        var diagrams: Bool
     }
 
     private static var cache: [CacheKey: ReplyDocument] = [:]
@@ -81,24 +82,24 @@ struct ReplyDocument {
     /// About what the documents kept may hold in all: some hundreds of replies' worth.
     private static let cacheLimit = 600_000
 
-    static func cached(markdown: String, parser: FileLinkingParser, style: Style) -> ReplyDocument {
+    static func cached(markdown: String, parser: FileLinkingParser, style: Style, diagrams: Bool = false) -> ReplyDocument {
         // With Find's marks, a group chat's faces or named agents, made each time (rarely).
-        guard parser.highlight == nil, parser.mentions.isEmpty, parser.agents.isEmpty else { return ReplyDocument(markdown: markdown, parser: parser, style: style) }
-        let key = CacheKey(markdown: markdown, style: style, folders: parser.folders())
+        guard parser.highlight == nil, parser.mentions.isEmpty, parser.agents.isEmpty else { return ReplyDocument(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
+        let key = CacheKey(markdown: markdown, style: style, folders: parser.folders(), diagrams: diagrams)
         if let known = cache[key] { return known }
         // A long one from short parts, each kept: as a reply is written, only its last part is
         // read again with each few words, not all of it (most of what each update cost).
         let parts = markdown.utf8.count > Self.partSize * 2 ? MarkdownChunks.split(markdown, size: Self.partSize) : []
         let document: ReplyDocument
         if parts.count > 1 {
-            var joined = cached(markdown: parts[0].text, parser: parser, style: style)
-            for part in parts.dropFirst() { joined = joined.joined(cached(markdown: part.text, parser: parser, style: style)) }
+            var joined = cached(markdown: parts[0].text, parser: parser, style: style, diagrams: diagrams)
+            for part in parts.dropFirst() { joined = joined.joined(cached(markdown: part.text, parser: parser, style: style, diagrams: diagrams)) }
             document = joined
             #if DEBUG
-            if PartsCheck.isOn { PartsCheck.compare(joined, ReplyDocument(markdown: markdown, parser: parser, style: style), markdown: markdown) }
+            if PartsCheck.isOn { PartsCheck.compare(joined, ReplyDocument(markdown: markdown, parser: parser, style: style, diagrams: diagrams), markdown: markdown) }
             #endif
         } else {
-            document = ReplyDocument(markdown: markdown, parser: parser, style: style)
+            document = ReplyDocument(markdown: markdown, parser: parser, style: style, diagrams: diagrams)
         }
         cache[key] = document
         cacheOrder.append(key)
@@ -209,7 +210,9 @@ struct ReplyDocument {
 
     /// `images`: the folder a file's own pictures are looked for in (a Markdown file's); none from
     /// the web (a README's badges and tracking pixels would reach their hosts as it opens).
-    /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a file's preview), not shown as code.
+    /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a reply's, a file's preview), not
+    /// shown as code; one a reply is still writing has its language marked (`CodeLanguage.writing`),
+    /// so it shows as code till it's done, and one Find has places in shows as code, with them.
     init(markdown: String, parser: some MarkupParser, style: Style, images: URL? = nil, diagrams: Bool = false) {
         let parsed = (try? parser.attributedString(for: markdown)) ?? AttributedString(markdown)
         let findsMarks = (parser as? FileLinkingParser).map { $0.highlight != nil } ?? false
@@ -241,12 +244,16 @@ struct ReplyDocument {
                 if code.hasSuffix("\n") { code.removeLast() }
                 if language == MathText.blockLanguage || language?.lowercased() == "math" {
                     segments.append(.math(latex: code.trimmingCharacters(in: .whitespacesAndNewlines)))
-                } else if diagrams, language?.lowercased() == "mermaid" {
-                    segments.append(.diagram(source: code))
                 } else {
                     // Find's marks only while Find has some: looking through every run of a
                     // code block for them was a good part of reading one.
-                    segments.append(.code(code: code, language: language, marks: findsMarks ? Self.marks(in: content) : []))
+                    let marks = findsMarks ? Self.marks(in: content) : []
+                    // A diagram, unless Find has places in it, which show in its code.
+                    if diagrams, language?.lowercased() == "mermaid", marks.isEmpty {
+                        segments.append(.diagram(source: code))
+                    } else {
+                        segments.append(.code(code: code, language: language, marks: marks))
+                    }
                 }
                 gaps.append(segments.count == 1 ? 0 : gap)
                 last = (Spacing(top: 0, bottom: 16), nil, nil, nil)
