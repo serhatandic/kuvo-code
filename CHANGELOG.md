@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- `/goal` gives the agent a goal to keep at until it's met, like `/goal all tests pass`: it works turn after turn on its own, a check after each turn tells it what's left, and a bar over the composer shows how it's going, with Pause, Resume and Stop. Goals run on the computer the session is on, your Mac or a machine, with the window closed too.
 - A message you send while the agent waits on a long command or a subagent is read at once, and so is another agent's: what it waits on carries on in the background, as the bar over the composer shows, and the agent answers you now rather than when the command ends.
 - A conversation, bot or group chat you read on your phone or another Mac stops showing as unread on this one at once, and its notifications go from Notification Center, on your machines too, with sessions from your coding agents as well.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.

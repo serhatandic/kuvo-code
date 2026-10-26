@@ -25,14 +25,14 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.67";
+export const BRIDGE_VERSION = "0.9.68";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
+  "engine.restart", "engine.start", "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
 ];

@@ -31,6 +31,11 @@ final class Workspace {
     /// A machine's coding agents (the agents bridge beside its engine), by the machine's name.
     @ObservationIgnored var machineAgents: (String) -> OutsideAgents? = { _ in nil }
 
+    /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now).
+    private func followGoals(of model: SessionModel) {
+        model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
+    }
+
     /// The agents bridge a folder's sessions with the coding agents run in: its machine's, or
     /// this Mac's.
     func agents(forFolder folder: String) -> OutsideAgents? {
@@ -450,6 +455,7 @@ final class Workspace {
         if let model = models[id] { return model }
         let model = SessionModel(session: session, api: api)
         model.isReachable = reachable(folder)
+        followGoals(of: model)
         models[id] = model
         return model
     }
@@ -531,6 +537,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
         // (which takes a moment, longer while it starts): read in place, the same messages,
@@ -598,6 +605,7 @@ final class Workspace {
                 return self.extraFolders(self.session(id)?.location.directory ?? directory)
             }
             model.isReachable = { [weak self] in isAgents ? self?.agents?.api != nil : self?.api != nil }
+            followGoals(of: model)
             model.show(copy.messages)
             models[id] = model
             beforeEngine.insert(id)
@@ -612,6 +620,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        followGoals(of: model)
         model.show(copy.messages)
         models[id] = model
         return model
@@ -2601,6 +2610,7 @@ final class Workspace {
             model.reconnect(api)
             model.session = session
             model.isReachable = reachable(session.location.directory)
+            followGoals(of: model)
             Task { await model.load() }
         }
     }
