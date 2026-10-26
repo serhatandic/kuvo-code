@@ -1,4 +1,3 @@
-// @ts-nocheck
 // "&" in a prompt that goes to the engine
 // The agents a prompt names with "&" are told at its end (peers/naming), as this box lists
 // everyone now (`run/agents.json`).
@@ -7,12 +6,18 @@ import fs from "node:fs";
 import { refreshOwn } from "../peers/agents";
 import { AGENTS_FILE } from "../peers/directory";
 import { graphemes, nameAgents, namesIn, wordCharacter } from "../peers/naming";
+import type { AgentsFile, ListedAgent, Target } from "../../shared/records";
+import type { NameableAgent } from "../peers/naming";
+
+/** A prompt's text with the agents it names with "&" told at its end (`namingHere`), for the
+ * conversation it goes to (left out of who's named). */
+export type Naming = (text: string, session: string) => Promise<string>;
 
 // A prompt's body with the agents its text names with "&" told at its end (`naming(text, session)`),
 // as this box lists everyone now; any other body as it is.
-export async function namedIn(body, session, naming) {
+export async function namedIn(body: Buffer | undefined, session: string, naming: Naming | null): Promise<Buffer | undefined> {
   if (!naming) return body;
-  let prompt;
+  let prompt: { text?: unknown } | null;
   try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
   if (typeof prompt?.text !== "string" || !prompt.text.includes("&")) return body;
   const text = await naming(prompt.text, session).catch(() => prompt.text);
@@ -22,25 +27,25 @@ export async function namedIn(body, session, naming) {
 // Who a message from a phone names with "&", for `forward`: everyone as this box lists them now,
 // at once, and where it is; its own worked out again meanwhile, and waited for (two seconds at most)
 // only when a name after "&" isn't there yet (one made a moment ago). One working out at a time.
-let refreshingOwn = null;
-export const refreshOwnShared = readEngine => (refreshingOwn ??= refreshOwn(readEngine).catch(() => {}).finally(() => { refreshingOwn = null; }));
+let refreshingOwn: Promise<ListedAgent[] | null | void> | null = null;
+export const refreshOwnShared = (readEngine: () => Target): Promise<ListedAgent[] | null | void> => (refreshingOwn ??= refreshOwn(readEngine).catch(() => {}).finally(() => { refreshingOwn = null; }));
 // That working out, done (what a test waits for before it removes its folders).
-export const ownRefreshed = () => refreshingOwn ?? Promise.resolve();
+export const ownRefreshed = (): Promise<ListedAgent[] | null | void> => refreshingOwn ?? Promise.resolve();
 // Everyone, as this box lists them now (`run/agents.json`), and its name there.
-export function listedAgents() {
+export function listedAgents(): AgentsFile {
   try {
-    const read = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
+    const read: Partial<AgentsFile> | null = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
     return { machine: read?.machine ?? null, agents: Array.isArray(read?.agents) ? read.agents : [] };
   } catch {
     return { machine: null, agents: [] };
   }
 }
-export function namingHere(readEngine) {
+export function namingHere(readEngine: () => Target): Naming {
   return async (text, session) => {
     let everyone = listedAgents();
     const working = refreshOwnShared(readEngine);
     if (nameMissing(text, everyone.agents)) {
-      await Promise.race([working, new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
+      await Promise.race([working, new Promise<void>(resolve => setTimeout(resolve, 2000).unref?.())]);
       everyone = listedAgents();
     }
     return nameAgents(text, { excluding: session, here: everyone.machine, agents: everyone.agents });
@@ -50,7 +55,7 @@ export function namingHere(readEngine) {
 // Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, with none of
 // their names after it, whole ("&Miranda" isn't "&Mira").
 // (Its characters as `namesIn` reads them: what's before an "&" is a whole character.)
-export function nameMissing(text, agents) {
+export function nameMissing(text: string, agents: NameableAgent[]): boolean {
   if (!text.includes("&")) return false;
   const references = agents.map(agent => ({ name: String(agent.name ?? ""), session: agent.session }));
   const named = new Set(namesIn(text, references).map(each => each.lower));

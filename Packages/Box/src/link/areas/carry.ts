@@ -1,4 +1,3 @@
-// @ts-nocheck
 // A conversation this box's engine runs carried on with its coding agents (`kuvo/sessions/<id>/agents`).
 
 import fs from "node:fs";
@@ -13,32 +12,80 @@ import { listOf } from "../files";
 import { BOTS, HERE, SESSION_WAKES } from "../home";
 import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
+import type { Target } from "../../shared/records";
+import type { Carried } from "../../shared/routes/sessions";
+import type { BotModel } from "../bots/here";
+import type { EngineSession } from "../peers/agents";
+import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+
+/** What `carryToAgents` answers: the coding agents' session it goes on in, or why not. */
+export type CarryAnswer = JSONAnswer<Carried | { message: string }>;
+
+/** A conversation as the engine has it (`api/session/<id>`), as far as carrying it on reads it: its
+ * title, agent, folder and permissions, an undo waiting to be kept, and whose it is. */
+export interface CarriedSession extends EngineSession {
+  agent?: string;
+  permissions?: unknown;
+  revert?: { messageID?: string } | null;
+  metadata?: EngineSession["metadata"] & { kuvoAgent?: unknown; "kuvo.carriedTo"?: unknown; kuvo?: { bot?: unknown; [more: string]: unknown }; [more: string]: unknown };
+}
+
+/** A message of the conversation's, as the engine lists it: carried over whole. */
+interface EngineMessage {
+  id: string;
+}
+
+/** A page of the conversation's messages (`…/message`), and where the next one starts. */
+interface MessagePage {
+  data?: EngineMessage[];
+  cursor?: { next?: string; previous?: string };
+}
+
+/** What was sent and waits in the conversation's inbox (`…/inbox`), as the engine keeps it. */
+interface InboxItem {
+  id: string;
+  type?: string;
+  text: string;
+  payload?: WaitingPayload;
+}
+
+/** What a waiting message brings, in the engine's form: its files, each by a link or its data. */
+interface WaitingPayload {
+  files?: { name?: unknown; uri?: unknown; source?: { uri?: unknown }; data?: unknown; mime?: unknown }[];
+}
+
+/** A file a waiting message brings, as the agents' bridge takes one: a link (or its data, as a
+ * `data:` link), and its name. */
+export interface AgentFile {
+  uri: string;
+  name?: string;
+}
 
 // Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
-const carrying = new Set();
+const carrying = new Set<string>();
 
 // A file a waiting message brings (the engine's form of it), as the agents' bridge takes one.
-const promptFiles = payload => (Array.isArray(payload?.files) ? payload.files : []).map(file => {
+const promptFiles = (payload: WaitingPayload | undefined): AgentFile[] => (Array.isArray(payload?.files) ? payload.files : []).map(file => {
   const name = typeof file?.name === "string" ? { name: file.name } : {};
   const uri = file?.source?.uri ?? file?.uri;
   if (typeof uri === "string") return { uri, ...name };
   return typeof file?.data === "string" ? { uri: `data:${file.mime ?? "application/octet-stream"};base64,${file.data}`, ...name } : null;
-}).filter(Boolean);
+}).filter(Boolean) as AgentFile[];
 
 // `POST kuvo/sessions/<id>/agents`, as a Mac's (Workspace.moveToAgents): a conversation this
 // machine's engine runs, carried on with its coding agents on `model` (one of theirs, or Custom
 // Auto), as picking it in the conversation does: a session of theirs with the whole conversation
 // and what was waiting; the engine's goes to Archived, and a bot's conversation becomes the new
 // one. `{status, value}`: 200 `{session}`, the new one.
-export async function carryToAgents(id, model, readEngine, agents, signal) {
-  const no = (status, message) => ({ status, value: { message } });
+export async function carryToAgents(id: string, model: Partial<BotModel> | null | undefined, readEngine: () => Target, agents: Target | null | undefined, signal?: AbortSignal): Promise<CarryAnswer> {
+  const no = (status: number, message: string): CarryAnswer => ({ status, value: { message } });
   if (!isModel(model) || !runsWithAgents(model)) return no(400, "That isn’t a coding agent’s model.");
-  let engine;
+  let engine: Target | undefined;
   try { engine = readEngine(); } catch {}
   if (!engine) return no(503, "The engine isn’t running.");
   if (!agents) return no(503, `The coding agents aren’t running on ${HERE}.`);
   const route = `api/session/${encodeURIComponent(id)}`;
-  let session;
+  let session: CarriedSession | undefined;
   try { session = (await engineGet(engine, route))?.data; } catch {}
   if (!session) {
     // One of theirs already, or none.
@@ -61,33 +108,33 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
     // From here on it goes to its end, whatever becomes of the phone's request: cut off halfway, it
     // would be in two places, or what waited would run twice.
     const directory = session.location?.directory ?? session.directory;
-    let messages = [], waiting = [];
+    let messages: EngineMessage[] = [], waiting: InboxItem[] = [];
     for (let round = 0; round < 3; round++) {
       // Not partway through a turn (one a client started again from what waited, since).
-      const active = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
+      const active: Record<string, unknown> = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
       if (id in active) {
         await call(engine, "POST", `/${route}/interrupt`).catch(() => {});
         await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`).catch(() => {});
       }
       // Its whole conversation, page by page (a great many messages at most).
-      let page = await engineGet(engine, `${route}/message?limit=200&order=desc`);
+      let page: MessagePage | undefined = await engineGet(engine, `${route}/message?limit=200&order=desc`);
       messages = [...(page?.data ?? [])].reverse();
       while ((page?.data?.length ?? 0) >= 200 && messages.length < 20_000) {
-        const cursor = page.cursor?.next ?? page.cursor?.previous;
+        const cursor = page!.cursor?.next ?? page!.cursor?.previous;
         if (!cursor) break;
         page = await engineGet(engine, `${route}/message?limit=200&cursor=${encodeURIComponent(cursor)}`);
         if (!page?.data?.length) break;
         messages = [...page.data].reverse().concat(messages);
       }
       // An undo waiting to be kept: the conversation as it is now, without what it took back.
-      const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert.messageID) : -1;
+      const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert!.messageID) : -1;
       if (cut >= 0) messages = messages.slice(0, cut);
       // What was sent and waiting comes along, still waiting.
-      waiting = ((await engineGet(engine, `${route}/inbox`).catch(() => null))?.data ?? []).filter(item => item?.type === "user" && typeof item.text === "string");
-      const still = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
+      waiting = ((await engineGet(engine, `${route}/inbox`).catch(() => null))?.data ?? []).filter((item: InboxItem | null) => item?.type === "user" && typeof item.text === "string");
+      const still: Record<string, unknown> = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
       if (!(id in still)) break;
     }
-    const moved = await call(agents, "POST", "/api/session/import", {
+    const moved: { id?: unknown } | null | undefined = await call(agents, "POST", "/api/session/import", {
       title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, messages,
       waiting: waiting.map(item => ({ id: messageID(), text: item.text, files: promptFiles(item.payload) })),
     });
@@ -120,7 +167,7 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
     }
     return { status: 200, value: { session: moved.id } };
   } catch (error) {
-    return no(502, error?.message ?? String(error));
+    return no(502, (error as Error | null)?.message ?? String(error));
   } finally {
     carrying.delete(id);
   }
@@ -128,10 +175,10 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
 
 // A conversation here carried on with the coding agents here, as picking one of their models
 // in it does.
-export async function* carryRoute(context, toAgents) {
+export async function* carryRoute(context: RouteContext, toAgents: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
   const { request, signal, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
-  let id;
+  let id: string;
   try { id = decodeURIComponent(toAgents[1]); } catch { return yield* json(404, { message: "That conversation isn’t there any more." }); }
   const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge(), signal);
   return yield* json(status, value);

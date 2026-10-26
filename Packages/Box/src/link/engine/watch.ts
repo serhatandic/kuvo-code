@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Watching this box's engine and its coding agents' bridge: their events followed, and what the
 // box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
 // that steers an agent read at once).
@@ -9,15 +8,83 @@ import { nameWorktreeBranch, tellWorktree } from "../areas/worktrees";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { engineGet, readBridgeFile, readEngineFile } from "./client";
+import type { Target } from "../../shared/records";
+import type { SignInEvent } from "../areas/accounts";
+import type { NoticeHold } from "../notices/hold";
+import type { EngineEvent, GroupEvent } from "../notices/news";
+import type { Notice } from "../notices/notice";
+
+/** An engine event `steering` follows, for its session: a tool call that started, was called or
+ * ended (its `id`, its tool's `name`, and with its `input`, whether it runs in the background); a
+ * message queued, sent now, put back, delivered or cancelled (its `inboxID`, what it is, and how
+ * it's sent); a run that ended. */
+export interface SteeringEvent {
+  type: string;
+  data?: {
+    sessionID?: string;
+    id?: string;
+    name?: string;
+    input?: { background?: unknown };
+    inboxID?: string;
+    item?: { type?: string; delivery?: string };
+    delivery?: string;
+  };
+}
+
+/** An event from the engine or the coding agents' bridge (`/api/event`), as this box reads them:
+ * each part of its work takes what it knows of it, and a request answered names its `requestID`, a
+ * session made its `info`. */
+export type BoxEvent = EngineEvent & SignInEvent & GroupEvent & SteeringEvent & { data?: { requestID?: string; info?: { id?: string } } };
+
+/** How `steering` waits: how long a call runs before a message is read at once (ms), and its clock
+ * (a test's own), and `signal`, which stops it. */
+export interface SteeringOptions {
+  after?: number;
+  now?: () => number;
+  schedule?: (run: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  cancel?: (timer: ReturnType<typeof setTimeout> | undefined) => void;
+  signal?: AbortSignal;
+}
+
+/** What `steering` keeps of a session: the tool of each call it's starting, when each call it
+ * waits on started (ms), and the messages waiting for its next step. */
+interface SteeredSession {
+  names: Map<string, string | undefined>;
+  blocking: Map<string, number>;
+  steers: Set<string>;
+}
+
+/** What `watchBox` is told: where its news goes (`tell`), where it waits (`hold`), which part of the
+ * box's work it does, and for a test, `signal` and `signedIn`. */
+export interface WatchBoxOptions {
+  tell?: (notice: Notice) => void;
+  hold?: NoticeHold | null;
+  bots?: boolean;
+  notices?: boolean;
+  signal?: AbortSignal;
+  signedIn?: (event: BoxEvent) => void;
+}
+
+/** Which part of the box's work `watchEvents` does as events come (and `steerAfter`, a test's wait
+ * for `steering`). */
+export interface WatchOptions {
+  bots?: boolean;
+  notices?: boolean;
+  signIns?: boolean;
+  hold?: NoticeHold | null;
+  signedIn?: (event: BoxEvent) => void;
+  steers?: boolean;
+  steerAfter?: number;
+}
 
 // The events in a `text/event-stream` body, parsed.
-async function* serverEvents(body) {
+async function* serverEvents(body: AsyncIterable<Uint8Array>): AsyncGenerator<BoxEvent> {
   const decoder = new TextDecoder();
   let buffer = "";
-  let data = [];
+  let data: string[] = [];
   for await (const chunk of body) {
     buffer += decoder.decode(chunk, { stream: true });
-    let end;
+    let end: number;
     while ((end = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, end).replace(/\r$/, "");
       buffer = buffer.slice(end + 1);
@@ -42,21 +109,21 @@ async function* serverEvents(body) {
 // (the call was asking you something first, say), it's tried again every `after` ms.
 // `background(session)` does it; each event from the engine goes to what this returns.
 export const STEER_AFTER = 3000;
-export function steering(background, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal } = {}) {
-  const sessions = new Map(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
-  const users = new Set(); // messages sent as a message (steered or queued) that wait
-  const timers = new Map();
-  const of = session => {
+export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
+  const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
+  const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const of = (session: string): SteeredSession => {
     if (!sessions.has(session)) sessions.set(session, { names: new Map(), blocking: new Map(), steers: new Set() });
-    return sessions.get(session);
+    return sessions.get(session)!;
   };
-  const forget = session => {
+  const forget = (session: string) => {
     sessions.delete(session);
     cancel(timers.get(session));
     timers.delete(session);
   };
   signal?.addEventListener("abort", () => { for (const session of [...timers.keys()]) forget(session); }, { once: true });
-  const consider = session => {
+  const consider = (session: string): void => {
     const { blocking, steers } = of(session);
     if (!blocking.size || !steers.size || timers.has(session) || signal?.aborted) return;
     const due = Math.min(...blocking.values()) + after;
@@ -70,7 +137,7 @@ export function steering(background, { after = STEER_AFTER, now = Date.now, sche
       timers.set(session, schedule(() => { timers.delete(session); consider(session); }, after));
     }, Math.max(0, due - now())));
   };
-  const steer = (session, inbox) => {
+  const steer = (session: string, inbox: string) => {
     of(session).steers.add(inbox);
     consider(session);
   };
@@ -78,38 +145,39 @@ export function steering(background, { after = STEER_AFTER, now = Date.now, sche
     const data = event?.data ?? {};
     const session = data.sessionID;
     if (typeof session !== "string") return;
+    // Each event names what it's about: a tool call's, its call (`id`); a message's, its `inboxID`.
     switch (event.type) {
       case "session.tool.input.started":
         if (typeof data.id === "string") of(session).names.set(data.id, data.name);
         break;
       case "session.tool.called": {
         const kept = of(session);
-        const name = data.name ?? kept.names.get(data.id);
-        kept.names.delete(data.id);
-        if (!["shell", "subagent"].includes(name) || data.input?.background === true) break;
-        kept.blocking.set(data.id, now());
+        const name = data.name ?? kept.names.get(data.id!);
+        kept.names.delete(data.id!);
+        if (!(["shell", "subagent"] as (string | undefined)[]).includes(name) || data.input?.background === true) break;
+        kept.blocking.set(data.id!, now());
         consider(session);
         break;
       }
       case "session.tool.success":
       case "session.tool.failed":
-        sessions.get(session)?.names.delete(data.id);
-        sessions.get(session)?.blocking.delete(data.id);
+        sessions.get(session)?.names.delete(data.id!);
+        sessions.get(session)?.blocking.delete(data.id!);
         break;
       case "session.inbox.enqueued":
         if (data.item?.type !== "user") break;
-        users.add(data.inboxID);
-        if (data.item.delivery === "steer") steer(session, data.inboxID);
+        users.add(data.inboxID!);
+        if (data.item.delivery === "steer") steer(session, data.inboxID!);
         break;
       // Sent now, from the queue (Send Now): read at once too; put back in the queue: not.
       case "session.inbox.delivery.changed":
-        if (data.delivery === "steer" && users.has(data.inboxID)) steer(session, data.inboxID);
-        else sessions.get(session)?.steers.delete(data.inboxID);
+        if (data.delivery === "steer" && users.has(data.inboxID!)) steer(session, data.inboxID!);
+        else sessions.get(session)?.steers.delete(data.inboxID!);
         break;
       case "session.inbox.delivered":
       case "session.inbox.cancelled":
-        users.delete(data.inboxID);
-        sessions.get(session)?.steers.delete(data.inboxID);
+        users.delete(data.inboxID!);
+        sessions.get(session)?.steers.delete(data.inboxID!);
         break;
       case "session.execution.succeeded":
       case "session.execution.failed":
@@ -121,7 +189,7 @@ export function steering(background, { after = STEER_AFTER, now = Date.now, sche
 }
 
 // Moves what a session waits on in the foreground (its commands, its subagents) to the background.
-function backgroundTools(engine, session) {
+function backgroundTools(engine: Target, session: string): Promise<Response> {
   return fetch(`http://127.0.0.1:${engine.port}/api/session/${encodeURIComponent(session)}/background`, {
     method: "POST",
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
@@ -134,8 +202,8 @@ function backgroundTools(engine, session) {
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
 // its bots' part of the box's work (this Mac's box, whose app does the rest).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn } = {}) {
-  const answered = id => hold?.resolve(id);
+export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn }: WatchBoxOptions = {}): void {
+  const answered = (id: string | undefined) => hold?.resolve(id);
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
 }
@@ -150,7 +218,7 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 // where those notices wait, settled each time the events are heard again (`settleHeld`).
 // `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
 // `steers`: your messages to an agent waiting on a command read at once (`steering`), the engine's.
-export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter } = {}) {
+export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter }: WatchOptions = {}): Promise<void> {
   let attempt = 0;
   while (!signal?.aborted) {
     // What this connection set going ends with it: what it heard of can't be settled once it's gone.
@@ -174,8 +242,8 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session; a bot's job read from its memory as
         // its run ends.
-        // A bot's run starting: what it's told brought up to date first.
-        if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
+        // A bot's run starting: what it's told brought up to date first (a run's events name its session).
+        if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID!).catch(() => {});
         steer?.(event);
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (!bots) {
