@@ -54,6 +54,18 @@ struct DecodingTests {
         #expect(agents.filter(\.isPrimary).map(\.id) == ["build", "plan"])
     }
 
+    /// Settings › Engine's plugins: a package that didn't load (a name misspelled) comes without a
+    /// name of the engine's, and still shows, as what it was added as, with the others.
+    @Test func decodesPluginsWithOneThatFailed() throws {
+        let plugins = try Fixture.decode("plugin.json", as: LocatedEnvelope<[PluginInfo]>.self).data
+        let added = plugins.filter { $0.source.type != "builtin" }
+        #expect(added.map(\.source.entry) == ["opencode-wakatime", "@tarquinen/opencode-dcp", "opencode-doesnotexist-xyz-123"])
+        #expect(added.first?.source.version == "1.4.0")
+        let failed = try #require(added.last)
+        #expect(failed.id == "opencode-doesnotexist-xyz-123")
+        #expect(failed.state.status == "failed")
+    }
+
     @Test func decodesStoredMessages() throws {
         let page = try Fixture.decode("messages.json", as: Page<Message>.self)
         #expect(page.data.count == 13)

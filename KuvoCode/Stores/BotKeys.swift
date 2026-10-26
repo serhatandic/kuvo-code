@@ -139,6 +139,7 @@ enum BotKeys {
     /// A request to a machine's box: method, path and body in, status and body out.
     typealias Ask = (_ method: String, _ path: String, _ body: [String: Any]?) async throws -> (status: Int, body: Data)
 
+    // COMPAT(0.7 bot-keys-keychain): machines' bots' keys this Mac's Keychain kept, given to their machines. Goes 3 months after 0.8.0.
     /// Keys this Mac kept for `machine`'s bots (an earlier Kuvo Code kept every bot's in your
     /// Keychain): each given to the machine (`ask`), then gone from your Keychain once it has it.
     static func handOver(on machine: String, app: AppModel, ask: Ask) async {

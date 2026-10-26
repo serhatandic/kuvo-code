@@ -25,16 +25,16 @@ import { fileURLToPath } from "node:url";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.69";
+export const BRIDGE_VERSION = "0.9.70";
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
+  "engine.restart", "engine.start", "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
+  "mcp.catalog", "named", "personalities", "plugins.search", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
+  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 const RUN = path.join(K, "run");
@@ -1849,6 +1849,7 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     updateWorktrees(list => [...list.filter(each => each.root !== root), tree]);
     return { status: 200, value: tree };
   }
+  // COMPAT(0.7 worktrees): a machine's worktrees an older Mac kept, given to its box. Goes 3 months after 0.8.0.
   if (route === "kuvo/worktrees/record") {
     // One a Mac made here before this box kept them: kept here from now on, if it's still here
     // (one removed since, from a phone, say, doesn't come back).
@@ -1889,6 +1890,175 @@ export async function answerWorktrees(method, requestPath, body, engine, signal)
     return { status: 200, value: {} };
   }
   return { status: 404, value: {} };
+}
+
+// Where its engine keeps what's its own (its XDG_DATA_HOME's `opencode`): in this box's folder on
+// a machine, and in the app's on a Mac (KUVO_ENGINE_DATA). New worktrees go in its `worktree`
+// folder, unless Settings › Worktrees names another.
+const ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode");
+
+/** `kuvo/worktrees/where`: where new worktrees go with `directory` as Settings' Worktrees folder
+ * (none: the engine's own), as the engine reads it, for each of this box's projects in a git
+ * repository: the folder, whether it's there or can be made, and whether it's in the repository's
+ * own checkout without git ignoring it (git would list them all as new files there). A relative
+ * one starts at the repository's own checkout, not at the project's folder in it. */
+export async function worktreesWhere(directory, engine, signal, projects = readProjects().filter(each => !each.removed).map(each => each.directory)) {
+  const value = typeof directory === "string" && directory !== "" ? directory : null;
+  const answer = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: os.homedir(), projects: [] };
+  // The engine's projects, by their own checkout, from one call about none of them (one about a
+  // folder would start the engine there): their ids name the engine's own folders.
+  const ids = new Map();
+  if (engine?.port) {
+    try {
+      for (const known of await call(engine, "GET", "/api/project", undefined, signal)) {
+        if (typeof known?.id === "string" && typeof known?.canonical === "string") ids.set(realOr(known.canonical), known.vcs === "git" && known.id !== "global" ? known.id : null);
+      }
+    } catch {}
+  }
+  for (const project of projects) {
+    if (!fs.existsSync(project)) continue;
+    // The repository's own checkout (of a worktree, or of a folder in it, its main one), which
+    // the engine resolves a relative folder from. (Without --path-format, which older git lacks.)
+    const common = await gitLater(project, ["rev-parse", "--git-common-dir"]);
+    if (!common) continue;
+    const gitFolder = path.resolve(project, common);
+    if (path.basename(gitFolder) !== ".git") continue;
+    const checkout = realOr(path.dirname(gitFolder));
+    // One the engine doesn't take for a repository has no worktrees: a repository with no commit
+    // yet is its "global" project.
+    const id = ids.get(checkout);
+    if (id === null) continue;
+    // The engine's own: a folder for each project, named by the start of its id.
+    const folder = value === null ? (id ? path.join(answer.default, id.slice(0, 6)) : null)
+      : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
+    const entry = { project, name: path.basename(project), folder };
+    if (folder) {
+      entry.exists = (() => { try { return fs.statSync(folder).isDirectory(); } catch { return false; } })();
+      if (!entry.exists) entry.canMake = canMake(folder);
+      if (inside(folder, checkout)) {
+        entry.inside = true;
+        // What's in it, as git sees a worktree there: ignored, or a new folder in the checkout.
+        entry.ignored = (await gitLater(checkout, ["check-ignore", "-q", path.join(folder, "worktree")])) !== null;
+      }
+    }
+    answer.projects.push(entry);
+  }
+  return answer;
+}
+
+/** A folder through any links in its path, as the engine names a checkout; as it is when it isn't there. */
+function realOr(folder) {
+  try { return fs.realpathSync(folder); } catch { return folder; }
+}
+
+/** Whether `folder` can be made: the nearest folder of it that's there is one you can write in. */
+function canMake(folder) {
+  for (let at = path.dirname(folder); ; at = path.dirname(at)) {
+    try {
+      if (!fs.statSync(at).isDirectory()) return false;
+      fs.accessSync(at, fs.constants.W_OK);
+      return true;
+    } catch (error) {
+      if (error?.code !== "ENOENT" || at === path.dirname(at)) return false;
+    }
+  }
+}
+
+// MARK: Folders (PROTOCOL.md, `kuvo/folders`): this box's folders, for a client to choose one.
+
+/** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
+ * starts there), as a client shows them to choose one: `{path, home, parent, folders: [{name,
+ * repository?}]}`, ordered as Finder orders names, hidden ones (starting with ".") only with
+ * `hidden=1`. `repository`: a git repository's own checkout. */
+export function listFolders(requestPath) {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = os.homedir();
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  let entries;
+  try {
+    entries = fs.readdirSync(at, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { status: 404, value: { message: `There's no folder ${at} here.` } };
+    return { status: 403, value: { message: `${at} can't be read here.` } };
+  }
+  const hidden = query.get("hidden") === "1";
+  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them
+  // (privacy prompts); Linux has none, so it looks into every folder.
+  const asks = process.platform === "darwin" && at === home ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set();
+  const isFolder = entry => entry.isDirectory() || (entry.isSymbolicLink() && (() => { try { return fs.statSync(path.join(at, entry.name)).isDirectory(); } catch { return false; } })());
+  const folders = entries
+    .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
+    .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders } };
+}
+
+/** `POST kuvo/folders {"path"}`: a new folder, in one that's there, as a folder panel's New Folder
+ * makes one: `{path}` (`~/` starts at the home folder). */
+export function makeFolder(body) {
+  const given = typeof body?.path === "string" ? body.path.trim() : "";
+  const home = os.homedir();
+  const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  // Platform: a Mac's disk usually ignores case, so "Trees" is taken by "trees" there, not on Linux.
+  if (fs.existsSync(at)) return { status: 409, value: { message: `There's already something called ${path.basename(at)} there.` } };
+  try {
+    fs.mkdirSync(at);
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: 404, value: { message: `There's no folder ${path.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
+  }
+  return { status: 200, value: { path: at } };
+}
+
+// MARK: Plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's packages its engine can load, found from this box.
+
+// npm's registry, or a test's stand-in for it, in a test's folder only (never a machine's own).
+const testNpm = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code") ? process.env.KUVO_TEST_NPM : undefined;
+const NPM = testNpm ?? "https://registry.npmjs.org";
+// A package as npm names it, with a version or tag after it or not.
+const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s@/]+))?$/;
+
+/** `kuvo/plugins/search?q=`: npm's packages for opencode that `q` finds (with none, the most used
+ * plugins), each `{name, version, description, weekly}`, the one it names exactly first. `q`
+ * that names a package npm doesn't have says so (`missing`). */
+export async function searchPlugins(query, signal) {
+  const text = String(query ?? "").trim().toLowerCase();
+  // A package's record as npm installs from it (its versions and tags, not its whole history).
+  const ask = async (address, headers = {}) => {
+    const answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) });
+    if (answered.status === 404) return null;
+    if (!answered.ok) throw new Error(`npm answered ${answered.status}.`);
+    return answered.json();
+  };
+  const spec = text.match(NPM_SPEC);
+  const [found, named] = await Promise.all([
+    ask(`${NPM}/-/v1/search?size=20&text=${encodeURIComponent(text ? `${text} keywords:opencode` : "keywords:opencode-plugin")}`),
+    // Not known (npm didn't answer) is not missing.
+    spec ? ask(`${NPM}/${spec[1].replace("/", "%2F")}`, { accept: "application/vnd.npm.install-v1+json" }).catch(() => undefined) : undefined,
+  ]);
+  const packages = (found?.objects ?? []).map(each => ({
+    name: each.package?.name,
+    version: each.package?.version,
+    description: each.package?.description || undefined,
+    weekly: each.downloads?.weekly,
+  })).filter(each => typeof each.name === "string");
+  const answer = { packages };
+  if (spec && named?.name) {
+    const listed = packages.find(each => each.name === named.name);
+    const version = spec[2] && named.versions?.[spec[2]] ? spec[2] : named["dist-tags"]?.[spec[2]] ?? named["dist-tags"]?.latest;
+    answer.packages = [{ name: named.name, version, description: listed?.description, weekly: listed?.weekly }, ...packages.filter(each => each !== listed)];
+    // A version or a tag it doesn't have (a range, like ^1.2.0, it may well have).
+    const exact = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(spec[2] ?? "") || /^[a-z][\w-]*$/i.test(spec[2] ?? "");
+    if (spec[2] && exact && !named.versions?.[spec[2]] && !named["dist-tags"]?.[spec[2]]) answer.missing = `${named.name}@${spec[2]}`;
+  } else if (named === null) {
+    answer.missing = spec[1];
+  }
+  return answer;
 }
 
 // MARK: Skills (PROTOCOL.md, "Skills"): every box's, a Mac's too, and every client's way to GitHub's collections.
@@ -2297,6 +2467,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       // a restart changes it.
       let started = null;
       if (engine.pid) try { started = fs.statSync(ENGINE_FILE).mtimeMs / 1000; } catch {}
+      // COMPAT(0.7 engine-stop): `stopped`, an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
       // Whether it runs now, and whether it's stopped on purpose (until it's started, from anywhere).
       const running = Boolean(engine.pid && runs(engine.pid, `${K}/engine/`));
       const stopped = fs.existsSync(path.join(RUN, "stopped"));
@@ -2332,6 +2503,22 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       try { engine = readEngine(); } catch {}
       const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
+    }
+    // A folder of this box's to choose, for a setting that names one (PROTOCOL.md, `kuvo/folders`).
+    if (route === "kuvo/folders") {
+      const method = request.method.toUpperCase();
+      if (method !== "GET" && method !== "POST") return yield* json(405, {});
+      const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+      return yield* json(status, value);
+    }
+    // Settings › Engine's plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's, found from this box.
+    if (route === "kuvo/plugins/search") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      try {
+        return yield* json(200, await searchPlugins(new URLSearchParams(request.path.split("?")[1] ?? "").get("q"), signal));
+      } catch (error) {
+        return yield* json(502, { message: "npm couldn't be reached from here. Check this computer's internet connection, then try again." });
+      }
     }
     // Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
     // collections, which it reaches itself (a machine's with the Mac closed too).
@@ -2508,6 +2695,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       if (!answer) return yield* json(400, given?.saved != null ? { message: "Saved passwords are on your Mac: type this one." } : {});
       return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});
     }
+    // COMPAT(0.7 engine-stop): `kuvo/engine/start`, for an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
     // (No Stop: a machine's engine keeps running, and up to date. Start is for one an older Mac stopped.)
     const control = route.match(/^kuvo\/engine\/(start|restart)$/);
     if (control) {
@@ -2622,9 +2810,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
     }
     // Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
-    if (/^kuvo\/worktrees(\/(remove|record))?$/.test(route)) {
+    if (/^kuvo\/worktrees(\/(remove|record|where))?$/.test(route)) {
       let engine = null;
       try { engine = readEngine(); } catch {}
+      if (route === "kuvo/worktrees/where") {
+        if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+        return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine, signal));
+      }
       const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
@@ -2774,6 +2966,7 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
 // machine, stopping again and again, with its keeper's next start a while away (`run/engine.retry`,
 // when, in seconds since 1970); or starting (again).
 const engineDown = () => {
+  // COMPAT(0.7 engine-stop): an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
   if (fs.existsSync(path.join(RUN, "stopped"))) return "The engine isn't running.";
   if (IS_MAC) {
     let why = "";
@@ -2790,6 +2983,7 @@ const engineDown = () => {
   return "This machine's engine is starting. Try again in a moment.";
 };
 
+// COMPAT(0.7 engine-stop): `start`, for an engine an older Mac's Stop left down (`restart` stays). Goes 3 months after 0.8.0.
 // The engine here started, or started over, by the box's own tool (`bin/kuvo-start`, as the Mac
 // has it do): `start` for one an older Mac's Stop left down (until it's started, from anywhere),
 // and `restart`. This bridge stays up through each. Answered at once (202), and the phone sees it
@@ -2926,6 +3120,7 @@ export function engineConnect(readEngine = readEngineFile) {
   };
 }
 
+// COMPAT(0.7 leave-running): `run/link.seen`, which a 0.7 Mac reads before it stops a machine's engine as it quits. Goes 3 months after 0.8.0.
 // When a phone last used this machine, in `run/link.seen`: a Mac with Kuvo Code 0.7.x leaves the
 // engine running as it quits while one has in the last week (later ones always do), so
 // the machine's sessions and bots are there whenever it asks; a phone lost or unpaired elsewhere
@@ -3368,6 +3563,7 @@ function writeJob(here, job) {
   const file = path.join(here.folder, JOB_FILE);
   fs.writeFileSync(`${file}.new`, JSON.stringify({ line: job.line, details: job.details, updated: stamp() }, null, 2));
   fs.renameSync(`${file}.new`, file);
+  // COMPAT(0.7 bot-json-job): the job's line in `bot.json` too, where an older Mac reads it. Goes 3 months after 0.8.0.
   // Its description says it in a few words too, for what reads only that (a Mac of an earlier version).
   if ((here.described.job ?? "") !== job.line) {
     const described = path.join(here.folder, "bot.json");
@@ -4230,6 +4426,7 @@ export async function forgetLeftKeys() {
   }
 }
 
+// COMPAT(beta.1 deleted-bots): `bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier. Goes when 0.8.0 ships.
 // The bots deleted here, the latest first (the last 500), for the Mac to let go of as it next
 // connects: `{"deleted": [<bot id>…]}` (Bots.deletedFile).
 const DELETED_FILE = path.join(BOTS, "deleted.json");
@@ -5674,6 +5871,7 @@ export function botPersonalities(kit, library = readPersonalities()) {
 // copies them between computers but you ("Also Apply to…", `applySettings`). Writes take
 // `run/.config.lock`.
 
+// COMPAT(0.7 settings): until a Mac adopts them (`adoptBox`), a machine's settings are the ones an older Mac's start left. Goes 3 months after 0.8.0.
 // A machine's own settings and keys, in a folder of their own (`box`), which no older Kuvo Code
 // writes: the engine reads the file (`OPENCODE_CONFIG`, over the global one) and reloads it when it
 // changes. Before a Mac made them the machine's own (`adoptBox`), its Mac's.
@@ -5697,6 +5895,7 @@ const LAUNCH_LOCK = path.join(RUN, ".launching");
 const CATALOG_FILE = path.join(K, "bin", "mcp-catalog.json");
 const SERVERS = ["mcp", "servers"];
 
+// COMPAT(0.7 settings): the routes answer 409 until a Mac adopts the settings an older Mac's start left. Goes 3 months after 0.8.0.
 export const ownsSettings = (mark = OWN_MARK) => mark === null || fs.existsSync(mark);
 
 const isObject = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -5848,6 +6047,7 @@ function writePrivate(file, text) {
 // reads the box, and clears what's below it (`global-adopted` says the global file came in whole).
 // Under the launch's lock and the settings' own, so no start or change comes between.
 // {status: "own" | "adopted", seeded, settings}.
+// COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
 export function adoptBox(seed) {
   return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -6464,6 +6664,7 @@ function held(envelope) {
 }
 const docKey = (origin, kind) => `${origin} ${kind}`;
 
+// COMPAT(beta.1 peers-list): a Mac that gave no signing key signs no documents. Goes when 0.8.0 ships.
 // The signing key a Mac of this box's gave in setup, over SSH; null for one that gave none yet (a
 // Mac with Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For released Macs").
 const macSign = (link, mac) => (typeof link?.macSigns?.[mac] === "string" && SIGN.test(link.macSigns[mac]) ? link.macSigns[mac] : null);
@@ -6796,6 +6997,7 @@ export function leaveMac(link, mac) {
     if (link.macs.length) link.mac = link.macs[0];
     else delete link.mac;
   }
+  // COMPAT(beta.1 peers-list): `legacy`, a beta.1 Mac's list. Goes when 0.8.0 ships.
   for (const field of ["macSeen", "macSigns", "legacy"]) if (link[field]) delete link[field][mac];
   link.phones = (link.phones ?? []).filter(phone => !(phone.from === "mac" && phone.mac === mac));
 }
@@ -6811,6 +7013,7 @@ const cleanPeer = ({ key, address, name, kind, id, sign }) => ({ key, address, k
 const cleanMoved = moved => (Array.isArray(moved) ? moved : []).filter(each => isObject(each) && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && KEY.test(each.key))
   .slice(0, 500).map(({ session, key }) => ({ session, key }));
 
+// COMPAT(beta.1 peers-list): a beta.1 Mac's list of peers, as its peers document. Goes when 0.8.0 ships.
 // A list of peers from a Mac that signs no documents yet (Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For
 // released Macs"): that Mac's newest, by its own `at`, used as its peers document would be, and
 // never passed on. False when it isn't taken.
@@ -6828,6 +7031,7 @@ function macWords(link) {
   return macsOf(link).map(mac => {
     const doc = macDoc(link, mac, "peers");
     if (doc) return { boxes: Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, MOST_PEERS) : [], moved: doc.body.moved };
+    // COMPAT(beta.1 peers-list): a beta.1 Mac's list, in place of its peers document. Goes when 0.8.0 ships.
     return link?.legacy?.[mac] ? { boxes: link.legacy[mac].peers ?? [], moved: link.legacy[mac].moved } : null;
   }).filter(Boolean);
 }
@@ -6863,6 +7067,7 @@ function ownKey(link) {
   try { return publicOf(Buffer.from(link.key, "base64url")).toString("base64url"); } catch { return null; }
 }
 
+// COMPAT(beta.1 peers-list): link.json as the bridge beta.1 put on machines (0.9.23) left it. Goes when 0.8.0 ships.
 // link.json as an earlier bridge left it: each Mac's list it had (`peersFrom`) kept as that Mac's
 // word until it signs a document; what lists passed on and their dates needed, gone.
 function migratedLink(link) {
@@ -8025,6 +8230,7 @@ export function receiveMail(body, host, peerMail = () => {}, attended = () => {}
   peerMail(sender, payload);
 }
 
+// COMPAT(beta.1 peers-list): the list of peers a beta.1 Mac mails. Goes when 0.8.0 ships.
 // Mail from one of this box's Macs: heard from (the 30 days a Mac counts for start again, noted
 // once an hour at most), and, from a Mac that signs no documents yet, its list of peers (Kuvo Code
 // 0.8.0-beta.1, PROTOCOL.md "For released Macs").
@@ -8140,6 +8346,7 @@ export function noteLauncher(readEngine = readEngineFile, now = Date.now()) {
   try { writePrivate(LAUNCHERS, JSON.stringify(all)); } catch {}
 }
 
+// COMPAT(0.7 visits): `launchers.json`, Macs that started the engine without saying they tolerate newer boxes, hold updates back. Goes 3 months after 0.8.0.
 // Why this box doesn't update itself now, or null: it isn't a machine's own folder, or a Mac that
 // started its engine lately would put back older versions (one that didn't say it leaves a newer
 // box as it is).
@@ -8288,6 +8495,7 @@ async function cameUp(version, withAgents, timeout = 120_000, readEngine = readE
   return false;
 }
 
+// COMPAT(0.7 files): `bin/.own`, the box's own copies of the tools an older Mac puts its own over. Goes 3 months after 0.8.0.
 // The box's tools that an older Kuvo Code on a Mac (0.7 and before) puts its own over as it
 // connects: the box keeps copies of its own (`bin/.own`), which its keeper puts back.
 const OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"];
@@ -8303,6 +8511,7 @@ const installOrder = files => [...files].sort((a, b) => (a === "bin/box-version"
 export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000 } = {}) {
   if (!keys.length) return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked) return { result: "blocked", message: blocked };
+  // COMPAT(0.7 engine-stop): no update while an older Mac's Stop holds the engine down. Goes 3 months after 0.8.0.
   if (fs.existsSync(path.join(RUN, "stopped"))) return { result: "blocked", message: "Its engine is stopped: start it to update it." };
   const before = boxVersion();
   if (!before) return { result: "blocked", message: "This machine's version isn't known: connect to it from Kuvo Code on your Mac once." };
@@ -8314,6 +8523,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     try {
       released = await fetched(url, 1_000_000, 30_000);
     } catch (error) {
+      // COMPAT(0.7 no-boxes-json): a newest release without `boxes.json` (0.7.2) is "current". Goes once a release with one is the newest.
       // The newest release has none for machines (one from before them): nothing newer for it.
       if (/answered 404/.test(String(error?.message))) return { result: "current", version: before };
       throw error;
@@ -8340,6 +8550,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
       if (hexSHA256(fs.readFileSync(path.join(stage, "files", file))) !== box.files[file]) throw new Error("The release's files aren't what it says.");
     }
     if (!files.includes("bin/box-version") || fs.readFileSync(path.join(stage, "files", "bin", "box-version"), "utf8").trim() !== manifest.version) throw new Error("The release's files aren't what it says.");
+    // COMPAT(0.7 files): the release's tools kept in `bin/.own`. Goes 3 months after 0.8.0.
     // Its tools kept as the box's own too (and put back with the rest, if it goes back).
     for (const tool of OWN_TOOLS) {
       if (!files.includes(`bin/${tool}`)) continue;
@@ -8451,6 +8662,7 @@ export function confirmUpdate(clock = Date.now) {
   return true;
 }
 
+// COMPAT(0.7 visits): "an older Mac" in `launchers.json`. Goes 3 months after 0.8.0.
 // An older Mac (Kuvo Code 0.7 and before) to hold updates back for, from now: it would put back
 // its own files.
 function noteOlderMac(at) {
@@ -8461,6 +8673,7 @@ function noteOlderMac(at) {
   try { writePrivate(LAUNCHERS, JSON.stringify(launchers)); } catch {}
 }
 
+// COMPAT(0.7 visits): `run/attached` and `run/older-mac`, an older Mac's visits. Goes 3 months after 0.8.0.
 // An older Kuvo Code on a Mac touches `run/attached` each time it connects, and this one never
 // does: one that did lately holds this box's updates back (it would put back its own files). Not
 // a touch from before a Kuvo Code that marks the box last put its files there: that was most
@@ -8479,6 +8692,7 @@ export function noteOlderMacs() {
   return true;
 }
 
+// COMPAT(0.7 visits): drift, an older Mac's files put back over an update's. Goes 3 months after 0.8.0.
 // Whether a Mac that doesn't leave a newer box as it is (an older Kuvo Code) put its own files back
 // since the box updated itself (seen twice, ten minutes apart, and not while a Mac says it puts its
 // files in place): then the box doesn't update itself for a while, as that Mac would undo it, and
@@ -8570,7 +8784,7 @@ export function startUpdate(options = {}) {
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
+export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
   "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
@@ -8990,6 +9204,7 @@ async function* macLinkRoute(route, request, signal) {
       yield { body: Buffer.from(JSON.stringify(await answer) + "\n") };
       return;
     }
+    // COMPAT(beta.1 mac-letters): the letters an earlier Kuvo Code kept (`agent-letters.json`), into the outbox. Goes 3 months after 0.8.0.
     case "kuvo/link/letters/take": {
       // What an earlier Kuvo Code kept itself (PhoneLink, before this Mac's box took its peers): its
       // letters on their way, and the letters it had delivered (so one sent again isn't twice).
@@ -9385,6 +9600,7 @@ const isBridge = pid => pid !== process.pid && runs(pid, "kuvo-link.js");
 export function keepKeeper() {
   let start = path.join(K, "bin", "kuvo-start");
   if (!fs.existsSync(start)) return;
+  // COMPAT(0.7 keeper): the keeper started from its own copy (`bin/.kuvo-start-keeper`) when an older Mac's kuvo-start has no `keep)`. Goes 3 months after 0.8.0.
   // An older Kuvo Code on a Mac (0.7 and before) put its own kuvo-start here, which only starts
   // the engine after a restart: the box's keeper, from the copy it keeps of itself (which puts
   // itself back).
@@ -9414,6 +9630,7 @@ async function run() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
+  // COMPAT(beta.1 connected): `run/connected` (beta.1) and `run/present` (0.7 with the phone link on), cleared. Goes when 0.8.0 ships.
   // The notes an earlier Kuvo Code on a Mac left that it was connected (it did some of the box's
   // work then): nothing reads them now.
   for (const folder of ["present", "connected"]) fs.rmSync(path.join(RUN, folder), { recursive: true, force: true });
@@ -9592,11 +9809,13 @@ async function box(command) {
   };
   const say = value => console.log(JSON.stringify(value));
   switch (command) {
+    // COMPAT(0.7 settings): `box adopt`, which a Mac runs over SSH. Goes 3 months after 0.8.0.
     case "adopt": {
       let seed = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
       return say(adoptBox(seed));
     }
+    // COMPAT(beta.1 box-read-change): `box read` and `box change`, which beta.1 runs over SSH (`box route` took their place). Goes when 0.8.0 ships.
     case "read": {
       const { settings, problem } = readSettings();
       return say(problem ? { status: 409, message: problem } : { status: 200, settings, own: ownsSettings() });
@@ -9807,11 +10026,13 @@ async function setup() {
         next.macSigns = { ...(next.macSigns ?? {}), [mac]: input.macSign };
         if (next.legacy) delete next.legacy[mac];
       } else if (Array.isArray(input.peers)) {
+        // COMPAT(beta.1 peers-list): the list of peers a beta.1 Mac's setup gives. Goes when 0.8.0 ships.
         // A Mac that signs none yet (0.8.0-beta.1): its peers as it lists them.
         takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : (typeof input.at === "number" ? input.at : 0), input.moved);
       }
     }
     if (typeof input.id === "string") next.id = input.id.slice(0, 200);
+    // COMPAT(0.7 visits): a Mac that doesn't say it `tolerates` newer boxes holds updates back. Goes 3 months after 0.8.0.
     // Whether this Mac leaves a newer box as it is, by its ID (as its engine launches name it): the
     // box updates itself only while every Mac that started its engine lately does (PROTOCOL.md, "Updates").
     if (typeof input.macID === "string" && /^[A-Za-z0-9-]{1,100}$/.test(input.macID)) next.tolerantIDs = { ...(next.tolerantIDs ?? {}), [input.macID]: input.tolerates === 1 };

@@ -91,8 +91,8 @@ import WebKit
     }
 
     /// With the app not answering for this Mac's keys (its host interface gone), its box can't say
-    /// whether it has an integration's keys: the page says they can't be read right now, rather
-    /// than ask for keys it would only turn away. Try Again brings the app's host interface back,
+    /// whether it has an integration's keys: the page says once that they can't be read right now,
+    /// rather than ask for keys it would only turn away. Try Again brings the app's host interface back,
     /// and the same box, never started again, reads them: Add Key… again. An added one says so too.
     @Test func keysThatCantBeReadNowArentAskedForAndTryAgainReadsThemOnceTheAppAnswers() async throws {
         let box = try await SettingsBox(port: 47_938, host: app.host)
@@ -108,8 +108,9 @@ import WebKit
         app.host.stop()
         let listed = try await app.integrations(on: .mac)
         let todoist = try #require(listed.integrations.first { $0.id == "todoist" })
-        #expect(todoist.adding == .keysUnreadable, "Try Again, not Add Key…")
-        #expect(todoist.keysNote(on: computer) == "Its keys can’t be read on \(computer) right now, so it can’t be added yet. Try again in a moment.")
+        #expect(todoist.adding == .keysUnreadable, "Add Key… waits, dimmed")
+        // Said once, over the page, with Try Again: not on every row.
+        #expect(listed.keysNote(on: computer) == "Integrations’ keys can’t be read on \(computer) right now. Those that use keys can’t be added or changed until they can.")
         #expect(listed.integrations.first { $0.id == "slack" }?.adding == .keysUnreadable, "nor Add App…")
         #expect(listed.integrations.first { $0.id == "linear" }?.adding == .connect, "one with no keys still connects")
         await #expect(throws: BoxRefusal.self, "keys given anyway are turned away") {
@@ -119,7 +120,7 @@ import WebKit
         // Try Again, as the page does it: Add Key…, from the same box, and nothing of the refused one.
         let again = try #require(try await app.integrationsAgain(on: .mac).integrations.first { $0.id == "todoist" })
         #expect(again.adding == .key && again.keysSaved == false, "Add Key…")
-        #expect(again.keysNote(on: computer) == nil)
+        #expect(try await app.integrations(on: .mac).keysNote(on: computer) == nil)
         #expect(box.box.process.endpoint == boxStarted, "its box wasn't started again")
         #expect(IntegrationKeys.value(key) == nil, "the refused key wasn't kept")
         let added = try await app.addIntegration(again, keys: ["TODOIST_API_KEY": "tok_read"], on: .mac)
@@ -127,8 +128,9 @@ import WebKit
 
         // Added, then its keys out of reach: said, until Try Again reads them.
         app.host.stop()
-        let unread = try #require(try await app.integrations(on: .mac).integrations.first { $0.id == "todoist" })
-        #expect(unread.added && unread.keysNote(on: computer) == "Its keys can’t be read on \(computer) right now. Try again in a moment.")
+        let unreadList = try await app.integrations(on: .mac)
+        let unread = try #require(unreadList.integrations.first { $0.id == "todoist" })
+        #expect(unread.added && unread.keysUnknown && unreadList.keysNote(on: computer) != nil)
         #expect(try await app.integrationsAgain(on: .mac).integrations.first { $0.id == "todoist" }?.keysSaved == true)
         #expect(await app.removeIntegration("todoist", on: .mac) == nil)
     }

@@ -162,7 +162,11 @@ final class Workspace {
     }
     private(set) var isLoaded = false
 
-    private var models: [String: SessionModel] = [:]
+    /// Each open conversation's model, made the first time it's asked for: a cache, not what a
+    /// view follows (views follow the model itself). Followed, keeping a new one would tell the
+    /// window as it's kept, which asks for it again before it's there and keeps a second, empty
+    /// one on screen while the conversation goes to the first.
+    @ObservationIgnored private var models: [String: SessionModel] = [:]
     /// Current git branch per project folder, when it has one.
     private(set) var branches: [String: String] = [:]
     /// The repository's main branch per project folder, when git knows it.
@@ -952,6 +956,7 @@ final class Workspace {
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
             if let base = tree.base { record["base"] = base }
             do {
+                // COMPAT(0.7 worktrees): machines' worktrees this Mac kept before their boxes did. Goes 3 months after 0.8.0.
                 let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", record)
                 records.append(BoxWorktree(project: project, root: root, folder: path, branch: tree.branch, base: tree.base))
             } catch let refusal as BoxRefusal where refusal.status == 404 {

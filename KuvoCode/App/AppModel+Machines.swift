@@ -212,6 +212,7 @@ extension AppModel {
         }
         engine.disconnect()
         workspace.forget(engine.machine.id)
+        // COMPAT(0.7 engine-stop): Connect Now starts an engine an older Mac stopped. Goes 3 months after 0.8.0.
         if engine.isStopped { engine.startWanted = true }
         return connect(engine)
     }
@@ -271,6 +272,7 @@ extension AppModel {
         }
     }
 
+    // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
         engine.disconnect()
@@ -290,6 +292,7 @@ extension AppModel {
         }
     }
 
+    // COMPAT(0.7 engine-stop): Connect starts an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// What Connect does where you pick a machine: one stopped on purpose starts (Start).
     func connectOrStart(_ engine: MachineEngine) {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
@@ -338,6 +341,7 @@ extension AppModel {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)
                 await self.boxGroups.connected(machine)
+                // COMPAT(0.7 mac-group-chats): seats the app's own group chats made before `GroupMigration`. Goes 3 months after 0.8.0.
                 // Seats an older version made there for its bots, which its group chats don't use.
                 if let api = engine.api { await GroupMigration.dropOrphanSeats(on: machine, api: api) }
                 // A move of a group chat to or from it cut short, now it's there to finish.
@@ -515,6 +519,7 @@ extension AppModel {
         let reached = machines.engines.values.filter { engine in
             if engine.isReady { return true }
             guard !leavesMachinesRunning else { return false }
+            // COMPAT(0.7 engine-stop): an engine an older Mac stopped counts as stopped here. Goes 3 months after 0.8.0.
             if case .preparing = engine.state { return engine.isStopped }
             return true
         }

@@ -200,6 +200,7 @@ final class PhoneLink {
     /// other), phone or not. Set by the app.
     @ObservationIgnored var hasMachines: () -> Bool = { false }
 
+    // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
     /// What an earlier Kuvo Code kept of your agents' letters, handed to this Mac's box before it
     /// meets your other computers. Set by the app (`AgentMail.handOver`).
     @ObservationIgnored var handOver: (BoxClient) async -> Void = { _ in }
@@ -591,6 +592,7 @@ final class PhoneLink {
                 var docs: [Documents.Envelope]
                 /// The machine's name here, for its agents to say where they are.
                 var id: String
+                // COMPAT(0.7 visits): this Mac leaves a newer box as it is; older ones don't say so. Goes 3 months after 0.8.0.
                 /// This Mac never puts its own files over a newer box's (`BoxVersion`): the box may
                 /// update itself once every Mac it sees does.
                 var tolerates = 1
@@ -993,7 +995,7 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
+    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
                                                   "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
@@ -1023,9 +1025,9 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
-        "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
-        "named", "personalities", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events",
+        "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
+        "named", "personalities", "phones", "phones.pair", "plugins.search", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
