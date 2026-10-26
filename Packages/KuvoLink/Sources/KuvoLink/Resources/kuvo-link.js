@@ -5198,9 +5198,13 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
 export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter } = {}) {
   let attempt = 0;
   while (!signal?.aborted) {
+    // What this connection set going ends with it: what it heard of can't be settled once it's gone.
+    const connection = new AbortController();
+    const stop = () => connection.abort();
+    signal?.addEventListener("abort", stop, { once: true });
     try {
       const source = read();
-      const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal }) : null;
+      const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,
@@ -5234,6 +5238,8 @@ export async function watchEvents(read, tell, signal, answered = () => {}, { bot
         noticeFor(event, route => engineGet(source, route)).then(notice => notice && tell(notice)).catch(() => {});
       }
     } catch {}
+    stop();
+    signal?.removeEventListener("abort", stop);
     attempt += 1;
     await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
   }

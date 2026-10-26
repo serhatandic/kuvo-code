@@ -120,6 +120,8 @@ import Testing
         engine.conversation("ses_a", moved)
         engine.on("GET", "/api/session/ses_sub/permission", json: ["data": [["id": "per_sub", "sessionID": "ses_sub", "action": "shell", "resources": ["npm test"]]]])
         engine.on("GET", "/api/session/ses_sub/form", json: ["data": []])
+        engine.on("GET", "/api/session/ses_a/permission", json: ["data": []])
+        engine.on("GET", "/api/session/ses_a/form", json: ["data": []])
         await workspace.refresh()
         let model = try #require(workspace.model(for: "ses_a"))
         await model.load()

@@ -167,6 +167,63 @@ test("nothing moves for a command already in the background, one that ended, or 
   assert.deepEqual(stopped.backgrounded, []);
 });
 
+test("stopped, it moves nothing more", () => {
+  let time = 0, timers = [];
+  const backgrounded = [];
+  const stop = new AbortController();
+  const hear = link.steering(session => backgrounded.push(session), {
+    signal: stop.signal, now: () => time,
+    schedule: (run, ms) => { const timer = { at: time + ms, run }; timers.push(timer); return timer; },
+    cancel: timer => { timers = timers.filter(each => each !== timer); },
+  });
+  hear({ type: "session.tool.input.started", data: { sessionID: "ses_1", id: "call_1", name: "shell" } });
+  hear({ type: "session.tool.called", data: { sessionID: "ses_1", id: "call_1", input: { command: "sleep 90" } } });
+  hear({ type: "session.inbox.enqueued", data: { sessionID: "ses_1", inboxID: "msg_1", item: { type: "user", delivery: "steer" } } });
+  stop.abort();
+  time = 60_000;
+  for (const timer of timers) timer.run();
+  assert.deepEqual(backgrounded, []);
+});
+
+test("once the engine's events stop (it restarted, the stream dropped), what it was waiting to move is let go", async () => {
+  let posts = 0, firstPost;
+  const posted = new Promise(resolve => { firstPost = resolve; });
+  const followers = [];
+  let reconnected;
+  const again = new Promise(resolve => { reconnected = resolve; });
+  const server = http.createServer((request, response) => {
+    if (request.url === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      followers.push(response);
+      if (followers.length === 2) reconnected(posts);
+      return;
+    }
+    if (request.method === "POST") { posts += 1; firstPost(); }
+    response.writeHead(204);
+    response.end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const send = (type, data) => followers[0].write(`data: ${JSON.stringify({ type, data: { sessionID: "ses_long", ...data } })}\n\n`);
+  const stop = new AbortController();
+  try {
+    link.watchEvents(() => ({ port: server.address().port, password: "pw" }), () => true, stop.signal, () => {}, { bots: true, notices: false, steers: true, steerAfter: 20 });
+    while (!followers.length) await new Promise(resolve => setImmediate(resolve));
+    send("session.tool.input.started", { id: "call_1", name: "shell" });
+    send("session.tool.called", { id: "call_1", input: { command: "sleep 90" } });
+    send("session.inbox.enqueued", { inboxID: "msg_1", item: { type: "user", delivery: "steer", payload: { text: "Still there?" } } });
+    await posted;
+    followers[0].end();
+    // Back once it has paused (2 seconds): what the old stream can't settle was let go as it
+    // ended, not asked for again and again meanwhile (100 times, every 20 ms).
+    assert.ok(await again < 10);
+  } finally {
+    stop.abort();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test("every box does it as it follows its engine, with the Mac closed too: the engine is asked to background the session's tools", async () => {
   let asked;
   const backgrounded = new Promise(resolve => { asked = resolve; });
