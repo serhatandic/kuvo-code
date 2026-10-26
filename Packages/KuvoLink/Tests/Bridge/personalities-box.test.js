@@ -153,6 +153,13 @@ test("a copy that isn't a library is refused", async () => {
   assert.equal((await fromApp("GET", "kuvo/personalities/take")).status, 405);
 });
 
+test("a personality whose id isn't one, a list holding one say, isn't taken from a copy", async () => {
+  await take({ personalities: [entry(["custom.listed"], "Listed", 1), entry("custom.plain", "Plain", 1)], removed: [{ id: ["custom.gone"], removed: 2 }] });
+  const { json } = await fromApp("GET", "kuvo/personalities/document");
+  assert.ok(!JSON.stringify(json).includes("custom.listed") && !JSON.stringify(json).includes("custom.gone"), "neither is in the library");
+  assert.ok(JSON.stringify(json).includes("custom.plain"));
+});
+
 test("a copy is met even when the two together are past what a document holds, as a peer's is, and removals still reach it", async () => {
   fresh();
   await take({ personalities: [entry("custom.kind", "Kind", 5)] });

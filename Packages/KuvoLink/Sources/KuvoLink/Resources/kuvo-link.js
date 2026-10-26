@@ -2722,7 +2722,7 @@ var MOST_COUNT = 2 ** 52;
 var changedAt = (entry) => Number(entry?.removed ?? entry?.updated ?? 0) || 0;
 var isRemoval = (entry) => entry?.removed !== undefined;
 function keptPersonality(entry) {
-  if (!isObject(entry) || !PERSONALITY_ID.test(String(entry.id)) || changedAt(entry) > MOST_COUNT)
+  if (!isObject(entry) || typeof entry.id !== "string" || !PERSONALITY_ID.test(entry.id) || changedAt(entry) > MOST_COUNT)
     return null;
   if (isRemoval(entry))
     return Number.isFinite(Number(entry.removed)) ? { id: entry.id, removed: Number(entry.removed) } : null;

@@ -83,7 +83,7 @@ const isRemoval = (entry: { removed?: unknown } | null | undefined): entry is Pe
 
 // One personality as kept: what's needed, plain and of a sane length; null for what isn't one.
 export function keptPersonality(entry: unknown): PersonalityEntry | null {
-  if (!isObject(entry) || !PERSONALITY_ID.test(String(entry.id)) || changedAt(entry) > MOST_COUNT) return null;
+  if (!isObject(entry) || typeof entry.id !== "string" || !PERSONALITY_ID.test(entry.id) || changedAt(entry) > MOST_COUNT) return null;
   if (isRemoval(entry)) return Number.isFinite(Number(entry.removed)) ? { id: entry.id, removed: Number(entry.removed) } : null;
   const name = plainName(entry.name).slice(0, 80);
   const description = String(entry.description ?? "").trim().slice(0, 2000);
