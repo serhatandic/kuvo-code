@@ -5,7 +5,7 @@
 // does it, here beside the engine, with the folder's git, for the engine's sessions and the
 // coding agents' alike (PROTOCOL.md, "Reviews").
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import { lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
@@ -42,6 +42,10 @@ export interface Review {
 
 /** The changes a review reads, at most (the rest is left out, and it says so). */
 const diffLimit = 80_000
+/** A new file bigger than this isn't read (a dump, a video): it's named, not shown. */
+const newFileLimit = 256_000
+/** git's own empty tree: a repository with no commits yet is compared with it. */
+const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 export class ReviewError extends Error {
   constructor(
@@ -59,6 +63,9 @@ export class Reviews {
   /** Told once a review ends (a test waits on it). */
   onEnded?: () => void
 
+  /** Each conversation followed for its deletion, which takes its review with it. */
+  private stops = new Map<string, () => void>()
+
   constructor(
     private readonly file: string,
     private readonly places: GoalPlaces,
@@ -75,10 +82,24 @@ export class Reviews {
         this.kept.set(review.session, review)
       }
     } catch {}
+    for (const session of this.kept.keys()) this.follow(session)
   }
 
   stopAll() {
     this.stopped = true
+    for (const stop of this.stops.values()) stop()
+    this.stops.clear()
+  }
+
+  /** A conversation deleted: its review goes with it. */
+  private follow(session: string) {
+    if (this.stops.has(session)) return
+    this.stops.set(session, this.place(session).listen(session, {
+      event: (type, data) => {
+        if (type === "session.deleted" && data?.sessionID === session && this.kept.has(session)) this.dismiss(session)
+      },
+      reconnected: () => {},
+    }))
   }
 
   get(session: string): Review | undefined {
@@ -97,8 +118,12 @@ export class Reviews {
       throw new ReviewError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.")
     })
     if (!info.directory) throw new ReviewError(409, "That conversation has no folder to review.")
-    const review: Review = { id: newID("rev"), session, state: "reviewing", model: model ?? info.model, findings: [], started: this.now() }
+    // A coding agent's conversation is reviewed by its own agent (another you're signed in to
+    // when it can't answer so): another model isn't one it can pick.
+    const onEngine = place === this.places.engine
+    const review: Review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model ?? info.model : info.model, findings: [], started: this.now() }
     this.kept.set(session, review)
+    this.follow(session)
     this.changed(review)
     void this.review(review, info)
     return review
@@ -107,6 +132,8 @@ export class Reviews {
   /** Puts a conversation's review away. */
   dismiss(session: string) {
     if (!this.kept.delete(session)) throw new ReviewError(404, "That conversation has no review.")
+    this.stops.get(session)?.()
+    this.stops.delete(session)
     this.save()
     emit("kuvo.review.updated", { sessionID: session, review: null })
   }
@@ -151,19 +178,39 @@ export class Reviews {
   }
 }
 
-/** The folder's changes not committed yet: tracked files' as git shows them, and new files whole. */
+/**
+ * The folder's changes not committed yet (only its own, in a folder inside a bigger repository):
+ * tracked files' as git shows them, against the last commit (or nothing, before the first), and
+ * new files whole, but for big ones, links and ones that aren't text.
+ */
 export async function gitChanges(directory: string): Promise<string> {
-  const tracked = await run("git", ["-C", directory, "diff", "HEAD", "--no-color", "--no-ext-diff"], { timeout: 30_000 })
-  if (tracked.code !== 0) throw new Error(tracked.stderr.trim().split("\n")[0] || "This folder isn't a git repository.")
-  const untracked = await run("git", ["-C", directory, "ls-files", "--others", "--exclude-standard", "-z"], { timeout: 30_000 })
+  const git = (args: string[]) => run("git", ["-C", directory, ...args], { timeout: 30_000 })
+  const inside = await git(["rev-parse", "--is-inside-work-tree"])
+  if (inside.code !== 0 || inside.stdout.trim() !== "true") throw new Error("This folder isn't a git repository, so there are no changes to review.")
+  const head = await git(["rev-parse", "--verify", "-q", "HEAD"])
+  const base = head.code === 0 ? "HEAD" : emptyTree
+  const tracked = await git(["diff", base, "--relative", "--no-color", "--no-ext-diff"])
+  if (tracked.code !== 0) throw new Error(tracked.code === null || tracked.code === 143 || tracked.code === 137 ? "git took too long to read the changes." : tracked.stderr.trim().split("\n")[0] || "git couldn't read the changes.")
+  const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z"])
   let added = ""
+  let budget = diffLimit - tracked.stdout.length
   for (const file of untracked.stdout.split("\0").filter(Boolean).slice(0, 50)) {
+    if (budget <= 0) break
     try {
-      const text = readFileSync(join(directory, file), "utf8")
+      const path = join(directory, file)
+      const kind = lstatSync(path)
+      // A link isn't followed (it could lead out of the folder, to something private).
+      if (!kind.isFile()) continue
+      if (kind.size > newFileLimit) {
+        added += `\n--- /dev/null\n+++ b/${file}\n[a new file of ${Math.round(kind.size / 1024)} KB, not shown]\n`
+        continue
+      }
+      const text = readFileSync(path, "utf8")
       if (text.includes("\0")) continue
-      added += `\n--- /dev/null\n+++ b/${file}\n` + text.split("\n").map((each) => "+" + each).join("\n")
+      const shown = `\n--- /dev/null\n+++ b/${file}\n` + text.split("\n").map((each) => "+" + each).join("\n")
+      added += shown
+      budget -= shown.length
     } catch {}
-    if (added.length > diffLimit) break
   }
   return tracked.stdout + added
 }

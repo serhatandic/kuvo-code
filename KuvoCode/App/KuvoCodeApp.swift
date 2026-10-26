@@ -333,7 +333,7 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .help) {
             Button("Kuvo Code Help") { NSWorkspace.shared.open(AppInfo.docs) }
             Button("What\u{2019}s New") { NSWorkspace.shared.open(AppInfo.releases) }
-            Button("Report a Problem…") { model.showsProblemReport = true }
+            Button("Report a Problem…") { model.reportProblem() }
             Button("Contact Us…") { NSWorkspace.shared.open(AppInfo.contact) }
         }
         CommandGroup(replacing: .appSettings) {

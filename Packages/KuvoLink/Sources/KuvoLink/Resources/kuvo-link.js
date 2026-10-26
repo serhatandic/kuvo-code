@@ -31,8 +31,8 @@ export const BRIDGE_VERSION = "0.9.69";
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
-  "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "btw", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "goals", "groups", "handoff", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
+  "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "btw", "config", "config.apply",
+  "engine.restart", "engine.start", "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "reviews", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
 ];

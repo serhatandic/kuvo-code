@@ -563,7 +563,12 @@ export function transcript(messages: any[], since: number): string {
     }
   }
   let text = lines.join("\n\n")
-  if (text.length > readLimit) text = "[…earlier turns left out]\n\n" + text.slice(text.length - readLimit)
+  if (text.length > readLimit) {
+    // Cut to its newest part, but what you first asked for stays: it's what the work is for.
+    const first = lines.find((each) => each.startsWith("Person: ")) ?? ""
+    const head = first.slice(0, 4_000)
+    text = (head ? head + "\n\n" : "") + "[…earlier turns left out]\n\n" + text.slice(text.length - (readLimit - head.length))
+  }
   return text || "(Nothing yet.)"
 }
 

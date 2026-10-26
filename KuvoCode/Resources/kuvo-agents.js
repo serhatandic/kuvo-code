@@ -1155,15 +1155,17 @@ import { readFileSync as readFileSync6, renameSync as renameSync3, writeFileSync
 var at = (session) => "/api/session/" + encodeURIComponent(session);
 async function sessionInfo(api, session) {
   const data = (await api.request("GET", at(session)))?.data ?? {};
-  const model2 = typeof data.model?.providerID === "string" && typeof data.model?.id === "string" ? { providerID: data.model.providerID, id: data.model.id } : undefined;
-  return { id: session, model: model2, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata };
+  const model2 = typeof data.model?.providerID === "string" && typeof data.model?.id === "string" ? { providerID: data.model.providerID, id: data.model.id, ...typeof data.model.variant === "string" && data.model.variant !== "default" ? { variant: data.model.variant } : {} } : undefined;
+  return { id: session, model: model2, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata };
 }
 var text = (answer) => String(answer?.data?.text ?? "");
 async function freshAnswer(api, onEngine, info, prompt, model2 = info.model) {
   if (!onEngine)
     return text(await api.request("POST", at(info.id) + "/generate", { prompt, orAnother: true }, 180000));
   if (model2) {
-    const answer = await api.request("POST", "/api/experimental/generate", { prompt, model: model2 }, 180000).catch(() => {
+    const answer = await api.request("POST", "/api/experimental/generate", { prompt, model: { providerID: model2.providerID, id: model2.id } }, 180000).catch((error) => {
+      if (error?.name === "TimeoutError")
+        throw new Error("The model took too long to answer.");
       return;
     });
     if (text(answer).trim())
@@ -1172,7 +1174,7 @@ async function freshAnswer(api, onEngine, info, prompt, model2 = info.model) {
   const made = await api.request("POST", "/api/session", {
     title: "Kuvo Code",
     ...info.directory ? { location: { directory: info.directory } } : {},
-    ...model2 ? { model: model2 } : {},
+    ...model2 ? { model: { providerID: model2.providerID, id: model2.id } } : {},
     metadata: { kuvo: { engineFor: info.id } }
   });
   const id = made?.data?.id;
@@ -1651,10 +1653,15 @@ ${cut(String(output), 1500)}` : ""}`);
   let text2 = lines.join(`
 
 `);
-  if (text2.length > readLimit)
-    text2 = `[\u2026earlier turns left out]
+  if (text2.length > readLimit) {
+    const first = lines.find((each) => each.startsWith("Person: ")) ?? "";
+    const head = first.slice(0, 4000);
+    text2 = (head ? head + `
 
-` + text2.slice(text2.length - readLimit);
+` : "") + `[\u2026earlier turns left out]
+
+` + text2.slice(text2.length - (readLimit - head.length));
+  }
   return text2 || "(Nothing yet.)";
 }
 var json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -1721,6 +1728,7 @@ class SideQuestions {
   kept = new Map;
   stopped = false;
   onAnswered;
+  stops = new Map;
   constructor(file, places, now = Date.now) {
     this.file = file;
     this.places = places;
@@ -1733,6 +1741,19 @@ class SideQuestions {
         this.kept.set(question.session, [...this.kept.get(question.session) ?? [], question]);
       }
     } catch {}
+    for (const session of this.kept.keys())
+      this.follow(session);
+  }
+  follow(session) {
+    if (this.stops.has(session))
+      return;
+    this.stops.set(session, this.place(session).listen(session, {
+      event: (type, data) => {
+        if (type === "session.deleted" && data?.sessionID === session)
+          this.forget(session);
+      },
+      reconnected: () => {}
+    }));
   }
   start() {
     for (const list of this.kept.values())
@@ -1742,6 +1763,9 @@ class SideQuestions {
   }
   stopAll() {
     this.stopped = true;
+    for (const stop of this.stops.values())
+      stop();
+    this.stops.clear();
   }
   list(session) {
     return this.kept.get(session) ?? [];
@@ -1762,6 +1786,7 @@ class SideQuestions {
     const asked = { id: newID("btw"), session, question: text2, state: "answering", asked: this.now() };
     const list = [...this.kept.get(session) ?? [], asked].slice(-keptLimit);
     this.kept.set(session, list);
+    this.follow(session);
     this.changed(asked);
     this.answer(asked);
     return asked;
@@ -1773,8 +1798,11 @@ class SideQuestions {
       throw new SideQuestionError(404, id ? "There's no such side question." : "That conversation has no side questions.");
     if (left.length)
       this.kept.set(session, left);
-    else
+    else {
       this.kept.delete(session);
+      this.stops.get(session)?.();
+      this.stops.delete(session);
+    }
     this.save();
     emit("kuvo.btw.removed", { sessionID: session, ...id ? { id } : {} });
   }
@@ -1874,18 +1902,23 @@ var notePrompt = `Write a handoff note for a new agent who takes over this conve
 - what's left, as next steps;
 - the files, commands and decisions that matter, and anything to watch out for.
 Write it as Markdown, under 400 words, addressed to the new agent. Don't run or change anything.`;
+function continuedTitle(title) {
+  return `${(title ?? "Conversation").replace(/\s*\(continued\)$/, "")} (continued)`;
+}
 
 class Handoffs {
   places;
-  underway = new Set;
+  kept = new Map;
   constructor(places) {
     this.places = places;
   }
-  async handoff(session, next) {
-    if (this.underway.has(session))
+  get(session) {
+    return this.kept.get(session);
+  }
+  async start(session, next) {
+    if (this.kept.get(session)?.state === "writing")
       throw new HandoffError(409, "It's being handed off already.");
-    const place = this.places.isBridge(session) ? this.places.bridge : this.places.engine;
-    const onEngine = place === this.places.engine;
+    const place = this.place(session);
     const info = await sessionInfo(place.api, session).catch((error) => {
       throw new HandoffError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.");
     });
@@ -1893,49 +1926,71 @@ class Handoffs {
       throw new HandoffError(409, "A subagent's conversation can't be handed off. Hand off the conversation it works for.");
     if (!info.directory || !info.model)
       throw new HandoffError(409, "That conversation has no model yet: there's nothing to hand off.");
-    this.underway.add(session);
+    if (await this.isActive(session, place))
+      throw new HandoffError(409, "The agent is working now. Stop it or wait for its turn to end, then hand it off.");
+    const handoff = { from: session, state: "writing" };
+    this.kept.set(session, handoff);
+    this.told(handoff);
+    this.carryOn(handoff, info, place, next?.trim() || undefined);
+    return { ...handoff };
+  }
+  async carryOn(handoff, info, place, next) {
+    const session = handoff.from;
     try {
       let note;
       try {
-        note = (await answerWithContext(place.api, onEngine, session, notePrompt, async () => transcript(await messages(place.api, session), 0))).trim();
+        note = (await answerWithContext(place.api, place === this.places.engine, session, notePrompt, async () => transcript(await messages(place.api, session), 0))).trim();
       } catch (error) {
-        throw new HandoffError(503, `The handoff note couldn't be written: ${error?.message ?? error}`);
+        throw new Error(`The handoff note couldn't be written: ${error?.message ?? error}`);
       }
       if (!note)
-        throw new HandoffError(503, "The model wrote no handoff note.");
-      const title = `${info.title ?? "Conversation"} (continued)`;
+        throw new Error("The model wrote no handoff note.");
+      const title = continuedTitle(info.title);
       const made = await place.api.request("POST", "/api/session", {
         title,
         location: { directory: info.directory },
         model: info.model,
-        ...info.agent ? { agent: info.agent } : {}
+        ...info.agent ? { agent: info.agent } : {},
+        ...info.permissions ? { permissions: info.permissions } : {}
       });
       const to = made?.data?.id;
       if (!to)
-        throw new HandoffError(503, "The new conversation couldn't be started.");
-      await this.link(place.api, to, { handoffFrom: session });
-      await this.link(place.api, session, { handoffTo: to }, info.metadata);
-      const said = next?.trim();
+        throw new Error("The new conversation couldn't be started.");
+      await this.link(place, to, { handoffFrom: session });
+      await this.link(place, session, { handoffTo: to });
       await place.api.request("POST", at(to) + "/synthetic", {
         text: `${handoffMarker}You're taking over from another conversation, "${info.title ?? "untitled"}". Its handoff note:
 
 ${note}
 
-${said ? `What to do next: ${said}` : "Read it, say in a line what you'll do next, then wait for my next message."}`,
+${next ? `What to do next: ${next}` : "Read it, say in a line what you'll do next, then wait for my next message."}`,
         description: `Carried on from \u201C${line(info.title ?? "a conversation", 80)}\u201D`
       });
-      const handoff = { from: session, to, title };
-      emit("kuvo.handoff", { sessionID: session, ...handoff });
-      return handoff;
-    } finally {
-      this.underway.delete(session);
+      Object.assign(handoff, { state: "done", to, title });
+    } catch (error) {
+      Object.assign(handoff, { state: "failed", error: String(error?.message ?? error) });
     }
+    this.told(handoff);
   }
-  async link(api, session, kuvo, known) {
-    const metadata = known ?? (await sessionInfo(api, session).catch(() => {
+  told(handoff) {
+    if (this.kept.get(handoff.from) !== handoff)
+      return;
+    emit("kuvo.handoff", { sessionID: handoff.from, handoff: { ...handoff } });
+  }
+  place(session) {
+    return this.places.isBridge(session) ? this.places.bridge : this.places.engine;
+  }
+  async isActive(session, place) {
+    const answer = await place.api.request("GET", "/api/session/active").catch(() => {
+      return;
+    });
+    return Boolean(answer?.data && session in answer.data);
+  }
+  async link(place, session, kuvo) {
+    const metadata = (await sessionInfo(place.api, session).catch(() => {
       return;
     }))?.metadata ?? {};
-    await api.request("PATCH", at(session), { metadata: { ...metadata, kuvo: { ...metadata.kuvo ?? {}, ...kuvo } } }).catch(() => {});
+    await place.api.request("PATCH", at(session), { metadata: { ...metadata, kuvo: { ...metadata.kuvo ?? {}, ...kuvo } } }).catch(() => {});
   }
 }
 var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -1943,13 +1998,19 @@ async function handoffRoutes(handoffs, method, parts, body) {
   if (!handoffs)
     return json3({ message: "Handoffs aren't running on this computer." }, 503);
   const [session] = parts;
-  if (method !== "POST" || !session)
+  if (!session)
     return json3({ message: "Not allowed" }, 405);
   if (!/^ses_[A-Za-z0-9_]+$/.test(session))
     return json3({ message: "There's no such conversation here." }, 404);
   try {
+    if (method === "GET") {
+      const handoff = handoffs.get(session);
+      return handoff ? json3({ data: handoff }) : json3({ message: "That conversation hasn't been handed off." }, 404);
+    }
+    if (method !== "POST")
+      return json3({ message: "Not allowed" }, 405);
     const { next } = await body() ?? {};
-    return json3({ data: await handoffs.handoff(session, typeof next === "string" ? next : undefined) });
+    return json3({ data: await handoffs.start(session, typeof next === "string" ? next : undefined) });
   } catch (error) {
     if (error instanceof HandoffError)
       return json3({ message: error.message }, error.status);
@@ -1958,7 +2019,7 @@ async function handoffRoutes(handoffs, method, parts, body) {
 }
 
 // Agents/src/reviews.ts
-import { readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "fs";
+import { lstatSync, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "fs";
 import { join as join7 } from "path";
 
 // Agents/src/proc.ts
@@ -2074,6 +2135,8 @@ function plain(text2) {
 
 // Agents/src/reviews.ts
 var diffLimit = 80000;
+var newFileLimit = 256000;
+var emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 class ReviewError extends Error {
   status;
@@ -2091,6 +2154,7 @@ class Reviews {
   kept = new Map;
   stopped = false;
   onEnded;
+  stops = new Map;
   constructor(file, places, changes = gitChanges, now = Date.now) {
     this.file = file;
     this.places = places;
@@ -2106,9 +2170,25 @@ class Reviews {
         this.kept.set(review.session, review);
       }
     } catch {}
+    for (const session of this.kept.keys())
+      this.follow(session);
   }
   stopAll() {
     this.stopped = true;
+    for (const stop of this.stops.values())
+      stop();
+    this.stops.clear();
+  }
+  follow(session) {
+    if (this.stops.has(session))
+      return;
+    this.stops.set(session, this.place(session).listen(session, {
+      event: (type, data) => {
+        if (type === "session.deleted" && data?.sessionID === session && this.kept.has(session))
+          this.dismiss(session);
+      },
+      reconnected: () => {}
+    }));
   }
   get(session) {
     return this.kept.get(session);
@@ -2125,8 +2205,10 @@ class Reviews {
     });
     if (!info.directory)
       throw new ReviewError(409, "That conversation has no folder to review.");
-    const review = { id: newID("rev"), session, state: "reviewing", model: model2 ?? info.model, findings: [], started: this.now() };
+    const onEngine = place === this.places.engine;
+    const review = { id: newID("rev"), session, state: "reviewing", model: onEngine ? model2 ?? info.model : info.model, findings: [], started: this.now() };
     this.kept.set(session, review);
+    this.follow(session);
     this.changed(review);
     this.review(review, info);
     return review;
@@ -2134,6 +2216,8 @@ class Reviews {
   dismiss(session) {
     if (!this.kept.delete(session))
       throw new ReviewError(404, "That conversation has no review.");
+    this.stops.get(session)?.();
+    this.stops.delete(session);
     this.save();
     emit("kuvo.review.updated", { sessionID: session, review: null });
   }
@@ -2177,26 +2261,47 @@ class Reviews {
   }
 }
 async function gitChanges(directory) {
-  const tracked = await run("git", ["-C", directory, "diff", "HEAD", "--no-color", "--no-ext-diff"], { timeout: 30000 });
+  const git = (args) => run("git", ["-C", directory, ...args], { timeout: 30000 });
+  const inside = await git(["rev-parse", "--is-inside-work-tree"]);
+  if (inside.code !== 0 || inside.stdout.trim() !== "true")
+    throw new Error("This folder isn't a git repository, so there are no changes to review.");
+  const head = await git(["rev-parse", "--verify", "-q", "HEAD"]);
+  const base = head.code === 0 ? "HEAD" : emptyTree;
+  const tracked = await git(["diff", base, "--relative", "--no-color", "--no-ext-diff"]);
   if (tracked.code !== 0)
-    throw new Error(tracked.stderr.trim().split(`
-`)[0] || "This folder isn't a git repository.");
-  const untracked = await run("git", ["-C", directory, "ls-files", "--others", "--exclude-standard", "-z"], { timeout: 30000 });
+    throw new Error(tracked.code === null || tracked.code === 143 || tracked.code === 137 ? "git took too long to read the changes." : tracked.stderr.trim().split(`
+`)[0] || "git couldn't read the changes.");
+  const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z"]);
   let added = "";
+  let budget = diffLimit - tracked.stdout.length;
   for (const file of untracked.stdout.split("\x00").filter(Boolean).slice(0, 50)) {
+    if (budget <= 0)
+      break;
     try {
-      const text2 = readFileSync8(join7(directory, file), "utf8");
+      const path = join7(directory, file);
+      const kind = lstatSync(path);
+      if (!kind.isFile())
+        continue;
+      if (kind.size > newFileLimit) {
+        added += `
+--- /dev/null
++++ b/${file}
+[a new file of ${Math.round(kind.size / 1024)} KB, not shown]
+`;
+        continue;
+      }
+      const text2 = readFileSync8(path, "utf8");
       if (text2.includes("\x00"))
         continue;
-      added += `
+      const shown2 = `
 --- /dev/null
 +++ b/${file}
 ` + text2.split(`
 `).map((each) => "+" + each).join(`
 `);
+      added += shown2;
+      budget -= shown2.length;
     } catch {}
-    if (added.length > diffLimit)
-      break;
   }
   return tracked.stdout + added;
 }
@@ -2377,7 +2482,7 @@ function kuvoToolName(name, args) {
 
 // Agents/src/snapshots.ts
 import { createHash } from "crypto";
-import { existsSync as existsSync2, lstatSync, mkdirSync as mkdirSync5, readdirSync as readdirSync2, readFileSync as readFileSync9, realpathSync, rmdirSync, rmSync as rmSync4, writeFileSync as writeFileSync8 } from "fs";
+import { existsSync as existsSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readdirSync as readdirSync2, readFileSync as readFileSync9, realpathSync, rmdirSync, rmSync as rmSync4, writeFileSync as writeFileSync8 } from "fs";
 import { dirname, join as join8, relative, resolve, sep } from "path";
 
 // Agents/src/diff.ts
@@ -2725,7 +2830,7 @@ class Snapshots {
       const back = paths.filter((path) => !isRules(path) && there.has(path));
       for (const path of back) {
         const full = join8(repository.top, path);
-        if (this.isInside(repository.top, full) && existsSync2(full) && lstatSync(full).isDirectory() && !existsSync2(join8(full, ".git")))
+        if (this.isInside(repository.top, full) && existsSync2(full) && lstatSync2(full).isDirectory() && !existsSync2(join8(full, ".git")))
           rmSync4(full, { recursive: true, force: true });
       }
       await this.checkout(repository, tree, back);
@@ -2757,7 +2862,7 @@ class Snapshots {
   }
   madeBefore(full, time) {
     try {
-      const born = lstatSync(full).birthtimeMs;
+      const born = lstatSync2(full).birthtimeMs;
       return born > 0 && born < time;
     } catch {
       return false;
@@ -2770,7 +2875,7 @@ class Snapshots {
     let folder = dirname(target);
     while (folder.length > top.length) {
       try {
-        if (lstatSync(folder).isSymbolicLink())
+        if (lstatSync2(folder).isSymbolicLink())
           return false;
       } catch {
         return true;
@@ -2784,7 +2889,7 @@ class Snapshots {
     if (!this.isInside(top, full))
       return;
     try {
-      const stat = lstatSync(full);
+      const stat = lstatSync2(full);
       if (stat.isDirectory() && !stat.isSymbolicLink() && existsSync2(join8(full, ".git")))
         return;
       rmSync4(full, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: true });
@@ -6639,7 +6744,7 @@ function safeBase642(path) {
 }
 
 // Agents/src/agents/codex.ts
-import { existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync10, readdirSync as readdirSync5, readFileSync as readFileSync15, readlinkSync, rmSync as rmSync8, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync9, lstatSync as lstatSync3, mkdirSync as mkdirSync10, readdirSync as readdirSync5, readFileSync as readFileSync15, readlinkSync, rmSync as rmSync8, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join14 } from "path";
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join14(homedir2(), ".local/bin"), join14(homedir2(), ".codex/bin")];
@@ -8112,7 +8217,7 @@ function shadowHome(home2) {
     const link2 = join14(home2, name);
     const target = join14(own, name);
     try {
-      const stat = lstatSync2(link2, { throwIfNoEntry: false });
+      const stat = lstatSync3(link2, { throwIfNoEntry: false });
       if (stat?.isSymbolicLink() && readlinkSync(link2) === target)
         continue;
       if (stat && !stat.isSymbolicLink())
@@ -8125,7 +8230,7 @@ function shadowHome(home2) {
   for (const name of readdirSync5(home2)) {
     const link2 = join14(home2, name);
     try {
-      if (lstatSync2(link2).isSymbolicLink() && !wanted.includes(name))
+      if (lstatSync3(link2).isSymbolicLink() && !wanted.includes(name))
         rmSync8(link2, { force: true });
     } catch {}
   }
@@ -16504,4 +16609,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 67d477d25feac7edddbc1ee2441669e5caba50ff5a64c7adcaab5ebff8d6de62
+// Built from Agents/src 6b3bf8919b181827c6bcccd64ad3538638dcd1bd6911ae6ed5d30b2ec0b255d2

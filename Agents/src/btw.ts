@@ -46,6 +46,8 @@ export class SideQuestions {
   private stopped = false
   /** Told once an answer's in (a test waits on it). */
   onAnswered?: () => void
+  /** Each conversation followed for its deletion, which takes its side questions with it. */
+  private stops = new Map<string, () => void>()
 
   constructor(
     private readonly file: string,
@@ -59,6 +61,17 @@ export class SideQuestions {
         this.kept.set(question.session, [...(this.kept.get(question.session) ?? []), question])
       }
     } catch {}
+    for (const session of this.kept.keys()) this.follow(session)
+  }
+
+  private follow(session: string) {
+    if (this.stops.has(session)) return
+    this.stops.set(session, this.place(session).listen(session, {
+      event: (type, data) => {
+        if (type === "session.deleted" && data?.sessionID === session) this.forget(session)
+      },
+      reconnected: () => {},
+    }))
   }
 
   /** Answers those still waiting from before the box stopped. */
@@ -68,6 +81,8 @@ export class SideQuestions {
 
   stopAll() {
     this.stopped = true
+    for (const stop of this.stops.values()) stop()
+    this.stops.clear()
   }
 
   /** A conversation's, oldest first. */
@@ -92,6 +107,7 @@ export class SideQuestions {
     const asked: SideQuestion = { id: newID("btw"), session, question: text, state: "answering", asked: this.now() }
     const list = [...(this.kept.get(session) ?? []), asked].slice(-keptLimit)
     this.kept.set(session, list)
+    this.follow(session)
     this.changed(asked)
     void this.answer(asked)
     return asked
@@ -103,7 +119,11 @@ export class SideQuestions {
     const left = id ? list.filter((question) => question.id !== id) : []
     if (left.length === list.length) throw new SideQuestionError(404, id ? "There's no such side question." : "That conversation has no side questions.")
     if (left.length) this.kept.set(session, left)
-    else this.kept.delete(session)
+    else {
+      this.kept.delete(session)
+      this.stops.get(session)?.()
+      this.stops.delete(session)
+    }
     this.save()
     emit("kuvo.btw.removed", { sessionID: session, ...(id ? { id } : {}) })
   }

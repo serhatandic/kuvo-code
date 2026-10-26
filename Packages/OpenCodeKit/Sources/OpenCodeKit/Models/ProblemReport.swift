@@ -23,6 +23,9 @@ public struct ProblemReport: Sendable, Equatable {
 
     /// The form's own title, before what's typed.
     static let titlePrefix = "[Bug]: "
+    /// What happened, at most, in the link: GitHub turns away links much longer than this. More
+    /// is cut, and the issue says so, to finish on the page.
+    public static let descriptionLimit = 4_000
 
     /// The new issue's page, its form filled in: the title from the first line of what happened,
     /// what happened, and the versions, by the form's field IDs.
@@ -31,14 +34,19 @@ public struct ProblemReport: Sendable, Equatable {
         let first = said.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         let title = first.count > 72 ? String(first.prefix(71)).trimmingCharacters(in: .whitespaces) + "…" : first
         let system = versions.filter { $0.label != "Kuvo Code" }.map { "\($0.label): \($0.value)" }.joined(separator: ", ")
-        var components = URLComponents(url: Self.newIssue, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "template", value: "bug_report.yml"),
-            URLQueryItem(name: "title", value: Self.titlePrefix + title),
-            URLQueryItem(name: "description", value: said),
-            URLQueryItem(name: "version", value: versions.first { $0.label == "Kuvo Code" }?.value ?? ""),
-            URLQueryItem(name: "macos", value: system),
+        let shown = said.count > Self.descriptionLimit ? String(said.prefix(Self.descriptionLimit)) + "\n\n[…cut here: the rest didn’t fit in the link]" : said
+        // Encoded by hand: a "+" left as it is reads as a space on GitHub ("C++" would arrive as "C  ").
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=#")
+        let fields = [
+            ("template", "bug_report.yml"),
+            ("title", Self.titlePrefix + title),
+            ("description", shown),
+            ("version", versions.first { $0.label == "Kuvo Code" }?.value ?? ""),
+            ("macos", system),
         ]
+        var components = URLComponents(url: Self.newIssue, resolvingAgainstBaseURL: false)!
+        components.percentEncodedQuery = fields.map { "\($0.0)=\($0.1.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }.joined(separator: "&")
         return components.url!
     }
 

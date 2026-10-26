@@ -27,3 +27,26 @@ import Testing
     #expect(title.hasSuffix("…"))
     #expect(title.count <= "[Bug]: ".count + 72)
 }
+
+/// The link's fields as GitHub reads them: a form's, where "+" is a space.
+private func asGitHubReads(_ url: URL) -> [String: String] {
+    let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery ?? ""
+    return Dictionary(uniqueKeysWithValues: query.split(separator: "&").map { pair in
+        let parts = pair.split(separator: "=", maxSplits: 1).map { String($0).replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? "" }
+        return (parts[0], parts.count > 1 ? parts[1] : "")
+    })
+}
+
+@Test func symbolsArriveAsTyped() {
+    let fields = asGitHubReads(ProblemReport(description: "C++ crash & a=b #1, 100% sure?", versions: [("Kuvo Code", "0.8.0+1")]).issueURL)
+    #expect(fields["description"] == "C++ crash & a=b #1, 100% sure?")
+    #expect(fields["title"] == "[Bug]: C++ crash & a=b #1, 100% sure?")
+    #expect(fields["version"] == "0.8.0+1")
+}
+
+@Test func aVeryLongReportStillMakesALinkGitHubTakes() {
+    let report = ProblemReport(description: String(repeating: "It froze again. ", count: 2_000), versions: [("Kuvo Code", "0.8.0")])
+    let fields = asGitHubReads(report.issueURL)
+    #expect(report.issueURL.absoluteString.utf8.count < 8_000)
+    #expect(fields["description"]?.hasSuffix("[…cut here: the rest didn’t fit in the link]") == true)
+}

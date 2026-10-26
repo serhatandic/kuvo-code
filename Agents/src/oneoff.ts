@@ -18,7 +18,10 @@ export const at = (session: string) => "/api/session/" + encodeURIComponent(sess
 /** What a conversation is, as its place lists it: its model, folder, title, agent and parent. */
 export interface SessionInfo {
   id: string
-  model?: { providerID: string; id: string }
+  /** Its model, with its effort (`variant`) when it has one. */
+  model?: { providerID: string; id: string; variant?: string }
+  /** Its permission rules, as made with it. */
+  permissions?: unknown[]
   directory?: string
   title?: string
   agent?: string
@@ -28,8 +31,10 @@ export interface SessionInfo {
 
 export async function sessionInfo(api: Requester, session: string): Promise<SessionInfo> {
   const data = (await api.request<{ data?: any }>("GET", at(session)))?.data ?? {}
-  const model = typeof data.model?.providerID === "string" && typeof data.model?.id === "string" ? { providerID: data.model.providerID, id: data.model.id } : undefined
-  return { id: session, model, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata }
+  const model = typeof data.model?.providerID === "string" && typeof data.model?.id === "string"
+    ? { providerID: data.model.providerID, id: data.model.id, ...(typeof data.model.variant === "string" && data.model.variant !== "default" ? { variant: data.model.variant } : {}) }
+    : undefined
+  return { id: session, model, permissions: Array.isArray(data.permissions) ? data.permissions : undefined, directory: data.location?.directory, title: data.title || undefined, agent: data.agent, parentID: data.parentID || undefined, metadata: data.metadata }
 }
 
 const text = (answer: any) => String(answer?.data?.text ?? "")
@@ -41,14 +46,18 @@ const text = (answer: any) => String(answer?.data?.text ?? "")
 export async function freshAnswer(api: Requester, onEngine: boolean, info: SessionInfo, prompt: string, model = info.model): Promise<string> {
   if (!onEngine) return text(await api.request("POST", at(info.id) + "/generate", { prompt, orAnother: true }, 180_000))
   if (model) {
-    const answer = await api.request("POST", "/api/experimental/generate", { prompt, model }, 180_000).catch(() => undefined)
+    // One that took its time and failed isn't asked again another way: that would take as long again.
+    const answer = await api.request("POST", "/api/experimental/generate", { prompt, model: { providerID: model.providerID, id: model.id } }, 180_000).catch((error: any) => {
+      if (error?.name === "TimeoutError") throw new Error("The model took too long to answer.")
+      return undefined
+    })
     if (text(answer).trim()) return text(answer)
   }
   // One of its own, with nothing in it but this.
   const made = await api.request<{ data?: { id?: string } }>("POST", "/api/session", {
     title: "Kuvo Code",
     ...(info.directory ? { location: { directory: info.directory } } : {}),
-    ...(model ? { model } : {}),
+    ...(model ? { model: { providerID: model.providerID, id: model.id } } : {}),
     metadata: { kuvo: { engineFor: info.id } },
   })
   const id = made?.data?.id

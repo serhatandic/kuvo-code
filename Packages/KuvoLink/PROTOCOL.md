@@ -1325,6 +1325,7 @@ engine's sessions and the coding agents' alike, with no client there: `kuvo/agen
 the box the conversation lives on (the Mac app at `api/kuvo/…` on the bridge), while `kuvo/info` has
 `agents: true` (503 otherwise), where `features` names them. Each answers `400`, `404` (no such
 conversation, or nothing of it), `409` and `503` with `{message}` to show. Times are ms since 1970.
+A conversation deleted takes its side questions and its review with it.
 
 - **Side questions** (`btw`, "/btw <question>"): a question about a conversation, answered from
   what it knows (on the engine, from inside its context; with the coding agents, the conversation
@@ -1340,16 +1341,22 @@ conversation, or nothing of it), `409` and `503` with `{message}` to show. Times
   - Events: `kuvo.btw.updated` `{sessionID, question}` as one is asked and answered;
     `kuvo.btw.removed` `{sessionID, id?}`.
 - **Handoffs** (`handoff`, "/handoff [what to do next]"): a conversation carried on in a fresh one.
-  `POST …/kuvo/handoff/<session>` with `{"next"?}` → `{data: {from, to, title}}`: its model writes a
-  handoff note from inside it, and a new conversation in the same folder, on the same model and
-  mode, titled "<title> (continued)", starts on that note (a note whose text starts with
-  `[Handoff] `: show its `description`, "Carried on from “…”"), and on `next` when given. The two
-  are linked in their metadata (`kuvo.handoffFrom`, `kuvo.handoffTo`): show the link in each. `409`
-  for a subagent's, one with no model yet, or one being handed off. Event `kuvo.handoff` `{sessionID,
-  from, to, title}`. Open `to` once it answers.
+  Its model writes a handoff note from inside it, and a new conversation in the same folder, on
+  the same model, effort, agent and permissions, titled "<title> (continued)", starts on that note
+  (a note whose text starts with `[Handoff] `: show its `description`, "Carried on from “…”"), and
+  on `next` when given. The two are linked in their metadata (`kuvo.handoffFrom`,
+  `kuvo.handoffTo`; the rest of it kept): show the link in each.
+  - `POST …/kuvo/handoff/<session>` with `{"next"?}` → `{data: handoff}`, `state` `writing`: the
+    note takes a while. A handoff: `{from, state: "writing" | "done" | "failed", to?, title?,
+    error?}`. `409` for a subagent's, one with no model yet, one being handed off, or one whose
+    agent is working (wait for its turn to end).
+  - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
+  - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
 - **Reviews** (`reviews`, "/review"): the conversation's changes not committed yet (its folder's
-  git: tracked files' diffs and new files whole), read by a model with none of the conversation's
-  context: its own model afresh, or `model` when given.
+  own, in its git: tracked files' diffs, against nothing before the first commit, and new files
+  whole, but for big ones, links and ones that aren't text), read by a model with none of the
+  conversation's context: on the engine, its own model afresh, or `model` when given; with the
+  coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
   - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
     `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
     "failed", model?, summary?, findings: [{file, line?, severity: "bug" | "risk" | "nit", note}],

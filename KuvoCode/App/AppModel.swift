@@ -99,6 +99,12 @@ final class AppModel {
     var showsSettings = false
     /// Help › Report a Problem…'s sheet, over the main window.
     var showsProblemReport = false
+    /// Help › Report a Problem…: its sheet, over the main window, opened if it was closed.
+    func reportProblem() {
+        openMainWindow?()
+        NSApp.activate()
+        showsProblemReport = true
+    }
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
     func openAccounts(on machine: String?) {
         openSettings(.accounts, on: SidebarBox(machine: machine))
