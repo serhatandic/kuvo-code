@@ -3617,7 +3617,7 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
       continue;
     const checkout = realOr(path22.dirname(gitFolder));
     const id = ids.get(checkout);
-    if (id === null)
+    if (id === null || await gitLater(project, ["rev-parse", "-q", "--verify", "HEAD"]) === null)
       continue;
     const folder = value === null ? id ? path22.join(answer.default, id.slice(0, 6)) : null : value.startsWith("~/") ? path22.join(answer.home, value.slice(2)) : path22.resolve(checkout, value);
     const entry = { project, name: path22.basename(project), folder };
@@ -3638,7 +3638,27 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
     }
     answer.projects.push(entry);
   }
+  apart(answer.projects);
   return answer;
+}
+function apart(projects) {
+  const parents = (project) => path22.dirname(project).split(path22.sep).filter(Boolean).reverse();
+  for (const name of new Set(projects.map((each) => each.name))) {
+    const same = projects.filter((each) => each.name === name);
+    if (same.length < 2)
+      continue;
+    const longest = Math.max(...same.map((each) => parents(each.project).length));
+    for (let depth = 1;depth <= longest; depth++) {
+      const labels = same.map((each) => parents(each.project).slice(0, depth).reverse().join("/"));
+      if (new Set(labels).size === same.length || depth === longest) {
+        same.forEach((each, at) => {
+          if (labels[at])
+            each.name = `${name} — ${labels[at]}`;
+        });
+        break;
+      }
+    }
+  }
 }
 function realOr(folder) {
   try {
@@ -8274,7 +8294,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.75";
+var BRIDGE_VERSION = "0.9.76";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

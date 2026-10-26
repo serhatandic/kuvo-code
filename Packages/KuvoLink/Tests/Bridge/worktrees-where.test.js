@@ -96,6 +96,17 @@ test("with the engine not running, a named folder is still found from git; the e
   assert.equal((await where(null, [shop], null)).projects[0].folder, null);
 });
 
+test("two projects with the same name are told apart by the folder each is in; a repository with no commit yet stays out with the engine stopped too", async () => {
+  const sums = [path.join(home, "scratchpad", "sums"), path.join(home, "work", "sums")];
+  for (const folder of sums) {
+    fs.mkdirSync(folder, { recursive: true });
+    git(folder, "init", "-q", "-b", "main");
+    git(folder, "commit", "-q", "--allow-empty", "-m", "First");
+  }
+  const answer = await where("../worktrees", [...sums, shop, drafts], null);
+  assert.deepEqual(answer.projects.map(each => each.name), ["sums — scratchpad", "sums — work", "shop"]);
+});
+
 test("a client goes through this box's folders to choose one: repositories marked, hidden ones left out, and no folder said so", () => {
   fs.mkdirSync(path.join(code, ".cache"));
   fs.mkdirSync(path.join(code, "app10"));
