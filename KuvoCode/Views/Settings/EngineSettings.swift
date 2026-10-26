@@ -2,18 +2,25 @@ import OpenCodeKit
 import SwiftUI
 
 /// The engine: how it's doing, and how it works: summaries, formatting, the shell, web search,
-/// limits, files it ignores, plugins, and its settings file.
+/// limits, files it ignores, plugins (`PluginsSection`), and its settings file.
 struct EngineSettings: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @State private var shells: [ShellOption] = []
     @State private var searchProviders: [WebSearchProvider] = []
-    @State private var plugins: [PluginInfo] = []
     /// A search service's key, while it's being added.
     @State private var addingKey: IntegrationRef?
+    @State private var addingPlugin = false
     @Environment(Catalog.self) private var catalog
 
     private var config: EngineConfig { app.config(for: box) }
+    private var demoPluginSearch: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_PLUGIN"]
+        #else
+        nil
+        #endif
+    }
     /// The machine's, on a machine's tab.
     private var machine: MachineEngine? { app.machines.engine(box.machine) }
     /// Its engine is running and answering, here or there.
@@ -164,20 +171,7 @@ struct EngineSettings: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section {
-                    ConfigStringList(path: ["plugins"], prompt: "An npm package, like opencode-wakatime")
-                    ForEach(plugins.filter { $0.source.type != "builtin" && $0.state.status == "failed" }) { plugin in
-                        Label("\(plugin.id): \(plugin.state.error ?? "didn't load")", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("Plugins")
-                } footer: {
-                    Text(box.machine == nil
-                        ? "Plugins add tools and change how the engine works. They run code on your Mac, so add only ones you trust."
-                        : "Plugins add tools and change how the engine works. They run code on \(app.name(of: box)), so add only ones you trust.")
-                        .foregroundStyle(.secondary)
-                }
+                PluginsSection(adding: $addingPlugin)
             } else {
                 SettingsUnread(engine: machine, asGroup: true)
             }
@@ -201,6 +195,13 @@ struct EngineSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .settingsDetail(isPresented: $addingPlugin, title: "Add a Plugin") {
+            AddPluginPage(typed: demoPluginSearch ?? "") { addingPlugin = false }
+        }
+        #if DEBUG
+        // KUVO_DEMO_ADD_PLUGIN=<search>: Add a Plugin open, with that typed ("" for none).
+        .task { if demoPluginSearch != nil { addingPlugin = true } }
+        #endif
         .settingsDetail(item: $addingKey, title: { _ in nil }) { ref in
             ConnectDetail(integrationID: ref.id, note: "The agent can search the web with it now.") { addingKey = nil }
         }
@@ -209,7 +210,6 @@ struct EngineSettings: View {
             guard let api = app.api(for: box) else { return }
             shells = (try? await api.shells()) ?? []
             searchProviders = (try? await api.webSearchProviders()) ?? []
-            plugins = (try? await api.plugins()) ?? []
         }
     }
 

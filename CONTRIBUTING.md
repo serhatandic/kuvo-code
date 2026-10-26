@@ -290,6 +290,8 @@ when you're there to answer.
 | `KUVO_DEMO_MCP_SERVER` | With `KUVO_DEMO_SETTINGS=mcp`: that server's editor, open (added, off, if it isn't there); `<name>\|web` switches it to On the web |
 | `KUVO_DEMO_SETTINGS_SCROLL` | `bottom`: with `KUVO_DEMO_SETTINGS`, each page scrolled to its end a few seconds after it opens |
 | `KUVO_DEMO_SKILLS_COLLECTION` | With `KUVO_DEMO_SETTINGS=skills`: that collection on GitHub (`owner/name`) opened, as if typed and opened; `owner/name\|skill` also adds that skill, as Add Skill does |
+| `KUVO_DEMO_ADD_PLUGIN` | With `KUVO_DEMO_SETTINGS=engine`: Add a Plugin open, with this typed in its search field (empty for none) |
+| `KUVO_DEMO_WORKTREES_FOLDER` | `browse`: with `KUVO_DEMO_SETTINGS=worktrees`, the folder browser a machine's page opens for Choose a Folder…, open |
 | `KUVO_DEMO_SKILLS_DELETED` | With `KUVO_DEMO_SETTINGS=skills`: `open` opens Recently Deleted; `restore:<folder>` also restores that skill, as Restore does |
 | `KUVO_DEMO_ACCOUNTS_MACHINE` | With `KUVO_DEMO_SETTINGS=accounts`: that machine's Accounts, in its own tab |
 | `KUVO_DEMO_WELCOME` | No tabs, so the welcome card shows |

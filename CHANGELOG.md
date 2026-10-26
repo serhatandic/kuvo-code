@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Settings › Worktrees has a folder menu in place of a text box: Kuvo Code's own folder, or **Choose a Folder…**, which on a machine shows that machine's folders. Under it, each project shows the real folder its new worktrees go in, and says so when that folder is inside the project's repository or can't be made.
+- Settings › Engine's **Add Plugin…** finds plugins on npm as you type, the most used first, or takes a folder of your own. Each plugin says whether it loaded, is installing, or why it didn't, like a name npm doesn't have.
 - Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
 - The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.
 - After you quote part of a reply (or reply to all of it), you can start typing your answer at once: it has the keyboard, with the cursor ready. Quoting the same part again takes you back to its answer.
