@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isObject } from "../../shared/json";
+import { isObject, parsed } from "../../shared/json";
 import { alive, processRuns as runs } from "../../shared/platform";
 import { quote } from "../../shared/text";
 import { sleep } from "../../shared/wait";
@@ -514,4 +514,20 @@ export function startUpdate(options = {}) {
     }, () => null)
     .finally(() => { updating = null; });
   return updating;
+}
+
+// This box's updates (PROTOCOL.md, "Updates"): how it stands, Update Now. It always updates
+// by itself: there's no switch.
+export async function* updateRoute(context) {
+  const { request, json } = context;
+  const method = request.method.toUpperCase();
+  if (method === "GET") return yield* json(200, updateStatus());
+  if (method === "POST") {
+    if (parsed(request.body)?.now !== true) return yield* json(400, { message: "Say to update now (now)." });
+    if (!UPDATE_KEYS.length) return yield* json(409, { message: "Updates aren't set up for this machine yet." });
+    const blocked = updatesBlocked();
+    if (blocked) return yield* json(409, { message: blocked });
+    return yield* (startUpdate({ now: true }) ? json(202, updateStatus()) : json(409, { message: "It's updating already." }));
+  }
+  return yield* json(405, {});
 }

@@ -14,6 +14,7 @@ import { digestOf, ownDocs, pruneDocs, takeDoc } from "../documents/work";
 import { readEngineFile } from "../engine/client";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
+import { IS_MAC } from "../home";
 import { cutText, LETTER_ID, LETTER_MEMORY, LETTERS_SEEN, SENDING } from "../letters/letter";
 import { lettersSeen } from "../letters/take";
 import { refreshOwn } from "../peers/agents";
@@ -299,4 +300,11 @@ export async function* macLinkRoute(route, request, signal) {
     default:
       return yield* json(404, {});
   }
+}
+
+// This Mac's box's link, for its app alone (PROTOCOL.md, "This Mac's box: the relay").
+export async function* linkRoute(context) {
+  const { request, signal, route, json } = context;
+  if (!IS_MAC || !request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
+  return yield* macLinkRoute(route, request, signal);
 }

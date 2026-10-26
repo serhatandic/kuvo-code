@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { promptedFolders } from "../../shared/platform";
 
 /** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
@@ -52,4 +53,13 @@ export function makeFolder(body) {
     return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
+}
+
+// A folder of this box's to choose, for a setting that names one (PROTOCOL.md, `kuvo/folders`).
+export async function* foldersRoute(context) {
+  const { request, json } = context;
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "POST") return yield* json(405, {});
+  const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+  return yield* json(status, value);
 }

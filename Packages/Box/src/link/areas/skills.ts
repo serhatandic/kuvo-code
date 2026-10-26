@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { listOf, textOf } from "../files";
 import { ENGINE_CONFIG, IN_TEST_FOLDER, K } from "../home";
 
@@ -385,4 +386,14 @@ export async function answerSkills(method, requestPath, body, engine = null) {
   } catch (error) {
     return { status: error instanceof SkillFailure ? error.status : 502, value: message(error?.message ?? String(error)) };
   }
+}
+
+// Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
+// collections, which it reaches itself (a machine's with the Mac closed too).
+export async function* skillsRoute(context) {
+  const { request, readEngine, json } = context;
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  return yield* json(status, value);
 }

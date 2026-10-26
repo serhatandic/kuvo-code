@@ -1,0 +1,84 @@
+// @ts-nocheck
+// This box's bots: listed and followed, made, changed and deleted as the Mac's New Bot and Edit
+// Bot do, brought here from another computer, and told what they are now.
+
+import { parsed } from "../../shared/json";
+import { changeBot, deleteBot } from "../bots/edit";
+import { botFollowers } from "../bots/here";
+import { botTemplates, NO_KIT, readKit } from "../bots/kit";
+import { listBots } from "../bots/list";
+import { makeBot } from "../bots/make";
+import { freshenBots, settleBot } from "../bots/tell";
+import { followed } from "../follow";
+import { BOTS } from "../home";
+
+export async function* botTemplatesRoute(context) {
+  const { info, json } = context;
+  const kit = readKit();
+  if (!kit) return yield* json(409, { message: NO_KIT });
+  return yield* json(200, botTemplates(kit, info.name));
+}
+
+export async function* newBotRoute(context) {
+  const { request, signal, readEngine, bridge, info, json } = context;
+  const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
+  return yield* json(status, value);
+}
+
+// A bot here changed as Edit Bot changes it, or deleted as Delete Bot… deletes it.
+export async function* botRoute(context, oneBot) {
+  const { request, signal, readEngine, bridge, info, json } = context;
+  let id;
+  try {
+    id = decodeURIComponent(oneBot[1]);
+  } catch {
+    return yield* json(404, { message: "That bot isn’t there any more." });
+  }
+  const { status, value } = request.method.toUpperCase() === "PATCH"
+    ? await changeBot(id, parsed(request.body), readEngine, bridge, info.name, signal)
+    : await deleteBot(id, readEngine, bridge, signal);
+  return yield* json(status, value);
+}
+
+// A bot brought here from another computer, made this box's (Move to Computer).
+export async function* arrivedRoute(context, arrived) {
+  const { request, readEngine, bridge, info, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  let id;
+  try { id = decodeURIComponent(arrived[1]); } catch { return yield* json(404, { message: "That bot isn’t there any more." }); }
+  const { status, value } = await settleBot(id, readEngine, bridge, info.name);
+  return yield* json(status, value);
+}
+
+// Its bots told what they are now where that changed, as its app asks after a change to its kit
+// (your personalities, on a Mac).
+export async function* retellRoute(context) {
+  const { request, readEngine, readBridge, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  for (const read of [readEngine, readBridge]) {
+    let target = null;
+    try { target = read(); } catch {}
+    if (target?.port) await freshenBots(target);
+  }
+  return yield* json(200, {});
+}
+
+// Its bots followed: a line now, and again as they change (made, changed, deleted, a wake-up
+// added or sent), as a client shows them.
+export async function* botEventsRoute(context) {
+  const { request, signal, info, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  return yield* followed(() => ({ bots: listBots(info.name) }), botFollowers, signal, { folders: [BOTS] });
+}
+
+// This machine's bots and wake-ups, from their folders.
+export async function* botsRoute(context) {
+  const { request, info, text } = context;
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
+  yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+  // A Mac's read (`?memory=1`): with each one's job as its memory has it now.
+  const memory = /(^|[?&])memory=1(&|$)/.test(request.path.split("?")[1] ?? "");
+  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
+  return;
+}

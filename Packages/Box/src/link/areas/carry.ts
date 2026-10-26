@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
@@ -122,4 +123,15 @@ export async function carryToAgents(id, model, readEngine, agents, signal) {
   } finally {
     carrying.delete(id);
   }
+}
+
+// A conversation here carried on with the coding agents here, as picking one of their models
+// in it does.
+export async function* carryRoute(context, toAgents) {
+  const { request, signal, readEngine, bridge, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  let id;
+  try { id = decodeURIComponent(toAgents[1]); } catch { return yield* json(404, { message: "That conversation isn’t there any more." }); }
+  const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge(), signal);
+  return yield* json(status, value);
 }

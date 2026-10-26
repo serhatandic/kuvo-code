@@ -11,7 +11,7 @@ import { isMoving, MOVING } from "../bots/here";
 import { engineGet } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { listOf, textOf } from "../files";
-import { watchFolders } from "../follow";
+import { followed, watchFolders } from "../follow";
 import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
 
 // What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
@@ -393,4 +393,32 @@ export async function* answerWakes(session, action, request, readEngine, bridge,
   } finally {
     wakingNow.delete(key);
   }
+}
+
+export async function* wakesRoute(context) {
+  const { request, text } = context;
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
+  yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+  yield { body: Buffer.from(JSON.stringify({ sessions: listWakes() })) };
+  return;
+}
+
+// Every conversation's wake-ups and watches followed: a line now, and again as they change
+// (added, fired, canceled, paused), as a Mac shows them (PROTOCOL.md, "Wake-ups").
+export async function* wakeEventsRoute(context) {
+  const { request, signal, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  return yield* followed(() => ({ sessions: allWakes() }), wakeFollowers, signal, { folders: [BOTS, SESSION_WAKES] });
+}
+
+export async function* sessionWakesRoute(context, wakes) {
+  const { request, signal, readEngine, bridge, text } = context;
+  let session;
+  try {
+    session = decodeURIComponent(wakes[1]);
+  } catch {
+    return yield* text(404, "No such session.");
+  }
+  return yield* answerWakes(session, wakes[2], request, readEngine, bridge, signal);
 }

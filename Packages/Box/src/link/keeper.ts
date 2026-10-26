@@ -6,8 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { processRuns as runs } from "../shared/platform";
 import { textOf } from "./files";
-import { K, PID_FILE, RUN } from "./home";
-import { SCRIPT } from "./home";
+import { K, PID_FILE, RUN, SCRIPT } from "./home";
 
 // (Whether a process is alive, and runs what it should: `alive` and `runs`, ../shared/platform.)
 

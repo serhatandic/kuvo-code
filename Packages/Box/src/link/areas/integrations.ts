@@ -4,13 +4,14 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
 import { listOf, writePrivate } from "../files";
 import { BOTS, INTEGRATION_DATA, IS_MAC, K, SCRIPT } from "../home";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
-import { changeSettings, readSettings, SERVERS, valueAt } from "./config";
+import { changeSettings, ownsSettings, readSettings, SERVERS, valueAt } from "./config";
 
 export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
 
@@ -234,4 +235,15 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
     return { status: 200, value: {} };
   }
   return { status: 405, value: {} };
+}
+
+// Settings › Integrations (PROTOCOL.md, "Integrations"): this machine's own, added and removed
+// here from the catalog the Mac leaves (`bin/integrations.json`), with the Mac closed too.
+export async function* integrationsRoute(context) {
+  const { request, signal, readEngine, json } = context;
+  if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
+  return yield* json(status, value);
 }

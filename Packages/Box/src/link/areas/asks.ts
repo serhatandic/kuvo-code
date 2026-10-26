@@ -6,7 +6,9 @@
 
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { processRuns as runs } from "../../shared/platform";
 import { pause } from "../../shared/wait";
 import { engineGet, readEngineFile } from "../engine/client";
@@ -148,4 +150,40 @@ export async function watchAsks(tell, { signal, every = 2000, read = readAsks, a
     } catch {}
     await pause(every, signal);
   }
+}
+
+// What agents ask for while they browse here: listed, followed (a line each time it changes,
+// as a Mac's), and answered.
+export async function* asksRoute(context) {
+  const { request, signal, route, readEngine, info, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  const read = async () => ({
+    asks: await Promise.all(readAsks().map(async ask => {
+      const { ask: shown, asker } = await inConversation(ask, readEngine);
+      return listedAsk(shown, info.name ?? os.hostname(), asker);
+    })),
+  });
+  if (route === "kuvo/asks") return yield* json(200, await read());
+  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  let last = "";
+  while (!signal?.aborted) {
+    const line = JSON.stringify(await read());
+    if (line !== last) {
+      yield { body: Buffer.from(line + "\n") };
+      last = line;
+    }
+    await new Promise(done => setTimeout(done, 1000));
+  }
+  return;
+}
+
+export async function* askAnswerRoute(context, answering) {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  const ask = readAsks().find(each => each.id === decodeURIComponent(answering[1]));
+  if (!ask) return yield* json(404, {});
+  const given = parsed(request.body);
+  const answer = askAnswer(ask, given);
+  if (!answer) return yield* json(400, given?.saved != null ? { message: "Saved passwords are on your Mac: type this one." } : {});
+  return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});
 }

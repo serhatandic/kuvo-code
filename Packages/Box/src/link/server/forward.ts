@@ -3,10 +3,10 @@
 // What isn't the box's own goes on to the engine, or to the coding agents' bridge (`kuvo/agents/…`),
 // a phone's prompts with who they name told, and that they're from a phone.
 
-import { engineDown } from "../areas/engine";
+import { engineDown, stopShell } from "../areas/engine";
 import { holdArchived } from "../areas/wakes";
-import { namedIn } from "./naming";
-import { canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
+import { namedIn, namingHere } from "./naming";
+import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 
 export const AGENTS = "kuvo/agents/";
 
@@ -93,4 +93,44 @@ export async function* forward(target, path, request, signal, allows, naming = n
   } finally {
     reader.cancel().catch(() => {});
   }
+}
+
+// The coding agents' sessions, accounts and Auto, through their bridge, as the engine's go
+// to it; never where the engine is, nor an agent's update.
+export async function* agentsRoute(context) {
+  const { request, signal, readEngine, bridge, text } = context;
+  const path = request.path.slice(AGENTS.length);
+  if (!agentsAllowed(path, request.method)) return yield* text(403, "That isn't available over the link.");
+  const target = bridge();
+  if (!target) {
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
+    return;
+  }
+  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
+}
+
+// What's left goes to the engine (the paths a phone may ask for), and a command stopped to whichever
+// runs it.
+export async function* engineRoute(context) {
+  const { request, signal, route, readEngine, bridge, json, text } = context;
+  const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
+  if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {
+    // A coding agent's command stops without the engine.
+    if (!stop || !bridge()) return yield* json(503, { message: engineDown() });
+  }
+  if (stop) {
+    if (request.method.toUpperCase() !== "POST") return yield* text(405, "Stop it with POST.");
+    const headers = {};
+    const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
+    for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name];
+    // The engine's, else a coding agent's, through their bridge.
+    const runners = [engine, bridge()].filter(Boolean);
+    return yield* stopShell(decodeURIComponent(stop[1]), runners, headers, signal);
+  }
+  return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
 }

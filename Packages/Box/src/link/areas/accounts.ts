@@ -79,3 +79,49 @@ export async function forgetPlan(engine, id) {
   changeEndedSignIns(each => each.delete(id));
   return true;
 }
+
+// The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
+// signing out of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts").
+export async function* accountsRoute(context) {
+  const { request, route, readEngine, json } = context;
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  if (!engine?.port) return yield* json(503, { message: "The engine isn't running." });
+  if (route === "kuvo/accounts/ended") {
+    if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* json(405, {});
+    return yield* json(200, { providers: await endedProviders(engine).catch(() => []) });
+  }
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  let id = null;
+  try { id = decodeURIComponent(route.slice("kuvo/accounts/".length, -"/forget".length)); } catch {}
+  if (!id || id.includes("/")) return yield* json(404, {});
+  return yield* ((await forgetPlan(engine, id).catch(() => false)) ? json(200, {}) : json(404, {}));
+}
+
+// This machine's sign-ins, listed (`api/credential` has what each is signed in with too).
+export async function* credentialsRoute(context) {
+  const { request, signal, readEngine, text } = context;
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
+  let engine;
+  try {
+    engine = readEngine();
+  } catch {
+    return yield* text(503, "The engine isn't running.");
+  }
+  let listed;
+  try {
+    const response = await fetch(`http://127.0.0.1:${engine.port}/api/credential`, {
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
+      signal,
+    });
+    if (!response.ok) return yield* text(502, "The engine didn't answer.");
+    listed = ((await response.json())?.data ?? []).map(credential => ({
+      id: String(credential.id), integrationID: String(credential.integrationID), label: String(credential.label ?? ""), active: Boolean(credential.active),
+    }));
+  } catch {
+    return yield* text(502, "The engine didn't answer.");
+  }
+  yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+  yield { body: Buffer.from(JSON.stringify({ credentials: listed })) };
+  return;
+}

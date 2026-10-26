@@ -7,7 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { isObject } from "../../shared/json";
+import { isObject, parsed } from "../../shared/json";
 import { soon } from "../../shared/wait";
 import { botHere } from "../bots/here";
 import { listOf, textOf, writePrivate } from "../files";
@@ -194,4 +194,27 @@ async function botKeysAnswer(method, requestPath, body, engine, file, later) {
     default:
       return { status: 405, value: {} };
   }
+}
+
+// Its bots' folders' settings as their keys and this box's integrations are now, as a client
+// asks after it changes them (before the bot keys' route, which would take "keys" for a bot).
+export async function* botKeysRefreshRoute(context) {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  try {
+    await refreshBotsKeys();
+  } catch (error) {
+    if (!(error instanceof KeysUnavailable)) throw error;
+    return yield* json(503, { message: error.message });
+  }
+  return yield* json(200, {});
+}
+
+// A bot's keys of its own, as Edit Bot shows and changes them.
+export async function* botKeysRoute(context) {
+  const { request, readEngine, json } = context;
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  return yield* json(status, value);
 }

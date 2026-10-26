@@ -46,3 +46,14 @@ export async function searchPlugins(query, signal) {
   }
   return answer;
 }
+
+// Settings › Engine's plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's, found from this box.
+export async function* pluginSearchRoute(context) {
+  const { request, signal, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  try {
+    return yield* json(200, await searchPlugins(new URLSearchParams(request.path.split("?")[1] ?? "").get("q"), signal));
+  } catch (error) {
+    return yield* json(502, { message: "npm couldn't be reached from here. Check this computer's internet connection, then try again." });
+  }
+}

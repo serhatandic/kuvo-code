@@ -6,13 +6,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parsed } from "../../shared/json";
 import { call, engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import { writePrivate } from "../files";
+import { followed } from "../follow";
 import { gitIn, gitLater, sizeLater } from "../git";
 import { ENGINE_DATA } from "../home";
 import { readProjects } from "./projects";
-import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees } from "./worktree-records";
+import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 
 /** `name`, or `name-2` and so on when that's a branch already, as the Mac's Git.newBranch picks. */
 function freeBranch(folder, name) {
@@ -308,4 +310,26 @@ function canMake(folder) {
       if (error?.code !== "ENOENT" || at === path.dirname(at)) return false;
     }
   }
+}
+
+// Its worktrees' records followed: a line now, and again each time they change (one made for
+// a phone, renamed, removed), as a Mac shows them.
+export async function* worktreeEventsRoute(context) {
+  const { request, signal, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
+}
+
+// Settings › Worktrees, and a new session's worktree (PROTOCOL.md, "Worktrees").
+export async function* worktreesRoute(context) {
+  const { request, signal, route, readEngine, json } = context;
+  let engine = null;
+  try { engine = readEngine(); } catch {}
+  if (route === "kuvo/worktrees/where") {
+    if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+    return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine, signal));
+  }
+  const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
+  return yield* json(status, value);
 }

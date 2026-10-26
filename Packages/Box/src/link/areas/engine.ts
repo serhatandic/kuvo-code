@@ -170,3 +170,18 @@ export function engineConnect(readEngine = readEngineFile) {
     };
   };
 }
+
+// COMPAT(0.7 engine-stop): `kuvo/engine/start`, for an engine an older Mac's Stop left down. Goes 3 months after 0.8.0.
+// (No Stop: a machine's engine keeps running, and up to date. Start is for one an older Mac stopped.)
+export async function* engineControlRoute(context, control) {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  const { status, message } = await engineControl(control[1]);
+  return yield* json(status, message ? { message } : {});
+}
+
+export async function* signInReturnRoute(context) {
+  const { request, signal, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  return yield* loadSignInReturn(request.body, signal);
+}
