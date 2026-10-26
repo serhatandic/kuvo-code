@@ -67,6 +67,22 @@ import Testing
         #expect(!tabs.canReopenTab)
     }
 
+    /// A tab picked in the tab bar is the one you work in, however you were working in the sidebar
+    /// or the panel before: its card looks it.
+    @Test func aTabPickedInTheTabBarIsTheOneYouWorkIn() async {
+        defer { done() }
+        await sessions(["ses_a", "ses_b"])
+        tabs.open(.session("ses_a"))
+        tabs.open(.session("ses_b"))
+        for elsewhere in [WindowTabs.Pane.sessions, .changes] {
+            tabs.focus = elsewhere
+            tabs.pick(.session("ses_a"))
+            #expect(tabs.selection == .session("ses_a"))
+            #expect(tabs.focus == .conversation, "after working in \(elsewhere)")
+            tabs.pick(.session("ses_b"))
+        }
+    }
+
     @Test func aSessionDeletedSinceIsntReopened() async {
         defer { done() }
         await sessions(["ses_a", "ses_b"])

@@ -6,9 +6,10 @@ import Testing
 /// The card you work in looks it (crisp, the others a warm ivory): the one you last clicked or
 /// typed in. A click on a reply's words makes the conversation that card, as a click anywhere in
 /// it does; a click on the sidebar makes the sidebar it; with Settings open, clicks there leave
-/// the cards as they were. (A session picked in the sidebar leaving you in its conversation isn't
-/// tried here: SwiftUI's buttons and gestures don't take queued clicks in a window that isn't key,
-/// and this one never is, so it can't take your keyboard.) The window is the app's own (`MainView`), with its
+/// the cards as they were; the keyboard moving into a card makes it the one too. A session picked
+/// in the sidebar is the press, then the store call its row's button makes: SwiftUI's buttons and
+/// gestures don't take queued clicks in a window that isn't key, and this one never is, so it
+/// can't take your keyboard. The window is the app's own (`MainView`), with its
 /// sidebar and conversation, in a window of the test's own; the engine is stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct WindowFocusTests {
@@ -99,6 +100,36 @@ import Testing
         // And back to the sidebar, with a click below its rows.
         click(at: NSPoint(x: 60, y: 200))
         try await until { app.tabs.focus == .sessions }
+    }
+
+    /// The keyboard going into a card (Tab, a shortcut, a field that takes it) makes it the card
+    /// you work in, as a click does: here the sidebar's search field.
+    @Test func theKeyboardMovingIntoACardMakesItTheOneYouWorkIn() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        app.tabs.focus = .conversation
+        let search = try #require(all(NSTextField.self, in: window.contentView).first { field in
+            field.isEditable && field.convert(field.bounds, to: nil).midX < 300
+        }, "the sidebar's search field")
+        window.makeFirstResponder(search)
+        try await until { app.tabs.focus == .sessions }
+    }
+
+    /// A session picked in the sidebar: the click is the sidebar's, then its row opens the session
+    /// (the store call its button makes as the click ends), and you work in its conversation.
+    @Test func aSessionPickedInTheSidebarLeavesYouInItsConversation() async throws {
+        defer { done() }
+        _ = try #require(reply)
+        // The press and its release in the sidebar, as on a row.
+        click(at: NSPoint(x: 60, y: 200))
+        let handled = TestClick()
+        NSApp.postEvent(handled.marker(in: window), atStart: false)
+        try await until { handled.isHandled }
+        #expect(app.tabs.focus == .sessions)
+        // What the row's button does as the click ends.
+        app.tabs.open(.session(harbor))
+        #expect(app.tabs.selection == .session(harbor))
+        #expect(app.tabs.focus == .conversation)
     }
 
     /// With Settings open over the cards, a click in Settings leaves the card you work in as it

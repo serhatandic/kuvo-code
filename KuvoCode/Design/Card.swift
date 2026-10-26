@@ -262,8 +262,9 @@ extension View {
     /// A click anywhere in it makes it the card you work in, as the button goes down: on what
     /// AppKit draws in it too (a reply's text, a terminal, a page), which a SwiftUI gesture never
     /// hears, and before what the click does, so a session picked in the sidebar leaves you in its
-    /// conversation. Not while it's out of reach (under Settings or the expanded panel), nor for
-    /// the window's own buttons over it.
+    /// conversation. So does the keyboard moving into it (Tab, a shortcut, a field that takes it).
+    /// Not while it's out of reach (under Settings or the expanded panel), nor for the window's own
+    /// buttons over it.
     func onCardClick(_ action: @escaping () -> Void) -> some View {
         background(CardClicks(clicked: action))
     }
@@ -287,6 +288,7 @@ private struct CardClicks: NSViewRepresentable {
         var clicked: () -> Void = {}
         var isOn = true
         private var monitor: Any?
+        private var keyboard: NSKeyValueObservation?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -301,11 +303,21 @@ private struct CardClicks: NSViewRepresentable {
                 self.clicked()
                 return event
             }
+            keyboard = window?.observe(\.firstResponder) { [weak self] window, _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.isOn, let view = window.firstResponder as? NSView, view.window === window else { return }
+                    let frame = view.convert(view.bounds, to: nil)
+                    guard self.bounds.contains(self.convert(NSPoint(x: frame.midX, y: frame.midY), from: nil)) else { return }
+                    // After what moved it is done: it can move while SwiftUI updates the window.
+                    DispatchQueue.main.async { [weak self] in if self?.isOn == true { self?.clicked() } }
+                }
+            }
         }
 
         func stop() {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
+            keyboard = nil
         }
 
         /// Close, minimize and zoom, which sit over the sidebar while the tab bar is hidden.

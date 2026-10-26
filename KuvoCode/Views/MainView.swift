@@ -493,7 +493,9 @@ struct MainView: View {
 
     /// The tab strip's selection, by the tabs' written keys.
     private var tabSelection: Binding<String?> {
-        Binding(get: { tabs.selection?.text }, set: { tabs.selection = $0.map(TabKey.init) })
+        Binding(get: { tabs.selection?.text }, set: { key in
+            if let key { tabs.pick(TabKey(key)) } else { tabs.selection = nil }
+        })
     }
 
     private func tabItem(for key: TabKey) -> TabItem? {
