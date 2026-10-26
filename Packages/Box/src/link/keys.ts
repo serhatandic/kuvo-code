@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Where keys are kept (PROTOCOL.md, "Host interface"): integrations' keys by their variable's
 // name (`KUVO_KEY_<ID>_<NAME>`, a bot's own `…__<BOT>`). A machine keeps them in files only you can
 // read (its shared ones in `box/keys`, its bots' own in `box/bot-keys`); this Mac's box asks its
@@ -23,41 +22,41 @@ function keyHost() {
 // Key work, one change at a time: on this Mac each key is a round trip to the app, and two changes
 // (a phone's and Edit Bot's, or a save during the refresh at start) would each write a bot's
 // settings from the names they read before the other's.
-let keyQueue = Promise.resolve();
-export function keyWork(work) {
+let keyQueue: Promise<unknown> = Promise.resolve();
+export function keyWork<T>(work: () => T | Promise<T>): Promise<T> {
   const run = keyQueue.then(work, work);
   keyQueue = run.catch(() => {});
   return run;
 }
 
-const checkedKeyName = name => {
+const checkedKeyName = (name: unknown): string => {
   if (typeof name !== "string" || !STORED_KEY.test(name)) throw new KeysUnavailable("That isn't a key's name.");
   return name;
 };
 
 /** The file one is kept in on a machine: a bot's own beside the others, the shared ones in `box/keys`. */
-const keyFile = name => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS : BOX_KEYS, name);
+const keyFile = (name: string) => path.join(checkedKeyName(name).includes("__") ? BOT_KEYS : BOX_KEYS, name);
 
 /** The names of the keys kept, those that begin with `prefix` and end with `suffix`, sorted. */
-export async function keyNames({ prefix = "", suffix = "" } = {}) {
+export async function keyNames({ prefix = "", suffix = "" }: { prefix?: string; suffix?: string } = {}): Promise<string[]> {
   if (typeof prefix !== "string" || typeof suffix !== "string" || (prefix && !/^KUVO_KEY_[A-Z0-9_]*$/.test(prefix)) || (suffix && !/^[A-Z0-9_]+$/.test(suffix))) {
     throw new KeysUnavailable("That isn't a part of a key's name.");
   }
   const host = keyHost();
-  let names;
+  let names: unknown[];
   if (host) {
     const answer = await askHost(host, "keys/names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
     // An answer without its list isn't "no keys" (a refresh would take every bot's servers away).
-    if (!Array.isArray(answer.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
-    names = answer.names;
+    if (!Array.isArray(answer!.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
+    names = answer!.names;
   } else {
     names = [...listOf(BOX_KEYS).filter(name => !name.includes("__")), ...listOf(BOT_KEYS).filter(name => name.includes("__"))];
   }
-  return [...new Set(names.filter(name => typeof name === "string" && STORED_KEY.test(name) && name.startsWith(prefix) && name.endsWith(suffix)))].sort();
+  return [...new Set(names.filter((name): name is string => typeof name === "string" && STORED_KEY.test(name) && name.startsWith(prefix) && name.endsWith(suffix)))].sort();
 }
 
 /** One key's value as it's kept; null for one there isn't. */
-export async function readKey(name) {
+export async function readKey(name: string): Promise<string | null> {
   checkedKeyName(name);
   const host = keyHost();
   if (!host) return textOf(keyFile(name));
@@ -66,7 +65,7 @@ export async function readKey(name) {
 }
 
 /** One key kept, in place of one there was. */
-export async function writeKey(name, value) {
+export async function writeKey(name: string, value: unknown): Promise<void> {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
   const host = keyHost();
@@ -77,7 +76,7 @@ export async function writeKey(name, value) {
 }
 
 /** One key gone (nothing for one there wasn't). */
-export async function deleteKey(name) {
+export async function deleteKey(name: string): Promise<void> {
   checkedKeyName(name);
   const host = keyHost();
   if (host) return void await askHost(host, "keys/delete", { name });
@@ -86,4 +85,4 @@ export async function deleteKey(name) {
 }
 
 /** A bot's own variable for one of an integration's, as the Mac's IntegrationKeys names it. */
-export const botVariable = (variable, bot) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;
+export const botVariable = (variable: string, bot: string) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;

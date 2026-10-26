@@ -1,4 +1,3 @@
-// @ts-nocheck
 // COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
 // A Mac with Kuvo Code 0.7 or before left a machine's settings in the global file and its keys in
 // `keys/` as its start wrote them (PROTOCOL.md, "For released Macs": its settings). The first Mac
@@ -18,7 +17,7 @@ const MAC_KEYS = path.join(K, "keys");
 const LAUNCH_LOCK = path.join(RUN, ".launching");
 
 // Key paths the Mac's start wrote (`<root>/keys/KUVO_KEY_…`), as the box keeps its keys now.
-function boxKeyPaths(value) {
+function boxKeyPaths(value: unknown): unknown {
   if (typeof value === "string") {
     return value.split(`{file:${shownRoot}/keys/KUVO_KEY_`).join(`{file:${shownRoot}/box/keys/KUVO_KEY_`)
       .split(`{file:${K}/keys/KUVO_KEY_`).join(`{file:${shownRoot}/box/keys/KUVO_KEY_`);
@@ -37,7 +36,7 @@ function boxKeyPaths(value) {
 // Under the launch's lock and the settings' own, so no start or change comes between.
 // {status: "own" | "adopted", seeded, settings}.
 // COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
-export function adoptBox(seed) {
+export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | undefined): { status: "own" | "adopted"; seeded?: boolean; settings: unknown } {
   return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
     if (fs.existsSync(CONFIG_FILE)) {
       addDefaultRules();
@@ -46,17 +45,17 @@ export function adoptBox(seed) {
     const global = readSettings(GLOBAL_FILE);
     const mac = readSettings(MAC_SETTINGS);
     const before = deepMerged(global.settings ?? {}, mac.settings ?? {});
-    const seeded = !Object.keys(before).length && isObject(seed?.settings);
-    const settings = boxKeyPaths(seeded ? seed.settings : before);
+    const seeded = !Object.keys(before as object).length && isObject(seed?.settings);
+    const settings = boxKeyPaths(seeded ? seed!.settings : before);
     fs.mkdirSync(BOX_KEYS, { recursive: true, mode: 0o700 });
     fs.chmodSync(BOX, 0o700);
     if (seeded) {
-      for (const [name, value] of Object.entries(isObject(seed.keys) ? seed.keys : {})) {
+      for (const [name, value] of Object.entries(isObject(seed!.keys) ? seed!.keys : {})) {
         if (KEY_NAME.test(name) && typeof value === "string") writePrivate(path.join(BOX_KEYS, name), value);
       }
     } else {
       // The shared keys; a bot's own (`…__<bot>`) stay where its folder names them.
-      let names = [];
+      let names: string[] = [];
       try { names = fs.readdirSync(MAC_KEYS); } catch {}
       for (const name of names) {
         if (!KEY_NAME.test(name) || name.includes("__")) continue;
@@ -66,7 +65,7 @@ export function adoptBox(seed) {
     // What it was made from, kept beside it.
     const kept = path.join(BOX, "adopted-from");
     fs.mkdirSync(kept, { recursive: true, mode: 0o700 });
-    for (const [file, name] of [[GLOBAL_FILE, "opencode.json"], [MAC_SETTINGS, "settings.json"]]) {
+    for (const [file, name] of [[GLOBAL_FILE, "opencode.json"], [MAC_SETTINGS, "settings.json"]] as const) {
       try { writePrivate(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
     }
     writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys(settings), null, 2) + "\n");

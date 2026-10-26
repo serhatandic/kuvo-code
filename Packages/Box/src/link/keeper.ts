@@ -1,4 +1,3 @@
-// @ts-nocheck
 // The box's keeper, the bridge it keeps running, and whether the bridge is needed (`run/link.needed`,
 // which the keeper reads).
 
@@ -10,14 +9,15 @@ import { textOf } from "./files";
 import { K, NEEDED_FILE, PID_FILE, RUN, SCRIPT } from "./home";
 import { peersOf } from "./peers/known";
 import { readLink } from "./state";
+import type { LinkState } from "./state";
 
 // (Whether a process is alive, and runs what it should: `alive` and `runs`, ../shared/platform.)
 
 // Another bridge.
-export const isBridge = pid => pid !== process.pid && runs(pid, "kuvo-link.js");
+export const isBridge = (pid: number) => pid !== process.pid && runs(pid, "kuvo-link.js");
 
 // Something to answer: a paired phone, a pairing code waiting, or other boxes of yours to talk to.
-export const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));
+export const needed = (link: LinkState | null | undefined) => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));
 
 // Nothing to answer any more (the last phone gone, a pairing run out, no link.json): the keeper
 // starts this bridge no more, unless a pairing began meanwhile.
