@@ -25,9 +25,11 @@ const npm = http.createServer((request, response) => {
   if (url.pathname === "/-/v1/search") {
     const text = url.searchParams.get("text");
     searched.push(text);
-    const found = text === "keywords:opencode-plugin" ? ["@tarquinen/opencode-dcp", "opencode-wakatime"] : text.startsWith("waka") ? ["opencode-wakatime"] : [];
+    const found = text === "keywords:opencode-plugin" ? ["@tarquinen/opencode-dcp", "opencode-wakatime"] : text.startsWith("waka") ? ["opencode-wakatime"] : text.includes("dcp") ? ["@tarquinen/opencode-dcp"] : [];
     return send({ objects: found.map(name => ({ package: { name, version: packages[name]["dist-tags"].latest, description: packages[name].versions[packages[name]["dist-tags"].latest].description }, downloads: { weekly: 500 } })) });
   }
+  // Only its versions and tags, as npm installs from it: never a package's whole history.
+  if (request.headers.accept !== "application/vnd.npm.install-v1+json") return send({ error: "Asked for the whole record" }, 406);
   const named = packages[decodeURIComponent(url.pathname.slice(1))];
   return named ? send(named) : send({ error: "Not found" }, 404);
 });
@@ -49,7 +51,7 @@ test("a word finds opencode's packages with it", async () => {
   const answer = await link.searchPlugins("waka");
   assert.equal(searched.at(-1), "waka keywords:opencode");
   assert.deepEqual(answer.packages, [{ name: "opencode-wakatime", version: "1.4.0", description: "WakaTime for OpenCode", weekly: 500 }]);
-  // Not a package's name exactly, but it finds one: nothing's missing to say.
+  // A name npm doesn't have, said for Return to add it, while the search finds the one meant.
   assert.equal(answer.missing, "waka");
 });
 
@@ -60,6 +62,9 @@ test("a package named exactly comes first, a scoped one or one search doesn't fi
   const pinned = await link.searchPlugins("opencode-wakatime@1.3.0");
   assert.equal(pinned.packages[0].version, "1.3.0");
   assert.equal(pinned.missing, undefined);
+  // A range or a tag it has isn't missing.
+  assert.equal((await link.searchPlugins("opencode-wakatime@^1.0.0")).missing, undefined);
+  assert.equal((await link.searchPlugins("opencode-wakatime@latest")).packages[0].version, "1.4.0");
 });
 
 test("a name or a version npm doesn't have is said to be missing", async () => {

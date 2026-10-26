@@ -1902,27 +1902,34 @@ const ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "openco
  * own checkout without git ignoring it (git would list them all as new files there). A relative
  * one starts at the repository's own checkout, not at the project's folder in it. */
 export async function worktreesWhere(directory, engine, signal, projects = readProjects().filter(each => !each.removed).map(each => each.directory)) {
-  const value = typeof directory === "string" && directory.trim() ? directory.trim() : null;
+  const value = typeof directory === "string" && directory !== "" ? directory : null;
   const answer = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: os.homedir(), projects: [] };
+  // The engine's projects, by their own checkout, from one call about none of them (one about a
+  // folder would start the engine there): their ids name the engine's own folders.
+  const ids = new Map();
+  if (engine?.port) {
+    try {
+      for (const known of await call(engine, "GET", "/api/project", undefined, signal)) {
+        if (typeof known?.id === "string" && typeof known?.canonical === "string") ids.set(realOr(known.canonical), known.vcs === "git" && known.id !== "global" ? known.id : null);
+      }
+    } catch {}
+  }
   for (const project of projects) {
     if (!fs.existsSync(project)) continue;
-    // The repository's own checkout (of a worktree, or of a folder in it, its main one), as the
-    // engine knows it, or as git says when it isn't running.
-    const common = gitIn(project, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-    if (common === null) continue;
-    let id = null;
-    let checkout = path.basename(common) === ".git" ? path.dirname(common) : null;
-    if (engine?.port) {
-      try {
-        const located = await call(engine, "GET", "/api/location", undefined, signal, project);
-        if (typeof located?.project?.id === "string") id = located.project.id;
-        if (typeof located?.project?.canonical === "string") checkout = located.project.canonical;
-      } catch {}
-    }
-    if (!checkout) continue;
+    // The repository's own checkout (of a worktree, or of a folder in it, its main one), which
+    // the engine resolves a relative folder from. (Without --path-format, which older git lacks.)
+    const common = await gitLater(project, ["rev-parse", "--git-common-dir"]);
+    if (!common) continue;
+    const gitFolder = path.resolve(project, common);
+    if (path.basename(gitFolder) !== ".git") continue;
+    const checkout = realOr(path.dirname(gitFolder));
+    // One the engine doesn't take for a repository has no worktrees: a repository with no commit
+    // yet is its "global" project.
+    const id = ids.get(checkout);
+    if (id === null) continue;
     // The engine's own: a folder for each project, named by the start of its id.
     const folder = value === null ? (id ? path.join(answer.default, id.slice(0, 6)) : null)
-      : value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : path.resolve(checkout, value);
+      : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
     const entry = { project, name: path.basename(project), folder };
     if (folder) {
       entry.exists = (() => { try { return fs.statSync(folder).isDirectory(); } catch { return false; } })();
@@ -1930,12 +1937,17 @@ export async function worktreesWhere(directory, engine, signal, projects = readP
       if (inside(folder, checkout)) {
         entry.inside = true;
         // What's in it, as git sees a worktree there: ignored, or a new folder in the checkout.
-        entry.ignored = gitIn(checkout, ["check-ignore", "-q", path.join(folder, "worktree")]) !== null;
+        entry.ignored = (await gitLater(checkout, ["check-ignore", "-q", path.join(folder, "worktree")])) !== null;
       }
     }
     answer.projects.push(entry);
   }
   return answer;
+}
+
+/** A folder through any links in its path, as the engine names a checkout; as it is when it isn't there. */
+function realOr(folder) {
+  try { return fs.realpathSync(folder); } catch { return folder; }
 }
 
 /** Whether `folder` can be made: the nearest folder of it that's there is one you can write in. */
@@ -1972,12 +1984,34 @@ export function listFolders(requestPath) {
     return { status: 403, value: { message: `${at} can't be read here.` } };
   }
   const hidden = query.get("hidden") === "1";
+  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them
+  // (privacy prompts); Linux has none, so it looks into every folder.
+  const asks = process.platform === "darwin" && at === home ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set();
   const isFolder = entry => entry.isDirectory() || (entry.isSymbolicLink() && (() => { try { return fs.statSync(path.join(at, entry.name)).isDirectory(); } catch { return false; } })());
   const folders = entries
     .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
-    .map(entry => (fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
+    .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders } };
+}
+
+/** `POST kuvo/folders {"path"}`: a new folder, in one that's there, as a folder panel's New Folder
+ * makes one: `{path}` (`~/` starts at the home folder). */
+export function makeFolder(body) {
+  const given = typeof body?.path === "string" ? body.path.trim() : "";
+  const home = os.homedir();
+  const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
+  const at = path.resolve(folder);
+  // Platform: a Mac's disk usually ignores case, so "Trees" is taken by "trees" there, not on Linux.
+  if (fs.existsSync(at)) return { status: 409, value: { message: `There's already something called ${path.basename(at)} there.` } };
+  try {
+    fs.mkdirSync(at);
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: 404, value: { message: `There's no folder ${path.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
+  }
+  return { status: 200, value: { path: at } };
 }
 
 // MARK: Plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's packages its engine can load, found from this box.
@@ -1993,8 +2027,9 @@ const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s
  * that names a package npm doesn't have says so (`missing`). */
 export async function searchPlugins(query, signal) {
   const text = String(query ?? "").trim().toLowerCase();
-  const ask = async address => {
-    const answered = await fetch(address, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) });
+  // A package's record as npm installs from it (its versions and tags, not its whole history).
+  const ask = async (address, headers = {}) => {
+    const answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000) });
     if (answered.status === 404) return null;
     if (!answered.ok) throw new Error(`npm answered ${answered.status}.`);
     return answered.json();
@@ -2003,7 +2038,7 @@ export async function searchPlugins(query, signal) {
   const [found, named] = await Promise.all([
     ask(`${NPM}/-/v1/search?size=20&text=${encodeURIComponent(text ? `${text} keywords:opencode` : "keywords:opencode-plugin")}`),
     // Not known (npm didn't answer) is not missing.
-    spec ? ask(`${NPM}/${spec[1].replace("/", "%2F")}`).catch(() => undefined) : undefined,
+    spec ? ask(`${NPM}/${spec[1].replace("/", "%2F")}`, { accept: "application/vnd.npm.install-v1+json" }).catch(() => undefined) : undefined,
   ]);
   const packages = (found?.objects ?? []).map(each => ({
     name: each.package?.name,
@@ -2013,11 +2048,12 @@ export async function searchPlugins(query, signal) {
   })).filter(each => typeof each.name === "string");
   const answer = { packages };
   if (spec && named?.name) {
-    const latest = named["dist-tags"]?.latest;
-    const exact = { name: named.name, version: spec[2] && named.versions?.[spec[2]] ? spec[2] : latest, description: (named.versions?.[latest]?.description ?? named.description) || undefined };
     const listed = packages.find(each => each.name === named.name);
-    answer.packages = [{ ...exact, weekly: listed?.weekly }, ...packages.filter(each => each !== listed)];
-    if (spec[2] && !named.versions?.[spec[2]] && !named["dist-tags"]?.[spec[2]]) answer.missing = `${named.name}@${spec[2]}`;
+    const version = spec[2] && named.versions?.[spec[2]] ? spec[2] : named["dist-tags"]?.[spec[2]] ?? named["dist-tags"]?.latest;
+    answer.packages = [{ name: named.name, version, description: listed?.description, weekly: listed?.weekly }, ...packages.filter(each => each !== listed)];
+    // A version or a tag it doesn't have (a range, like ^1.2.0, it may well have).
+    const exact = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(spec[2] ?? "") || /^[a-z][\w-]*$/i.test(spec[2] ?? "");
+    if (spec[2] && exact && !named.versions?.[spec[2]] && !named["dist-tags"]?.[spec[2]]) answer.missing = `${named.name}@${spec[2]}`;
   } else if (named === null) {
     answer.missing = spec[1];
   }
@@ -2468,8 +2504,9 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     // A folder of this box's to choose, for a setting that names one (PROTOCOL.md, `kuvo/folders`).
     if (route === "kuvo/folders") {
-      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
-      const { status, value } = listFolders(request.path);
+      const method = request.method.toUpperCase();
+      if (method !== "GET" && method !== "POST") return yield* json(405, {});
+      const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
       return yield* json(status, value);
     }
     // Settings › Engine's plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's, found from this box.

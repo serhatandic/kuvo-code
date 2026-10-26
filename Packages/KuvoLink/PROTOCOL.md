@@ -1031,6 +1031,9 @@ host serves:
   hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
   null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
   `403` for one it can't read, `400` for a path that isn't a full one.
+  `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
+  Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
+  it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
 - `GET kuvo/plugins/search?q=<text>` (`plugins.search`): npm's packages Settings › Engine offers as
   plugins, found from the box itself (its network) → `{"packages": [{name, version, description?,
   weekly?}], "missing"?}`: with no `q`, the most used opencode plugins; otherwise opencode's
