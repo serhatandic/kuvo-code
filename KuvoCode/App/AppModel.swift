@@ -97,6 +97,8 @@ final class AppModel {
     @ObservationIgnored private var starting: UUID?
     /// Settings fill the main window in place of the sessions while this is on.
     var showsSettings = false
+    /// Help › Report a Problem…'s sheet, over the main window.
+    var showsProblemReport = false
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
     func openAccounts(on machine: String?) {
         openSettings(.accounts, on: SidebarBox(machine: machine))

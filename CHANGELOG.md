@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- **Help › Report a Problem…** opens a short sheet: say what happened, see the versions that go with it, and open a new GitHub issue filled in with both, to read over and post. It says up front that issues are public.
 - Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
 - The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.
 - After you quote part of a reply (or reply to all of it), you can start typing your answer at once: it has the keyboard, with the cursor ready. Quoting the same part again takes you back to its answer.

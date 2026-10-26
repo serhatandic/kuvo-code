@@ -356,6 +356,10 @@ struct MainView: View {
         .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
         .sheet(item: $projectEditor) { projectSheet($0) }
+        // Help › Report a Problem…: a new issue on GitHub, filled in.
+        .sheet(isPresented: Binding { app.showsProblemReport } set: { app.showsProblemReport = $0 }) {
+            ReportProblemSheet { app.showsProblemReport = false }
+        }
     }
 
     private func projectSheet(_ request: ProjectEditorRequest) -> some View {
