@@ -11,6 +11,9 @@ import { isObject } from "../shared/json";
 import { SIGN } from "./documents/format";
 import { locked } from "./files";
 import { IS_MAC, LINK_FILE, RUN } from "./home";
+import type { NoticeHold } from "./notices/hold";
+import type { Peer } from "./peers/known";
+import type { LinkHost } from "./relay/host";
 
 /** A phone this box lets in (PROTOCOL.md, "Paired phones"). */
 export interface Phone {
@@ -62,19 +65,35 @@ export interface LinkState {
   legacy?: Record<string, { at: number; peers: unknown[]; moved: unknown[] }>;
   macPeers?: unknown;
   macMoved?: unknown;
+  /** Machines this Mac removed that haven't heard it yet (they hear it once it's back on the relay). */
+  untold?: Peer[];
 }
 
 // This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`), its keys from the
 // app once it has them (with the relay and name, `overlay`, never written), how it stands, and who
 // follows that and its phones.
 const MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
+/** What this Mac's app says of its box's link (`kuvo/link/config`): whether the phone link is on
+ * and there are machines to meet, the relay, this Mac's name, its app's version, and what it
+ * answers (`features`). */
+export interface MacLinkConfig {
+  phones: boolean;
+  machines: boolean;
+  relay: string;
+  name: string;
+  app: string;
+  features?: string[];
+}
+
 export const macLink: {
-  config: any;
+  config: MacLinkConfig | null;
   overlay: Partial<LinkState> | null;
-  status: { state: string; reason?: string };
-  host: any;
+  status: { state: "off" | "connecting" | "connected" | "failed"; reason?: string };
+  host: LinkHost | null;
   /** The notices this Mac's box holds while you're at a computer (its link's). */
-  hold?: any;
+  hold?: NoticeHold;
+  /** Stopped for good (a test's, as it ends): the link's loop goes. */
+  stopped?: boolean;
   wake: (() => void) | null;
   statusFollowers: Set<() => void>;
   phoneFollowers: Set<() => void>;

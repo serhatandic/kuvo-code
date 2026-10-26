@@ -1,26 +1,29 @@
-// @ts-nocheck
 // This box's own settings, its MCP catalog and its integrations' keys (PROTOCOL.md, "Settings per
 // box").
 
 import { parsed } from "../../shared/json";
+import type { Config } from "../../shared/routes/settings";
+import type { AnswerPiece, RouteContext } from "../server/context";
 import { applySettings } from "./apply";
 import { answerKeys } from "./box-keys";
 import { changeSettings, ownsSettings, readSettings } from "./config";
+import type { Settings } from "./config";
 import { addFromCatalog, mcpCatalog } from "./mcp-catalog";
 
 // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
-export async function* settingsRoute(context) {
+export async function* settingsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, route, json } = context;
   // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
   if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
   const method = request.method.toUpperCase();
   // A file that can't be used says why twice: in words to show (`message`), and the file's
   // problem alone (`problem`), for a page that names the file already.
-  const answered = ({ status, settings, message, problem }) => json(status, message ? (problem ? { message, problem } : { message }) : settings ?? {});
+  const answered = ({ status, settings, message, problem }: { status: number; settings?: Settings; message?: string; problem?: string }): AnswerPiece[] =>
+    json(status, message ? (problem ? { message, problem } : { message }) : (settings ?? {}) satisfies Config);
   if (route === "kuvo/config") {
     if (method === "GET") {
       const { settings, problem } = readSettings();
-      return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings));
+      return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings! satisfies Config));
     }
     if (method === "PATCH") return yield* answered(changeSettings(parsed(request.body)?.changes));
     return yield* json(405, {});
