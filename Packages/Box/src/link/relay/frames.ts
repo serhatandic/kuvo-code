@@ -1,5 +1,6 @@
 // What goes over the relay (PROTOCOL.md, "The relay"), the link frames inside it ("Link frames"),
 // and the messages inside a session ("Messages in a session").
+
 import { sortedJSON } from "../../shared/json";
 import { EMPTY } from "../crypto/keys";
 

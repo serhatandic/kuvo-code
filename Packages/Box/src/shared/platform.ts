@@ -5,6 +5,7 @@
 // Also the same rule elsewhere, in shell: the update's restore script tells the link it started
 // by its command line where there's /proc, and by its being alive where there isn't
 // (`keepForRollback`'s `restore.sh`, link/main.ts).
+
 import fs from "node:fs";
 
 /** Whether process `pid` is alive (and ours to signal). */

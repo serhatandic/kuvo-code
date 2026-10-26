@@ -1,5 +1,6 @@
 // X25519 keys, kept as their raw 32 bytes, and a device's address on the relay (PROTOCOL.md,
 // "Keys and addresses").
+
 import crypto from "node:crypto";
 
 const PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
