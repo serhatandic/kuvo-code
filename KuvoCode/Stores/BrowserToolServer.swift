@@ -125,6 +125,7 @@ final class BrowserToolServer {
             // Not the browser's: no page to serve it.
             if name == BrowserTools.showInPanel { return reply(BrowserTools.showInPanelCall(arguments, caller: caller)) }
             if name == BrowserTools.showFile { return reply(BrowserTools.showFileCall(arguments)) }
+            if name == BrowserTools.markFinal { return reply(BrowserTools.markFinalCall(arguments)) }
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
@@ -200,6 +201,9 @@ enum BrowserTools {
         tool(showFile, "Put a file in this conversation, for the user to see where they read your replies: a picture shows in it, large, and any other file (a PDF, a document, a spreadsheet) as a card they open. Use it to show what you made or found when seeing it helps, and always when the user is on their phone (their message ends with a <from-phone> block), where file paths and the side panel don't reach them. Give its full path.",
              ["path": ["type": "string", "description": "The file's full path."],
               "caption": ["type": "string", "description": "A line about it, shown under it."]], required: ["path"]),
+        tool(markFinal, "Mark a file you made as final, once it's done and ready for the user (a report, a document, a picture): it's pinned at the top of what you made, where the user finds it with every version. Give its full path.",
+             ["path": ["type": "string", "description": "The file's full path."],
+              "note": ["type": "string", "description": "A few words on it, like who it's for or what it's final for."]], required: ["path"]),
         tool(showWidget, "Show the user something visual or interactive right in this conversation, drawn live where this call is: a chart or graph, a diagram or flow, a mockup, a table to sort, a small app, calculator or game, a timeline, a visual explanation, or choices for them to click. Use it whenever seeing or playing with something says it better than words, and be creative. Write the HTML: a fragment, or a whole page, with its CSS and JavaScript inline; libraries only from cdnjs.cloudflare.com, cdn.jsdelivr.net or unpkg.com (Chart.js, D3, Mermaid, Three.js, Leaflet with its map tiles); pictures from anywhere, but it can't fetch data or send anything, so put the data in the page. Follow light and dark with CSS (it starts transparent with color-scheme light dark, text in CanvasText, and --kuvo-accent as the accent). It's as tall as its content, up to about 760 points, then it scrolls. To hear back, call kuvo.send(text) from a click in it: that sends text to you as the user's message (a choice they made, values they set).",
              ["html": ["type": "string", "description": "The HTML to show."],
               "title": ["type": "string", "description": "A short name for it, shown above it. Write it first, before the HTML: it shows while you write the rest."]], required: ["html"]),
@@ -245,6 +249,8 @@ enum BrowserTools {
     /// The tool that puts a file in the conversation: the transcript shows it from the call (see
     /// `ShownFileRow`), here and on a phone, which opens it with `kuvo/file`.
     nonisolated static let showFile = "show_file"
+    /// Pins a file in the record of what was made (the box reads the call).
+    nonisolated static let markFinal = "mark_final"
 
     /// The tool that shows something the agent made, live in the conversation; the transcript
     /// draws it from the call (see `WidgetCard`), for a session here or on a machine alike.
@@ -364,6 +370,17 @@ enum BrowserTools {
         guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder) else { return text("There's nothing at \(full).", error: true) }
         guard !isFolder.boolValue else { return text("\(full) is a folder: show a file in it, or the folder with show_in_panel.", error: true) }
         return text("Shown in the conversation: the file \(full). The user sees it there, on their Mac and their phone.")
+    }
+
+    /// Checks the file is there: the box's record pins it, from the call.
+    static func markFinalCall(_ arguments: [String: Any]) -> [String: Any] {
+        func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
+        guard let full = arguments["path"] as? String, full.hasPrefix("/"), !full.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else {
+            return text("Give the file's full path.", error: true)
+        }
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder), !isFolder.boolValue else { return text("There's no file at \(full).", error: true) }
+        return text("Marked final: \(full). It's pinned at the top of what you made, for the user.")
     }
 
     /// How long the engine lets a tool run: longer than the agent waits for the user.

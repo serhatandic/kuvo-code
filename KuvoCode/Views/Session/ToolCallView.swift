@@ -253,6 +253,7 @@ struct ToolCallView: View {
             let about = string("query").map { " about “\($0)”" } ?? ""
             return (isActive ? "Reading " : "Read ") + of + "’s conversation" + about
         case "show_in_panel", "show_file": return (isActive ? "Showing " : "Showed ") + (relative(string("path")) ?? "a file")
+        case "mark_final": return (isActive ? "Marking " : "Marked ") + (string("path").map { ($0 as NSString).lastPathComponent } ?? "a file") + " final"
         case "start_session": return (isActive ? "Starting a session" : "Started a session") + (string("title").map { ": \($0)" } ?? "")
         // Kuvo Code's wake-up tools, worded as the kuvo-wake commands they run are.
         case "schedule_wake_up":

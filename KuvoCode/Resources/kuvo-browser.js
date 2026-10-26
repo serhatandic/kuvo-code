@@ -2421,6 +2421,20 @@ async function tool(name, args) {
     return text(`Shown in the conversation: the file ${full}. The user sees it there, on their Mac and their phone.`);
   }
 
+  // Pinned by the box's record of what was made, from the call: only checked here.
+  if (name === "mark_final") {
+    const full = string("path");
+    if (!full || !path.isAbsolute(full) || full.split("/").some((part) => part === "." || part === "..")) return text("Give the file's full path.", true);
+    let stat;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      return text(`There's no file at ${full}.`, true);
+    }
+    if (!stat.isFile()) return text(`There's no file at ${full}.`, true);
+    return text(`Marked final: ${full}. It's pinned at the top of what you made, for the user.`);
+  }
+
   if (name === "browser_upload") {
     const index = integer("index");
     const files = Array.isArray(args.files) ? args.files.filter((f) => typeof f === "string" && f) : [];
@@ -2779,7 +2793,7 @@ async function mcp() {
           const note = integrationNote(params.arguments?.url, call.session);
           if (note) return reply(text(note));
         }
-        if (params.name === "show_in_panel" || params.name === "show_widget" || params.name === "show_file") {
+        if (params.name === "show_in_panel" || params.name === "show_widget" || params.name === "show_file" || params.name === "mark_final") {
           tool(params.name, params.arguments || {}).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }

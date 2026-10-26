@@ -189,6 +189,7 @@ enum StepsSummary {
         case "todowrite", "todoread": return "kept its to-do list"
         case "skill": return many ? "used \(count) skills" : "used a skill"
         case "start_session": return many ? "started \(count) sessions" : "started a session"
+        case "mark_final": return many ? "marked \(count) files final" : "marked a file final"
         case let kind where kind.hasPrefix("mcp:"):
             let server = String(kind.dropFirst(4))
             let name = Integrations.service(server)?.title ?? server
