@@ -27,11 +27,12 @@ function box() {
   return {
     backgrounded,
     hear: (type, data) => hear({ type, data: { sessionID: "ses_1", ...data } }),
+    // The clock moves on `ms`, and what's due by then runs, what that sets for then too.
     wait: ms => {
       time += ms;
-      for (const timer of timers.filter(each => each.at <= time)) {
-        timers = timers.filter(each => each !== timer);
-        timer.run();
+      for (let due = timers.find(each => each.at <= time); due; due = timers.find(each => each.at <= time)) {
+        timers = timers.filter(each => each !== due);
+        due.run();
       }
     },
   };
@@ -92,18 +93,47 @@ test("a subagent it waits on goes on in the background too", () => {
   assert.deepEqual(b.backgrounded, ["ses_1"]);
 });
 
-test("a message queued for after the turn, a wake-up or an agent's letter waits as before", () => {
+test("a message queued for after the turn, or the engine's own note, waits as before", () => {
   const b = box();
   command(b, "call_1");
   b.wait(10_000);
   yours(b, "msg_1", "queue");
-  b.hear("session.inbox.enqueued", { inboxID: "syn_1", item: { type: "synthetic", delivery: "steer", payload: { text: "Wake up: check the build" } } });
+  b.hear("session.inbox.enqueued", { inboxID: "syn_1", item: { type: "synthetic", delivery: "steer", payload: { text: "The command finished." } } });
   b.wait(10_000);
   assert.deepEqual(b.backgrounded, []);
   // Sent now from the queue (Send Now): read at once.
   b.hear("session.inbox.delivery.changed", { inboxID: "msg_1", delivery: "steer" });
   b.wait(0);
   assert.deepEqual(b.backgrounded, ["ses_1"]);
+});
+
+test("each command gets its moment: one that ended doesn't time the next", () => {
+  const b = box();
+  command(b, "call_1");
+  b.wait(2_000);
+  command(b, "call_2");
+  yours(b, "msg_1");
+  b.hear("session.tool.success", { id: "call_1" });
+  b.wait(1_000);
+  assert.deepEqual(b.backgrounded, [], "call_2 has run 1 second");
+  b.wait(2_000);
+  assert.deepEqual(b.backgrounded, ["ses_1"]);
+});
+
+test("still waiting behind it after that (the command was asking you first), it's tried again", () => {
+  const b = box();
+  command(b, "call_1");
+  b.wait(5_000);
+  yours(b, "msg_1");
+  b.wait(0);
+  assert.deepEqual(b.backgrounded, ["ses_1"]);
+  b.wait(3_000);
+  assert.deepEqual(b.backgrounded, ["ses_1", "ses_1"]);
+  // Moved now: it ends at once, and your message is read.
+  b.hear("session.tool.success", { id: "call_1" });
+  b.hear("session.inbox.delivered", { inboxID: "msg_1" });
+  b.wait(30_000);
+  assert.deepEqual(b.backgrounded, ["ses_1", "ses_1"]);
 });
 
 test("nothing moves for a command already in the background, one that ended, or a message taken back", () => {

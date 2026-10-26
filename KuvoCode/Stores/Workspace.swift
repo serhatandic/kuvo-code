@@ -2082,6 +2082,8 @@ final class Workspace {
                     // bot's row.
                     let isBot = botName?(id) != nil
                     let reply = failed || !(Notifier.isEnabled || isBot) ? nil : await lastReply(of: id)
+                    // Read on another client meanwhile: it's news no more.
+                    if let idle = self.session(id)?.time.idle, (readElsewhere[id] ?? 0) >= idle { return }
                     if isBot { replyPreviews[id] = reply }
                     // Told: a reconnection won't tell it again.
                     if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
@@ -2397,9 +2399,7 @@ final class Workspace {
     }
 
     func markViewed(_ id: String) {
-        Notifier.shared.clear(session: id)
-        // Read: its next news is read afresh.
-        if replyPreviews[id] != nil { replyPreviews[id] = nil }
+        clearNews(of: id)
         guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].isUnread, let idle = sessions[index].time.idle else { return }
         sessions[index].time.viewed = idle
         // Its engine away (a machine out of reach): told once it's back (see `refresh`).
@@ -2409,12 +2409,20 @@ final class Workspace {
 
     /// Read elsewhere, as its box says: the same as `markViewed`, without telling the box again.
     private func sawViewed(_ id: String, idle: Milliseconds) {
+        readElsewhere[id] = max(idle, readElsewhere[id] ?? 0)
         guard let index = sessions.firstIndex(where: { $0.id == id }), idle > (sessions[index].time.viewed ?? 0) else { return }
         sessions[index].time.viewed = idle
-        guard !sessions[index].isUnread else { return }
+        if !sessions[index].isUnread { clearNews(of: id) }
+    }
+
+    /// Read: its notification goes, and its next news is read afresh.
+    private func clearNews(of id: String) {
         Notifier.shared.clear(session: id)
         if replyPreviews[id] != nil { replyPreviews[id] = nil }
     }
+
+    /// How far each session was read on another client, for news that was on its way meanwhile.
+    @ObservationIgnored private var readElsewhere: [String: Milliseconds] = [:]
 
     /// Sessions read while their machine was away, with what was read, to tell it when it's back.
     @ObservationIgnored private var unsentViews: [String: Milliseconds] = [:]
@@ -2614,8 +2622,12 @@ final class Workspace {
         }
         nameBranch(of: session)
         defer { noteBeside(session) }
+        var session = session
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             let wasArchived = Self.isArchived(sessions[index])
+            // Read since this was asked for (here, or on the phone): that stands, as the box keeps
+            // the later look.
+            if let seen = sessions[index].time.viewed, seen > (session.time.viewed ?? 0) { session.time.viewed = seen }
             sessions[index] = session
             // Archived or brought back elsewhere (from a phone): its wake-ups wait, or come back,
             // as with Archive here. (Archive here notes it first, so it isn't told twice.)

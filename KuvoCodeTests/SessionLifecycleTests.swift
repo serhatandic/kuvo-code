@@ -77,7 +77,14 @@ import Testing
         workspace.handle(try engine.event("session.viewed", session: "ses_again", ["idle": 6]))
         #expect(workspace.session("ses_again")?.isUnread == true, "it finished again after that look")
         #expect(workspace.waitingCount == 1)
-        #expect(engine.requests("POST", "/api/session/ses_done/view").isEmpty, "not told back to where it came from")
+
+        // A read of it the engine answered before that look (as the run ended, on a machine):
+        // the look stands.
+        engine.on("GET", "/api/session/ses_done", json: ["data": StubEngine.session("ses_done", title: "Renamed", directory: project,
+                                                                                     extra: ["time": ["created": 1, "updated": 10, "idle": 9, "viewed": 4]])])
+        workspace.handle(try engine.event("session.renamed", session: "ses_done"))
+        try await until { workspace.session("ses_done")?.title == "Renamed" }
+        #expect(workspace.session("ses_done")?.isUnread == false)
     }
 
     /// Renamed, archived and moved elsewhere: the lists follow.

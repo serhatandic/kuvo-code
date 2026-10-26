@@ -617,18 +617,20 @@ host serves:
   read on all of them, a machine's with the Mac closed too. A session (a bot's too) is unread
   while `time.idle` is later than `time.viewed`. Read it with `POST api/session/<id>/view`
   (`{"idle"}`, the `time.idle` it was read at; `kuvo/agents/api/…` for a coding agent's): the box
-  keeps the later of that and what it had, and tells every client with `session.viewed`
+  keeps the later of that and what it had, and tells every client of a later look with `session.viewed`
   (`{"sessionID", "idle"}`) on `api/event` (an older coding agents' bridge keeps it without
   telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
   it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
   changes in `kuvo/groups/events` (below).
-- **A message while a command runs** is read at once. A message of yours sent to steer
-  (`delivery: "steer"`) waits for the agent's next step, and an agent waiting on a command or a
-  subagent it started in the foreground takes none until that ends. So each box, following its
-  engine, moves what the agent waits on to the background once it has run for 3 seconds
-  (`POST api/session/<id>/background`, the engine's Ctrl+B): the agent reads your message now, and
-  is told when the command ends (bridge 0.9.67). A message queued for after the turn, a wake-up or
-  an agent's letter waits as before. The coding agents' sessions don't do this yet.
+- **A message while a command runs** is read at once. A message sent to steer
+  (`delivery: "steer"`: yours, or another agent's letter) waits for the agent's next step, and an
+  agent waiting on a command or a subagent it started in the foreground takes none until that
+  ends. So each box, following its engine, moves what the agent waits on to the background once
+  it has run for 3 seconds (`POST api/session/<id>/background`, the engine's Ctrl+B), and again
+  every 3 seconds while the message still waits behind it: the agent reads the message now, and
+  is told when the command ends (bridge 0.9.67). A message queued for after the turn, a wake-up
+  (queued too) or the engine's own notes wait as before. The coding agents' sessions don't do
+  this yet.
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the

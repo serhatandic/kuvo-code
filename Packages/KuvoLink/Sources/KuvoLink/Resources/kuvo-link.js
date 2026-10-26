@@ -5069,40 +5069,46 @@ export function groupNotice(event) {
   return null;
 }
 
-// A message of yours that reaches an agent while it waits on a command or a subagent it started
-// in the foreground is read at once, as it would be at the agent's next step, rather than when the
-// command ends: what it waits on goes on in the background, and the agent is told when it ends (the
-// engine's own Ctrl+B in its terminal). Only your messages sent to steer, never one queued for
-// after the turn, a wake-up or an agent's letter; and only once what it waits on has run for
-// `after` ms, so a quick command simply ends first. `background(session)` does it; each event
-// from the engine goes to what this returns.
+// A message that reaches an agent while it waits on a command or a subagent it started in the
+// foreground is read at once, as it would be at the agent's next step, rather than when the command
+// ends: what it waits on goes on in the background, and the agent is told when it ends (the engine's
+// own Ctrl+B in its terminal). Only messages sent to steer (yours, or another agent's letter), never
+// one queued for after the turn, a wake-up or the engine's own notes; and only once what it waits
+// on has run for `after` ms, so a quick command simply ends first. While one still waits behind it
+// (the call was asking you something first, say), it's tried again every `after` ms.
+// `background(session)` does it; each event from the engine goes to what this returns.
 export const STEER_AFTER = 3000;
 export function steering(background, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal } = {}) {
-  const names = new Map(); // a tool call's ID → its tool
-  const blocking = new Map(); // session → (call ID → when it started), in the foreground
-  const steers = new Map(); // session → your messages waiting for its next step
+  const sessions = new Map(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
+  const users = new Set(); // messages sent as a message (steered or queued) that wait
   const timers = new Map();
-  const users = new Set(); // your messages waiting, steered or queued
-  const steer = (session, inbox) => {
-    if (!steers.has(session)) steers.set(session, new Set());
-    steers.get(session).add(inbox);
-    consider(session);
+  const of = session => {
+    if (!sessions.has(session)) sessions.set(session, { names: new Map(), blocking: new Map(), steers: new Set() });
+    return sessions.get(session);
   };
   const forget = session => {
-    blocking.delete(session);
-    steers.delete(session);
+    sessions.delete(session);
     cancel(timers.get(session));
     timers.delete(session);
   };
   signal?.addEventListener("abort", () => { for (const session of [...timers.keys()]) forget(session); }, { once: true });
   const consider = session => {
-    const calls = blocking.get(session), waiting = steers.get(session);
-    if (!calls?.size || !waiting?.size || timers.has(session) || signal?.aborted) return;
-    const due = Math.min(...calls.values()) + after;
+    const { blocking, steers } = of(session);
+    if (!blocking.size || !steers.size || timers.has(session) || signal?.aborted) return;
+    const due = Math.min(...blocking.values()) + after;
     timers.set(session, schedule(() => {
       timers.delete(session);
-      if (blocking.get(session)?.size && steers.get(session)?.size) background(session);
+      const { blocking, steers } = of(session);
+      if (!blocking.size || !steers.size) return;
+      // The call it was timed by ended meanwhile: the next one gets its moment too.
+      if (Math.min(...blocking.values()) + after > now()) return consider(session);
+      background(session);
+      timers.set(session, schedule(() => { timers.delete(session); consider(session); }, after));
     }, Math.max(0, due - now())));
+  };
+  const steer = (session, inbox) => {
+    of(session).steers.add(inbox);
+    consider(session);
   };
   return event => {
     const data = event?.data ?? {};
@@ -5110,21 +5116,21 @@ export function steering(background, { after = STEER_AFTER, now = Date.now, sche
     if (typeof session !== "string") return;
     switch (event.type) {
       case "session.tool.input.started":
-        if (typeof data.id === "string") names.set(data.id, data.name);
+        if (typeof data.id === "string") of(session).names.set(data.id, data.name);
         break;
       case "session.tool.called": {
-        const name = data.name ?? names.get(data.id);
-        names.delete(data.id);
+        const kept = of(session);
+        const name = data.name ?? kept.names.get(data.id);
+        kept.names.delete(data.id);
         if (!["shell", "subagent"].includes(name) || data.input?.background === true) break;
-        if (!blocking.has(session)) blocking.set(session, new Map());
-        blocking.get(session).set(data.id, now());
+        kept.blocking.set(data.id, now());
         consider(session);
         break;
       }
       case "session.tool.success":
       case "session.tool.failed":
-        names.delete(data.id);
-        blocking.get(session)?.delete(data.id);
+        sessions.get(session)?.names.delete(data.id);
+        sessions.get(session)?.blocking.delete(data.id);
         break;
       case "session.inbox.enqueued":
         if (data.item?.type !== "user") break;
@@ -5134,12 +5140,12 @@ export function steering(background, { after = STEER_AFTER, now = Date.now, sche
       // Sent now, from the queue (Send Now): read at once too; put back in the queue: not.
       case "session.inbox.delivery.changed":
         if (data.delivery === "steer" && users.has(data.inboxID)) steer(session, data.inboxID);
-        else steers.get(session)?.delete(data.inboxID);
+        else sessions.get(session)?.steers.delete(data.inboxID);
         break;
       case "session.inbox.delivered":
       case "session.inbox.cancelled":
         users.delete(data.inboxID);
-        steers.get(session)?.delete(data.inboxID);
+        sessions.get(session)?.steers.delete(data.inboxID);
         break;
       case "session.execution.succeeded":
       case "session.execution.failed":

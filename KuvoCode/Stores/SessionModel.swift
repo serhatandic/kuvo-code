@@ -188,7 +188,10 @@ final class SessionModel {
                 guard let session = call.state.metadata?["sessionID"]?.string ?? known[call.id] else { continue }
                 let input = call.state.input
                 let subagent = Subagent(id: session, call: call.id, task: input?["description"]?.string ?? "", agent: input?["agent"]?.string,
-                                        isBackground: input?["background"]?.bool == true, isStepDone: call.state.isFinished)
+                                        // Sent off in the background, or moved there as it worked (its call
+                                        // done, the subagent still running).
+                                        isBackground: input?["background"]?.bool == true || call.state.metadata?["status"]?.string == "running",
+                                        isStepDone: call.state.isFinished)
                 // One the agent picked up again (by its session) is where it was first, as it is now.
                 if let index = found.firstIndex(where: { $0.id == session }) { found[index] = subagent } else { found.append(subagent) }
             }
