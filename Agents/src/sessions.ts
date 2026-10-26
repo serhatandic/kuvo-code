@@ -1062,10 +1062,13 @@ export class Sessions {
     return false
   }
 
+  /** Looked at up to `idle`, on any client: kept, and told to the others, as the engine tells it. */
   view(id: string, idle: number) {
     const session = this.record(id).session
-    session.time.viewed = Math.max(idle, session.time.viewed ?? 0)
+    if (idle <= (session.time.viewed ?? 0)) return
+    session.time.viewed = idle
     this.store.save(id)
+    emit("session.viewed", { sessionID: id, idle }, session.location.directory)
   }
 
   active(): string[] {

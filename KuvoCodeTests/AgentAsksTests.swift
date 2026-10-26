@@ -103,6 +103,31 @@ import Testing
         #expect((engine.requests("POST", "/api/session/ses_a/prompt").first?.body["text"] as? String)?.contains("build it, as planned") == true)
     }
 
+    /// A subagent the agent waited on, moved to the background as you wrote to the agent (its
+    /// call done, the subagent still at work): what it asks still shows in the conversation when
+    /// it's read again, as nothing else shows it.
+    @Test func aSubagentMovedToTheBackgroundStillAsks() async throws {
+        defer { engine.stop() }
+        let moved: [[String: Any]] = [
+            ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Look into the flaky test"],
+            ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2, "completed": 3], "model": ["id": "m", "providerID": "p"],
+             "content": [["type": "tool", "id": "call_1", "name": "subagent", "executed": true,
+                          "state": ["status": "completed", "input": ["agent": "explore", "description": "Find the flaky test", "prompt": "Find it"],
+                                    "content": [["type": "text", "text": "The subagent is working in the background (sessionID: ses_sub)."]],
+                                    "metadata": ["sessionID": "ses_sub", "status": "running"]]]]],
+        ]
+        engine.list([StubEngine.session("ses_a", title: "Flaky", directory: project)], running: ["ses_a"])
+        engine.conversation("ses_a", moved)
+        engine.on("GET", "/api/session/ses_sub/permission", json: ["data": [["id": "per_sub", "sessionID": "ses_sub", "action": "shell", "resources": ["npm test"]]]])
+        engine.on("GET", "/api/session/ses_sub/form", json: ["data": []])
+        engine.on("GET", "/api/session/ses_a/permission", json: ["data": []])
+        engine.on("GET", "/api/session/ses_a/form", json: ["data": []])
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: "ses_a"))
+        await model.load()
+        #expect(model.permissions.map(\.id) == ["per_sub"])
+    }
+
     /// An MCP server asking you something mid-task (H3): its form belongs to no session, only to
     /// the folder; it shows in the conversation whose tool of that server is at work, not in
     /// another of the same folder, and your answer goes back under that folder.

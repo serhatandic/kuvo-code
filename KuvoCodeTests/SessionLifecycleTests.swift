@@ -63,6 +63,30 @@ import Testing
         #expect(engine.requests("POST", "/api/session/ses_done/view").first?.body["idle"] as? Double == 9)
     }
 
+    /// Read on the phone (or another Mac): its box says so, and it's read here too, off the
+    /// Dock's count; a look at an earlier finish leaves a newer one unread.
+    @Test func readElsewhereIsReadHere() async throws {
+        defer { engine.stop() }
+        await start([
+            StubEngine.session("ses_done", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
+            StubEngine.session("ses_again", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
+        ])
+        #expect(workspace.waitingCount == 2)
+        workspace.handle(try engine.event("session.viewed", session: "ses_done", ["idle": 9]))
+        #expect(workspace.session("ses_done")?.isUnread == false)
+        workspace.handle(try engine.event("session.viewed", session: "ses_again", ["idle": 6]))
+        #expect(workspace.session("ses_again")?.isUnread == true, "it finished again after that look")
+        #expect(workspace.waitingCount == 1)
+
+        // A read of it the engine answered before that look (as the run ended, on a machine):
+        // the look stands.
+        engine.on("GET", "/api/session/ses_done", json: ["data": StubEngine.session("ses_done", title: "Renamed", directory: project,
+                                                                                     extra: ["time": ["created": 1, "updated": 10, "idle": 9, "viewed": 4]])])
+        workspace.handle(try engine.event("session.renamed", session: "ses_done"))
+        try await until { workspace.session("ses_done")?.title == "Renamed" }
+        #expect(workspace.session("ses_done")?.isUnread == false)
+    }
+
     /// Renamed, archived and moved elsewhere: the lists follow.
     @Test func changesMadeElsewhereShowHere() async throws {
         defer { engine.stop() }
