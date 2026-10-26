@@ -25,6 +25,21 @@ import os from "node:os";
 import path from "node:path";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { DOC_KINDS } from "../shared/documents";
+import { isObject, sortedJSON } from "../shared/json";
+import { alive, processRuns as runs, promptedFolders } from "../shared/platform";
+import { addressOf, EMPTY, newKey, publicOf } from "./crypto/keys";
+import { CipherState, IKInitiator, IKResponder, MAIL_PROLOGUE, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
+import { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRelay, relayHello, relayPush, relaySend } from "./relay/frames";
+import { masked, showsAll } from "./notices/mask";
+import { bodyHash, DOC_PART, docBytes, docKey, held, MOST_DOC, MOST_PARTS, newSigningSeed, ownSign, readDoc, shortHash, SIGN, signDoc, signingKeyOf } from "./documents/format";
+
+// What moved into modules, as this file exported it (the bridge's tests import it from here).
+export { addressOf, newKey, publicOf } from "./crypto/keys";
+export { CipherState, IKInitiator, IKResponder, MAIL_PROLOGUE, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
+export { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRelay, relayHello, relayPush, relaySend } from "./relay/frames";
+export { isSecretName, markingHashes, masked, maskedHexValues, maskedNamed, namesHash, showsAll } from "./notices/mask";
+export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingKeyOf } from "./documents/format";
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
@@ -50,276 +65,6 @@ const PID_FILE = path.join(RUN, "link.pid");
 const NEEDED_FILE = path.join(RUN, "link.needed");
 const VERSION_FILE = path.join(RUN, "link.version");
 const PAIRING_MINUTES = 10;
-
-// ---- Keys: X25519 keys are kept as their raw 32 bytes ----
-
-const PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
-const SPKI = Buffer.from("302a300506032b656e032100", "hex");
-const EMPTY = Buffer.alloc(0);
-
-const privateKey = raw => crypto.createPrivateKey({ key: Buffer.concat([PKCS8, raw]), format: "der", type: "pkcs8" });
-const publicKey = raw => crypto.createPublicKey({ key: Buffer.concat([SPKI, raw]), format: "der", type: "spki" });
-export const newKey = () => crypto.generateKeyPairSync("x25519").privateKey.export({ format: "der", type: "pkcs8" }).subarray(PKCS8.length);
-export const publicOf = raw => crypto.createPublicKey(privateKey(raw)).export({ format: "der", type: "spki" }).subarray(SPKI.length);
-const dh = (raw, remote) => crypto.diffieHellman({ privateKey: privateKey(raw), publicKey: publicKey(remote) });
-export const addressOf = secret => crypto.createHash("sha256").update("kuvo-link address v1").update(secret).digest().subarray(0, 16);
-
-// ---- Noise: IK for sessions, K for mail, with X25519, AES-GCM and SHA-256 ----
-
-const sha256 = data => crypto.createHash("sha256").update(data).digest();
-const hmac = (key, data) => crypto.createHmac("sha256", key).update(data).digest();
-function hkdf(chainingKey, input) {
-  const temp = hmac(chainingKey, input);
-  const first = hmac(temp, Buffer.from([1]));
-  return [first, hmac(temp, Buffer.concat([first, Buffer.from([2])]))];
-}
-
-export class CipherState {
-  constructor(key) {
-    this.key = key;
-    this.n = 0n;
-  }
-
-  nonce() {
-    const nonce = Buffer.alloc(12);
-    nonce.writeBigUInt64BE(this.n, 4);
-    return nonce;
-  }
-
-  encrypt(ad, plaintext) {
-    if (!this.key) return plaintext;
-    const cipher = crypto.createCipheriv("aes-256-gcm", this.key, this.nonce());
-    cipher.setAAD(ad);
-    const sealed = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
-    this.n += 1n;
-    return sealed;
-  }
-
-  decrypt(ad, ciphertext) {
-    if (!this.key) return ciphertext;
-    if (ciphertext.length < 16) throw new Error("decrypt");
-    const decipher = crypto.createDecipheriv("aes-256-gcm", this.key, this.nonce());
-    decipher.setAAD(ad);
-    decipher.setAuthTag(ciphertext.subarray(-16));
-    let plaintext;
-    try {
-      plaintext = Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()]);
-    } catch {
-      throw new Error("decrypt");
-    }
-    this.n += 1n;
-    return plaintext;
-  }
-}
-
-class SymmetricState {
-  constructor(name, prologue) {
-    const bytes = Buffer.from(name);
-    this.h = bytes.length <= 32 ? Buffer.concat([bytes, Buffer.alloc(32 - bytes.length)]) : sha256(bytes);
-    this.ck = this.h;
-    this.cipher = new CipherState();
-    this.mixHash(prologue);
-  }
-
-  mixKey(input) {
-    const [chainingKey, key] = hkdf(this.ck, input);
-    this.ck = chainingKey;
-    this.cipher = new CipherState(key);
-  }
-
-  mixHash(data) {
-    this.h = sha256(Buffer.concat([this.h, data]));
-  }
-
-  encryptAndHash(plaintext) {
-    const ciphertext = this.cipher.encrypt(this.h, plaintext);
-    this.mixHash(ciphertext);
-    return ciphertext;
-  }
-
-  decryptAndHash(ciphertext) {
-    const plaintext = this.cipher.decrypt(this.h, ciphertext);
-    this.mixHash(ciphertext);
-    return plaintext;
-  }
-
-  split() {
-    const [first, second] = hkdf(this.ck, EMPTY);
-    return [new CipherState(first), new CipherState(second)];
-  }
-}
-
-const IK = "Noise_IK_25519_AESGCM_SHA256";
-const ONE_WAY = "Noise_K_25519_AESGCM_SHA256";
-export const PROLOGUE = Buffer.from("kuvo-link v1");
-export const MAIL_PROLOGUE = Buffer.from("kuvo-link mail v1");
-
-const transport = (sending, receiving, hash) => ({
-  hash,
-  seal: plaintext => sending.encrypt(EMPTY, plaintext),
-  open: ciphertext => receiving.decrypt(EMPTY, ciphertext),
-});
-
-// The side that starts (the phone), knowing the other's static key. Here for tests.
-export class IKInitiator {
-  constructor(s, rs, prologue, e = newKey()) {
-    Object.assign(this, { s, rs, e, state: new SymmetricState(IK, prologue) });
-    this.state.mixHash(rs);
-  }
-
-  writeMessage1(payload) {
-    const state = this.state;
-    const ephemeral = publicOf(this.e);
-    state.mixHash(ephemeral);
-    state.mixKey(dh(this.e, this.rs));
-    const s = state.encryptAndHash(publicOf(this.s));
-    state.mixKey(dh(this.s, this.rs));
-    return Buffer.concat([ephemeral, s, state.encryptAndHash(payload)]);
-  }
-
-  readMessage2(message) {
-    if (message.length < 48) throw new Error("malformed");
-    const state = this.state;
-    const re = message.subarray(0, 32);
-    state.mixHash(re);
-    state.mixKey(dh(this.e, re));
-    state.mixKey(dh(this.s, re));
-    const payload = state.decryptAndHash(message.subarray(32));
-    const [first, second] = state.split();
-    return { payload, transport: transport(first, second, state.h) };
-  }
-}
-
-// The side that answers (this machine), learning the phone's static key.
-export class IKResponder {
-  constructor(s, prologue, e = newKey()) {
-    Object.assign(this, { s, e, state: new SymmetricState(IK, prologue) });
-    this.state.mixHash(publicOf(s));
-  }
-
-  readMessage1(message) {
-    if (message.length < 96) throw new Error("malformed");
-    const state = this.state;
-    this.re = message.subarray(0, 32);
-    state.mixHash(this.re);
-    state.mixKey(dh(this.s, this.re));
-    this.rs = state.decryptAndHash(message.subarray(32, 80));
-    state.mixKey(dh(this.s, this.rs));
-    return state.decryptAndHash(message.subarray(80));
-  }
-
-  writeMessage2(payload) {
-    const state = this.state;
-    const ephemeral = publicOf(this.e);
-    state.mixHash(ephemeral);
-    state.mixKey(dh(this.e, this.re));
-    state.mixKey(dh(this.e, this.rs));
-    const message = Buffer.concat([ephemeral, state.encryptAndHash(payload)]);
-    const [first, second] = state.split();
-    return { message, transport: transport(second, first, state.h) };
-  }
-}
-
-// One message to a device that knows the sender, for pushes.
-export function sealOneWay(payload, s, rs, prologue = MAIL_PROLOGUE, e = newKey()) {
-  const state = new SymmetricState(ONE_WAY, prologue);
-  state.mixHash(publicOf(s));
-  state.mixHash(rs);
-  const ephemeral = publicOf(e);
-  state.mixHash(ephemeral);
-  state.mixKey(dh(e, rs));
-  state.mixKey(dh(s, rs));
-  return { message: Buffer.concat([ephemeral, state.encryptAndHash(payload)]), following: state.split()[0] };
-}
-
-export function openOneWay(message, s, rs, prologue = MAIL_PROLOGUE) {
-  if (message.length < 48) throw new Error("malformed");
-  const state = new SymmetricState(ONE_WAY, prologue);
-  state.mixHash(rs);
-  state.mixHash(publicOf(s));
-  const re = message.subarray(0, 32);
-  state.mixHash(re);
-  state.mixKey(dh(s, re));
-  state.mixKey(dh(s, rs));
-  return { payload: state.decryptAndHash(message.subarray(32)), following: state.split()[0] };
-}
-
-// ---- Frames ----
-
-export const Frame = { handshake1: 1, handshake2: 2, transport: 3, close: 4, mail: 5 };
-const MAX_MESSAGE = 65535 - 16;
-
-export const relayHello = secret => Buffer.concat([Buffer.from([1]), secret]);
-export const relaySend = (to, payload) => Buffer.concat([Buffer.from([2]), to, payload]);
-export const relayPush = (to, payload) => Buffer.concat([Buffer.from([5]), to, payload]);
-
-// What the relay sent, or null.
-export function readRelay(bytes) {
-  const kind = bytes[0];
-  const address = bytes.subarray(1, 17);
-  if (kind === 1 && bytes.length === 17) return { kind: "welcome", address };
-  if (kind === 2 && bytes.length >= 17) return { kind: "deliver", address, payload: bytes.subarray(17) };
-  if (kind === 3 && bytes.length === 17) return { kind: "unreachable", address };
-  if (kind === 6 && bytes.length === 18) return { kind: "pushed", address, status: bytes[17] };
-  // A reason it doesn't know yet counts as left: the sessions are over either way.
-  if (kind === 7 && bytes.length === 18) return { kind: "gone", address, reason: bytes[17] === 0 ? "replaced" : "left" };
-  return null;
-}
-
-export function frame(kind, session, body = EMPTY) {
-  const header = Buffer.alloc(5);
-  header[0] = kind;
-  header.writeUInt32BE(session, 1);
-  return Buffer.concat([header, body]);
-}
-
-export function readFrame(bytes) {
-  if (bytes.length < 5 || bytes[0] < 1 || bytes[0] > 5) return null;
-  return { kind: bytes[0], session: bytes.readUInt32BE(1), body: bytes.subarray(5) };
-}
-
-// JSON with sorted keys, as the Swift side writes it.
-function sortedJSON(value) {
-  if (Array.isArray(value)) return `[${value.map(sortedJSON).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().filter(k => value[k] !== undefined).map(k => `${JSON.stringify(k)}:${sortedJSON(value[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-export function encodeMessage(head, body = EMPTY) {
-  const json = Buffer.from(sortedJSON(head));
-  const length = Buffer.alloc(2);
-  length.writeUInt16BE(json.length);
-  return Buffer.concat([length, json, body]);
-}
-
-export function decodeMessage(bytes) {
-  if (bytes.length < 2) return null;
-  const length = bytes.readUInt16BE(0);
-  if (bytes.length < 2 + length) return null;
-  try {
-    return { head: JSON.parse(bytes.subarray(2, 2 + length).toString("utf8")), body: bytes.subarray(2 + length) };
-  } catch {
-    return null;
-  }
-}
-
-// `head` and `body` as messages that each fit: the first with `head`, the rest as `data`.
-export function pieces(head, body, end) {
-  if (Buffer.byteLength(sortedJSON(head)) > 60_000) throw new Error("head too long");
-  const out = [];
-  let current = { ...head, end: false };
-  let offset = 0;
-  do {
-    const room = MAX_MESSAGE - 2 - Buffer.byteLength(sortedJSON(current)) - 8;
-    out.push([current, body.subarray(offset, offset + room)]);
-    offset += room;
-    current = { t: "data", id: head.id, end: false };
-  } while (offset < body.length);
-  out[out.length - 1][0].end = end;
-  return out.map(([h, b]) => encodeMessage(h, b));
-}
 
 // ---- The host: answers paired phones' sessions (the Mac app's LinkServer, in JavaScript) ----
 
@@ -1988,9 +1733,8 @@ export function listFolders(requestPath) {
     return { status: 403, value: { message: `${at} can't be read here.` } };
   }
   const hidden = query.get("hidden") === "1";
-  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them
-  // (privacy prompts); Linux has none, so it looks into every folder.
-  const asks = process.platform === "darwin" && at === home ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set();
+  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
+  const asks = at === home ? promptedFolders() : new Set();
   const isFolder = entry => entry.isDirectory() || (entry.isSymbolicLink() && (() => { try { return fs.statSync(path.join(at, entry.name)).isDirectory(); } catch { return false; } })());
   const folders = entries
     .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
@@ -4723,135 +4467,6 @@ function prefixBytes(text, bytes) {
 const cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
 
 // A notification's JSON, under NOTICE_LIMIT bytes: what doesn't fit of the body ends in "…".
-// ---- What a notice shows (KuvoLink's SecretMask: the same rules, held to Vectors/masking.json) ----
-// What looks like a secret (a key, a token, a password) as dots, everything else as written, so a
-// notice on a phone's lock screen never shows one and still says what happened.
-
-const SHOWN_LENGTH = 4000;
-const HASH_NAMES = "commit|sha|sha1|sha256|sha512|md5|rev|revision|hash|ref|head|onto|checksum|digest|etag|integrity|fingerprint|cache[ _.-]?key|public[ _.-]?key|object|oid|tree|parent|blob|base|id|uuid|tag|build|version|release";
-// Either case, letter by letter (a part of a pattern that takes either, where the rest doesn't).
-const eitherCase = word => [...word].map(letter => /[a-z]/i.test(letter) ? `[${letter.toLowerCase()}${letter.toUpperCase()}]` : letter).join("");
-
-const trimmedName = prefix => prefix.replace(/[\s:=>"'\]\\_-]+$/, "");
-
-export function isSecretName(prefix) {
-  const name = trimmedName(prefix);
-  const word = name.split(/[\s([{,;"'=/]+/).filter(Boolean).at(-1) ?? "";
-  if (/secret|private|pass|pwd|token|credential/i.test(word)) return true;
-  return /key$/i.test(name) && !/(cache|public)[ _.-]?key$/i.test(name);
-}
-
-export function namesHash(prefix) {
-  if (prefix.endsWith(":")) {
-    const before = prefix.slice(0, -1);
-    const token = before.split(/\s+/).filter(Boolean).at(-1);
-    if (token && /[/.]/.test(token) && before.length && !/\s/.test(before.at(-1))) return true;
-  }
-  return !isSecretName(prefix) && new RegExp(`(?:${HASH_NAMES})s?$`, "i").test(trimmedName(prefix));
-}
-
-const HEX_AFTER_NAME = /(?<=[A-Za-z0-9_])(?:\\?["'])?\]?[ \t]*(?::=|=>|[:=])[ \t]*(?:\\?["'])?([0-9a-fA-F]{32,})(?![0-9A-Za-z])/dg;
-
-export function maskedHexValues(text) {
-  let result = text;
-  for (const match of [...text.matchAll(HEX_AFTER_NAME)].reverse()) {
-    const [start, end] = match.indices[1];
-    const prefix = text.slice(Math.max(0, start - 32), start);
-    if (namesHash(prefix)) continue;
-    result = result.slice(0, start) + "•••" + result.slice(end);
-  }
-  return result;
-}
-
-const HEX_PART = /(?<![0-9A-Za-z])[0-9a-f]{32,}(?![0-9A-Za-z])/g;
-
-export function markingHashes(run, before) {
-  let result = run;
-  for (const hit of [...run.matchAll(HEX_PART)].reverse()) {
-    const prefix = (before + run.slice(0, hit.index)).slice(-32);
-    const isCommit = hit[0].length === 40 || hit[0].length === 64;
-    let isHash;
-    if (isCommit && (!prefix.length || /[\s/+"'([]/.test(prefix.at(-1)))) isHash = true;
-    else if (isCommit && prefix.endsWith("-")) isHash = !isSecretName(prefix);
-    else isHash = namesHash(prefix);
-    if (isHash) result = result.slice(0, hit.index) + "h" + result.slice(hit.index + hit[0].length);
-  }
-  return result;
-}
-
-const WORDS = /[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g;
-
-// `text` cut to what a notice shows, between words, so a key isn't cut short of looking like one.
-function cutShown(text) {
-  const start = [...text].slice(0, SHOWN_LENGTH);
-  let end = start.length;
-  for (let index = start.length - 1; index >= Math.max(0, start.length - 100); index--) {
-    if (!/[\p{L}\p{N}_\-+/=]/u.test(start[index])) {
-      end = index;
-      break;
-    }
-  }
-  return start.slice(0, end).join("") + "…";
-}
-
-export function maskedNamed(text) {
-  // (A possessive `?+` written as a lookahead captured and matched again: what's there is taken.)
-  const named = /((?:api[_-]?key|secret(?:[_-]?access[_-]?key)?|password|passwd|authorization)["']?\s*[:=]\s*["']?(?=((?:bearer\s+|basic\s+|token\s+(?:token=)?["']?)?))\2|bearer\s+|(?<![\w-])--(?=\w)[\w-]{0,60}?(?:password|passwd|secret)[=\s]+(?!-))[^\s"'&;]{3,}/gi;
-  text = text.replace(named, "$1•••");
-  const flag = /((?<![\w-])--(?=\w)[\w-]{0,60}?(?<!(?:sort|foreign|partition|group|cache|order|index|range|lookup|hash)[-_])(?<!hot|turn|mon)(?:token|key)[=\s]+(?!-))(?![0-9][^\s"'&;]{0,7}(?:[\s"'&;]|$))[^\s"'&;]{3,}/gi;
-  text = text.replace(flag, "$1•••");
-  text = maskedHexValues(text);
-  const token = /(token["']?\s*[:=]\s*["']?(?=((?:bearer\s+|basic\s+)?))\2)(?![0-9]+(?:[\s"'&;,}]|$))[^\s"'&;]{3,}/gi;
-  text = text.replace(token, "$1•••");
-  text = text.replace(/(:\/\/[^\s/:@]+:)[^\s/@]+@/g, "$1•••@");
-  text = text.replace(/(:\/\/)[^\s/:@]{20,}@/g, "$1•••@");
-  text = text.replace(/(\bcurl\b[^\n]*?\s(?:-u|--user)\s+[^\s:]+:)\S+/g, "$1•••");
-  text = text.replace(/(secret[_-]?access[_-]?key\s+)\S+/gi, "$1•••");
-  text = text.replace(/(hooks\.slack\.com\/services\/)[^\s"'<>]+/g, "$1•••");
-  const mysql = new RegExp(`(\\b(?:${["mysql", "mariadb", "mysqldump", "mysqladmin"].map(eitherCase).join("|")})\\b[^\\n]*?\\s-p)\\S+`, "g");
-  text = text.replace(mysql, "$1•••");
-  return text;
-}
-
-const KEY_STARTS = /^(sk-|sk_live_|sk_test_|rk_live_|rk_test_|whsec_|ghp_|gho_|ghs_|github_pat_|xox[abpe]-|AKIA|AIza|glpat-|dop_v1_|sbp_|pul-|npm_|hf_|gsk_|xai-|pplx-|r8_|lin_api_|ntn_|shp(at|ss|ca)_)/;
-const IS_HASH = /^([0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
-
-export function masked(text) {
-  text = maskedNamed([...text].length > SHOWN_LENGTH ? cutShown(text) : text);
-  let result = "";
-  let at = 0;
-  for (const match of text.matchAll(/[A-Za-z0-9_\-+/=]{20,}/g)) {
-    const run = match[0];
-    const location = match.index;
-    if (run.length < 24) {
-      if (!/^(AKIA|ASIA)[0-9A-Z]{16}$/.test(run)) continue;
-      result += text.slice(at, location) + "•••";
-      at = location + run.length;
-      continue;
-    }
-    const prefixed = run.split("/").some(part => KEY_STARTS.test(part));
-    const isHash = IS_HASH.test(run);
-    const before = text.slice(Math.max(0, location - 32), Math.max(0, location - 32) + Math.min(32, location));
-    const plain = markingHashes(run, before)
-      .replace(/(?<![0-9A-Fa-f])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9A-Fa-f])/g, "u")
-      .replace(/\/var\/folders\/[^/]+\/[^/]+/g, "/var/folders/t/t");
-    const wordy = plain.split(/[/\-_.]/).filter(part => part.length).every(part => {
-      if (part.length < 12) return true;
-      if (/^[0-9]*[a-fA-F][0-9a-fA-F]*$/.test(part)) return part.length < 20;
-      return part.length / Math.max(1, (part.match(WORDS) ?? []).length) >= 3.5;
-    });
-    const mixed = /[A-Za-z]/.test(run) && /\d/.test(run);
-    if (!((prefixed && mixed) || (mixed && !isHash && !wordy))) continue;
-    result += text.slice(at, location) + "•••";
-    at = location + run.length;
-  }
-  return result + text.slice(at);
-}
-
-// Whether a notice shows all of `text`: one that hides some of it doesn't answer from its buttons,
-// as you'd answer what you can't see.
-export const showsAll = text => [...text].length <= SHOWN_LENGTH && masked(text) === text;
-
 export function noticeJSON(notice) {
   // What it shows masked, as the Mac's own notifications are: a phone's lock screen never shows
   // a key.
@@ -5901,7 +5516,6 @@ const SERVERS = ["mcp", "servers"];
 // COMPAT(0.7 settings): the routes answer 409 until a Mac adopts the settings an older Mac's start left. Goes 3 months after 0.8.0.
 export const ownsSettings = (mark = OWN_MARK) => mark === null || fs.existsSync(mark);
 
-const isObject = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const sortedKeys = value => Array.isArray(value) ? value.map(sortedKeys)
   : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedKeys(value[key])])) : value;
 
@@ -6587,85 +6201,6 @@ const ownPhones = link => ({
 // kind from. No clock decides anything: boxes tell each other what they have as they meet
 // (`have`), what changed as it changes (`give`), and what they have again with their agents.
 
-const DOC_SIGNED = Buffer.from("kuvo-link doc v1\0");
-const DOC_KINDS = ["peers", "phones", "personalities"];
-// A document at most so big (its JSON), and in a mail at most so much of one; a bigger one goes in parts.
-export const MOST_DOC = 512 * 1024;
-const DOC_PART = 40_000;
-const MOST_PARTS = Math.ceil(MOST_DOC * 4 / 3 / DOC_PART) + 1;
-const SIGN = /^[A-Za-z0-9_-]{43}$/;
-const ED_PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
-const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
-
-export const newSigningSeed = () => crypto.randomBytes(32).toString("base64url");
-const edPrivate = seed => crypto.createPrivateKey({ key: Buffer.concat([ED_PKCS8, Buffer.from(seed, "base64url")]), format: "der", type: "pkcs8" });
-const edPublic = key => crypto.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(key, "base64url")]), format: "der", type: "spki" });
-const signingKeys = new Map();
-// The public half of a signing key (its 32-byte seed): what documents name as their origin.
-export function signingKeyOf(seed) {
-  let key = signingKeys.get(seed);
-  if (!key) {
-    key = crypto.createPublicKey(edPrivate(seed)).export({ format: "der", type: "spki" }).subarray(ED_SPKI.length).toString("base64url");
-    signingKeys.set(seed, key);
-  }
-  return key;
-}
-export const ownSign = link => { try { return typeof link?.sign === "string" ? signingKeyOf(link.sign) : null; } catch { return null; } };
-
-const shortHash = bytes => crypto.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
-const bodyHash = body => shortHash(Buffer.from(JSON.stringify(body)));
-// The bytes an origin signs for one version of its document.
-export const docBytes = (origin, kind, n, body) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));
-
-// Version `n` of the document of `kind` that the key `seed` signs: `{d, s}`, as it's given.
-export function signDoc(seed, kind, n, body) {
-  const bytes = docBytes(signingKeyOf(seed), kind, n, body);
-  return { d: bytes.toString("base64url"), s: crypto.sign(null, Buffer.concat([DOC_SIGNED, bytes]), edPrivate(seed)).toString("base64url") };
-}
-
-// A document as given, checked: signed by the origin it names, of a kind there is, its version a
-// whole number from 1, no bigger than a document can be. `{origin, kind, n, body, h, envelope}`
-// (`h`, its bytes' hash, as digests name it), or null.
-export function readDoc(envelope) {
-  if (!isObject(envelope) || typeof envelope.d !== "string" || typeof envelope.s !== "string" || envelope.d.length > Math.ceil(MOST_DOC * 4 / 3) + 4) return null;
-  let bytes, doc;
-  try {
-    bytes = Buffer.from(envelope.d, "base64url");
-    if (bytes.length > MOST_DOC || bytes.toString("base64url") !== envelope.d) return null;
-    doc = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (!isObject(doc) || doc.v !== 1 || !DOC_KINDS.includes(doc.kind) || typeof doc.origin !== "string" || !SIGN.test(doc.origin)
-    || !Number.isSafeInteger(doc.n) || doc.n < 1 || !isObject(doc.body)) return null;
-  try {
-    const signature = Buffer.from(envelope.s, "base64url");
-    if (signature.length !== 64 || !crypto.verify(null, Buffer.concat([DOC_SIGNED, bytes]), edPublic(doc.origin), signature)) return null;
-  } catch {
-    return null;
-  }
-  return { origin: doc.origin, kind: doc.kind, n: doc.n, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
-}
-
-// One this box keeps (`link.docs`, checked as it came), read again; remembered, as it's read often.
-const heldDocs = new Map();
-function held(envelope) {
-  if (typeof envelope?.d !== "string") return null;
-  let doc = heldDocs.get(envelope.d);
-  if (!doc) {
-    try {
-      const bytes = Buffer.from(envelope.d, "base64url");
-      const parsed = JSON.parse(bytes.toString("utf8"));
-      doc = { origin: parsed.origin, kind: parsed.kind, n: parsed.n, body: isObject(parsed.body) ? parsed.body : {}, h: shortHash(bytes), envelope };
-    } catch {
-      return null;
-    }
-    if (heldDocs.size >= 256) heldDocs.delete(heldDocs.keys().next().value);
-    heldDocs.set(envelope.d, doc);
-  }
-  return doc;
-}
-const docKey = (origin, kind) => `${origin} ${kind}`;
 
 // COMPAT(beta.1 peers-list): a Mac that gave no signing key signs no documents. Goes when 0.8.0 ships.
 // The signing key a Mac of this box's gave in setup, over SSH; null for one that gave none yet (a
@@ -9573,27 +9108,7 @@ export function connectOnce(relay, secret, host, onWelcome = machineWelcomed) {
   });
 }
 
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Whether `pid` runs `name`, not whatever took its number after a crash: on Linux its command
-// line says so (elsewhere, where there's no /proc, that it's alive).
-function runs(pid, name) {
-  if (!Number.isInteger(pid) || pid <= 1 || !alive(pid)) return false;
-  try {
-    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(name);
-  } catch {
-    // A Mac's own box: no /proc there, so a process that's alive is taken as it (the app removes
-    // its records as what they name stops).
-    return !fs.existsSync("/proc");
-  }
-}
+// (Whether a process is alive, and runs what it should: `alive` and `runs`, ../shared/platform.)
 
 // Another bridge.
 const isBridge = pid => pid !== process.pid && runs(pid, "kuvo-link.js");
