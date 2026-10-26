@@ -1,0 +1,40 @@
+// A box's folders to choose one from (PROTOCOL.md, `kuvo/folders`), npm's plugins its engine can
+// load (`kuvo/plugins/search`), and a sign-in's return loaded on the computer it's for
+// (`kuvo/sign-in/return`).
+
+import { bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
+
+/** The folders in one of this box's folders: its path, the home folder, the one it's in (null for
+ * the top), and the folders in it, ordered as Finder orders names (`repository`: a git
+ * repository's own checkout). */
+export const FOLDER_LIST = object({
+  path: string,
+  home: string,
+  parent: nullable(string),
+  folders: list(object({ name: string, "repository?": bool })),
+});
+/** A new folder, made where it was asked. */
+export const FOLDER_MADE = object({ path: string });
+
+/** npm's packages a search finds, the one it names exactly first: each one's name, version, what
+ * it says it is and its downloads last week, where npm says; `missing`, a package (or version)
+ * named that npm doesn't have. */
+export const PLUGIN_SEARCH = object({
+  packages: list(object({ name: string, "version?": string, "description?": string, "weekly?": number })),
+  "missing?": string,
+});
+
+/** The status the computer's own address answered a sign-in's return with (2xx or 3xx: it took it). */
+export const SIGN_IN_RETURNED = object({ status: number });
+
+export type FolderList = Infer<typeof FOLDER_LIST>;
+export type FolderMade = Infer<typeof FOLDER_MADE>;
+export type PluginSearch = Infer<typeof PLUGIN_SEARCH>;
+export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
+
+export const MISC_ROUTES: RouteShape[] = [
+  { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST } },
+  { route: "POST kuvo/folders", answers: { 200: FOLDER_MADE } },
+  { route: "GET kuvo/plugins/search", answers: { 200: PLUGIN_SEARCH } },
+  { route: "POST kuvo/sign-in/return", answers: { 200: SIGN_IN_RETURNED } },
+];

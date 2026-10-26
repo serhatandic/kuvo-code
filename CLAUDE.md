@@ -23,6 +23,7 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 - Work through every state: empty, loading, failed, long text, many items, a narrow window, light and dark, larger text, and VoiceOver.
 - See it yourself in a demo copy before calling it done, and look at it as the user will.
 - **UI work starts with drafts to pick from, always.** Before building any screen, control or visible change, draft two or three options (mocks or renders, light and dark) with your recommendation and why, and let the user pick. Build the picked one; meanwhile build only what doesn't depend on the choice. This holds even when one option seems obvious.
+- **Look at how the best do it first.** Before designing a feature or a screen, study how the leading products handle the same thing (other agent apps like Codex, Claude Code and Cursor, and the best of their kind, like GitHub, Linear or Apple's own apps). Bring what you found with your drafts: what you borrow, and where Kuvo Code does it differently and why.
 - When the machinery makes the right UI hard, change the machinery. Don't bend the UI around it.
 - **The right panel is only for common tools**: the browser, terminals, files, and Changes for coding sessions. A feature's own view goes where it belongs, never in a new panel tab: a popover or sheet on the conversation (like Artifacts), or a page in Settings.
 
@@ -169,6 +170,11 @@ style and CodeColors (`CodeBlockStyle.swift`, `CodeHighlighter.swift`) and the s
 conversation, cards, composer or sidebar look, change the phone's copy too (or tell the session
 working on the phone), so the two stay one app. The same goes for the app icon: the phone's
 `KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
+
+What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
+against from this checkout as it does OpenCodeKit. Today that's `ClientText`, the rules for what a
+message says (picture names, web links, the site a link is on); its README says what belongs there.
+A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
 
 ## Upstreams stay up to date
 

@@ -37,8 +37,9 @@ Bun's own.
 
 ## Where things go
 
-`src/link/main.ts` is today's `kuvo-link.js`, unchecked (`@ts-nocheck`). Its parts move out into
-typed modules one at a time, each move passing every suite, until it's only the command line:
+`src/link` is `kuvo-link.js`, every file of it type-checked (`bun run check`, and a test that none
+says `@ts-nocheck`); `main.ts` is the command line, and each route's answer has a shape in
+`src/shared/routes`, which both boxes are held to:
 
 ```
 src/shared/      what both programs and the contract suite read: run/ records, features, documents,
@@ -47,12 +48,23 @@ src/shared/      what both programs and the contract suite read: run/ records, f
                  each side tested
 src/link/
   main.ts        the command line (run, serve, setup, pair, leave, update, box …, selftest)
+  home.ts state.ts files.ts   the box's folders, link.json, writing files
   crypto/        keys, Noise sessions and mail, signing
   relay/         frames, the host's sessions, the relay connection
-  documents/ peers/ phones.ts state.ts
-  server/        the route table (a path to its area, nothing else), forwarding to the engine, serve
-  areas/         one module per route family: projects, worktrees, skills, integrations, bots, wakes,
-                 groups, config, personalities, accounts, asks, artifacts, folders, plugins…
-  notices/ updates/ host.ts mac-link.ts
+  engine/        asking the engine and the agents bridge, its sessions, its events
+  peers/         the other boxes: who they are, their agents and this box's, "&" names, mail,
+                 group chats' seats
+  documents/     what boxes copy between them: their format, the work of taking and giving them,
+                 sending them
+  letters/       agents' messages to agents on other boxes: the outbox, and those that come here
+  phones.ts      paired phones
+  bots/ personalities/   bots, and the personalities library (yours, and others' copies taken)
+  server/        the route table (a path to its area, nothing else), forwarding to the engine and
+                 who a prompt names with "&", the server on a Mac
+  mac/           this Mac's box: its link on the relay, what its app asks of it, its notices, its
+                 part among your other computers
+  areas/         one module per route family: projects, worktrees, skills, integrations, wakes,
+                 groups, config, accounts, asks, artifacts, folders, plugins…
+  notices/ updates/ host-interface.ts keeper.ts
   compat/        what's only for released Macs, where it's a whole thing
 ```

@@ -1,0 +1,105 @@
+// The box itself (PROTOCOL.md, "Messages in a session" and "Updates"): what it is and runs, its
+// updates, the phones paired with it, whether you're at a computer, and who `&` can name.
+
+import { FEATURES } from "../features";
+import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
+import { MAC_FEATURES } from "./mac";
+
+/** What the box is and runs (`kuvo/info`): a Mac's names its app's version and its integrations, a
+ * machine's its bridge's version and whether its engine runs or is stopped on purpose. `started`:
+ * when the engine running now came up, in seconds since 1970 (null while none runs). */
+export const INFO = oneOf(
+  object({
+    kind: literal("mac"),
+    name: string,
+    app: string,
+    engine: string,
+    features: list(words(...FEATURES, ...MAC_FEATURES)),
+    agents: bool,
+    started: nullable(number),
+    chats: string,
+    integrations: map(string),
+  }),
+  object({
+    kind: literal("machine"),
+    name: string,
+    bridge: string,
+    engine: nullable(string),
+    features: list(words(...FEATURES)),
+    agents: bool,
+    started: nullable(number),
+    chats: string,
+    running: bool,
+    stopped: bool,
+  }),
+);
+
+/** An update's step under way. */
+const STEP = words("checking", "downloading", "downloading the engine", "checking it", "installing", "starting");
+/** How the last one went: `from` and `to` once one's done, or what it said. */
+const LAST_UPDATE = object({
+  at: number,
+  result: words("updated", "current", "waiting", "busy", "off", "blocked", "failed"),
+  "version?": string,
+  "message?": string,
+  "from?": string,
+  "to?": string,
+});
+/** This box's updates (`kuvo/update`): whether they're set up, its version and its engine's, the
+ * latest it knows of, how the last one went, the step under way, and why it can't update. */
+export const UPDATE = object({
+  setUp: bool,
+  version: nullable(string),
+  engine: nullable(string),
+  latest: nullable(string),
+  last: nullable(LAST_UPDATE),
+  updating: nullable(STEP),
+  blocked: nullable(string),
+});
+
+/** The phones paired here, `you` being the one asking. */
+export const PHONES = object({ phones: list(object({ key: string, name: string, added: nullable(number), pairing: string, you: bool })) });
+/** A link for another phone to pair with (good once), and when it ends, in seconds since 1970. */
+export const PAIRING = object({ link: string, ends: number });
+
+/** Whether a client's in use here, and how many notices wait. */
+export const ATTENTION = object({ inUse: bool, held: number });
+
+/** Who `&` can name in a message here: this box's bots and latest sessions (`machine` null), then
+ * those its other computers told it of. */
+export const NAMED = object({
+  agents: list(object({ session: string, name: string, kind: words("bot", "session"), machine: nullable(string), project: nullable(string), about: nullable(string) })),
+});
+
+/** The plans whose sign-in ran out and couldn't be renewed, by provider. */
+export const ENDED = object({ providers: list(string) });
+/** This box's sign-ins. */
+export const CREDENTIALS = object({ credentials: list(object({ id: string, integrationID: string, label: string, active: bool })) });
+
+export type BoxInfo = Infer<typeof INFO>;
+/** A machine's, as its link answers. */
+export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
+export type UpdateStatus = Infer<typeof UPDATE>;
+export type Phones = Infer<typeof PHONES>;
+export type Named = Infer<typeof NAMED>;
+
+export const BOX_ROUTES: RouteShape[] = [
+  { route: "GET kuvo/info", answers: { 200: INFO } },
+  { route: "GET kuvo/update", answers: { 200: UPDATE } },
+  { route: "POST kuvo/update", answers: { 202: UPDATE } },
+  { route: "GET kuvo/file", answers: { 200: BYTES } },
+  { route: "GET kuvo/phones", answers: { 200: PHONES } },
+  { route: "POST kuvo/phones/remove", answers: { 200: NOTHING } },
+  { route: "POST kuvo/phones/pair", answers: { 200: PAIRING } },
+  { route: "DELETE kuvo/phones/pair", answers: { 200: NOTHING } },
+  { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
+  { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
+  { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },
+  { route: "POST kuvo/attention/answered", answers: { 200: NOTHING } },
+  { route: "GET kuvo/named", answers: { 200: NAMED } },
+  { route: "GET kuvo/accounts/ended", answers: { 200: ENDED } },
+  { route: "POST kuvo/accounts/:provider/forget", answers: { 200: NOTHING } },
+  { route: "GET kuvo/accounts/credentials", answers: { 200: CREDENTIALS } },
+  { route: "POST kuvo/engine/:control", answers: { 202: NOTHING } },
+  { route: "POST kuvo/shell/:id/stop", answers: { 200: object({ stopped: words("signal", "removed") }) } },
+];

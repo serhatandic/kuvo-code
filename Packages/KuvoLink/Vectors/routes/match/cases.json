@@ -1,5 +1,5 @@
 {
-  "about": "How both runners match what a box answers with what a scenario expects (CONTRIBUTING.md, \"Route scenarios\"), so the two never drift apart: each case is what's expected, what was answered (left out: nothing there) and whether it matches; then how {{name}} is filled in.",
+  "about": "How both runners match what a box answers with what a scenario expects (CONTRIBUTING.md, \"Route scenarios\"), so the two never drift apart: each case is what's expected, what was answered (left out: nothing there) and whether it matches (with \"whole\", a field it doesn't name doesn't); then how {{name}} is filled in.",
   "cases": [
     { "expected": "<any>", "actual": 1, "matches": true },
     { "expected": "<any>", "actual": null, "matches": true },
@@ -51,7 +51,14 @@
     { "expected": { "<includes>": [] }, "actual": {}, "matches": false },
     { "expected": { "<contains>": "ell" }, "actual": "hello", "matches": true },
     { "expected": { "<contains>": "ell" }, "actual": "hi", "matches": false },
-    { "expected": { "<contains>": "1" }, "actual": 1, "matches": false }
+    { "expected": { "<contains>": "1" }, "actual": 1, "matches": false },
+    { "expected": { "a": 1 }, "actual": { "a": 1, "b": 2 }, "matches": true },
+    { "expected": { "a": 1 }, "actual": { "a": 1, "b": 2 }, "whole": true, "matches": false },
+    { "expected": { "a": 1, "b": "<number>" }, "actual": { "a": 1, "b": 2 }, "whole": true, "matches": true },
+    { "expected": { "a": [ { "x": 1 } ] }, "actual": { "a": [ { "x": 1, "y": 2 } ] }, "whole": true, "matches": false },
+    { "expected": { "a": "<any>" }, "actual": { "a": { "deep": 1 } }, "whole": true, "matches": true },
+    { "expected": { "a": { "<length>": 1 } }, "actual": { "a": [ { "x": 1 } ] }, "whole": true, "matches": true },
+    { "expected": { "a": null }, "actual": { "a": null }, "whole": true, "matches": true }
   ],
   "filled": [
     { "template": "{{made}}", "vars": { "made": 3 }, "filled": 3 },

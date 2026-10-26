@@ -103,6 +103,17 @@
       ]
     },
     {
+      "name": "a bot made keeps its look and model as Edit Bot keeps them, nothing else that came with them",
+      "steps": [
+        {
+          "send": "POST kuvo/bots",
+          "body": { "name": "Herald", "look": { "color": "sky", "shape": "round", "face": "calm", "glow": true }, "model": { "providerID": "opencode", "id": "big-pickle", "variant": null, "extra": 1 } },
+          "expect": { "status": 201, "json": { "bot": { "name": "Herald", "look": { "color": "sky", "shape": "round", "face": "calm", "glow": "<absent>" }, "model": { "providerID": "opencode", "id": "big-pickle", "variant": "<absent>", "extra": "<absent>" } } } }
+        },
+        { "send": "GET kuvo/bots", "expect": { "status": 200, "json": { "bots": [ { "name": "Herald", "look": { "glow": "<absent>" }, "model": { "variant": "<absent>", "extra": "<absent>" } } ] } } }
+      ]
+    },
+    {
       "name": "a bot made is told who it is and where it runs, and its conversation marked as its",
       "steps": [
         {

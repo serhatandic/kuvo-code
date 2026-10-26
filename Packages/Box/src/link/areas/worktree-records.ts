@@ -1,4 +1,3 @@
-// @ts-nocheck
 // What this box keeps of the worktrees it makes for sessions (`box/worktrees.json`, PROTOCOL.md
 // "Worktrees"), and the branch prefix a client last gave: read by the worktrees' routes, and by a
 // project's, which names a session in one after its project.
@@ -12,7 +11,7 @@ import { K } from "../home";
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
 // The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
 export const BRANCH_PREFIX_FILE = path.join(K, "box", "git.json");
-export const branchPrefix = () => {
+export const branchPrefix = (): string => {
   try {
     const kept = JSON.parse(fs.readFileSync(BRANCH_PREFIX_FILE, "utf8")).branchPrefix;
     return typeof kept === "string" ? kept : "kuvo/";
@@ -21,12 +20,26 @@ export const branchPrefix = () => {
   }
 };
 
+/** A worktree this box keeps, as `box/worktrees.json` has it. */
+export interface WorktreeRecord {
+  /** The project it's of, and the repository's checkout it is. */
+  project: string;
+  root: string;
+  /** Where its session runs: the project's place in its repository (`root` when there's none). */
+  folder?: string;
+  branch: string;
+  base?: string;
+  /** One made here: the branch it was made on, and what its name starts with. */
+  made?: string;
+  prefix?: string;
+}
+
 /** The worktrees this box keeps: `{project, root, folder, branch, base?}` each (`folder`: where
  * its session runs, the project's place in its repository; one made here also has `made`, the
  * branch it was made on, and `prefix`, what its name starts with). */
-export function readWorktrees() {
+export function readWorktrees(): WorktreeRecord[] {
   try {
-    const list = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).worktrees;
+    const list: unknown = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).worktrees;
     return Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string" && typeof each?.branch === "string") : [];
   } catch {
     return [];
@@ -35,10 +48,10 @@ export function readWorktrees() {
 
 /** Worktrees removed here: the project each was of, by the folder its sessions ran in, so a
  * conversation that ran in one is still named after its project, as the Mac names it. */
-export function readRemovedWorktrees() {
+export function readRemovedWorktrees(): Record<string, string> {
   try {
     const removed = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).removed;
-    return isObject(removed) ? Object.fromEntries(Object.entries(removed).filter(([, project]) => typeof project === "string")) : {};
+    return isObject(removed) ? Object.fromEntries(Object.entries(removed).filter(([, project]) => typeof project === "string")) as Record<string, string> : {};
   } catch {
     return {};
   }
@@ -47,7 +60,7 @@ export function readRemovedWorktrees() {
 /** The list as `change` makes it, read again just before: a phone's request and a Mac's run
  * beside each other, each in a process of its own. `gone`: a worktree removed, kept in `removed`
  * (the latest 200). */
-export function updateWorktrees(change, gone) {
+export function updateWorktrees(change: (list: WorktreeRecord[]) => WorktreeRecord[], gone?: WorktreeRecord) {
   let removed = readRemovedWorktrees();
   if (gone) removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
   writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed }, null, 2));
@@ -55,4 +68,4 @@ export function updateWorktrees(change, gone) {
 }
 
 // Those following this box's worktrees (`kuvo/worktrees/events`), told of each change made here.
-export const worktreeFollowers = new Set();
+export const worktreeFollowers = new Set<() => void>();

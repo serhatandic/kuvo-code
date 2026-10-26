@@ -44,10 +44,16 @@ test("the box answers its routes to the app, with its password only", async t =>
   assert.equal(said.bridge, link.BRIDGE_VERSION);
   assert.equal(said.chats, path.join(home, "chats"), "its folders are where the app put it");
 
-  // A path that isn't what it seems, as through the relay.
-  const sneaky = await new Promise(resolve => http.get(`${url}/kuvo/groups/%2e%2e/x`, { headers: { authorization: auth("s3cret") } }, resolve));
+  // A path that isn't what it seems, as through the relay: sent as it's written (a URL would
+  // resolve its "%2e%2e" before it went).
+  const { hostname, port } = new URL(url);
+  const sneaky = await new Promise(resolve => http.get({ hostname, port, path: "/kuvo/groups/%2e%2e/x", headers: { authorization: auth("s3cret") } }, resolve));
   assert.equal(sneaky.statusCode, 403);
   sneaky.resume();
+  // And a route this box doesn't have, as every box answers it.
+  const missing = await fetch(`${url}/kuvo/nothing`, { headers: { authorization: auth("s3cret") } });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), {});
 });
 
 test("it goes when the app does (its stdin closes)", async () => {

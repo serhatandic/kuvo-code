@@ -1,4 +1,3 @@
-// @ts-nocheck
 // What a client follows (`kuvo/projects/events`, `kuvo/bots/events` and the rest): a list as JSON,
 // a line now and one each time it changes, as this box changes it or the system says its files did.
 // Platform: a watch on a folder with what's in it (`recursive`) is the system's own on macOS; on
@@ -6,13 +5,20 @@
 // instead (`whole`), the same on both.
 
 import fs from "node:fs";
+import type { AnswerPiece } from "./server/context";
+
+/** A watch on folders: whether the system tells of every change in them, and how to stop it. */
+export interface FolderWatch {
+  readonly whole: boolean;
+  close: () => void;
+}
 
 /** `folders` watched, with what's in them (`recursive`) or only their own files, for `changed`:
  * whether the system tells of every change (a watch it can't keep goes, and so does that), and how
  * to stop. */
-export function watchFolders(folders, changed, { recursive = true } = {}) {
+export function watchFolders(folders: string[], changed: () => void, { recursive = true }: { recursive?: boolean } = {}): FolderWatch {
   let whole = folders.length > 0;
-  const watchers = [];
+  const watchers: fs.FSWatcher[] = [];
   for (const folder of folders) {
     try {
       fs.mkdirSync(folder, { recursive: true });
@@ -34,9 +40,14 @@ export function watchFolders(folders, changed, { recursive = true } = {}) {
  * given `folders` to watch, as the system says they change, looked for again every half minute
  * only for a change it missed. A watch starts a moment after it's asked for (a change in that
  * moment isn't told), so it's looked at once more just after. `watch`: the system's (a test's own). */
-export async function* followed(read, followers, signal, { folders = [], recursive = true, watch = watchFolders } = {}) {
-  let wake = null;
-  const queue = [];
+export async function* followed(
+  read: () => unknown,
+  followers: Set<() => void>,
+  signal: AbortSignal | undefined,
+  { folders = [], recursive = true, watch = watchFolders }: { folders?: string[]; recursive?: boolean; watch?: typeof watchFolders } = {},
+): AsyncGenerator<AnswerPiece> {
+  let wake: (() => void) | null = null;
+  const queue: string[] = [];
   const told = () => {
     queue.push(JSON.stringify(read()));
     wake?.();
@@ -53,14 +64,14 @@ export async function* followed(read, followers, signal, { folders = [], recursi
     let last = "";
     while (!signal?.aborted) {
       while (queue.length) {
-        const line = queue.shift();
+        const line = queue.shift()!;
         if (line !== last) {
           yield { body: Buffer.from(line + "\n") };
           last = line;
         }
       }
       if (signal?.aborted) break;
-      await new Promise(done => {
+      await new Promise<void>(done => {
         // Its look-again timer goes once it's woken, so a client gone leaves nothing waiting.
         const timer = setTimeout(done, watching.whole ? 30_000 : 1000);
         wake = () => { clearTimeout(timer); done(); };

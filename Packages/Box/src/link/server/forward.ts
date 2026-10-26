@@ -1,0 +1,143 @@
+// Forwarding to the engine
+// What isn't the box's own goes on to the engine, or to the coding agents' bridge (`kuvo/agents/…`),
+// a phone's prompts with who they name told, and that they're from a phone.
+
+import { engineDown, stopShell } from "../areas/engine";
+import { holdArchived } from "../areas/wakes";
+import { namedIn, namingHere } from "./naming";
+import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
+import type { EngineRecord, Target } from "../../shared/records";
+import type { AnswerPiece, LinkRequest, RouteContext } from "./context";
+import type { Naming } from "./naming";
+
+export const AGENTS = "kuvo/agents/";
+
+// The block a prompt from a phone ends with, for the agent, in the Mac's words (FromPhone.swift):
+// the user is on their iPhone, where a file is shown with show_file. Never shown.
+export const FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it. A widget (show_widget) shows there too: keep it narrow, and make it work with taps rather than hovering.", "</from-phone>"].join("\n");
+
+// A prompt's body with the block at the end of its text, once; any other body as it is.
+export function fromPhone(body: Buffer | undefined): Buffer | undefined {
+  let prompt: { text?: unknown } | null;
+  try {
+    prompt = JSON.parse(Buffer.from(body ?? "").toString());
+  } catch {
+    return body;
+  }
+  if (typeof prompt?.text !== "string" || prompt.text.trimEnd().endsWith("</from-phone>")) return body;
+  return Buffer.from(JSON.stringify({ ...prompt, text: `${prompt.text}\n\n${FROM_PHONE}` }));
+}
+
+// Passes `path` to the engine or the agents' bridge on this machine, with its password, and
+// streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
+// what `allows` checks.
+export async function* forward(target: Target, path: string, request: LinkRequest, signal: AbortSignal | undefined, allows: (path: string, method: string) => boolean, naming: Naming | null = null, down: () => string = engineDown): AsyncGenerator<AnswerPiece> {
+  const method = request.method.toUpperCase();
+  const sent = canonicalPath(path);
+  if (sent === null || !allows(sent, method)) {
+    yield { head: { status: 403, headers: { "content-type": "text/plain" } } };
+    yield { body: Buffer.from("That isn't available over the link.") };
+    return;
+  }
+  const url = new URL(`http://127.0.0.1:${target.port}/${sent}`);
+  const headers: Record<string, string> = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
+  const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  // (These are single headers, never a list.)
+  for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name] as string;
+  // A message the phone sends: who it names with "&" (`naming`), and that it's from the phone, go
+  // with it.
+  const prompt = method === "POST" && /^\/api\/session\/([^/]+)\/prompt$/.exec(url.pathname);
+  // A session's metadata changed: whether it was archived before, as the engine has it (null when
+  // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
+  const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
+  let wasArchived: boolean | null = null;
+  if (changed) {
+    try {
+      const before = await fetch(url, { headers, signal });
+      if (before.ok) wasArchived = (await before.json() as { data?: { metadata?: Record<string, unknown> } } | null)?.data?.metadata?.["kuvo.archived"] === true;
+    } catch {}
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: method === "GET" || method === "HEAD" ? undefined : prompt ? fromPhone(await namedIn(request.body, decodeURIComponent(prompt[1]!), naming)) : request.body,
+      signal,
+    });
+  } catch (error) {
+    // Not answering (starting again, say): said so, unless the asker went.
+    if (signal?.aborted) throw error;
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
+    return;
+  }
+  const out: Record<string, string> = {};
+  for (const name of RESPONSE_HEADERS) {
+    const value = response.headers.get(name);
+    if (value) out[name] = value;
+  }
+  // Archived or brought back (`kuvo.archived` in its metadata), here with the Mac closed too: its
+  // wake-ups wait, or come back, as a Mac's Archive has it. Only when that changed.
+  if (changed && response.ok) {
+    let archived: unknown;
+    try { archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"]; } catch {}
+    if (typeof archived === "boolean" && archived !== wasArchived) try { holdArchived(decodeURIComponent(changed[1]!), archived); } catch {}
+  }
+  yield { head: { status: response.status, headers: out } };
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield { body: Buffer.from(value) };
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+// The coding agents' sessions, accounts and Auto, through their bridge, as the engine's go
+// to it; never where the engine is, nor an agent's update.
+export async function* agentsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, signal, readEngine, bridge, text } = context;
+  const path = request.path.slice(AGENTS.length);
+  if (!agentsAllowed(path, request.method)) return yield* text(403, "That isn't available over the link.");
+  const target = bridge();
+  if (!target) {
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
+    return;
+  }
+  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
+}
+
+// What's left goes to the engine (the paths a phone may ask for), and a command stopped to whichever
+// runs it.
+export async function* engineRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, signal, route, readEngine, bridge, json, text } = context;
+  const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
+  // A route of a box's own that this box doesn't have: 404, as every box answers it (one whose
+  // path isn't what it seems is refused, below).
+  if (!stop && route.startsWith("kuvo/") && canonicalPath(request.path) === request.path) return yield* json(404, {});
+  if (!stop && !allowed(request.path, request.method)) return yield* text(403, "That isn't available over the link.");
+  let engine: EngineRecord | null = null;
+  try {
+    engine = readEngine();
+  } catch {
+    // A coding agent's command stops without the engine.
+    if (!stop || !bridge()) return yield* json(503, { message: engineDown() });
+  }
+  if (stop) {
+    if (request.method.toUpperCase() !== "POST") return yield* text(405, "Stop it with POST.");
+    const headers: Record<string, string> = {};
+    const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
+    for (const name of REQUEST_HEADERS) if (given[name]) headers[name] = given[name] as string;
+    // The engine's, else a coding agent's, through their bridge.
+    const runners = [engine, bridge()].filter(Boolean) as Target[];
+    return yield* stopShell(decodeURIComponent(stop[1]!), runners, headers, signal);
+  }
+  // (Read: without a stop, one that couldn't be read answered 503 above.)
+  return yield* forward(engine!, request.path, request, signal, allowed, namingHere(readEngine));
+}

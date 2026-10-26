@@ -4,7 +4,7 @@
 //
 // Also the same rule elsewhere, in shell: the update's restore script tells the link it started
 // by its command line where there's /proc, and by its being alive where there isn't
-// (`keepForRollback`'s `restore.sh`, link/main.ts).
+// (`keepForRollback`'s `restore.sh`, link/updates/update.ts).
 
 import fs from "node:fs";
 

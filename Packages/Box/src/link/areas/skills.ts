@@ -1,13 +1,82 @@
-// @ts-nocheck
 // Skills (PROTOCOL.md, "Skills"): every box's, a Mac's too, and every client's way to GitHub's collections.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { textOf, listOf } from "../files";
-import { K } from "../home";
-import { ENGINE_CONFIG, IN_TEST_FOLDER } from "../home";
+import { parsed } from "../../shared/json";
+import type { EngineRecord } from "../../shared/records";
+import { listOf, textOf } from "../files";
+import { ENGINE_CONFIG, IN_TEST_FOLDER, K } from "../home";
+import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+
+/** A collection of skills on GitHub: its repository (`owner/name`), what it's called and is, and
+ * the branch its skills are read from. */
+export interface SkillRepository {
+  id: string;
+  owner: string;
+  name: string;
+  title: string;
+  summary: string;
+  branch: string;
+}
+
+/** A skill in a repository: its name, its folder there (`""` for the repository itself), and the
+ * files in it. */
+export interface RepositorySkill {
+  name: string;
+  path: string;
+  files: string[];
+}
+
+/** What a skill's SKILL.md says it is, in its front matter. */
+export interface SkillAbout {
+  name?: string;
+  description?: string;
+}
+
+/** Where a skill installed from GitHub came from: its repository, and its folder there. */
+export interface SkillSource {
+  repository: string;
+  path: string;
+}
+
+/** A Recently Deleted entry's id read: the folder it goes back to, and when it was put away
+ * (seconds since 1970). */
+export interface SkillTrashEntry {
+  folder: string;
+  deleted: number;
+}
+
+/** A skill in Recently Deleted, as `kuvo/skill-trash` lists it: its entry's id and folder, what
+ * its SKILL.md says it is, when it was put away and when it goes (seconds since 1970). */
+export interface DeletedSkill extends SkillTrashEntry {
+  id: string;
+  name: string;
+  description?: string;
+  goes: number;
+}
+
+/** A skill the engine lists (`api/skill`): its name, and its SKILL.md's path. */
+interface EngineSkill {
+  id: string;
+  path?: string;
+}
+
+/** What a client sends to the skills' routes: a SKILL.md's text (and whether it's a new skill's),
+ * or a skill to install, by its repository and folder there. */
+export interface SkillsBody {
+  text?: unknown;
+  new?: unknown;
+  repository?: unknown;
+  path?: unknown;
+}
+
+/** A repository's file list, as GitHub's API answers it (`git/trees`). */
+interface GitHubTree {
+  tree?: { type?: string; path: string }[];
+  truncated?: boolean;
+}
 
 // Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
 // in this box's folder on a machine, and the app's engine's on a Mac (KUVO_ENGINE_CONFIG), so a
@@ -18,7 +87,7 @@ const SKILL_SOURCE = ".kuvo-source.json";
 const testGitHub = IN_TEST_FOLDER ? process.env.KUVO_TEST_GITHUB : undefined;
 const GITHUB = { api: testGitHub ?? "https://api.github.com", raw: testGitHub ?? "https://raw.githubusercontent.com" };
 // The well-known collections, roughly most popular first. Anyone can open another by name.
-export const SKILL_REPOSITORIES = [
+export const SKILL_REPOSITORIES: SkillRepository[] = [
   ["anthropics", "skills", "Anthropic", "The reference set: documents, spreadsheets, slides, PDFs, design and more."],
   ["openai", "skills", "OpenAI", "Codex's catalog of curated skills."],
   ["obra", "superpowers", "Superpowers", "Ways of working: test-driven development, debugging, planning, code review."],
@@ -34,15 +103,16 @@ export const SKILL_REPOSITORIES = [
 ].map(([owner, name, title, summary]) => ({ id: `${owner}/${name}`, owner, name, title, summary, branch: "main" }));
 
 class SkillFailure extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  declare status: number;
+  constructor(status: number, message: string) { super(message); this.status = status; }
 }
 const limited = () => new SkillFailure(503, "GitHub is limiting requests for now. Try again in a while.");
 
 /** A folder's name in the skills folder: not a path, nor hidden. */
-const isSkillFolder = name => typeof name === "string" && name.length > 0 && name.length <= 128 && !name.startsWith(".") && !/[\/\\\0]/.test(name);
+const isSkillFolder = (name: unknown): name is string => typeof name === "string" && name.length > 0 && name.length <= 128 && !name.startsWith(".") && !/[\/\\\0]/.test(name);
 
 /** A skill's name from what's typed, as Settings makes it (SkillFile.name). */
-export function skillName(text) {
+export function skillName(text: unknown): string {
   // Composed first (an "é" typed as "e" and a mark is one letter, left out whole), as Settings does.
   const words = String(text).normalize("NFC").toLowerCase().split(/[^\p{L}\p{N}]+/u).map(word => [...word].filter(c => c.charCodeAt(0) < 128).join("")).filter(Boolean);
   return words.join("-").slice(0, 64).replace(/-+$/, "");
@@ -50,7 +120,7 @@ export function skillName(text) {
 
 /** The skills folder's own folders (not hidden), by name: what a new skill's name mustn't take,
  * whether its engine lists it or not. */
-function skillFolders() {
+function skillFolders(): string[] {
   return listOf(SKILLS).filter(name => !name.startsWith(".") && (() => { try { return fs.statSync(path.join(SKILLS, name)).isDirectory(); } catch { return false; } })()).sort();
 }
 
@@ -61,12 +131,12 @@ const SKILL_TRASH = path.join(K, "trash", "skills");
 const SKILL_TRASH_DAYS = 30;
 const DAY = 86_400_000;
 
-const isDirectory = file => { try { return fs.statSync(file).isDirectory(); } catch { return false; } };
+const isDirectory = (file: string) => { try { return fs.statSync(file).isDirectory(); } catch { return false; } };
 
 /** A Recently Deleted entry's id read: the folder's name it goes back to and when it was put away
  * (seconds since 1970), or null for what isn't an entry's id (a path, a hidden name, anything not
  * `<name>-<seconds>`). */
-export function skillTrashEntry(entry) {
+export function skillTrashEntry(entry: unknown): SkillTrashEntry | null {
   const found = typeof entry === "string" && entry.length <= 141 ? /^(.+)-(\d{1,12})$/.exec(entry) : null;
   return found && isSkillFolder(found[1]) && isSkillFolder(entry) ? { folder: found[1], deleted: Number(found[2]) } : null;
 }
@@ -90,8 +160,8 @@ export function keepSkillTrashClear() {
 
 /** Recently Deleted, newest first: each with what its SKILL.md says it is, when it was put away and
  * when it goes, in seconds since 1970. */
-function skillTrashEntries() {
-  const entries = [];
+function skillTrashEntries(): DeletedSkill[] {
+  const entries: DeletedSkill[] = [];
   for (const id of listOf(SKILL_TRASH)) {
     const entry = skillTrashEntry(id);
     const away = path.join(SKILL_TRASH, id);
@@ -106,8 +176,8 @@ function skillTrashEntries() {
 }
 
 /** Skills installed from GitHub, by their folder's name, with where they came from. */
-function skillSources() {
-  const sources = {};
+function skillSources(): Record<string, SkillSource> {
+  const sources: Record<string, SkillSource> = {};
   for (const name of listOf(SKILLS)) {
     try {
       const source = JSON.parse(fs.readFileSync(path.join(SKILLS, name, SKILL_SOURCE), "utf8"));
@@ -117,7 +187,7 @@ function skillSources() {
   return sources;
 }
 
-async function github(url, json = true) {
+async function github(url: string, json = true): Promise<Response> {
   const response = await fetch(url, { headers: json ? { accept: "application/vnd.github+json", "user-agent": "Kuvo Code" } : { "user-agent": "Kuvo Code" }, signal: AbortSignal.timeout(30_000) });
   if (response.status === 403 || response.status === 429) throw limited();
   return response;
@@ -125,17 +195,17 @@ async function github(url, json = true) {
 
 /** Repositories looked up on GitHub lately, by their name in lowercase: a collection's skills'
  * descriptions are asked for one by one, and GitHub allows few lookups an hour. */
-const lookedUp = new Map();
+const lookedUp = new Map<string, { repository: SkillRepository; at: number }>();
 
 /** One of the well-known collections, or any other by its name on GitHub, with its default branch. */
-async function skillRepository(owner, name) {
+async function skillRepository(owner: string, name: string): Promise<SkillRepository> {
   const known = SKILL_REPOSITORIES.find(each => each.owner.toLowerCase() === owner.toLowerCase() && each.name.toLowerCase() === name.toLowerCase());
   if (known) return known;
   const key = `${owner}/${name}`.toLowerCase();
   const kept = lookedUp.get(key);
   if (kept && Date.now() - kept.at < 15 * 60_000) return kept.repository;
   const response = await github(`${GITHUB.api}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
-  const info = response.status === 200 ? await response.json().catch(() => null) : null;
+  const info = response.status === 200 ? await (response.json() as Promise<{ default_branch?: unknown; description?: string | null }>).catch(() => null) : null;
   if (typeof info?.default_branch !== "string") throw new SkillFailure(404, `${owner}/${name} wasn’t found on GitHub.`);
   const repository = { id: `${owner}/${name}`, owner, name, title: `${owner}/${name}`, summary: info.description ?? "", branch: info.default_branch };
   if (lookedUp.size > 50) lookedUp.clear();
@@ -145,14 +215,14 @@ async function skillRepository(owner, name) {
 
 /** The skills the engine lists (its own, and those in other tools' folders), `{id, path?}`, which a
  * new one mustn't take; none when it doesn't answer. */
-async function engineSkills(engine) {
+async function engineSkills(engine: EngineRecord | null): Promise<EngineSkill[]> {
   if (!engine?.port) return [];
   try {
     const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(5_000),
     });
-    const listed = response.ok ? (await response.json())?.data : null;
+    const listed = response.ok ? (await response.json() as { data?: unknown })?.data : null;
     return Array.isArray(listed)
       ? listed.filter(skill => typeof skill?.id === "string").map(skill => ({ id: skill.id, ...(typeof skill.path === "string" ? { path: skill.path } : {}) }))
       : [];
@@ -161,10 +231,10 @@ async function engineSkills(engine) {
   }
 }
 
-const engineSkillNames = async engine => (await engineSkills(engine)).map(skill => skill.id);
+const engineSkillNames = async (engine: EngineRecord | null) => (await engineSkills(engine)).map(skill => skill.id);
 
 /** Where a skill the engine lists is, said short: "in ~/.claude/skills", "built in". */
-function skillPlace(file) {
+function skillPlace(file: string | undefined): string {
   if (typeof file !== "string" || !file) return "elsewhere";
   if (file.startsWith("/builtin/")) return "built in";
   const folder = path.dirname(path.dirname(file));
@@ -175,25 +245,25 @@ function skillPlace(file) {
 /** A repository's skills, from its file list (one request to GitHub's API): each folder with a
  * SKILL.md, with every file in it (the deepest skill's, for skills inside skills), or the
  * repository itself when its SKILL.md is at the top (without its hidden folders). */
-export async function skillsIn(repository) {
+export async function skillsIn(repository: SkillRepository): Promise<{ skills: RepositorySkill[]; partial: boolean }> {
   const response = await github(`${GITHUB.api}/repos/${repository.owner}/${repository.name}/git/trees/${repository.branch}?recursive=1`);
   if (response.status !== 200) throw new SkillFailure(404, `${repository.id} wasn’t found on GitHub.`);
-  const tree = await response.json();
+  const tree = await response.json() as GitHubTree;
   const files = (tree.tree ?? []).filter(entry => entry.type === "blob").map(entry => entry.path);
-  const dirname = file => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
+  const dirname = (file: string) => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
   const folders = new Set(files.filter(file => file.split("/").at(-1) === "SKILL.md").map(dirname).filter(Boolean));
   const isSkill = files.includes("SKILL.md");
-  const byFolder = new Map();
+  const byFolder = new Map<string, string[]>();
   for (const file of files) {
     let folder = dirname(file);
     while (folder && !folders.has(folder)) folder = dirname(folder);
     if (folder) byFolder.set(folder, [...(byFolder.get(folder) ?? []), file]);
     else if (isSkill && !file.startsWith(".")) byFolder.set("", [...(byFolder.get("") ?? []), file]);
   }
-  const nameOf = folder => (folder ? folder.split("/").at(-1) : repository.name);
+  const nameOf = (folder: string) => (folder ? folder.split("/").at(-1)! : repository.name);
   let skills = [...(isSkill ? [""] : []), ...[...folders].sort()].map(folder => ({ name: nameOf(folder), path: folder, files: byFolder.get(folder) ?? [] }));
   // A copy kept for another tool in a hidden folder, of one in plain sight: listed once.
-  const hidden = skill => skill.path.split("/").some(part => part.startsWith("."));
+  const hidden = (skill: RepositorySkill) => skill.path.split("/").some(part => part.startsWith("."));
   const shown = new Set(skills.filter(skill => !hidden(skill)).map(skill => skill.name));
   skills = skills.filter(skill => !(hidden(skill) && shown.has(skill.name)));
   return { skills, partial: tree.truncated === true };
@@ -201,21 +271,21 @@ export async function skillsIn(repository) {
 
 /** What skills' SKILL.md files say they are, by repository, branch and folder, kept while the box
  * runs: a collection's are read once, however often it's opened or a phone asks for one. */
-const skillAbouts = new Map();
+const skillAbouts = new Map<string, SkillAbout>();
 /** At most this many read from GitHub at once, the rest waiting their turn, so a big collection
  * never holds up an install or another client's request. */
 const ABOUT_READS = 16;
 let aboutReading = 0;
-const aboutWaiting = [];
+const aboutWaiting: (() => void)[] = [];
 
 /** What a skill's SKILL.md says it is: `{name?, description?}`, `{}` when GitHub doesn't say. */
-async function aboutSkill(repository, folder) {
+async function aboutSkill(repository: SkillRepository, folder: string): Promise<SkillAbout> {
   const key = `${repository.id.toLowerCase()}@${repository.branch}:${folder}`;
-  if (skillAbouts.has(key)) return skillAbouts.get(key);
-  if (aboutReading >= ABOUT_READS) await new Promise(resolve => aboutWaiting.push(resolve));
+  if (skillAbouts.has(key)) return skillAbouts.get(key)!;
+  if (aboutReading >= ABOUT_READS) await new Promise<void>(resolve => aboutWaiting.push(resolve));
   aboutReading++;
   try {
-    if (skillAbouts.has(key)) return skillAbouts.get(key);
+    if (skillAbouts.has(key)) return skillAbouts.get(key)!;
     const response = await github(rawURL(repository, folder ? `${folder}/SKILL.md` : "SKILL.md"), false).catch(() => null);
     if (response?.status !== 200) return {};
     const about = skillAbout(await response.text());
@@ -228,12 +298,12 @@ async function aboutSkill(repository, folder) {
   }
 }
 
-const rawURL = (repository, file) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
+const rawURL = (repository: SkillRepository, file: string) => `${GITHUB.raw}/${repository.owner}/${repository.name}/${repository.branch}/${file.split("/").map(encodeURIComponent).join("/")}`;
 
 /** The front matter's name and description. */
-export function skillAbout(markdown) {
+export function skillAbout(markdown: unknown): SkillAbout {
   const lines = String(markdown).split(/\r\n|\r|\n/);
-  const about = {};
+  const about: SkillAbout = {};
   if (lines[0]?.trim() !== "---") return about;
   for (let index = 1; index < lines.length && lines[index].trim() !== "---"; index++) {
     const line = lines[index];
@@ -254,7 +324,7 @@ export function skillAbout(markdown) {
 }
 
 /** Fetches a skill's files beside the folder, then moves them in whole, so the engine never finds half of it. */
-async function installSkill(repository, skill) {
+async function installSkill(repository: SkillRepository, skill: RepositorySkill): Promise<void> {
   const target = path.join(SKILLS, skill.name);
   if (fs.existsSync(target)) throw new SkillFailure(409, `A skill named ${skill.name} is already installed.`);
   // Its own: two installs at once never share one.
@@ -279,11 +349,11 @@ async function installSkill(repository, skill) {
 }
 
 /** `kuvo/skills…`, `kuvo/skill-trash…` and `kuvo/skill-library…`, for this box's own folder. */
-export async function answerSkills(method, requestPath, body, engine = null) {
+export async function answerSkills(method: string, requestPath: string, body: SkillsBody | undefined, engine: EngineRecord | null = null): Promise<JSONAnswer> {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
   if (parts.includes(null)) return { status: 400, value: { message: "That isn’t a path." } };
-  const message = text => ({ message: text });
+  const message = (text: string) => ({ message: text });
   try {
     if (parts[1] === "skills" && parts.length === 2) {
       if (method !== "GET") return { status: 405, value: {} };
@@ -339,7 +409,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         const entry = parts[2];
         const name = skillTrashEntry(entry)?.folder;
         if (!name) return { status: 400, value: message("That isn’t an entry in Recently Deleted.") };
-        const away = path.join(SKILL_TRASH, entry);
+        const away = path.join(SKILL_TRASH, entry!);
         if (!isDirectory(away)) return { status: 404, value: {} };
         const back = path.join(SKILLS, name);
         // Never over another: one by its name now stays, and so does this one, to restore later.
@@ -366,7 +436,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         return { status: 200, value: { name: skill.name } };
       }
       if (parts.length === 4 && method === "GET") {
-        const repository = await skillRepository(parts[2], parts[3]);
+        const repository = await skillRepository(parts[2]!, parts[3]!);
         const { skills, partial } = await skillsIn(repository);
         const { branch, ...shown } = repository;
         // Each with what its SKILL.md says it is, so a client shows them without asking for each.
@@ -374,7 +444,7 @@ export async function answerSkills(method, requestPath, body, engine = null) {
         return { status: 200, value: { repository: shown, skills: described, partial } };
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
-        const repository = await skillRepository(parts[2], parts[3]);
+        const repository = await skillRepository(parts[2]!, parts[3]!);
         // As written: a "+" is a plus.
         const pair = query.split("&").find(each => each.startsWith("path="));
         let at = "";
@@ -384,6 +454,16 @@ export async function answerSkills(method, requestPath, body, engine = null) {
     }
     return { status: 404, value: {} };
   } catch (error) {
-    return { status: error instanceof SkillFailure ? error.status : 502, value: message(error?.message ?? String(error)) };
+    return { status: error instanceof SkillFailure ? error.status : 502, value: message((error as Error)?.message ?? String(error)) };
   }
+}
+
+// Settings › Skills (PROTOCOL.md, "Skills"): this box's own skills folder, its Recently Deleted, and GitHub's
+// collections, which it reaches itself (a machine's with the Mac closed too).
+export async function* skillsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, readEngine, json } = context;
+  let engine: EngineRecord | null = null;
+  try { engine = readEngine(); } catch {}
+  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  return yield* json(status, value);
 }
