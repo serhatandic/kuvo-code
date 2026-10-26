@@ -1,4 +1,3 @@
-// @ts-nocheck
 // The box's routes
 // What a phone, or this Mac's app, asks of this box: each route to the area that answers it, the
 // first that takes a request answering it; what none takes goes on to the engine (`engineRoute`).
@@ -31,14 +30,29 @@ import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
 import { AGENTS, agentsRoute, engineRoute } from "./forward";
+import type { BridgeRecord, EngineRecord } from "../../shared/records";
+import type { NoticeHold } from "../notices/hold";
+import type { Answer, AnswerPiece, Asker, LinkRequest, RouteContext } from "./context";
+
+/** One of the box's routes: `when(route, request)` says whether it takes the request, and gives
+ * what its `answer(context, match)` is given: the route's match for one with a part of its own
+ * (`Match` a RegExpMatchArray), else `true`. */
+export interface Route<Match = true> {
+  when: (route: string, request: LinkRequest) => Match | false | null;
+  answer: (context: RouteContext, match: Match) => Answer;
+}
+
+/** What LinkHost (or this Mac's app's HTTP server) runs for each request: its answer, as it comes.
+ * `phone`: who asks, nothing for this Mac's app. */
+export type LinkHandler = (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal) => AsyncGenerator<AnswerPiece>;
 
 // `when(route, request)`: whether it takes the request (a route's match, for one with a part of its
 // own); `answer(context, match)`: its answer, as it comes.
 // Their order counts where they overlap: a list and its events come before the route for one of
 // its own ("events" isn't an id), as personalities', asks' and wake-ups' do.
-const ROUTES = [
+const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/info", answer: infoRoute },
-  { when: route => route === "kuvo/file", answer: ({ request, json }) => fileAt(request.path, json) },
+  { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: route => route === "kuvo/folders", answer: foldersRoute },
@@ -66,7 +80,7 @@ const ROUTES = [
   // (A new bot; reading them is `botsRoute`, further on.)
   { when: (route, request) => request.method.toUpperCase() === "POST" && route === "kuvo/bots", answer: newBotRoute },
   // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
-  { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }) => answerProjects(request, readEngine, readBridge, signal) },
+  { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }: RouteContext) => answerProjects(request, readEngine, readBridge, signal) },
   { when: route => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
   { when: route => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },
   // (Before the bot keys' route, which would take "keys" for a bot.)
@@ -86,9 +100,9 @@ const ROUTES = [
 
 // The handler LinkHost runs for each request. `hold`: the running bridge's notices held while
 // you're at a computer (none in `box route`, a command of its own).
-export function engineHandler(readEngine = readEngineFile, info = {}, readBridge = readBridgeFile, phonesChanged = () => {}, hold = null) {
+export function engineHandler(readEngine: () => EngineRecord = readEngineFile, info: RouteContext["info"] = {}, readBridge: () => BridgeRecord = readBridgeFile, phonesChanged: RouteContext["phonesChanged"] = () => {}, hold: NoticeHold | null = null): LinkHandler {
   // The agents' bridge, while it runs: its record, while the process it names is still it.
-  const bridge = () => {
+  const bridge = (): BridgeRecord | null => {
     try {
       const found = readBridge();
       return found?.port && found?.password && runs(found.pid, "kuvo-agents") ? found : null;
@@ -96,16 +110,18 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       return null;
     }
   };
-  return async function* (request, phone, signal) {
-    const text = (status, words) => [{ head: { status, headers: { "content-type": "text/plain" } } }, { body: Buffer.from(words) }];
-    const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+  return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
+    const text = (status: number, words: string): AnswerPiece[] => [{ head: { status, headers: { "content-type": "text/plain" } } }, { body: Buffer.from(words) }];
+    const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
     // A phone using this machine, whatever it asks; not the app beside a Mac's own box.
     if (!request.fromApp) phoneHere();
     const route = request.path.split("?")[0];
-    const context = { request, phone, signal, route, readEngine, readBridge, bridge, info, phonesChanged, hold, json, text };
+    const context: RouteContext = { request, phone, signal, route, readEngine, readBridge, bridge, info, phonesChanged, hold, json, text };
     for (const { when, answer } of ROUTES) {
       const match = when(route, request);
-      if (match) return yield* answer(context, match);
+      // (Each answer is given what its own `when` gave: a pairing TypeScript can't follow through
+      // the loop, so `never`.)
+      if (match) return yield* answer(context, match as never);
     }
     return yield* engineRoute(context);
   };

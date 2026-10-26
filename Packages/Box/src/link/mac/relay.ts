@@ -1,4 +1,3 @@
-// @ts-nocheck
 // This Mac's box on the relay (PROTOCOL.md, "This Mac's box: the relay")
 // On a Mac, `serve` holds the relay connection a machine's `run` holds, in the same process: your
 // phones' sessions, paired and pairing as on a machine, answered here. Its keys stay in your
@@ -24,6 +23,10 @@ import { AGENTS } from "../server/forward";
 import { engineHandler } from "../server/router";
 import { macLink, readLink } from "../state";
 import { macKeys, macLinkCheck, macLinkWait, macNeeded, setLinkStatus, tellUntold } from "./link";
+import type { EngineRecord } from "../../shared/records";
+import type { AnswerPiece, Asker, LinkRequest } from "../server/context";
+import type { LinkHandler } from "../server/router";
+import type { LinkState } from "../state";
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
@@ -32,15 +35,15 @@ export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins"
   "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
 // `kuvo/shell/<id>/stop`: the box's too.)
-const macAnswersAlso = route => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route);
-export const macAnswers = route => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
+const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route);
+export const macAnswers = (route: string): boolean => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 
 // What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
 // at once, when the app isn't answering, and a stream that ends when the app goes.
-async function* toApp(request, phone, signal) {
-  let response = null;
+async function* toApp(request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
+  let response: Response | null = null;
   const host = appHost();
   if (host) {
     try {
@@ -74,7 +77,7 @@ async function* toApp(request, phone, signal) {
     yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
     return;
   }
-  const headers = { "content-type": response.headers.get("content-type") ?? "application/json" };
+  const headers: Record<string, string> = { "content-type": response.headers.get("content-type") ?? "application/json" };
   const cache = response.headers.get("cache-control");
   if (cache) headers["cache-control"] = cache;
   yield { head: { status: response.status, headers } };
@@ -87,8 +90,8 @@ async function* toApp(request, phone, signal) {
 }
 
 // A phone's request on this Mac: the box's own areas here, the rest from the app.
-export function macFront(handle = engineHandler(readEngineFile, { name: os.hostname() })) {
-  return async function* (request, phone, signal) {
+export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() })): LinkHandler {
+  return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
     const route = String(request.path ?? "").split("?")[0];
     // (The engine's API and the coding agents', as a machine's bridge passes them on, who a message
     // names with "&" told: bridge 0.9.64.)
@@ -100,7 +103,7 @@ export function macFront(handle = engineHandler(readEngineFile, { name: os.hostn
 // This Mac's box's link: up while it's wanted, its keys from the app, your phones answered here,
 // what's the app's yet passed to it. Nothing it meets (the relay gone, a frame that isn't one, the
 // app away) stops the box's own routes.
-export async function runMacLink() {
+export async function runMacLink(): Promise<void> {
   let attempt = 0;
   macLink.stopped = false;
   while (!macLink.stopped) {
@@ -118,19 +121,21 @@ export async function runMacLink() {
         await macLinkWait(60_000);
         continue;
       }
-      const link = readLink();
+      // (Wanted, with its keys: the app's overlay gives it these, and its config is there, as
+      // macNeeded says no without one.)
+      const link = readLink() as LinkState & Required<Pick<LinkState, "key" | "secret" | "relay">>;
       setLinkStatus("connecting");
-      let engine = {};
+      let engine: Partial<EngineRecord> = {};
       try { engine = readEngineFile(); } catch {}
       const host = new LinkHost({
         key: Buffer.from(link.key, "base64url"),
-        hello: { v: 1, kind: "mac", name: config.name, app: config.app, engine: engine.version ?? null },
+        hello: { v: 1, kind: "mac", name: config!.name, app: config!.app, engine: engine.version ?? null },
         // Phones only while the phone link's on (the relay can be up for your machines alone).
         authorize: (key, hello, address) => Boolean(macLink.config?.phones) && authorizePhone(key, hello, address),
         confirmed: confirmPhone,
         // Mail from your machines, taken here as a machine takes it (`peerMail`).
         mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets)),
-        handle: macFront(engineHandler(readEngineFile, { name: config.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
+        handle: macFront(engineHandler(readEngineFile, { name: config!.name }, readBridgeFile, changed => host.keepOnly(new Set((changed.phones ?? []).map(phone => phone.key))), macLink.hold)),
         connect: engineConnect(readEngineFile),
         send: () => {},
       });
@@ -164,7 +169,7 @@ export async function runMacLink() {
       await macLinkWait(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
     } catch (error) {
       macLink.host = null;
-      setLinkStatus("failed", String(error?.message ?? error));
+      setLinkStatus("failed", String((error as Error | undefined)?.message ?? error));
       await macLinkWait(5_000);
     }
   }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // The box's server on this Mac (`serve`)
 
 import crypto from "node:crypto";
@@ -7,6 +6,11 @@ import os from "node:os";
 import { readEngineFile } from "../engine/client";
 import { canonicalPath } from "./paths";
 import { engineHandler } from "./router";
+import type { AnswerPiece } from "./context";
+import type { LinkHandler } from "./router";
+
+/** An answer's piece, read alike whichever it is (its head, its body). */
+type AnyPiece = Partial<Extract<AnswerPiece, { head: unknown }> & Extract<AnswerPiece, { body: unknown }>>;
 
 // `serve`: this box's routes over HTTP, for a Mac, whose app starts its own box as it starts the
 // coding agents' bridge: on 127.0.0.1, `{"url"}` said once it listens, answering only with the
@@ -14,9 +18,11 @@ import { engineHandler } from "./router";
 // same routes as a phone's through the relay, the path checked the same way; a stream goes as it
 // comes, and stops when the client goes. The engine and the agents' bridge are found as on a
 // machine (`run/engine.json`, `run/bridge.json`), which the app writes.
-export function serveBox(password, handle = engineHandler(readEngineFile, { name: os.hostname() })) {
+export function serveBox(password: string, handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() })): http.Server {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
-  return http.createServer(async (request, response) => {
+  // (`any`: nothing reads what it gives back, and its early `return response.end()` lines would
+  // otherwise each need a return on every path.)
+  return http.createServer(async (request, response): Promise<any> => {
     const given = Buffer.from(request.headers.authorization ?? "");
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
       response.writeHead(401);
@@ -27,7 +33,7 @@ export function serveBox(password, handle = engineHandler(readEngineFile, { name
       response.writeHead(403);
       return response.end();
     }
-    const chunks = [];
+    const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
     const abort = new AbortController();
     response.on("close", () => abort.abort());
@@ -35,7 +41,7 @@ export function serveBox(password, handle = engineHandler(readEngineFile, { name
     try {
       // The app's own (the Mac's link says which aren't a phone's), not a phone using this box.
       const fromApp = request.headers["x-kuvo-from"] === "app";
-      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal)) {
+      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal) as AsyncIterable<AnyPiece>) {
         if (abort.signal.aborted) break;
         if (part.head && !headed) {
           response.writeHead(part.head.status, part.head.headers ?? {});
@@ -47,7 +53,7 @@ export function serveBox(password, handle = engineHandler(readEngineFile, { name
     } catch (error) {
       if (!headed) {
         response.writeHead(500, { "content-type": "application/json" });
-        response.write(JSON.stringify({ message: String(error?.message ?? error) }));
+        response.write(JSON.stringify({ message: String((error as Error | undefined)?.message ?? error) }));
         headed = true;
       }
     }
