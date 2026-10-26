@@ -37,6 +37,8 @@ import Testing
     }
 
     let engine = StubEngine(port: 47913)
+    /// Who "&" named before: put back after.
+    private let mail = AgentMail.shared.app
     let app = AppModel()
     let model: SessionModel
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 620), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -48,7 +50,8 @@ import Testing
         let items = [Item(id: "a", text: "The keeper climbed the stairs at dusk and lit the great lamp for the ships.")]
         let id = "ses_quotefocus_\(UUID().uuidString.prefix(8))"
         app.workspace.api = engine.api
-        engine.list([StubEngine.session(id, title: "Quotes", directory: "/tmp/kuvo-tests-quote-focus", created: 1)])
+        engine.list([StubEngine.session(id, title: "Quotes", directory: "/tmp/kuvo-tests-quote-focus", created: 1),
+                     StubEngine.session(id + "_other", title: "Lighthouse", directory: "/tmp/kuvo-tests-quote-focus", created: 2)])
         engine.conversation(id, [])
         await app.workspace.refresh()
         model = try #require(app.workspace.model(for: id))
@@ -67,6 +70,7 @@ import Testing
     }
 
     private func done() {
+        AgentMail.shared.app = mail
         Drafts.shared.remove(model.id)
         engine.stop()
         window.orderOut(nil)
@@ -218,6 +222,21 @@ extension ComposerFieldTests {
         field.setSelectedRange(NSRange(location: end, length: 0))
         field.deleteBackward(nil)
         #expect(model.draftText == "Ask  about it")
+    }
+
+    /// A name picked from the "&" list with Return: the next words go after it, where you were
+    /// typing, not into the name.
+    @Test func typingGoesOnAfterANamePickedFromTheList() async throws {
+        defer { done() }
+        try await until { editing == "composer" }
+        let field = try #require(field)
+        type("Ask &Lig", in: field)
+        let returnKey = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                       context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        field.keyDown(with: returnKey)
+        try await until { field.string == "Ask &Lighthouse " }
+        type("to look", in: field)
+        #expect(model.draftText == "Ask &Lighthouse to look")
     }
 
     /// Words pasted come in as words, plain.

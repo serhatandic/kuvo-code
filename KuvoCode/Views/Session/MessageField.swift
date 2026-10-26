@@ -36,6 +36,8 @@ struct MessageField: NSViewRepresentable {
     /// For its owner to write where the caret is.
     var handle: Handle?
     var identifier = "composer"
+    /// What VoiceOver calls it.
+    var label = "Message"
 
     /// A request for the keyboard: each one made is another.
     struct FocusRequest: Equatable {
@@ -83,18 +85,11 @@ struct MessageField: NSViewRepresentable {
         }
 
         /// Undo brings back nothing from before (another conversation's draft).
-        func forgetUndo() {
-            guard let view else { return }
-            view.undoManager?.removeAllActions(withTarget: view)
-            view.textStorage.map { view.undoManager?.removeAllActions(withTarget: $0) }
-        }
-
-        /// Whether the field has the keyboard.
-        var hasKeyboard: Bool { view.map { $0.window?.firstResponder === $0 } ?? false }
+        func forgetUndo() { view?.forgetUndo() }
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = FieldScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = false
@@ -114,8 +109,8 @@ struct MessageField: NSViewRepresentable {
         view.isVerticallyResizable = true
         view.isHorizontallyResizable = false
         view.autoresizingMask = [.width]
-        view.isContinuousSpellCheckingEnabled = true
         view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
         scroll.documentView = view
         handle?.view = view
         context.coordinator.focus = focus
@@ -151,11 +146,7 @@ struct MessageField: NSViewRepresentable {
             changed = true
         }
         if view.string != text, !view.hasMarkedText() {
-            // From outside (sent, a message brought back, a picture's name taken out): the caret
-            // stays where it was, or at the end of what's left.
-            let caret = min(view.selectedRange().location, (text as NSString).length)
-            view.string = text
-            view.setSelectedRange(NSRange(location: caret, length: 0))
+            view.replace(with: text)
             changed = true
         }
         // A command is typed as is: no curly quotes, long dashes or corrections.
@@ -205,6 +196,15 @@ struct MessageField: NSViewRepresentable {
     }
 }
 
+/// The field's scroll view: the wheel goes on to what's around it (the conversation, a list of
+/// quotes) while the field has nothing to scroll.
+final class FieldScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        let overflow = (documentView?.frame.height ?? 0) - contentView.bounds.height
+        if overflow > 0.5 { super.scrollWheel(with: event) } else { nextResponder?.scrollWheel(with: event) }
+    }
+}
+
 /// The text view under `MessageField`.
 final class MessageTextView: NSTextView {
     var onKey: (MessageField.Key) -> Bool = { _ in false }
@@ -237,21 +237,54 @@ final class MessageTextView: NSTextView {
     }
 
     /// The keyboard, with the caret after the text (not all of it selected, which typing would
-    /// replace).
+    /// replace). Once SwiftUI is done updating: it's asked for while SwiftUI updates the field,
+    /// and taking it tells the owner (`onFocus`), whose state mustn't change then.
     func takeKeyboard() {
-        guard let window else {
-            wantsKeyboard = true
-            return
+        wantsKeyboard = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, wantsKeyboard, let window else { return }
+            wantsKeyboard = false
+            if window.firstResponder !== self { window.makeFirstResponder(self) }
+            setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
+            scrollRangeToVisible(selectedRange())
         }
-        wantsKeyboard = false
-        if window.firstResponder !== self { window.makeFirstResponder(self) }
-        setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
-        scrollRangeToVisible(selectedRange())
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if wantsKeyboard, window != nil { takeKeyboard() }
+    }
+
+    /// Its text changed from outside (a name picked from a list, a sent message gone, one brought
+    /// back, a picture's name taken out): only the part that changed is replaced, and the caret
+    /// moves with it, after what came in where it was typing. Undo starts over, as what it
+    /// remembers was in text that's gone.
+    func replace(with text: String) {
+        guard let storage = textStorage else { return }
+        let old = string as NSString, new = text as NSString
+        var prefix = 0
+        while prefix < old.length, prefix < new.length, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < old.length - prefix, suffix < new.length - prefix,
+              old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+        let changed = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let added = new.length - prefix - suffix
+        let caret = selectedRange().location
+        storage.replaceCharacters(in: changed, with: new.substring(with: NSRange(location: prefix, length: added)))
+        let moved = caret < changed.location ? caret : caret >= NSMaxRange(changed) ? caret + added - changed.length : prefix + added
+        setSelectedRange(NSRange(location: min(moved, new.length), length: 0))
+        forgetUndo()
+    }
+
+    func forgetUndo() {
+        undoManager?.removeAllActions(withTarget: self)
+        textStorage.map { undoManager?.removeAllActions(withTarget: $0) }
+    }
+
+    /// VoiceOver (and the end-to-end runs) setting what it says: as if typed, so its owner hears.
+    override func setAccessibilityValue(_ value: Any?) {
+        guard let text = value as? String else { return super.setAccessibilityValue(value) }
+        insertText(text, replacementRange: NSRange(location: 0, length: (string as NSString).length))
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -280,9 +313,18 @@ final class MessageTextView: NSTextView {
     override func insertTab(_ sender: Any?) { window?.selectNextKeyView(self) }
     override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(self) }
 
-    // A paste (⌘V, a service): files and pictures are the owner's to attach, words come in plain.
+    // A paste (⌘V, Paste and Match Style, a service): files and pictures are the owner's to
+    // attach, words come in plain.
     override func readSelection(from pboard: NSPasteboard) -> Bool {
-        guard let names = onPaste(pboard) else { return super.readSelection(from: pboard) }
+        attached(from: pboard) || super.readSelection(from: pboard)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        attached(from: pboard) || super.readSelection(from: pboard, type: type)
+    }
+
+    private func attached(from pboard: NSPasteboard) -> Bool {
+        guard let names = onPaste(pboard) else { return false }
         if !names.isEmpty { write(names.joined(separator: " ")) }
         return true
     }
@@ -310,6 +352,11 @@ final class MessageTextView: NSTextView {
 
     /// Where each mark is: the agents named and the pictures, for Backspace.
     private var marks: [NSRange] = []
+    /// It has marks styled, so the next styling starts over from plain text.
+    private var styled = false
+    private var styledFont: NSFont?
+    /// Past this many characters (a pasted log), its addresses aren't looked for as you type.
+    private static let longest = 20_000
 
     /// Styles what the text names, each time from the field's own look, so a mark no longer whole
     /// goes back to plain text.
@@ -319,11 +366,17 @@ final class MessageTextView: NSTextView {
         let text = string
         let length = storage.length
         let all = NSRange(location: 0, length: length)
+        // Only where there's something to style, or was: typing in a long pasted log stays as
+        // quick as in any text. Addresses aren't looked for in one that long.
+        let mayMark = shown && (text.contains(AgentReferences.trigger) || text.contains("[Image ")
+            || (length < Self.longest && (text.contains("http") || text.contains("www."))))
+        guard mayMark || styled || font != styledFont else { return }
+        styledFont = font
         var faces: [(at: Int, image: NSImage)] = []
         var marks: [NSRange] = []
         storage.beginEditing()
         storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: all)
-        if shown, length > 0 {
+        if mayMark, length > 0 {
             let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
             let size = (font.pointSize * 1.1).rounded()
             /// The first character of a mark makes room for its face, unseen.
@@ -334,7 +387,7 @@ final class MessageTextView: NSTextView {
                 storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
                 faces.append((span.location, image))
             }
-            for (range, _) in WebLinks.find(in: text) {
+            for (range, _) in length < Self.longest ? WebLinks.find(in: text) : [] {
                 storage.addAttribute(.foregroundColor, value: ReplyDocument.Colors.link, range: NSRange(range, in: text))
             }
             if text.contains(AgentReferences.trigger) {
@@ -363,6 +416,7 @@ final class MessageTextView: NSTextView {
         storage.endEditing()
         self.faces = faces
         self.marks = marks
+        styled = !faces.isEmpty || mayMark
         // What you type next is plain, also right after a mark.
         typingAttributes = [.font: font, .foregroundColor: NSColor.textColor]
         needsDisplay = true
@@ -373,7 +427,9 @@ final class MessageTextView: NSTextView {
         let origin = textContainerOrigin
         if string.isEmpty, !placeholder.isEmpty {
             let attributes: [NSAttributedString.Key: Any] = [.font: font ?? .systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.placeholderTextColor]
-            (placeholder as NSString).draw(at: NSPoint(x: origin.x, y: origin.y), withAttributes: attributes)
+            // One line, cut short with an ellipsis in a narrow window.
+            let line = NSRect(x: origin.x, y: origin.y, width: bounds.width - origin.x, height: lineHeight)
+            (placeholder as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
         }
         guard let layoutManager, let textContainer, !faces.isEmpty else { return }
         let size = ((font?.pointSize ?? 13) * 1.1).rounded()

@@ -58,7 +58,7 @@ struct QuoteList: View {
                             }
                             MessageField(text: response(to: quote.id), placeholder: "Your answer to this…", font: font, maxLines: 10,
                                          focus: focus?.id == quote.id ? focus?.request : nil, blur: blur, images: images,
-                                         onKey: onKey, onFocus: { onFocus(quote.id, $0) }, onPaste: onPaste, identifier: "quote-answer")
+                                         onKey: onKey, onFocus: { onFocus(quote.id, $0) }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer")
                                 .padding(.leading, 12)
                                 .padding(.bottom, 4)
                         }

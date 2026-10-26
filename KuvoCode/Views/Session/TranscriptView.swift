@@ -793,8 +793,8 @@ struct UserBubble: View {
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
 
-    /// A part of its words with its own styling, and what it names standing out.
-    /// Its web addresses as links, and the pictures it names as the composer showed them.
+    /// A part of its words with its own styling, and what it names standing out: agents, files,
+    /// web addresses as links, and its pictures' names as the composer showed them.
     private func styled(_ part: String, agents: [MessageMentions.Agent]) -> AttributedString? {
         let own = style?(part)
         let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))

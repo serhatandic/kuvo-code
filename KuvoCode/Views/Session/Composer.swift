@@ -267,6 +267,8 @@ struct Composer: View {
             commandIndex = 0
             dismissedCommands = false
             isTargeted = false
+            // The keyboard goes to this session's message, not a quote it was answering before.
+            answerFocus = nil
             // Undoing typing here brings back nothing from the session it was writing to before.
             field.forgetUndo()
             focusAtEnd()
@@ -316,9 +318,7 @@ struct Composer: View {
                 insertMention(mention.matches[min(mentionIndex, mention.matches.count - 1)])
                 return true
             }
-            if key.modifiers.contains(.shift) || key.modifiers.contains(.option) { return false }
-            if key.modifiers.contains(.command) { queue() } else { send() }
-            return true
+            return answerKey(key)
         case .tab:
             if let commandMatches {
                 text = "/" + commandMatches[min(commandIndex, commandMatches.count - 1)].name + " "
@@ -337,7 +337,7 @@ struct Composer: View {
                 dismissedMention = text.distance(from: text.startIndex, to: start)
                 return true
             }
-            return escape()
+            return answerKey(key)
         case .up:
             if let commandMatches {
                 commandIndex = max(0, min(commandIndex, commandMatches.count - 1) - 1)
@@ -363,7 +363,8 @@ struct Composer: View {
         }
     }
 
-    /// An answer's keys: Return sends (Shift- or Option-Return starts a new line), Escape stops.
+    /// An answer's keys, and the field's with no list open: Return sends (Shift- or Option-Return
+    /// starts a new line, ⌘Return queues); Escape closes an open Find bar, then stops the agent.
     private func answerKey(_ key: MessageField.Key) -> Bool {
         switch key.name {
         case .return:
@@ -371,18 +372,13 @@ struct Composer: View {
             if key.modifiers.contains(.command) { queue() } else { send() }
             return true
         case .escape:
-            return escape()
+            if ConversationFind.closeOpen() { return true }
+            guard isRunning else { return false }
+            onStop()
+            return true
         default:
             return false
         }
-    }
-
-    /// Escape with no list open: an open Find bar closes first; then it stops the agent.
-    private func escape() -> Bool {
-        if ConversationFind.closeOpen() { return true }
-        guard isRunning else { return false }
-        onStop()
-        return true
     }
 
     private var placeholder: String {
@@ -502,7 +498,7 @@ struct Composer: View {
     /// Files dropped on the composer or chosen: attached, the pictures' names written in the message.
     private func attachAndName(_ urls: [URL]) {
         let names = attach(urls)
-        if !names.isEmpty { field.write(names.joined(separator: " "), into: $text) }
+        if !names.isEmpty, !isShell { field.write(names.joined(separator: " "), into: $text) }
     }
 
     /// Takes a file off the message, and a picture's name with it.
@@ -514,9 +510,11 @@ struct Composer: View {
     private var imageFiles: [URL] { files.filter { AttachmentItem.local($0).isImage } }
 
     /// ⌘V in the field or an answer: files and pictures on the pasteboard are attached, and the
-    /// pictures' names written there.
+    /// pictures' names written there (not in a "!" command, which is the shell's).
     private func pasteAttachments(from board: NSPasteboard) -> [String]? {
-        Self.pastedFiles(from: board).map(attach)
+        guard let urls = Self.pastedFiles(from: board) else { return nil }
+        let names = attach(urls)
+        return isShell ? [] : names
     }
 
     private func chooseFiles() {

@@ -314,13 +314,13 @@ private final class LinkAreaView: NSView {
     }
 }
 
-/// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.
 /// A picture's name in your words: its "[" is drawn as a picture's mark, its "]" left out.
 nonisolated enum PictureMark: AttributedStringKey {
     enum Value: Hashable, Sendable { case open, close }
     static let name = "kuvo.pictureMark"
 }
 
+/// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.
 nonisolated enum AgentMark: AttributedStringKey {
     typealias Value = MessageMentions.Agent
     static let name = "kuvo.agentMark"
