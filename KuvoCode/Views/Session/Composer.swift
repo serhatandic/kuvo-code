@@ -31,6 +31,9 @@ struct Composer: View {
     var folders: [String] = []
     /// What "/" at the start of a message can run.
     var commands: [Command] = []
+    /// The keywords "/" offers first (those this conversation's computer runs): one typed is
+    /// drawn as a token, says what it will do under the field, and a picked one fills in.
+    var keywords: [Keyword] = []
     /// Puts the cursor here when it changes.
     var focusRequest = 0
     /// The engine it sends to can't be reached now (its machine is reconnecting): you can write,
@@ -106,6 +109,10 @@ struct Composer: View {
     @State private var commandIndex = 0
     /// The "/" list was closed with Escape; it opens again for a new message.
     @State private var dismissedCommands = false
+    @State private var loopIndex = 0
+    /// "/loop"'s "How often" was closed with Escape, or Custom… is open in its place.
+    @State private var dismissedLoop = false
+    @State private var customLoop = false
     /// "&" and the bots and sessions it names.
     @State private var agents = AgentPicker()
 
@@ -123,7 +130,16 @@ struct Composer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let commandMatches {
-                CommandList(commands: commandMatches, selected: min(commandIndex, commandMatches.count - 1)) { runCommand($0) }
+                SlashList(items: commandMatches, selected: min(commandIndex, commandMatches.count - 1), project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
+                    .preference(key: ComposerListShown.self, value: true)
+            } else if customLoop, typedKeyword?.keyword == .loop {
+                CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
+                    customLoop = false
+                    focusAtEnd()
+                })
+                .preference(key: ComposerListShown.self, value: true)
+            } else if let loopChoices {
+                LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
                     .preference(key: ComposerListShown.self, value: true)
             } else if let mention {
                 MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
@@ -181,6 +197,8 @@ struct Composer: View {
                 blur: blurRequest,
                 marks: !isShell,
                 images: imageFiles.count,
+                token: token,
+                example: example,
                 onKey: key,
                 onFocus: { focused in
                     if focused { fieldFocus = nil }
@@ -201,8 +219,22 @@ struct Composer: View {
                     commandIndex = 0
                     if new.isEmpty { dismissedCommands = false }
                 }
+                if !new.hasPrefix(Keyword.loop.typed) {
+                    loopIndex = 0
+                    dismissedLoop = false
+                    customLoop = false
+                } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
+                    // Typed in the field meanwhile: Custom… has nothing left to ask.
+                    customLoop = false
+                }
             }
             .onChange(of: session) { agents.reset() }
+            if keywordHint != nil {
+                // Read again each minute: /loop's says when it first sends.
+                TimelineView(.everyMinute) { _ in
+                    if let keywordHint { KeywordHint(text: keywordHint.text, isProblem: keywordHint.isProblem) }
+                }
+            }
 
             HStack(spacing: 4) {
                 if isShell {
@@ -266,6 +298,9 @@ struct Composer: View {
             dismissedMention = nil
             commandIndex = 0
             dismissedCommands = false
+            loopIndex = 0
+            dismissedLoop = false
+            customLoop = false
             isTargeted = false
             // The keyboard goes to this session's message, not a quote it was answering before.
             answerFocus = nil
@@ -308,10 +343,11 @@ struct Composer: View {
     /// through what was sent before.
     private func key(_ key: MessageField.Key) -> Bool {
         if agents.key(key, text: $text, excluding: session) { return true }
+        if let loopChoices, loopKey(key, loopChoices) { return true }
         switch key.name {
         case .return:
             if let commandMatches, key.modifiers.isEmpty {
-                runCommand(commandMatches[min(commandIndex, commandMatches.count - 1)])
+                pick(commandMatches[min(commandIndex, commandMatches.count - 1)])
                 return true
             }
             if let mention, key.modifiers.isEmpty, !mention.matches.isEmpty {
@@ -321,7 +357,10 @@ struct Composer: View {
             return answerKey(key)
         case .tab:
             if let commandMatches {
-                text = "/" + commandMatches[min(commandIndex, commandMatches.count - 1)].name + " "
+                switch commandMatches[min(commandIndex, commandMatches.count - 1)] {
+                case .keyword(let keyword): text = keyword.typed + " "
+                case .command(let command): text = "/" + command.name + " "
+                }
                 return true
             }
             guard let mention, !mention.matches.isEmpty else { return false }
@@ -415,19 +454,109 @@ struct Composer: View {
         onQueue()
     }
 
-    /// The commands matching the "/" that starts the message, while its list is open.
-    /// Not while going through sent messages: ↑ and ↓ keep doing that.
-    private var commandMatches: [Command]? {
+    /// The keywords and commands matching the "/" that starts the message, while its list is
+    /// open. Not while going through sent messages: ↑ and ↓ keep doing that.
+    private var commandMatches: [SlashItem]? {
         guard !dismissedCommands, historyIndex == nil, let query = SlashCommands.query(in: text) else { return nil }
-        let matches = SlashCommands.matches(query, in: commands).prefix(8)
+        let matches = SlashItem.matches(query, keywords: keywords, commands: commands).prefix(12)
         return matches.isEmpty ? nil : Array(matches)
     }
 
-    /// Picked from the list: runs it, as if "/name" had been typed and sent.
-    private func runCommand(_ command: Command) {
-        text = "/" + command.name
+    /// Picked from the list: a keyword fills in, so what it does is read before Return runs it;
+    /// a command runs, as if "/name" had been typed and sent.
+    private func pick(_ item: SlashItem) {
         commandIndex = 0
-        send()
+        switch item {
+        case .keyword(let keyword):
+            text = keyword.typed + " "
+            focusAtEnd()
+        case .command(let command):
+            text = "/" + command.name
+            send()
+        }
+    }
+
+    /// The keyword the message starts with, one offered here, and what follows it: "/goal all
+    /// tests pass" is (.goal, " all tests pass"). Not in a "!" command.
+    private var typedKeyword: (keyword: Keyword, rest: String)? {
+        guard text.hasPrefix("/") else { return nil }
+        let name = text.dropFirst().prefix { !$0.isWhitespace }
+        guard let keyword = Keyword(rawValue: name.lowercased()), keywords.contains(keyword) else { return nil }
+        return (keyword, String(text.dropFirst(1 + name.count)))
+    }
+
+    /// The keyword drawn as a token: /loop's with its schedule once it reads one.
+    private var token: MessageField.Token? {
+        guard let (keyword, rest) = typedKeyword else { return nil }
+        let schedule = keyword == .loop ? LoopCommand(rest).scheduleLength : 0
+        return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol, orange: keyword.isPlan)
+    }
+
+    /// In grey after the keyword until something follows it: what to write ("/loop"'s once it
+    /// has a schedule).
+    private var example: String? {
+        guard let (keyword, rest) = typedKeyword, rest.first?.isWhitespace == true else { return nil }
+        if keyword == .loop {
+            let command = LoopCommand(rest)
+            return command.schedule != nil && command.message.isEmpty ? keyword.argument : nil
+        }
+        return rest.allSatisfy(\.isWhitespace) ? keyword.argument : nil
+    }
+
+    /// Under the field while a keyword is typed: what it will do. /loop's reads its schedule back
+    /// (or says it can't), /review's names who reads the changes.
+    private var keywordHint: (text: String, isProblem: Bool)? {
+        guard let (keyword, rest) = typedKeyword, commandMatches == nil else { return nil }
+        switch keyword {
+        case .loop:
+            let command = LoopCommand(rest)
+            guard let schedule = command.schedule else {
+                if loopChoices != nil || customLoop { return ("Pick how often, then write what to do each time.", false) }
+                return ("Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”.", true)
+            }
+            let place = folders.first.flatMap(RemoteFolder.machine(of:)).map { "on \($0), with this Mac closed too" } ?? "on this Mac, also with the window closed"
+            // A wake-up sends words: what's attached goes with the first message, or stays.
+            let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
+            return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)\(attached)", false)
+        case .review:
+            let reader = currentModel?.name ?? "The conversation’s model"
+            return ("\(reader) reads the changes not committed yet with fresh eyes, without this conversation, and lists what it finds.", false)
+        default:
+            return (keyword.hint, false)
+        }
+    }
+
+    /// "/loop "'s "How often", until one is picked or typed.
+    private var loopChoices: [LoopChoice]? {
+        guard !dismissedLoop, !customLoop, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .loop,
+              rest.first?.isWhitespace == true, LoopCommand(rest).schedule == nil else { return nil }
+        return LoopChoice.matches(rest)
+    }
+
+    /// Picked from "How often": its words written after "/loop ", or Custom…'s row in its place.
+    private func pickLoop(_ choice: LoopChoice) {
+        loopIndex = 0
+        switch choice {
+        case .preset(let schedule):
+            customLoop = false
+            text = Keyword.loop.typed + " " + schedule.phrase + " "
+            focusAtEnd()
+        case .custom:
+            customLoop = true
+        }
+    }
+
+    /// "How often"'s keys while it's open: ↑ ↓ choose, Return and Tab pick, Escape closes it.
+    private func loopKey(_ key: MessageField.Key, _ choices: [LoopChoice]) -> Bool {
+        switch key.name {
+        case .return, .tab:
+            guard key.modifiers.isEmpty else { return false }
+            pickLoop(choices[min(loopIndex, choices.count - 1)])
+        case .escape: dismissedLoop = true
+        case .up: loopIndex = max(0, min(loopIndex, choices.count - 1) - 1)
+        case .down: loopIndex = min(choices.count - 1, loopIndex + 1)
+        }
+        return true
     }
 
     /// The "@" being typed and the files it matches, while its list is open.
@@ -692,38 +821,6 @@ private struct MentionList: View {
         }
         .padding(.leading, -8)
         .help("↑ ↓ to choose, Return or Tab to insert, Escape to close")
-    }
-}
-
-/// The commands a "/" matches, above the message field, each with what it does.
-private struct CommandList: View {
-    let commands: [Command]
-    let selected: Int
-    let choose: (Command) -> Void
-
-    var body: some View {
-        VStack(spacing: 1) {
-            ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
-                Button { choose(command) } label: {
-                    HStack(spacing: 8) {
-                        Text("/" + command.name)
-                            .font(.system(size: 13, weight: .medium))
-                        if let description = command.description {
-                            Text(description)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .frame(height: 28)
-                }
-                .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
-            }
-        }
-        .padding(.leading, -8)
-        .help("↑ ↓ to choose, Return to run, Tab to add to it, Escape to close")
     }
 }
 

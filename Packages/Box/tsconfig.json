@@ -19,7 +19,6 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "src",
-    "test"
+    "src"
   ]
 }

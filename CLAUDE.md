@@ -22,7 +22,7 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 - Before you build a screen or a control, look at how the app already draws the same kind of thing (`KuvoCode/Design`, the views beside it, the website's screenshots) and match its materials, spacing, wording, states and motion.
 - Work through every state: empty, loading, failed, long text, many items, a narrow window, light and dark, larger text, and VoiceOver.
 - See it yourself in a demo copy before calling it done, and look at it as the user will.
-- When a visible choice isn't obvious, mock the options and let the user pick.
+- **UI work starts with drafts to pick from, always.** Before building any screen, control or visible change, draft two or three options (mocks or renders, light and dark) with your recommendation and why, and let the user pick. Build the picked one; meanwhile build only what doesn't depend on the choice. This holds even when one option seems obvious.
 - When the machinery makes the right UI hard, change the machinery. Don't bend the UI around it.
 - **The right panel is only for common tools**: the browser, terminals, files, and Changes for coding sessions. A feature's own view goes where it belongs, never in a new panel tab: a popover or sheet on the conversation (like Artifacts), or a page in Settings.
 

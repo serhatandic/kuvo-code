@@ -56,6 +56,7 @@ Object.assign(process.env, {
   KUVO_HOME: path.join(support, "mac"),
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),
+  KUVO_BOX: "mac",
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"),
   KUVO_KEYS: path.join(support, "keys"),
   KUVO_HOST_URL: `http://127.0.0.1:${appHost.address().port}`,

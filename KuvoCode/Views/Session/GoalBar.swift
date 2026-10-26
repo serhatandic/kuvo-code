@@ -29,7 +29,7 @@ struct GoalBar: View {
                         .padding(.leading, 42)
                         .padding(.trailing, 16)
                         .padding(.bottom, 12)
-                        .transition(.opacity)
+                        .transition(.fold)
                 }
             }
         }

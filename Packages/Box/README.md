@@ -20,10 +20,16 @@ The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for rele
 
 After changing anything in `src`, run `scripts/build-box.sh` and commit `kuvo-link.js` with it. It
 builds with the Bun CI has (1.4.2), so every computer builds the same file, and CI fails when the
-file isn't what the sources build, byte for byte (`build-box.sh --check`). `bun install
---frozen-lockfile` here, then `bun run check`, type-checks what's typed (Node's types: it must
-run on Node too). In a debug build of the app, `KUVO_BOX_SCRIPT` can name
-`src/link/main.ts` itself, which the engine's Bun runs as it is.
+file isn't what the sources build, byte for byte (`build-box.sh --check`).
+
+`bun install --frozen-lockfile` here, then `bun run check` type-checks what's typed (Node's types:
+it must run on Node too), and `bun test` runs its own tests. The lockfile is Bun 1.4.2's too, which
+an older Bun refuses (`lockfile had changes`): install with that Bun, or with the engine of a demo,
+perf or e2e copy, which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install
+--frozen-lockfile`), never the real Kuvo Code's.
+
+In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, which the
+engine's Bun runs as it is.
 
 The bundle targets Node as well as Bun: the bridge's tests (`Packages/KuvoLink/Tests/Bridge`, `node
 --test`) import it, and machines run it with the engine's Bun. So it uses Node's modules, never
@@ -36,10 +42,11 @@ typed modules one at a time, each move passing every suite, until it's only the 
 
 ```
 src/shared/      what both programs and the contract suite read: run/ records, features, documents,
-                 mail between boxes, group chats' seat mail, link ⇄ agents bridge, notices, route shapes
+                 mail between boxes, group chats' seat mail, link ⇄ agents bridge, notices, route shapes;
+                 platform.ts, where macOS and Linux differ (processes, the folders a Mac asks about),
+                 each side tested
 src/link/
   main.ts        the command line (run, serve, setup, pair, leave, update, box …, selftest)
-  platform.ts    where macOS and Linux differ (processes, folder watching, keys), each side tested
   crypto/        keys, Noise sessions and mail, signing
   relay/         frames, the host's sessions, the relay connection
   documents/ peers/ phones.ts state.ts

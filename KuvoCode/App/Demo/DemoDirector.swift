@@ -518,6 +518,20 @@ enum DemoDirector {
         let files = environment["KUVO_DEMO_FILES"]?.split(separator: ",").map { URL(filePath: String($0)) } ?? []
         // As the composer sends it: "/" runs a command, "!" a shell command.
         workspace.model(for: session.id)?.submit(prompt, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: folder))
+        // KUVO_DEMO_THEN: messages separated by "|", each sent once the turn before it ended (a
+        // keyword too, "/btw what changed?"); KUVO_DEMO_THEN_DRAFT: then left in the composer.
+        if environment["KUVO_DEMO_THEN"] != nil || environment["KUVO_DEMO_THEN_DRAFT"] != nil, let model = workspace.model(for: session.id) {
+            let commands = Keyword.commands(catalog.commands(in: folder), keywords: model.keywords)
+            for message in (environment["KUVO_DEMO_THEN"] ?? "").split(separator: "|") {
+                await DemoWait.until("the agent to start (KUVO_DEMO_THEN)", limit: .seconds(20)) { model.isRunning }
+                await DemoWait.until("its turn to end (KUVO_DEMO_THEN)", limit: .seconds(180)) { !model.isRunning }
+                model.submit(String(message), files: [], for: catalog.model(session.model), queue: false, commands: commands)
+            }
+            if let draft = environment["KUVO_DEMO_THEN_DRAFT"] {
+                await DemoWait.until("its turn to end (KUVO_DEMO_THEN_DRAFT)", limit: .seconds(180)) { !model.isRunning }
+                model.draftText = draft
+            }
+        }
         // KUVO_DEMO_QUEUE: messages separated by "|", queued once the agent is working.
         guard let queue = environment["KUVO_DEMO_QUEUE"], let running = workspace.model(for: session.id) else { return }
         await DemoWait.until("the agent to start (KUVO_DEMO_QUEUE)", limit: .seconds(10)) { running.isRunning }

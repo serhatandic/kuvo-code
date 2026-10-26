@@ -98,6 +98,14 @@ final class AppModel {
     @ObservationIgnored private var starting: UUID?
     /// Settings fill the main window in place of the sessions while this is on.
     var showsSettings = false
+    /// Help › Report a Problem…'s sheet, over the main window.
+    var showsProblemReport = false
+    /// Help › Report a Problem…: its sheet, over the main window, opened if it was closed.
+    func reportProblem() {
+        openMainWindow?()
+        NSApp.activate()
+        showsProblemReport = true
+    }
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
     func openAccounts(on machine: String?) {
         openSettings(.accounts, on: SidebarBox(machine: machine))
@@ -565,6 +573,8 @@ final class AppModel {
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
+        // A handoff asked for here, done: its new conversation opens, wherever the window is.
+        agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         agents.onStopped = { [weak self] in
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()

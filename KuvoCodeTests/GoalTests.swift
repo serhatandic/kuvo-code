@@ -57,8 +57,10 @@ import Testing
             conversation.noted(request.body["text"] as? String ?? "", description: request.body["description"] as? String ?? "")
             return StubWeb.json(["data": [:]])
         }
+        // The check, afresh on the session's model (a paid one answers it so), and in the session if not.
+        engine.on("POST", "/api/experimental/generate") { _ in StubWeb.json(["data": ["text": conversation.check()]]) }
         engine.on("POST", "/api/session/\(id)/generate") { _ in StubWeb.json(["data": ["text": conversation.check()]]) }
-        engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: "/tmp")])
+        engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: "/tmp", extra: ["model": ["id": "m", "providerID": "p"]])])
         // The feed ends as soon as it opens: each time it's opened again, the box looks.
         engine.on("GET", "/api/event") { _ in StubWeb.Answer(status: 200, body: Data()) }
         engine.on("GET", "/api/provider", json: ["data": []])

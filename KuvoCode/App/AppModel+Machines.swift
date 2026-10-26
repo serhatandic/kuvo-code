@@ -335,6 +335,7 @@ extension AppModel {
             engine?.catalog.handle(event)
             self?.workspace.handleAgents(event, machine: machine)
         }
+        engine.agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         engine.agents.onConnected = { [weak self, weak engine] in
             guard let self, let engine else { return }
             Task {

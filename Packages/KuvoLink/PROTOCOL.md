@@ -1345,6 +1345,57 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).
 
+### Side questions, handoffs and reviews
+
+Three more keywords each box answers in its agents bridge, as it does goals ("Goals"), for the
+engine's sessions and the coding agents' alike, with no client there: `kuvo/agents/api/kuvo/…` on
+the box the conversation lives on (the Mac app at `api/kuvo/…` on the bridge), while `kuvo/info` has
+`agents: true` (503 otherwise), where `features` names them. Each answers `400`, `404` (no such
+conversation, or nothing of it), `409` and `503` with `{message}` to show. Times are ms since 1970.
+A conversation deleted takes its side questions and its review with it (`kuvo.btw.removed`
+`{sessionID}`, `kuvo.review.updated` with `review: null`), also one deleted while the box was stopped.
+
+- **Side questions** (`btw`, "/btw <question>"): a question about a conversation, answered from
+  what it knows (on the engine, from inside its context; with the coding agents, the conversation
+  goes with the question), and kept out of it: the conversation is told nothing. Each conversation
+  keeps its own list (the newest 100), which a client shows apart from the conversation (the
+  Mac's sidebar has them under it).
+  - `POST …/kuvo/btw/<session>` with `{"question"}` (at most 4,000 characters) → `{data:
+    question}`, `state` `answering`; it's answered in a moment. A question: `{id, session, question,
+    state: "answering" | "answered" | "failed", answer?, error?, asked, answered?}`.
+  - `GET …/kuvo/btw/<session>` → `{data: [question]}`, oldest first; `GET …/kuvo/btw` → `{data:
+    [{session, count, latest}]}`, every conversation that has some.
+  - `DELETE …/kuvo/btw/<session>/<id>` takes one away, `DELETE …/kuvo/btw/<session>` all of them.
+  - Events: `kuvo.btw.updated` `{sessionID, question}` as one is asked and answered;
+    `kuvo.btw.removed` `{sessionID, id?}`.
+- **Handoffs** (`handoff`, "/handoff [what to do next]"): a conversation carried on in a fresh one.
+  Its model writes a handoff note from inside it, and a new conversation in the same folder, on
+  the same model, effort, agent and permissions, titled "<title> (continued)", starts on that note
+  (a note whose text starts with `[Handoff] `: show its `description`, "Carried on from “…”"), and
+  on `next` when given. The two are linked in their metadata (`kuvo.handoffFrom`,
+  `kuvo.handoffTo`; the rest of it kept): show the link in each.
+  - `POST …/kuvo/handoff/<session>` with `{"next"?}` → `{data: handoff}`, `state` `writing`: the
+    note takes a while. A handoff: `{from, state: "writing" | "done" | "failed", to?, title?,
+    error?}`. `409` for a subagent's, one with no model yet, one being handed off, or one whose
+    agent is working (wait for its turn to end); one whose agent starts while the note is written
+    fails, and makes no new conversation.
+  - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
+  - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
+- **Reviews** (`reviews`, "/review"): the conversation's changes not committed yet (its folder's
+  own, in its git: tracked files' diffs, against nothing before the first commit, and new files
+  whole; a big new file is named with its size, and links and files that aren't text are left
+  out), read by a model with none of the
+  conversation's context: on the engine, its own model afresh, or `model` when given; with the
+  coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
+  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
+    `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
+    "failed", model?, summary?, findings: [{file, line?, severity: "bug" | "risk" | "nit", note}],
+    error?, fix?, started, ended?}`, its findings bugs first. `fix` is what to send the agent, as
+    your message, to fix them.
+  - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
+    conversation's; `DELETE …/kuvo/reviews/<session>` puts it away.
+  - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
+
 ### Features
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
@@ -1376,6 +1427,9 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
+| `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
+| `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
+| `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |
