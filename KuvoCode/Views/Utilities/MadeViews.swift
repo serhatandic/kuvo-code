@@ -4,7 +4,6 @@ import OpenCodeKit
 import PDFKit
 import Quartz
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Where something was made, as the conversation's bar shows it: a bot's, a group chat's, or a
 /// coding session's (which shows only what isn't code: its Changes are in the panel).
@@ -57,6 +56,7 @@ enum MadePlace: Equatable {
 struct MadeButton: View {
     let place: MadePlace
     @Environment(AppModel.self) private var app
+    @Environment(\.colorScheme) private var scheme
     @State private var things: MadeThings?
     @State private var isOpen = false
     /// When you last looked, by place, on this Mac: the newest thing's time then.
@@ -84,6 +84,9 @@ struct MadeButton: View {
                 .accessibilityValue(hasNew(things) ? "Something new" : "")
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     MadePopover(things: things, place: place) { isOpen = false }
+                        // The conversation card's own surface, edge to edge: the popover's see-through
+                        // material showed the window under one part and the desktop under another.
+                        .presentationBackground(Surface.cardFill(scheme, focused: true))
                 }
                 .onChange(of: isOpen) { _, open in if open { markSeen(things) } }
                 .onChange(of: newest(things)) { if isOpen { markSeen(things) } }
@@ -683,7 +686,7 @@ struct MadeRow: View {
                 .clipShape(.rect(cornerRadius: 7))
                 .specularRim(RoundedRectangle(cornerRadius: 7), strength: 0.6)
         } else {
-            FileKindIcon(name: header.name, kind: header.kind, type: header.type)
+            KindTile(kind: header.kind, type: header.type)
         }
     }
 
@@ -703,23 +706,19 @@ struct MadeRow: View {
     }
 }
 
-/// A file's icon as Finder and Changes show it, by its kind of file; a kind's symbol for one macOS
-/// has no icon for.
-private struct FileKindIcon: View {
-    let name: String
+/// Its kind's symbol on a quiet tile, as the phone shows it. (macOS's file icons are drawn by
+/// the app that opens the kind, so a PDF showed a browser's.)
+private struct KindTile: View {
     let kind: Artifact.Kind
     let type: String
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? UTType(mimeType: self.type) {
-            Image(nsImage: NSWorkspace.shared.icon(for: type))
-                .resizable()
-                .frame(width: 28, height: 28)
-        } else {
-            Image(systemName: ArtifactWords.symbol(kind: kind, type: self.type))
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-        }
+        Image(systemName: ArtifactWords.symbol(kind: kind, type: type))
+            .font(.system(size: 14))
+            .foregroundStyle(.secondary)
+            .frame(width: 28, height: 28)
+            .background(Surface.well(scheme), in: .rect(cornerRadius: 7))
     }
 }
 
@@ -863,6 +862,15 @@ struct ArtifactDetail: View {
             if let artifact, let version {
                 versionBar(artifact, version)
                     .padding(.bottom, 6)
+                // A machine's file: what's missing here, and why.
+                if things.box.box != BoxClient.mac, artifact.gone == nil {
+                    Label("It’s on \(app.machines.list.first { $0.id == things.box.box }?.name ?? "a machine"), so Finder and the side panel can’t open it from here.", systemImage: "info.circle")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
                 if let restoring { confirm(artifact, restoring) }
                 if let problem {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
