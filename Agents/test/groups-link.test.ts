@@ -82,6 +82,18 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+test("what a chat doesn't have is left out of its answers, though its file says null", async () => {
+  // As a chat file may hold them (the store takes null for each): no purpose, a one-off meeting,
+  // a message from nobody in particular.
+  const nulls = { ...group, id: "grp_nulls00001", name: "Nulls", purpose: null, meeting: { next: "2030-10-23T06:00:00Z", topic: "Plan", every: null, at: null, weekday: null } } as unknown as Group
+  runner.put(nulls, [{ id: "gm_n", author: null, text: "Hello.", time: "2026-10-22T08:00:00Z", kind: "note" } as unknown as GroupMessage], "active", false)
+  const listed = (await ask("GET", "")).json.groups.find((each: any) => each.id === "grp_nulls00001")
+  expect("purpose" in listed).toBe(false)
+  expect(listed.meeting).toEqual({ next: Date.parse("2030-10-23T06:00:00Z") / 1000, topic: "Plan" })
+  const one = (await ask("GET", "grp_nulls00001")).json
+  expect(one.messages.map((each: any) => "author" in each)).toEqual([false])
+})
+
 describe("a computer's group chats, as a client reads them", () => {
   test("listed with their bots, who's talking, the last thing said and the meeting, in seconds; one moving here isn't listed yet", async () => {
     const { status, json } = await ask("GET", "")

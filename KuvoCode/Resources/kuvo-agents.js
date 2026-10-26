@@ -13000,12 +13000,14 @@ var stamp3 = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 var plainName = (text3) => String(text3 ?? "").replace(/[\u0000-\u001f\u007f\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, " ").split(/\s+/).filter(Boolean).join(" ");
 var newGroupID = () => "grp_" + Array.from(crypto.getRandomValues(new Uint8Array(10)), (byte) => "abcdefghijklmnopqrstuvwxyz0123456789"[byte % 36]).join("");
 var failed = (status) => status === 409 ? 409 : status >= 500 ? 503 : 404;
+var present = (value) => Object.fromEntries(Object.entries(value).filter(([, each]) => each !== null && each !== undefined));
 function clientMessage(message2, withSteps = true) {
   if (!message2)
     return;
-  const { named: _named, steps, time, tasks: tasks2, ...rest } = message2;
+  const { named: _named, steps, time, tasks: tasks2, author, ...rest } = message2;
   return {
     ...rest,
+    ...author != null ? { author } : {},
     time: seconds(time),
     ...withSteps && steps ? { steps } : {},
     ...tasks2 ? {
@@ -13047,14 +13049,14 @@ function list(runner, store) {
   const groups = runner.list().filter((chat) => chat.status === "active").map(({ group, state, said: said3, fromBot }) => ({
     id: group.id,
     name: group.name,
-    purpose: group.purpose,
+    ...group.purpose ? { purpose: group.purpose } : {},
     members: group.members.flatMap((id) => anyMember(id, runner, store) ?? []),
     speaking: state.speaking,
     discussing: Boolean(state.discussing),
     paused: Boolean(state.paused),
     unread: Boolean(fromBot && (!group.viewed || Date.parse(fromBot.time) > Date.parse(group.viewed))),
     last: clientMessage(said3, false),
-    meeting: group.meeting ? { ...group.meeting, next: seconds(group.meeting.next) } : undefined
+    meeting: group.meeting ? present({ ...group.meeting, next: seconds(group.meeting.next) }) : undefined
   }));
   return { groups };
 }
@@ -16654,4 +16656,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Agents/src 6ff1d8ac73f485ae5b5231949c2acd3d368ee75f38b9c94822782557a77db94d
+// Built from Agents/src 5d950052a4573627fb94e35c77aa6147e41f835b8e923f707389da7688aca367

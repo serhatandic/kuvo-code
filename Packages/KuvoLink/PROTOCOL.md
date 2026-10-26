@@ -1115,7 +1115,7 @@ when there's nothing to say), never with an empty body. A host serves:
   Bot does (`personality: null` for the model's own way, `model` as `{providerID, id, variant?}`,
   `job` as `{line, details}`, the whole job, which replaces the one it had: its line on one line,
   without a sentence's end; both `""` for none; 400 for one too long): `200 {"bot": <as kuvo/bots
-  lists one>}`, after a coding agent's model for a bot on the engine has carried its conversation
+  lists one>}` (null when it no longer lists here by then, a move begun meanwhile), after a coding agent's model for a bot on the engine has carried its conversation
   on with them (its `session` is the new one, `agents` true). Errors are `{"message"}`: 400 for an
   empty name, or a look or personality there isn't; 422 for a model it can't use where it lives
   (the one it has is always kept); 404 for no such bot; 409 while it moves; 503 when it couldn't
@@ -1164,10 +1164,12 @@ when there's nothing to say), never with an empty body. A host serves:
   up (the agents bridge's `planMeeting`), on your clock, to the minute: a repeating one whose time
   has passed comes at its next round, weekdays skip the weekend, a time of day (and a week's day)
   is kept from then on, and an empty topic gets the default. 400 `{"message"}` for a one-off whose
-  time has passed or a repeat there isn't. The chat lists it as `meeting: {next, every, topic,
-  at, weekday}`.
+  time has passed or a repeat there isn't. The chat lists it as `meeting: {next, topic, every?, at?,
+  weekday?}`. What a chat doesn't have is left out of what it answers, never null: a purpose, a
+  meeting's repeat, a message's author.
 - `PATCH kuvo/groups/<id>` with any of `{name, purpose, members, meeting}` changes the chat as
-  Edit Group Chat does (an empty `purpose` is none, `meeting: null` none): `200 {"group"}`, 400
+  Edit Group Chat does (an empty `purpose` is none, `meeting: null` none): `200 {"group"}` (null
+  when it no longer lists here by then, a move begun meanwhile), 400
   `{"message"}` for what can't be (no name, fewer than two bots, a bot that doesn't live where
   the chat does, a meeting as above), 404 for no such chat or bot, 409 while it moves. Each
   computer answers it for the chats that live there; `kuvo/groups/events` says what changed at once.

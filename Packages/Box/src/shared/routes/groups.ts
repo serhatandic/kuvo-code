@@ -39,7 +39,7 @@ export const TASK = object({
  * list's `last`), the parts a wrap-up hands out, and the task a bot reports back on. */
 export const MESSAGE = object({
   id: string,
-  "author?": nullable(string),
+  "author?": string,
   text: string,
   time: number,
   kind: words("message", "wrapUp", "note", "meeting"),
@@ -49,24 +49,23 @@ export const MESSAGE = object({
 });
 
 /** A chat's meeting: the next one (seconds since 1970), how often it comes back (as kuvo-wake
- * writes it; none, or null, for once), its topic, and the time of day (minutes) and day of the
- * week (1 is Sunday) one that repeats keeps. A chat a Mac wrote can say null for those left out. */
+ * writes it; left out for once), its topic, and the time of day (minutes) and day of the week (1 is
+ * Sunday) one that repeats keeps. */
 export const MEETING = object({
   next: number,
-  "every?": nullable(string),
+  "every?": string,
   topic: string,
-  "at?": nullable(number),
-  "weekday?": nullable(number),
+  "at?": number,
+  "weekday?": number,
 });
 
-/** A chat that lives here, as a client lists it: its name and purpose (left out, or null in a
- * chat a Mac wrote, for none), its bots, who's talking (left out when nobody is), whether a
+/** A chat that lives here, as a client lists it: its name and purpose (left out for none), its bots, who's talking (left out when nobody is), whether a
  * discussion is under way or paused, whether a bot said something since you last looked, the last
  * thing said (left out before anything was), and its meeting, if it has one. */
 export const GROUP = object({
   id: string,
   name: string,
-  "purpose?": nullable(string),
+  "purpose?": string,
   members: list(MEMBER),
   "speaking?": string,
   discussing: bool,

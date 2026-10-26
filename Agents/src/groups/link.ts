@@ -33,11 +33,15 @@ const newGroupID = () => "grp_" + Array.from(crypto.getRandomValues(new Uint8Arr
 const failed = (status: number) => (status === 409 ? 409 : status >= 500 ? 503 : 404)
 
 /** A message as a client shows it: its times in seconds, without the block naming agents (the box's own record of who you named) nor, in a list, what each bot did on its turn. */
+/** An object without what it doesn't have: a chat file may hold null for it, and an answer leaves it out. */
+const present = <T extends object>(value: T) => Object.fromEntries(Object.entries(value).filter(([, each]) => each !== null && each !== undefined)) as T
+
 export function clientMessage(message: GroupMessage | undefined, withSteps = true) {
   if (!message) return undefined
-  const { named: _named, steps, time, tasks, ...rest } = message as GroupMessage & { named?: string }
+  const { named: _named, steps, time, tasks, author, ...rest } = message as GroupMessage & { named?: string }
   return {
     ...rest,
+    ...(author != null ? { author } : {}),
     time: seconds(time),
     ...(withSteps && steps ? { steps } : {}),
     ...(tasks
@@ -105,14 +109,14 @@ function list(runner: GroupRunner, store: GroupStore) {
     .map(({ group, state, said, fromBot }) => ({
       id: group.id,
       name: group.name,
-      purpose: group.purpose,
+      ...(group.purpose ? { purpose: group.purpose } : {}),
       members: group.members.flatMap((id) => anyMember(id, runner, store) ?? []),
       speaking: state.speaking,
       discussing: Boolean(state.discussing),
       paused: Boolean(state.paused),
       unread: Boolean(fromBot && (!group.viewed || Date.parse(fromBot.time) > Date.parse(group.viewed))),
       last: clientMessage(said, false),
-      meeting: group.meeting ? { ...group.meeting, next: seconds(group.meeting.next) } : undefined,
+      meeting: group.meeting ? present({ ...group.meeting, next: seconds(group.meeting.next) }) : undefined,
     }))
   return { groups }
 }

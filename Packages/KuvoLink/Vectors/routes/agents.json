@@ -82,7 +82,8 @@
           "save": { "group": "group.id" }
         },
         { "send": "GET kuvo/groups", "expect": { "status": 200, "json": { "groups": [ { "id": "{{group}}", "name": "Standup" } ] } } },
-        { "send": "PATCH kuvo/groups/{{group}}", "body": { "name": "Daily", "purpose": "" }, "expect": { "status": 200, "json": { "group": { "id": "{{group}}", "name": "Daily", "purpose": null } } } },
+        { "send": "PATCH kuvo/groups/{{group}}", "body": { "name": "Daily", "purpose": "" }, "expect": { "status": 200, "json": { "group": { "id": "{{group}}", "name": "Daily", "purpose": "<absent>" } } } },
+        { "send": "GET kuvo/groups", "why": "A chat without a purpose leaves it out, as one made without one does.", "expect": { "status": 200, "json": { "groups": [ { "id": "{{group}}", "purpose": "<absent>" } ] } } },
         { "send": "PATCH kuvo/groups/{{group}}", "body": { "members": [ "bot_ada" ] }, "expect": { "status": 400, "json": { "message": "A group chat needs at least two bots." } } },
         { "send": "PATCH kuvo/groups/grp_nothing", "body": { "name": "Ghost" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
         { "send": "DELETE kuvo/groups/{{group}}", "expect": { "status": 200, "json": {} } },

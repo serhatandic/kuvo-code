@@ -1636,12 +1636,7 @@
         "object": {
          "id": "string",
          "name": "string",
-         "purpose?": {
-          "oneOf": [
-           "string",
-           "null"
-          ]
-         },
+         "purpose?": "string",
          "members": {
           "list": {
            "object": {
@@ -1740,12 +1735,7 @@
          "last?": {
           "object": {
            "id": "string",
-           "author?": {
-            "oneOf": [
-             "string",
-             "null"
-            ]
-           },
+           "author?": "string",
            "text": "string",
            "time": "number",
            "kind": {
@@ -1807,25 +1797,10 @@
          "meeting?": {
           "object": {
            "next": "number",
-           "every?": {
-            "oneOf": [
-             "string",
-             "null"
-            ]
-           },
+           "every?": "string",
            "topic": "string",
-           "at?": {
-            "oneOf": [
-             "number",
-             "null"
-            ]
-           },
-           "weekday?": {
-            "oneOf": [
-             "number",
-             "null"
-            ]
-           }
+           "at?": "number",
+           "weekday?": "number"
           }
          }
         }
@@ -1846,12 +1821,7 @@
          "object": {
           "id": "string",
           "name": "string",
-          "purpose?": {
-           "oneOf": [
-            "string",
-            "null"
-           ]
-          },
+          "purpose?": "string",
           "members": {
            "list": {
             "object": {
@@ -1950,12 +1920,7 @@
           "last?": {
            "object": {
             "id": "string",
-            "author?": {
-             "oneOf": [
-              "string",
-              "null"
-             ]
-            },
+            "author?": "string",
             "text": "string",
             "time": "number",
             "kind": {
@@ -2017,25 +1982,10 @@
           "meeting?": {
            "object": {
             "next": "number",
-            "every?": {
-             "oneOf": [
-              "string",
-              "null"
-             ]
-            },
+            "every?": "string",
             "topic": "string",
-            "at?": {
-             "oneOf": [
-              "number",
-              "null"
-             ]
-            },
-            "weekday?": {
-             "oneOf": [
-              "number",
-              "null"
-             ]
-            }
+            "at?": "number",
+            "weekday?": "number"
            }
           }
          }
@@ -2156,12 +2106,7 @@
        "list": {
         "object": {
          "id": "string",
-         "author?": {
-          "oneOf": [
-           "string",
-           "null"
-          ]
-         },
+         "author?": "string",
          "text": "string",
          "time": "number",
          "kind": {
@@ -2276,12 +2221,7 @@
          "object": {
           "id": "string",
           "name": "string",
-          "purpose?": {
-           "oneOf": [
-            "string",
-            "null"
-           ]
-          },
+          "purpose?": "string",
           "members": {
            "list": {
             "object": {
@@ -2380,12 +2320,7 @@
           "last?": {
            "object": {
             "id": "string",
-            "author?": {
-             "oneOf": [
-              "string",
-              "null"
-             ]
-            },
+            "author?": "string",
             "text": "string",
             "time": "number",
             "kind": {
@@ -2447,25 +2382,10 @@
           "meeting?": {
            "object": {
             "next": "number",
-            "every?": {
-             "oneOf": [
-              "string",
-              "null"
-             ]
-            },
+            "every?": "string",
             "topic": "string",
-            "at?": {
-             "oneOf": [
-              "number",
-              "null"
-             ]
-            },
-            "weekday?": {
-             "oneOf": [
-              "number",
-              "null"
-             ]
-            }
+            "at?": "number",
+            "weekday?": "number"
            }
           }
          }
