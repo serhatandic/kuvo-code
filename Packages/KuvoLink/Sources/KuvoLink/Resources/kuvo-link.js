@@ -7966,7 +7966,9 @@ async function* attentionRoute(context) {
 
 // Packages/Box/src/link/areas/bots.ts
 async function* botTemplatesRoute(context) {
-  const { info, json } = context;
+  const { request, info, json } = context;
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
+    return yield* json(405, {});
   const kit = readKit();
   if (!kit)
     return yield* json(409, { message: NO_KIT });

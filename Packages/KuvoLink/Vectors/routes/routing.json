@@ -86,6 +86,8 @@
         { "given": { "agentsBridge": { "groups": true } } },
         { "send": "PUT kuvo/groups", "body": {}, "expect": { "status": 405 } },
         { "send": "PUT kuvo/bots", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/bots/templates", "body": {}, "expect": { "status": 405, "whole": true, "json": {} } },
+        { "send": "DELETE kuvo/bots/templates", "expect": { "status": 405, "whole": true, "json": {} } },
         { "send": "DELETE kuvo/wakes", "expect": { "status": 405 } },
         { "send": "POST kuvo/named", "body": {}, "expect": { "status": 405 } },
         { "send": "POST kuvo/asks", "body": {}, "expect": { "status": 405 } },

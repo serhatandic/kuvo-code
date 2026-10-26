@@ -13,7 +13,9 @@ import { followed } from "../follow";
 import { BOTS } from "../home";
 
 export async function* botTemplatesRoute(context) {
-  const { info, json } = context;
+  const { request, info, json } = context;
+  // Read with GET or HEAD, as every box's lists are.
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* json(405, {});
   const kit = readKit();
   if (!kit) return yield* json(409, { message: NO_KIT });
   return yield* json(200, botTemplates(kit, info.name));
