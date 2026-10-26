@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A message you send while the agent waits on a long command or a subagent is read at once: what it waits on carries on in the background, as the bar over the composer shows, and the agent answers you now rather than when the command ends.
 - A conversation or bot you read on your phone or another Mac stops showing as unread on this one at once, and its notification goes, on your machines too, with sessions from your coding agents as well.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.
 - Restarting the engine while it's still starting, or the engine stopping while it finishes starting, starts it again rather than leaving it stopped with nothing said.

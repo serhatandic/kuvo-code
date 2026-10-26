@@ -622,6 +622,13 @@ host serves:
   telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
   it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
   changes in `kuvo/groups/events` (below).
+- **A message while a command runs** is read at once. A message of yours sent to steer
+  (`delivery: "steer"`) waits for the agent's next step, and an agent waiting on a command or a
+  subagent it started in the foreground takes none until that ends. So each box, following its
+  engine, moves what the agent waits on to the background once it has run for 3 seconds
+  (`POST api/session/<id>/background`, the engine's Ctrl+B): the agent reads your message now, and
+  is told when the command ends (bridge 0.9.67). A message queued for after the turn, a wake-up or
+  an agent's letter waits as before. The coding agents' sessions don't do this yet.
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
