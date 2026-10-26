@@ -57,6 +57,12 @@ import Testing
         watch = window.observe(\.firstResponder) { _, _ in TestPulse.beat() }
         window.orderBack(nil)
         try await until { reply != nil }
+        // The composer takes the keyboard as the window opens, a moment after: settled first, so
+        // it doesn't land in the middle of a test.
+        try await until { (window.firstResponder as? MessageTextView)?.accessibilityIdentifier() == "composer" }
+        let settled = TestClick()
+        NSApp.postEvent(settled.marker(in: window), atStart: false)
+        try await until { settled.isHandled }
     }
 
     private func done() {
@@ -126,14 +132,18 @@ import Testing
         NSApp.postEvent(handled.marker(in: window), atStart: false)
         try await until { handled.isHandled }
         #expect(app.tabs.focus == .sessions)
-        // What the row's button does as the click ends.
+        // What the row's button does as the click ends; then the keyboard goes to its composer.
         app.tabs.open(.session(harbor))
+        try await until { (window.firstResponder as? MessageTextView)?.accessibilityIdentifier() == "composer" }
+        let settled = TestClick()
+        NSApp.postEvent(settled.marker(in: window), atStart: false)
+        try await until { settled.isHandled }
         #expect(app.tabs.selection == .session(harbor))
         #expect(app.tabs.focus == .conversation)
     }
 
-    /// With Settings open over the cards, a click in Settings leaves the card you work in as it
-    /// was, rather than giving it to the card hidden underneath.
+    /// With Settings open over the cards, a click in Settings, or the keyboard moving there, leaves
+    /// the card you work in as it was, rather than giving it to the card hidden underneath.
     @Test func clicksInSettingsLeaveTheCardsAlone() async throws {
         defer {
             app.showsSettings = false
@@ -143,6 +153,10 @@ import Testing
         #expect(app.tabs.focus == .conversation)
         app.showsSettings = true
         click(at: NSPoint(x: 60, y: 200))
+        // Nor the keyboard going to a field of the cards under Settings.
+        if let search = all(NSTextField.self, in: window.contentView).first(where: { $0.isEditable && $0.convert($0.bounds, to: nil).midX < 300 }) {
+            window.makeFirstResponder(search)
+        }
         // The click is handled, then nothing moved.
         let handled = TestClick()
         NSApp.postEvent(handled.marker(in: window), atStart: false)

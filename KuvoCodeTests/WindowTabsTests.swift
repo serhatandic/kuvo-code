@@ -68,7 +68,7 @@ import Testing
     }
 
     /// A tab picked in the tab bar is the one you work in, however you were working in the sidebar
-    /// or the panel before: its card looks it.
+    /// or the panel before: its card looks it, and its composer has the keyboard.
     @Test func aTabPickedInTheTabBarIsTheOneYouWorkIn() async {
         defer { done() }
         await sessions(["ses_a", "ses_b"])
@@ -76,9 +76,12 @@ import Testing
         tabs.open(.session("ses_b"))
         for elsewhere in [WindowTabs.Pane.sessions, .changes] {
             tabs.focus = elsewhere
+            let asked = app.workspace.model(for: "ses_a")?.composerFocus
             tabs.pick(.session("ses_a"))
             #expect(tabs.selection == .session("ses_a"))
             #expect(tabs.focus == .conversation, "after working in \(elsewhere)")
+            // Its composer takes the keyboard, so typing goes where the window shows you working.
+            #expect(app.workspace.model(for: "ses_a")?.composerFocus != asked)
             tabs.pick(.session("ses_b"))
         }
     }

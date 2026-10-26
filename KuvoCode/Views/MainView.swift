@@ -491,6 +491,10 @@ struct MainView: View {
         }
     }
 
+    /// Something over the cards (the command palette, Open Quickly, a picture looked at closer):
+    /// clicks and the keyboard there are its, not the card's under it.
+    private var overlayShown: Bool { showsPalette || showsOpenQuickly || ImageViewer.shared.request != nil }
+
     /// The tab strip's selection, by the tabs' written keys.
     private var tabSelection: Binding<String?> {
         Binding(get: { tabs.selection?.text }, set: { key in
@@ -582,7 +586,7 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .onCardClick { tabs.focus = .sessions }
+        .onCardClick(isOn: !overlayShown) { tabs.focus = .sessions }
     }
 
     /// The session's title, renamed in its card's header, while it's the one being renamed.
@@ -624,7 +628,7 @@ struct MainView: View {
         .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
         .id("split-" + id)
-        .onCardClick { tabs.focus = .split }
+        .onCardClick(isOn: !overlayShown) { tabs.focus = .split }
     }
 
     /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
@@ -775,7 +779,7 @@ struct MainView: View {
                 }
             }
         }
-        .onCardClick { tabs.focus = .conversation }
+        .onCardClick(isOn: !overlayShown) { tabs.focus = .conversation }
         // What you open last keeps its place when the window is short of room (a split, from
         // Open Beside: coming back to a tab that has one isn't opening it).
         .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
@@ -822,7 +826,7 @@ struct MainView: View {
             isFocused: focus == .changes
         )
         .environment(catalog(for: focusedDirectory))
-        .onCardClick { tabs.focus = .changes }
+        .onCardClick(isOn: !overlayShown) { tabs.focus = .changes }
     }
 
     /// Opens the panel on a tool.
