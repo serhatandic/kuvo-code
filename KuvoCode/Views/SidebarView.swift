@@ -63,6 +63,8 @@ struct SidebarView: View {
     }
     /// Sessions whose title or project has this, instead of the usual lists.
     @State private var search = ""
+    /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
+    @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
     @State private var conversationResults: [(session: Session, snippet: String)] = []
     @State private var isSearchingConversations = false
@@ -92,7 +94,7 @@ struct SidebarView: View {
                 SidebarSearchRow(text: $search)
 
                 if boxes.count > 1, search.isEmpty {
-                    BoxSwitchLine(boxes: boxes, selected: boxBinding)
+                    BoxNameStrip(boxes: boxes, selected: boxBinding, motion: boxMotion)
                         .padding(.top, 8)
                 }
 
@@ -109,7 +111,7 @@ struct SidebarView: View {
                 .scrollIndicators(.never)
                 .fadingScrollEdges()
             } else {
-                BoxPager(boxes: boxes, selected: boxBinding) { box in
+                BoxPager(boxes: boxes, selected: boxBinding, motion: boxMotion) { box in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 1) {
                             page(box)
@@ -265,7 +267,16 @@ struct SidebarView: View {
     /// How the boxes are switched besides the swipe (Settings › Appearance).
 
     /// This Mac, then your machines, each a page of its own.
-    private var boxes: [SidebarBox] { app.boxes }
+    private var boxes: [SidebarBox] {
+        #if DEBUG
+        // KUVO_DEMO_BOXES: stand-in machines by name, comma-separated, for how the name strip looks
+        // with many and with long names (their pages are empty).
+        if let names = ProcessInfo.processInfo.environment["KUVO_DEMO_BOXES"] {
+            return [.mac] + names.split(separator: ",").map { .machine(String($0)) }
+        }
+        #endif
+        return app.boxes
+    }
 
     /// The box in view: the one last picked, while it's still there.
     private var box: SidebarBox {
