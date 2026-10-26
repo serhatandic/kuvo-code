@@ -10,7 +10,7 @@ struct ReplyView: NSViewRepresentable {
     /// A reply's (with file links), or another's (a Markdown file's, with `images`).
     let parser: any MarkupParser
     var images: URL? = nil
-    /// ` ```mermaid ` blocks are drawn as diagrams (a Markdown file's preview).
+    /// ` ```mermaid ` blocks are drawn as diagrams (a reply, a Markdown file's preview).
     var diagrams = false
     var openURL: (URL) -> Bool = { _ in false }
     @Environment(\.messageFont) private var font
@@ -43,7 +43,7 @@ struct ReplyView: NSViewRepresentable {
         view.cardIsFocused = cardIsFocused
         let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents)) }
         view.show(markdown, document: {
-            if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style) }
+            if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
             return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images, diagrams: diagrams)
         }, style: style, marks: marks)
     }
