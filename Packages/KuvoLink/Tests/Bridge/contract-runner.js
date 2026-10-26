@@ -132,6 +132,7 @@ async function startRealBridge() {
       PATH: process.env.PATH, HOME: root, TMPDIR: path.join(root, "tmp") + "/", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       KUVO_AGENTS_HOME: path.join(root, "agents"), OPENCODE_PASSWORD: password,
       KUVO_GROUPS: path.join(home, "groups"), KUVO_BOTS: botsRoot, KUVO_TRASH: path.join(home, "trash"),
+      KUVO_ARTIFACTS: path.join(home, "artifacts"),
     },
   });
   fs.mkdirSync(path.join(root, "tmp"), { recursive: true });

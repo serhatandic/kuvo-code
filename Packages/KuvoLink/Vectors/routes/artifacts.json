@@ -1,0 +1,23 @@
+{
+  "about": "What a box's agents made (kuvo/artifacts): its record, kept by the coding agents' bridge, which each box passes a client's routes on to as they are, with their query.",
+  "scenarios": [
+    {
+      "name": "a list says whose, and an artifact the record doesn't have isn't there",
+      "steps": [
+        { "given": { "agentsBridge": { "groups": true } } },
+        {
+          "send": "GET kuvo/artifacts",
+          "why": "Exactly one of a conversation, a bot, a group chat or a project.",
+          "expect": { "status": 400, "json": { "message": "<string>" } }
+        },
+        { "send": "GET kuvo/artifacts?bot=bot_ada&group=grp_team", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/artifacts?bot=bot_ada", "expect": { "status": 200, "json": { "artifacts": [], "next": null } } },
+        { "send": "GET kuvo/artifacts?group=grp_team&kind=memory", "expect": { "status": 200, "json": { "artifacts": [] } } },
+        { "send": "GET kuvo/artifacts?bot=bot_ada&kind=poem", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/artifacts/art_000000000000000000000000", "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/artifacts?bot=bot_ada", "body": {}, "expect": { "status": 405 } },
+        { "send": "GET kuvo/artifacts/storage", "expect": { "status": 200, "json": { "copies": 0, "older": 0, "budget": "<number>" } } }
+      ]
+    }
+  ]
+}

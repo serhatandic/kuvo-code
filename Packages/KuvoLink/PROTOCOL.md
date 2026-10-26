@@ -1633,6 +1633,107 @@ while a box is away goes there when it's back.
 - `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
   changes.
 
+### Artifacts
+
+Each box keeps a record of what its agents made: every file a conversation there wrote, edited,
+made or showed, with a version for each turn that changed it (`artifacts` in `features`). The
+coding agents' bridge keeps it, in `artifacts/` under the box's folder (`~/.kuvo-code/artifacts` on
+a machine, `box/artifacts` in this Mac's app folder), and the box passes `kuvo/artifacts…` on to
+the bridge as it answers (`503 {"message"}` while it isn't running).
+
+- **What fills it**: the tool calls of every conversation on the engine and the bridge (their
+  `metadata.files`, a write's path, the pictures a tool that makes them made), Kuvo Code's own
+  tools (`show_file` and `show_in_panel` mark it shown; `mark_final` pins it), and as each turn
+  ends, files it changed that no tool call named (a command's): in a git repository as `git
+  status` lists them, elsewhere by a walk of the folder; a bot's folder is also watched, so your
+  own edits there count (`by: {kind: "outside"}`). A conversation's bot comes from its folder, its
+  `kuvo.bot` metadata or the bots' folders; a group chat seat's bot and chat from its `kuvo.seat`;
+  a chat's part, given to a bot's own conversation, is the chat's too (`trigger: "group"`); a
+  wake-up's turn is `trigger: "wake"`; a subagent's work counts as its parent's turn. The engine's
+  conversations run for the bridge's (`kuvo.engineFor`) aren't recorded twice.
+- **Versions**: one per turn (more edits in that turn make it `edits` more); changes with no turn
+  running, within 5 minutes of each other, are one version. A file the record first sees changed
+  has a version 0 (`before: true`), what it was, worked out from the change when it fits the file
+  exactly, so the first change can be shown.
+- **Copies**: a copy of each version up to 25 MB, by its SHA-256, except:
+  - never the bytes of what's likely a secret (`.env*`, `*.pem`, `*.key`, `id_*`, anything under
+    `.ssh`, `.gnupg` or a `keys` folder) or what git ignores: `kept: false`, `reason: "secret"` or
+    `"ignored"`, its hash keyed so it says nothing of what it holds, and its bytes and changes are
+    never sent (`410`);
+  - code that git keeps: only the change its tool calls made (`reason: "git"`, `patch`), unless
+    it's pinned;
+  - with the disk's free space under its floor (whichever is less of 10 GB and a tenth of the
+    disk), the version a new one replaces keeps no copy (`reason: "low-disk"`).
+
+  The newest version of each file there, and every version of memory, skills and what's pinned,
+  stay; older versions of the rest stay while they take no more than the box's budget (1 GB unless
+  you set it), the oldest going first (`reason: "cleared"`), each still listed.
+- **Pages**: a document that two wake-ups or more rewrote is `living: true`, a page kept up to
+  date, as a Shelf shows it with HTML pages.
+- **Times** are seconds since 1970.
+
+An artifact:
+
+```json
+{"id": "art_<24 hex>", "path": "/…/report.md", "name": "report.md",
+ "kind": "memory|skill|image|page|document|download|code|file", "type": "text/markdown",
+ "where": {"bots": ["bot_…"], "project": "/…", "sessions": ["ses_…"], "groups": ["grp_…"]},
+ "pinned": {"by": "bot|you", "at": 1760000000, "note": "…"} | null, "living": true, "git": true,
+ "restorable": true, "gone": 1760000000 | null, "shown": 1760000000, "updated": 1760000000,
+ "versions": [Version]}
+```
+
+`git`: it's in a git repository; `restorable`: a version of it can be put back (it's in a bot's
+folder or the project it was made in), so a client offers Restore only then.
+
+A version: `{n, at, by: {kind: "agent|you|outside", session?, bot?, agent?}, turn?: {session,
+message?}, group?: {id}, trigger?: "group|wake", via: ["edit", "write", "shell", "show_file",
+"restore", …], status: "added|modified|deleted", edits, lines?: {added, removed}, size, hash, kept,
+reason?: "secret|ignored|git|too-big|low-disk|cleared", patch?, before?, handoff?: {from: "bot_…"},
+restored?: <n>}`. `turn.message` is the message that started the turn; `handoff`, another bot in
+the same chat made the version before; `restored`, it put back version `n`.
+
+- `GET kuvo/artifacts?<scope>[&kind=][&pinned=1][&limit=][&before=]`: `{artifacts: [summary],
+  next}`, the scope's pinned ones first, then the latest changed; a summary has `versions` (how
+  many) and `latest` (the newest version) in place of the list. The scope is exactly one of
+  `session=`, `bot=`, `group=` or `project=` (400 otherwise). `next`, an opaque cursor: pass it as
+  `before` for the next page; null when there are none.
+- `GET kuvo/artifacts/events?<scope>`: `application/x-ndjson`, the list now (the latest 200), then
+  again each time it changes.
+- `GET kuvo/artifacts/timeline?<scope>[&by=<bot>][&limit=][&before=]`: `{entries: [{artifact, version}],
+  next}`, every version made in the scope, newest first, each with its artifact (without its
+  versions): in a group chat only what its bots made for it (on their turns, and in their own
+  conversations for its parts), for a bot only what it made (and what you changed of its files),
+  for a conversation only its turns'; with `by`, only what that bot made (a group chat's one bot).
+  `GET kuvo/artifacts/timeline/events?<scope>` follows it, as `events` does the list.
+- Over SSH (`kuvo-link.js box route`, a Mac reaching a machine's box), which answers once: a
+  followed route (`…/events`) answers with its first line, what it says now, and a client reads it
+  again now and then; bytes that aren't text (a picture, a PDF) come as `{"status", "bodyBase64",
+  "type"}` in place of `{"status", "body"}`.
+- `GET kuvo/artifacts/<id>`: the artifact with all its versions.
+- `GET kuvo/artifacts/<id>/versions/<n>`: that version's bytes, with its type; `410 {"message"}`,
+  saying why, when it has no copy or was a deletion.
+- `GET kuvo/artifacts/<id>/versions/<n>/changes[?from=<m>]`: what changed from the version before
+  (or `m`). Prose (memory, Markdown, text, a job) is `{style: "words", lines: [{kind: "same|added|
+  removed", text} | {kind: "changed", runs: [{t: " |+|-", text}]} | {kind: "folded", lines}],
+  added, removed, from, to}`, the newer version's lines with the words that changed marked, and
+  long unchanged stretches folded to a count; code is `{style: "lines", patch, added, removed,
+  from, to}` (code git keeps: its turn's patches); pictures and PDFs are `{style: "pair", from,
+  to}`, shown side by side from each version's bytes; anything else `{style: "none"}`. `410` for
+  what's private.
+- `POST kuvo/artifacts/<id>/pin {pinned, note?}`: pinned by you, or not; the artifact. Pinning
+  code git keeps keeps a copy of it as it is.
+- `POST kuvo/artifacts/<id>/restore {version}`: that version written back to the file, as a
+  version by you (`via: ["restore"]`, `restored`); what it replaced is kept first, with a copy, as
+  a version by you (`via: ["replaced"]`), so a restore can itself be undone. Only for a file in a
+  bot's folder or the project it was made in, and a version with a copy: `409 {"message"}`
+  otherwise. Clients ask first, saying what's replaced.
+- `GET kuvo/artifacts/storage`: `{copies, older, budget, free, floor, low}` in bytes (`low`: free
+  space is under the floor); `POST kuvo/artifacts/storage {budget}` sets the budget for older
+  versions (older ones past it go at once), and answers the same; `POST
+  kuvo/artifacts/storage/clear {before?}`: older versions' copies cleared (those from before
+  `before`, in seconds), `{cleared, …}`.
+
 ### Settings per box
 
 Each computer keeps its own engine settings and keys; nothing copies them between computers but
@@ -1645,7 +1746,8 @@ Mac's. From then on a Mac's start sends none of its own, and a machine's setting
 box's routes, the same way from a Mac and from a phone (`kuvo/config`), one change at a time under
 `run/.config.lock`. A Mac reaches any of a machine's routes that answer once (never a stream) over
 SSH: `kuvo-link.js box route` takes `{method, path, body?}` on stdin and prints `{status, body}`,
-answered as a phone's request is. (`kuvo-link.js box read | change` are the same, for Kuvo Code
+answered as a phone's request is: once (a followed route's first line), and bytes that aren't text
+as `{status, bodyBase64, type}`. (`kuvo-link.js box read | change` are the same, for Kuvo Code
 0.8.0-beta.1, which uses them; `key` sets one of its keys.) This Mac's own settings are its box's too
 ("This Mac's box").
 

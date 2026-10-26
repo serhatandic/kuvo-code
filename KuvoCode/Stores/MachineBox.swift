@@ -190,9 +190,10 @@ enum MachineBox {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = body }
         let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), on: connection)
-        struct Routed: Decodable { var status: Int; var body: String }
+        /// Text as it came, or bytes that aren't text (a picture) in base64.
+        struct Routed: Decodable { var status: Int; var body: String?; var bodyBase64: String? }
         guard let routed = try? JSONDecoder().decode(Routed.self, from: Data(output.utf8)) else { throw Failure.refused("The machine didn't answer: \(output.prefix(200))") }
-        return (routed.status, Data(routed.body.utf8))
+        return (routed.status, routed.bodyBase64.flatMap { Data(base64Encoded: $0) } ?? Data((routed.body ?? "").utf8))
     }
 
     /// What `kuvo-link.js box <arguments>` answered (its last line, JSON), or why not.

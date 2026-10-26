@@ -31,7 +31,7 @@ export const BRIDGE_VERSION = "0.9.68";
 // meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
 // and the Mac's own routes besides.
 export const FEATURES = [
-  "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
+  "accounts.credentials", "accounts.ended", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "bots.events", "bots.job",
@@ -2688,6 +2688,13 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       }
       return yield* forwardGroups(target, route, request, signal);
     }
+    // What this box's agents made (`kuvo/artifacts`), from the coding agents' bridge, which keeps
+    // the record.
+    if (ARTIFACT_ROUTE.test(route)) {
+      const target = bridge();
+      if (!target) return yield* groupJSON(503, { message: IS_MAC ? "What your agents made on this Mac is still loading. Try again in a moment." : "What agents made here is kept by the coding agents' bridge, which isn't running on this machine." });
+      return yield* forwardArtifacts(target, route, request, signal);
+    }
     // A bot brought here from another computer, made this box's (Move to Computer).
     const arrived = route.match(/^kuvo\/bots\/([^/]+)\/arrived$/);
     if (arrived) {
@@ -3227,6 +3234,41 @@ async function* forwardGroups(target, route, request, signal) {
     for await (const chunk of response.body ?? []) yield { body: Buffer.from(chunk) };
   } catch {}
 }
+
+// The record of what agents made, as a client reads it (PROTOCOL.md, "Artifacts").
+const ARTIFACT_ROUTE = /^kuvo\/artifacts(?:\/(?:events|timeline(?:\/events)?|storage(?:\/clear)?|art_[0-9a-f]{24}(?:\/(?:pin|restore|versions\/\d+(?:\/changes)?))?))?$/;
+
+// A client's artifacts route, to the bridge and back as it answers, with its query (a followed one
+// as its lines come). Not answering now: 503, to ask again.
+async function* forwardArtifacts(target, route, request, signal) {
+  const method = request.method.toUpperCase();
+  const sends = method === "POST";
+  const query = request.path.includes("?") ? request.path.slice(request.path.indexOf("?")) : "";
+  let response;
+  try {
+    response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/link/artifacts${route.slice("kuvo/artifacts".length)}${query}`, {
+      method,
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(sends ? { "content-type": "application/json" } : {}) },
+      body: sends ? Buffer.from(request.body ?? []) : undefined,
+      signal,
+    });
+  } catch {
+    if (signal?.aborted) return;
+    return yield* groupJSON(503, { message: artifactsNotAnswering() });
+  }
+  if (response.status >= 500) {
+    await response.body?.cancel().catch(() => {});
+    return yield* groupJSON(503, { message: artifactsNotAnswering() });
+  }
+  const headers = { "content-type": response.headers.get("content-type") ?? "application/json" };
+  if (response.headers.get("content-length")) headers["content-length"] = response.headers.get("content-length");
+  yield { head: { status: response.status, headers } };
+  try {
+    for await (const chunk of response.body ?? []) yield { body: Buffer.from(chunk) };
+  } catch {}
+}
+
+const artifactsNotAnswering = () => (IS_MAC ? "What your agents made on this Mac can’t be read right now. Try again in a moment." : "The coding agents’ bridge here isn’t answering. Try again in a moment.");
 
 const groupsNotAnswering = () => (IS_MAC ? "Group chats on this Mac aren’t answering. Try again in a moment." : "The coding agents’ bridge here isn’t answering. Try again in a moment.");
 
@@ -8570,7 +8612,7 @@ export function startUpdate(options = {}) {
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
+export const MAC_BOX_ROUTES = ["kuvo/artifacts", "kuvo/projects", "kuvo/worktrees", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
   "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,
@@ -9631,12 +9673,26 @@ async function box(command) {
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
       const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)) };
       let status = 502;
+      let type = "";
       const chunks = [];
-      for await (const part of handle(request, {}, undefined)) {
-        if (part.head) status = part.head.status;
+      // A route that follows something answers with what it says now: its first line.
+      const stop = new AbortController();
+      for await (const part of handle(request, {}, stop.signal)) {
+        if (part.head) {
+          status = part.head.status;
+          type = String(part.head.headers?.["content-type"] ?? "");
+        }
         if (part.body) chunks.push(Buffer.from(part.body));
+        if (type.startsWith("application/x-ndjson") && Buffer.concat(chunks).includes(10)) {
+          stop.abort();
+          const all = Buffer.concat(chunks);
+          return say({ status, body: all.subarray(0, all.indexOf(10) + 1).toString("utf8") });
+        }
       }
-      return say({ status, body: Buffer.concat(chunks).toString("utf8") });
+      const body = Buffer.concat(chunks);
+      // Bytes that aren't text (a picture, a PDF) go as base64, whole.
+      const text = !type || type.startsWith("text/") || type.includes("json");
+      return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
     case "reconnect": {
       // An integration's server connected again everywhere, a moment after `route` changed its

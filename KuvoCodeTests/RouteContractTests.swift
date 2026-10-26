@@ -424,7 +424,7 @@ final class MacBox {
             guard given["groups"] as? Bool == true, realBridge == nil else { break }
             realBridge = try await RealBridge.start(engine: engine, folder: work.appending(path: "agents"), environment: [
                 "KUVO_GROUPS": GroupMigration.root.path, "KUVO_BOTS": Bots.root.path, "KUVO_TRASH": work.appending(path: "trash").path,
-                "KUVO_GROUPS_MEMORY_KEY": BotGroups.memoryKey,
+                "KUVO_GROUPS_MEMORY_KEY": BotGroups.memoryKey, "KUVO_ARTIFACTS": work.appending(path: "artifacts").path,
             ])
         case "peers":
             // Your machines and their bots, as this Mac's link tells its bridge (its box, `tellSeatPeers`).
