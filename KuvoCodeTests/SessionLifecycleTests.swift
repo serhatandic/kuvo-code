@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -72,8 +73,12 @@ import Testing
             StubEngine.session("ses_again", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
         ])
         #expect(workspace.waitingCount == 2)
+        let shown = ShownNotifications(threads: ["ses_done", "ses_again"])
+        defer { shown.done() }
         workspace.handle(try engine.event("session.viewed", session: "ses_done", ["idle": 9]))
         #expect(workspace.session("ses_done")?.isUnread == false)
+        try await until { shown.threads == ["ses_again"] }
+        #expect(shown.threads == ["ses_again"], "its notification gone from Notification Center, the other's kept")
         workspace.handle(try engine.event("session.viewed", session: "ses_again", ["idle": 6]))
         #expect(workspace.session("ses_again")?.isUnread == true, "it finished again after that look")
         #expect(workspace.waitingCount == 1)
@@ -85,6 +90,82 @@ import Testing
         workspace.handle(try engine.event("session.renamed", session: "ses_done"))
         try await until { workspace.session("ses_done")?.title == "Renamed" }
         #expect(workspace.session("ses_done")?.isUnread == false)
+    }
+
+    /// A new session, made and sent to at once (as a demo copy's prompt does): what's said shows
+    /// in its conversation as it comes, and it has its row.
+    @Test func aNewSessionShowsItsFirstTurn() async throws {
+        defer { engine.stop() }
+        await start([])
+        let made = StubEngine.session("ses_new", title: "New session", directory: project)
+        engine.on("POST", "/api/session", json: ["data": made])
+        engine.on("GET", "/api/session/ses_new", json: ["data": made])
+        engine.conversation("ses_new", [])
+        let session = try await workspace.createSession(in: project, model: nil, agent: "build")
+        let model = try #require(workspace.model(for: session.id))
+        model.submit("Say hi in three words.", files: [], for: nil, queue: false, commands: [])
+        try await until { !engine.requests("POST", "/api/session/ses_new/prompt").isEmpty }
+        let sent = try #require(engine.requests("POST", "/api/session/ses_new/prompt").first?.body["id"] as? String)
+        workspace.handle(try engine.event("session.created", session: "ses_new"))
+        workspace.handle(try engine.event("session.inbox.enqueued", session: "ses_new", ["inboxID": sent, "item": ["type": "user", "delivery": "steer", "payload": ["text": "Say hi in three words."]]]))
+        workspace.handle(try engine.event("session.execution.started", session: "ses_new"))
+        workspace.handle(try engine.event("session.inbox.delivered", session: "ses_new", ["inboxID": sent]))
+        let step: [String: Any] = ["assistantMessageID": "msg_02", "agent": "build", "model": ["id": "m", "providerID": "p"]]
+        workspace.handle(try engine.event("session.step.started", session: "ses_new", step))
+        workspace.handle(try engine.event("session.text.started", session: "ses_new", ["assistantMessageID": "msg_02", "ordinal": 0]))
+        workspace.handle(try engine.event("session.text.delta", session: "ses_new", ["assistantMessageID": "msg_02", "ordinal": 0, "delta": "Hi there, friend."]))
+        workspace.handle(try engine.event("session.text.ended", session: "ses_new", ["assistantMessageID": "msg_02", "ordinal": 0, "text": "Hi there, friend."]))
+        let shown = try #require(workspace.model(for: "ses_new"))
+        #expect(shown === model, "the conversation on screen is the one that was sent to")
+        let said = shown.transcript.messages.map { message -> String in
+            switch message {
+            case .user(let user): user.text
+            case .assistant(let reply): reply.content.compactMap { if case .text(let text) = $0 { text.text } else { nil } }.joined()
+            default: ""
+            }
+        }
+        #expect(said == ["Say hi in three words.", "Hi there, friend."])
+        #expect(workspace.projects.first { $0.directory == workspace.folderPath(project) }?.sessions.map(\.id) == ["ses_new"])
+    }
+
+    /// A session opened as it's made (a demo copy's prompt, a session another client starts): the
+    /// window, asking again for the conversation as soon as anything it follows changes, shows the
+    /// same one its turn goes to, not one of its own that stays empty.
+    @Test func aSessionOpenedAsItsMadeShowsItsTurn() async throws {
+        defer { engine.stop() }
+        await start([StubEngine.session("ses_open", title: "Open", directory: project)])
+        let made = StubEngine.session("ses_new", title: "New session", directory: project)
+        engine.on("POST", "/api/session", json: ["data": made])
+        engine.conversation("ses_new", [])
+        let session = try await workspace.createSession(in: project, model: nil, agent: "build")
+        // The window, showing a conversation, looks again whenever what it read changes.
+        let window = Window(workspace: workspace, id: session.id)
+        withObservationTracking {
+            _ = workspace.model(for: "ses_open")
+        } onChange: {
+            MainActor.assumeIsolated { window.look() }
+        }
+        let sentTo = try #require(workspace.model(for: session.id))
+        #expect((window.shown ?? workspace.model(for: session.id)) === sentTo, "the conversation on screen is the one its turn goes to")
+        #expect(workspace.model(for: session.id) === sentTo)
+    }
+
+    /// A window showing a session's conversation, as it asks for it.
+    nonisolated private final class Window: @unchecked Sendable {
+        let workspace: Workspace
+        let id: String
+        var shown: SessionModel?
+        init(workspace: Workspace, id: String) {
+            self.workspace = workspace
+            self.id = id
+        }
+        private var looked = false
+        /// Once: what it reads as it looks changes again, and the window would look again.
+        @MainActor func look() {
+            guard !looked else { return }
+            looked = true
+            shown = workspace.model(for: id)
+        }
     }
 
     /// Renamed, archived and moved elsewhere: the lists follow.

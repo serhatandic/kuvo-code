@@ -3,6 +3,7 @@ import Foundation
 import OpenCodeKit
 import os
 
+// COMPAT(0.7 mac-group-chats): the whole file. Goes 3 months after 0.8.0.
 /// This Mac's group chats, moved into its own box, once: Kuvo Code 0.5 to 0.8.0-beta.1 ran them in
 /// the app and kept them in `groups.json`, each chat's messages in `groups/<id>.json`; from now on
 /// this Mac's coding agents' bridge runs them as a machine's runs its own, and keeps each in a

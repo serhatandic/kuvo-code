@@ -356,6 +356,7 @@ export class GroupStore {
     write(join(this.root, "peer-work.json"), all)
   }
 
+  // COMPAT(0.7 mac-group-chats): `pending-memory.json` from `GroupMigration`. Goes 3 months after 0.8.0.
   /**
    * Bots whose memory of their chats is still to be told, each with the chats it forgets
    * (`pending-memory.json`): what the Mac's own runner couldn't tell a bot whose machine was away,

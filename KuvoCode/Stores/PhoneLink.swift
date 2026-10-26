@@ -200,6 +200,7 @@ final class PhoneLink {
     /// other), phone or not. Set by the app.
     @ObservationIgnored var hasMachines: () -> Bool = { false }
 
+    // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
     /// What an earlier Kuvo Code kept of your agents' letters, handed to this Mac's box before it
     /// meets your other computers. Set by the app (`AgentMail.handOver`).
     @ObservationIgnored var handOver: (BoxClient) async -> Void = { _ in }
@@ -591,6 +592,7 @@ final class PhoneLink {
                 var docs: [Documents.Envelope]
                 /// The machine's name here, for its agents to say where they are.
                 var id: String
+                // COMPAT(0.7 visits): this Mac leaves a newer box as it is; older ones don't say so. Goes 3 months after 0.8.0.
                 /// This Mac never puts its own files over a newer box's (`BoxVersion`): the box may
                 /// update itself once every Mac it sees does.
                 var tolerates = 1

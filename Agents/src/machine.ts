@@ -95,6 +95,7 @@ export function machineEngine(): { pid: number; url: string; password: string } 
   }
 }
 
+// COMPAT(0.7 agents-runtime): the programs an older bridge installed in `agents/runtime`, taken away. Goes 3 months after 0.8.0.
 /**
  * What earlier bridges installed of the agents' programs on a machine, before it used the ones on
  * the machine's PATH (installed with their makers' installers): Codex's and Grok's packages, and
@@ -108,6 +109,7 @@ export function dropOwnPrograms(runtime: string) {
   } catch {}
 }
 
+// COMPAT(0.7 agents-runtime): the sign-ins an older Mac carried over (`.from-mac`), taken away. Goes 3 months after 0.8.0.
 /**
  * Sign-ins a Mac carried over to this machine before each machine signed in on its own (each
  * marked `<file>.from-mac`): gone, with their marks. A sign-in made here stays.

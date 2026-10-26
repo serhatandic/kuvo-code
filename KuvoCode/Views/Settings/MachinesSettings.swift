@@ -123,6 +123,7 @@ struct MachinesSettings: View {
                 case .disconnect:
                     Button("Disconnect") { app.disconnect(engine) }
                         .help("Close this Mac’s connection; \(engine.machine.name) keeps running on its own")
+                // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                 case .start:
                     Button("Start Engine") { app.startEngine(engine) }
                 case .connect, .connectNow:

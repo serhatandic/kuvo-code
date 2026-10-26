@@ -38,6 +38,7 @@ struct EngineSettings: View {
                                 .fixedSize()
                             switch machine.state {
                             case .ready: Button("Restart") { app.restartEngine(machine) }
+                            // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                             case .preparing where machine.isStopped: Button("Start") { app.startEngine(machine) }
                             case .failed, .preparing: Button("Connect") { app.connect(machine) }
                             default: EmptyView()
