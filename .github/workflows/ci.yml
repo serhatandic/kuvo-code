@@ -52,13 +52,14 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - name: Check the box's link is built from its sources
+      - name: Test the box's code, and check its link is built from it
         working-directory: Packages/Box
         env:
           BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0"
         run: |
           bun install --frozen-lockfile
           bun run check
+          bun test
           ../../scripts/build-box.sh --check
 
       - name: Test KuvoLink and the machines' bridge
