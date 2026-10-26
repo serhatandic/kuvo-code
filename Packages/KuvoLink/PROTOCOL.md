@@ -1015,6 +1015,29 @@ host serves:
     `503` while the engine isn't running. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
     isn't there any more).
+  - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
+    with `value` as `worktree.directory` (none: the engine's own), as the engine reads it, so
+    Settings shows real folders before and after you choose one → `{"directory", "default", "home",
+    "projects": [{project, name, folder, exists?, canMake?, inside?, ignored?}]}`, one for each of
+    the box's projects in a git repository. `default`: the engine's own folder, where each project
+    has one of its own (`folder` is null until the engine runs and says which). A relative value
+    starts at the repository's own checkout, not the project's folder in it; `~/` at the home
+    folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
+    checkout, and `ignored` whether git ignores it there (if not, git lists each worktree as new
+    files).
+- `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
+  for a client to choose one (Settings › Worktrees' folder) as a folder panel does → `{"path",
+  "home", "parent", "folders": [{name, repository?}]}`, ordered as Finder orders names, without
+  hidden ones unless `hidden=1`. No `path`, or `~`: the home folder; `~/` starts there. `parent` is
+  null at `/`; `repository`, a git repository's own checkout. `404 {"message"}` for no folder there,
+  `403` for one it can't read, `400` for a path that isn't a full one.
+- `GET kuvo/plugins/search?q=<text>` (`plugins.search`): npm's packages Settings › Engine offers as
+  plugins, found from the box itself (its network) → `{"packages": [{name, version, description?,
+  weekly?}], "missing"?}`: with no `q`, the most used opencode plugins; otherwise opencode's
+  packages `q` finds, the one `q` names exactly (`name`, `@scope/name`, `name@version`) first.
+  `missing`: what `q` names that npm doesn't have (a name, or a version of one), for a client to
+  say so before it's added. `502 {"message"}` when npm can't be reached. Whether a plugin loaded
+  is the engine's `GET api/plugin` (a failed one has no `id`; its `source.target` is the name).
 - On a Mac, `kuvo/mac`: Settings › General's While Agents Work. `GET` → `{openAtLogin, keepsAwake,
   awakeNow}`: whether Kuvo Code opens at login, in the background; whether it keeps the Mac awake
   while agents work; and whether it's doing so now. `PATCH` with either setting answers the same;
@@ -1347,6 +1370,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
+| `folders` | `kuvo/folders` |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
@@ -1358,6 +1382,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `personalities.events` | `kuvo/personalities/events` |
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
 | `phones.pair` | `kuvo/phones/pair` |
+| `plugins.search` | `kuvo/plugins/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
@@ -1367,6 +1392,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
 | `worktrees` | `kuvo/worktrees…` |
+| `worktrees.where` | `kuvo/worktrees/where` |
 | `engine.start` | a machine only: `POST kuvo/engine/start` |
 | `groups.joinable` | `kuvo/groups/joinable` |
 | `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
