@@ -1,4 +1,3 @@
-// @ts-nocheck
 // A bot's conversation told what it is, as the Mac tells it: the kit's words, with its job as its
 // memory has it now.
 
@@ -15,21 +14,37 @@ import { botHere, isMoving, noteBotsChanged } from "./here";
 import { jobOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
 import { listBots } from "./list";
+import type { Target } from "../../shared/records";
+import type { ChangedBot } from "../../shared/routes/bots";
+import type { JSONAnswer } from "../server/context";
+import type { BotDescription, BotHere } from "./here";
+import type { BotKit, KitRule } from "./kit";
+
+/** What a bot's conversation was last told (`told.json`): its conversation, a digest of what it was
+ * told, and the folder its own rules were last put right for. */
+export interface Told {
+  session?: string;
+  instructions?: string;
+  rules?: string;
+}
+
+/** What `POST kuvo/bots/<id>/arrived` answers (`settleBot`): the bot as it's listed now, or why not. */
+export type SettledAnswer = JSONAnswer<ChangedBot | { message: string }>;
 
 // What a bot's conversation was last told, kept in its folder (`told.json`, so a restart doesn't
 // tell every bot again): its conversation, what it was told (a digest), and the folder its own
 // rules were last put right for. It's told again only when what it would be told changes.
 const TOLD_FILE = "told.json";
-export const toldDigest = text => crypto.createHash("sha256").update(text).digest("hex");
-function toldOf(folder) {
+export const toldDigest = (text: string): string => crypto.createHash("sha256").update(text).digest("hex");
+function toldOf(folder: string): Told {
   try {
-    const told = JSON.parse(textOf(path.join(folder, TOLD_FILE)) ?? "");
-    return isObject(told) ? told : {};
+    const told: unknown = JSON.parse(textOf(path.join(folder, TOLD_FILE)) ?? "");
+    return isObject(told) ? told as Told : {};
   } catch {
     return {};
   }
 }
-export function noteTold(folder, changes) {
+export function noteTold(folder: string, changes: Told): void {
   try {
     const file = path.join(folder, TOLD_FILE);
     fs.writeFileSync(`${file}.new`, JSON.stringify({ ...toldOf(folder), ...changes }));
@@ -39,14 +54,14 @@ export function noteTold(folder, changes) {
 
 // What a bot here is told now: the kit's words, with its name, folder, personality and project,
 // and its job as its memory has it.
-export function toldNow(kit, here, described = here.described) {
+export function toldNow(kit: BotKit, here: BotHere, described: BotDescription = here.described): string {
   const personality = botPersonalities(kit).find(each => each.id === described.personality)?.instruction;
   const job = jobOf(here);
   return botInstructions(kit, described.name, here.folder, personality, described.project, { line: job.line, section: job.details });
 }
 
 // Tells a bot's conversation (on `target`) `text`, and notes it. Whether it got there.
-export async function tellBot(target, here, session, text, signal) {
+export async function tellBot(target: Target, here: BotHere, session: string, text: string, signal?: AbortSignal): Promise<boolean> {
   const told = await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries/kuvo.bot`, { value: text }, signal).then(() => true, () => false);
   if (told) noteTold(here.folder, { session, instructions: toldDigest(text) });
   return told;
@@ -58,8 +73,8 @@ export async function tellBot(target, here, session, text, signal) {
 // folder it's in; and its memory file made, for one made before it was made with it.
 // One bot at a time: asked again while it's being told (its run starting as the box finds its
 // engine, or as its app asks), it's looked at again once that's done, so it's never told twice.
-const freshening = new Map();
-function oneAtATime(sessionID, work) {
+const freshening = new Map<string, Promise<unknown>>();
+function oneAtATime<T>(sessionID: string, work: () => T | Promise<T>): Promise<T> {
   const now = (freshening.get(sessionID) ?? Promise.resolve()).catch(() => {}).then(work);
   freshening.set(sessionID, now);
   const done = () => { if (freshening.get(sessionID) === now) freshening.delete(sessionID); };
@@ -67,11 +82,11 @@ function oneAtATime(sessionID, work) {
   return now;
 }
 
-export function freshenBot(target, sessionID) {
+export function freshenBot(target: Target, sessionID: string): Promise<void> {
   return oneAtATime(sessionID, () => freshenOne(target, sessionID));
 }
 
-async function freshenOne(target, sessionID) {
+async function freshenOne(target: Target, sessionID: string): Promise<void> {
   const here = listOf(BOTS).map(botHere).find(bot => bot?.session === sessionID);
   if (!here || isMoving(here.folder)) return;
   const kit = readKit();
@@ -92,10 +107,10 @@ async function freshenOne(target, sessionID) {
 // machine's: yours, as its kit has it; this Mac's go by its own clock), and its memory file (for
 // one made before it was made with it), which needs this box's words (`kit`, null without them).
 // For one that came from another computer (Move to Computer), those are this one's from now on.
-function settleFolder(here, kit) {
-  const write = (name, data) => {
+function settleFolder(here: BotHere, kit: BotKit | null): void {
+  const write = (name: string, data: string | Buffer) => {
     const file = path.join(here.folder, name);
-    let now = null;
+    let now: Buffer | null = null;
     try { now = fs.readFileSync(file); } catch {}
     if (!now || !now.equals(Buffer.from(data))) fs.writeFileSync(file, data);
   };
@@ -117,17 +132,17 @@ function settleFolder(here, kit) {
 // rules here (for its folder here, and from this box's Settings › Permissions), and what it's told
 // here (where it runs, now). Done while its move still holds it, before its wake-ups go on, and
 // one at a time with its other tellings. `{status, value}`: 200 `{bot}`.
-export async function settleBot(id, readEngine, readBridge, machine) {
-  const no = (status, message) => ({ status, value: { message } });
+export async function settleBot(id: string, readEngine: () => Target, readBridge: () => Target | null, machine?: string): Promise<SettledAnswer> {
+  const no = (status: number, message: string): SettledAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
-  return oneAtATime(here.session, async () => {
+  return oneAtATime(here.session, async (): Promise<SettledAnswer> => {
     const kit = readKit();
     // Where it works and the clock it goes by, whatever else can't be done yet.
     settleFolder(here, kit);
     noteBotsChanged();
     if (!kit) return no(409, NO_KIT);
-    let target;
+    let target: Target | null | undefined;
     try { target = here.agents ? readBridge() : readEngine(); } catch {}
     if (!target) return no(503, here.agents ? `The coding agents aren’t running on ${HERE}.` : "The engine isn’t running.");
     const text = toldNow(kit, here);
@@ -145,11 +160,11 @@ export async function settleBot(id, readEngine, readBridge, machine) {
 
 // What a conversation on `target` is told as a bot (its `kuvo.bot` entry): its words, null for
 // none, undefined when that can't be read (it isn't there, or `target` doesn't say).
-async function toldThere(target, sessionID) {
+async function toldThere(target: Target, sessionID: string): Promise<string | null | undefined> {
   try {
-    const entries = await call(target, "GET", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries`);
+    const entries: unknown = await call(target, "GET", `/api/experimental/session/${encodeURIComponent(sessionID)}/instructions/entries`);
     if (!Array.isArray(entries)) return undefined;
-    const entry = entries.find(each => each?.key === "kuvo.bot");
+    const entry = entries.find((each: { key?: unknown; value?: unknown } | null) => each?.key === "kuvo.bot");
     return typeof entry?.value === "string" ? entry.value : null;
   } catch {
     return undefined;
@@ -160,7 +175,7 @@ async function toldThere(target, sessionID) {
 // or what a Mac of an earlier version told it), and its rules put right: as the box finds its engine
 // or its coding agents' bridge (it started, or they did), so a bot's next turn starts on its own
 // words. The ones on the other are left to it.
-export async function freshenBots(target) {
+export async function freshenBots(target: Target): Promise<void> {
   for (const id of listOf(BOTS)) {
     const here = botHere(id);
     if (!here || isMoving(here.folder)) continue;
@@ -171,14 +186,14 @@ export async function freshenBots(target) {
 
 // What "Ask First" asks about (the Mac's ToolApproval.askFirst): a conversation that asks before
 // running commands asks first.
-const ASK_FIRST = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
-const isRule = rule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && ["allow", "deny", "ask"].includes(rule.effect);
+const ASK_FIRST: string[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
+const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && ["allow", "deny", "ask"].includes(rule.effect as string);
 // A folder a conversation may work in, of its own (the Mac's ToolApproval.isParticular).
-const isParticular = rule => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
+const isParticular = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource !== "*";
 
 // This box's Settings › Permissions (its settings' `permissions`), or null where they can't be read,
 // or aren't its own yet (a machine whose Mac hasn't made them so, which runs with what its Mac gave it).
-function permissionsHere() {
+function permissionsHere(): KitRule[] | null {
   if (!ownsSettings()) return null;
   const { settings } = readSettings();
   if (!settings) return null;
@@ -190,19 +205,19 @@ function permissionsHere() {
 // and Settings › Permissions (`settings`) as they are now, with its own folders after, as the Mac
 // makes them (ToolApproval.refreshed): Approve All runs what Settings asks first about, Ask First
 // still lets through what Settings allows, and both keep what Settings doesn't allow.
-export function refreshedRules(current, settings) {
+export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule[] {
   const asks = current.some(rule => rule.action === "shell" && rule.effect === "ask");
   const denied = settings.filter(rule => rule.effect === "deny");
-  let made;
+  let made: KitRule[];
   if (asks) {
     const everywhere = settings.findLast(rule => rule.action === "external_directory" && rule.resource === "*")?.effect === "allow";
     made = [
-      ...ASK_FIRST.filter(action => everywhere || action !== "external_directory").map(action => ({ action, resource: "*", effect: "ask" })),
+      ...ASK_FIRST.filter(action => everywhere || action !== "external_directory").map(action => ({ action, resource: "*", effect: "ask" as const })),
       ...settings.filter(rule => rule.effect !== "deny" && rule.resource !== "*" && rule.action !== "external_directory"),
       ...denied,
     ];
   } else {
-    made = [...settings.filter(rule => rule.effect === "ask").map(rule => ({ action: rule.action, resource: rule.resource, effect: "allow" })), ...denied];
+    made = [...settings.filter(rule => rule.effect === "ask").map(rule => ({ action: rule.action, resource: rule.resource, effect: "allow" as const })), ...denied];
   }
   return [...made, ...current.filter(isParticular)];
 }
@@ -211,9 +226,9 @@ export function refreshedRules(current, settings) {
 // `external_directory` for its folder here. An earlier version allowed its kuvo-wake commands
 // (which let one that also wrote a file through), a move left the folder it had, and the computer
 // it came from had Settings of its own. Whether they're right now.
-async function repairRules(target, here, sessionID) {
+async function repairRules(target: Target, here: BotHere, sessionID: string): Promise<boolean> {
   const id = here.described.id;
-  let rules;
+  let rules: unknown;
   try {
     rules = (await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`))?.permissions;
   } catch {
@@ -222,11 +237,12 @@ async function repairRules(target, here, sessionID) {
   if (!Array.isArray(rules)) return false;
   const own = { action: "external_directory", resource: path.join(here.folder, "*"), effect: "allow" };
   const commands = [`kuvo-wake ${id} `, `"${WAKE_COMMAND}" ${id} `, `"$HOME/.kuvo-code/bin/kuvo-wake" ${id} `];
-  const old = rule => (rule?.action === "shell" && commands.some(command => String(rule.resource ?? "").startsWith(command)))
+  const old = (rule: { action?: unknown; resource?: unknown } | null | undefined) => (rule?.action === "shell" && commands.some(command => String(rule.resource ?? "").startsWith(command)))
     || (rule?.action === "external_directory" && String(rule.resource ?? "").endsWith(`/bots/${id}/*`));
-  const kept = rules.filter(rule => !old(rule));
+  const kept: unknown[] = rules.filter(rule => !old(rule));
   const settings = kept.every(isRule) ? permissionsHere() : null;
-  const repaired = [...(settings ? refreshedRules(kept, settings) : kept), own];
+  // Where `settings` is there, every one kept is a rule (checked just above).
+  const repaired = [...(settings ? refreshedRules(kept as KitRule[], settings) : kept), own];
   if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
   return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
 }
