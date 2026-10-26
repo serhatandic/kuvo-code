@@ -178,8 +178,11 @@ private struct WorktreesFolderSection: View {
     @Binding var choosing: Bool
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
-    /// Where new ones go, for the folder chosen now, as the box answered.
+    /// Where new ones go, for the folder chosen now, as the box answered; `unread`: it couldn't.
     @State private var preview: WorktreesWhere?
+    @State private var unread = false
+    /// The projects shown each with their own folder; the rest are counted.
+    private static let shown = 5
 
     private var config: EngineConfig { app.config(for: box) }
     private var boxID: String { box.machine ?? BoxClient.mac }
@@ -202,26 +205,50 @@ private struct WorktreesFolderSection: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            if let preview, preview.projects.isEmpty {
-                // No project in a repository here yet: the folder itself.
-                LabeledContent("Each project’s go in") {
-                    Text(chosen ?? BoxPaths.display(preview.default, home: preview.home) + "/…")
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+            .task(id: "\(boxID) \(chosen ?? "") \(app.isReady(box))") {
+                // Kept as it was while the new one's read, so the rows don't blink.
+                if preview?.directory != chosen { preview = nil }
+                do {
+                    let answer = try await app.box(boxID).worktreesWhere(chosen)
+                    // Another folder chosen meanwhile: its own read puts in its answer.
+                    guard !Task.isCancelled, answer.directory == chosen else { return }
+                    preview = answer
+                    unread = false
+                } catch {
+                    guard !Task.isCancelled, !(error is CancellationError) else { return }
+                    preview = nil
+                    unread = true
                 }
             }
-            ForEach(preview?.projects.prefix(3) ?? []) { project in
-                WorktreePlace(project: project, home: preview?.home, onThisMac: box.machine == nil)
+            if let preview {
+                let projects = preview.projects
+                if projects.isEmpty {
+                    // No project in a repository here yet: the folder itself.
+                    LabeledContent("New worktrees go in") {
+                        Text(chosen ?? BoxPaths.display(preview.default, home: preview.home) + "/…")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                } else if Set(projects.map(\.folder)).count == 1, let first = projects.first {
+                    // The same folder for every project (one named in full): said once.
+                    WorktreePlace(project: projects.first(where: { $0.isInRepository }) ?? first, title: "New worktrees go in", home: preview.home, onThisMac: box.machine == nil)
+                } else {
+                    ForEach(projects.prefix(Self.shown)) { project in
+                        WorktreePlace(project: project, home: preview.home, onThisMac: box.machine == nil)
+                    }
+                    if projects.count > Self.shown {
+                        Text("And \((projects.count - Self.shown).counting("more project"))")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if unread {
+                Text(box.machine == nil ? "Where they go shows once this Mac’s background service is running." : "Where they go shows once \(app.name(of: box)) is connected.")
+                    .foregroundStyle(.secondary)
             }
         } header: {
             Text("New Worktrees")
-        }
-        .task(id: "\(boxID) \(chosen ?? "") \(app.isReady(box))") {
-            // Kept as it was while the new one's read, so the rows don't blink.
-            if preview?.directory != chosen { preview = nil }
-            preview = try? await app.box(boxID).worktreesWhere(chosen)
         }
     }
 
@@ -240,7 +267,10 @@ private struct WorktreesFolderSection: View {
         case .own: set(nil)
         case .chosen: break
         case .choose:
-            if box.machine == nil { chooseOnThisMac() } else { choosing = true }
+            // Once the menu has closed.
+            DispatchQueue.main.async {
+                if box.machine == nil { chooseOnThisMac() } else { choosing = true }
+            }
         }
     }
 
@@ -265,6 +295,8 @@ private struct WorktreesFolderSection: View {
 /// it, if anything.
 private struct WorktreePlace: View {
     let project: WorktreesWhere.Project
+    /// Its name; another for the one folder every project's go in.
+    var title: String?
     let home: String?
     let onThisMac: Bool
 
@@ -293,15 +325,15 @@ private struct WorktreePlace: View {
                 }
             }
         } label: {
-            Text(project.name)
+            Text(title ?? project.name)
             if project.cantBeMade {
-                Text("This folder can’t be made here.")
+                Text("Kuvo Code can’t create this folder. Choose another one.")
                     .foregroundStyle(.red)
             } else if project.isInRepository {
-                Text("Inside \(project.name)’s repository, so git lists each worktree as new files.")
+                Text("It’s inside \(project.name)’s repository, so git would list each worktree as new files there. Choose a folder outside it.")
                     .foregroundStyle(.orange)
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }

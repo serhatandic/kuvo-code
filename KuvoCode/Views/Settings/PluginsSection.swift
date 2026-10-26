@@ -31,19 +31,19 @@ struct PluginsSection: View {
                     }
                 }
                 Button("Add Plugin…") { adding = true }
+                    // Why each that failed did, from npm, once.
+                    .task(id: failedNames) {
+                        for name in failedNames where missing[name] == nil {
+                            guard let answer = try? await app.box(boxID).searchPlugins(name) else { continue }
+                            missing[name] = answer.missing ?? ""
+                        }
+                    }
             }
         } header: {
             Text("Plugins")
         } footer: {
             Text("Plugins add tools and change how the engine works. They run code on \(computer), so add only ones you trust.")
                 .foregroundStyle(.secondary)
-        }
-        // Why each that failed did, from npm, once.
-        .task(id: failedNames) {
-            for name in failedNames where missing[name] == nil {
-                guard let answer = try? await app.box(boxID).searchPlugins(name) else { continue }
-                missing[name] = answer.missing ?? ""
-            }
         }
     }
 
@@ -56,8 +56,10 @@ struct PluginsSection: View {
         guard app.isReady(box), let plugins = catalog.plugins else { return .unknown }
         guard let name = entry.name else { return .unknown }
         let found = plugins.first { $0.source.entry == name }
-            ?? (entry.isFolder ? plugins.first { ($0.source.path as NSString?)?.lastPathComponent == (name as NSString).lastPathComponent } : nil)
-        guard let found else { return entry.isFolder || entry.turnsOff ? .unknown : .installing }
+            ?? (entry.isFolder ? plugins.first { ($0.source.path as NSString?)?.lastPathComponent == (name as NSString).lastPathComponent }
+                : plugins.first { $0.source.entry.map(PluginEntry.package(of:)) == PluginEntry.package(of: name) })
+        // Not listed yet: an npm package is being installed; anything else, the engine says nothing of.
+        guard let found else { return entry.isPackage ? .installing : .unknown }
         if found.state.status == "active" { return .loaded(version: found.source.version) }
         if let gone = missing[name], !gone.isEmpty {
             // "name@9.9.9": the package is there, that version isn't.
@@ -71,17 +73,23 @@ struct PluginsSection: View {
 private struct PluginEntry {
     /// The package or folder; nil for one the settings set up some other way.
     let name: String?
-    let hasOptions: Bool
 
     init(_ item: JSONValue) {
         name = item.string ?? item["package"]?.string
-        hasOptions = item.string == nil && item["options"] != nil
     }
 
     /// A folder of your own, rather than a package on npm.
     var isFolder: Bool { name.map { $0.hasPrefix("/") || $0.hasPrefix("~/") || $0.hasPrefix("./") || $0.hasPrefix("../") || $0.hasPrefix("file://") } ?? false }
     /// "-name": turns off one that other settings add.
     var turnsOff: Bool { name?.hasPrefix("-") ?? false }
+    /// A package on npm, by its name (with a version or not), which the engine installs.
+    var isPackage: Bool { name.map { !isFolder && !turnsOff && !$0.contains(":") } ?? false }
+
+    /// A package's name without the version after it: "@scope/name" of "@scope/name@1.2.0".
+    static func package(of spec: String) -> String {
+        guard let at = spec.lastIndex(of: "@"), at != spec.startIndex else { return spec }
+        return String(spec[..<at])
+    }
 }
 
 /// One added: what it is, whether it loaded, and Remove.
@@ -168,6 +176,8 @@ struct AddPluginPage: View {
     @Environment(\.settingsBox) private var settingsBox
     @State private var query = ""
     @State private var found: PluginSearch?
+    /// What `found` was found for ("" for the most used).
+    @State private var foundFor = ""
     @State private var failure: String?
     @State private var isSearching = false
     @State private var confirming: PluginSearch.Package?
@@ -195,10 +205,15 @@ struct AddPluginPage: View {
                     if isSearching { Spinner(size: 14) }
                 }
                 if let failure {
-                    FailureLabel(title: "Couldn’t search npm", detail: failure, retrying: "npm") { Task { await find() } }
+                    if settingsBox.machine != nil, !app.isReady(settingsBox) {
+                        Text("\(computer) isn’t connected. Its plugins can be found once it is.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        FailureLabel(title: "Couldn’t search npm", detail: failure, retrying: "npm") { Task { await find() } }
+                    }
                 } else if let found {
-                    if let missing = found.missing, found.packages.isEmpty || search.contains("@") {
-                        Label("npm doesn’t have \(missing).", systemImage: "questionmark.circle")
+                    if let missing = saysMissing(found) {
+                        Label(missing, systemImage: "questionmark.circle")
                             .foregroundStyle(.secondary)
                     } else if found.packages.isEmpty {
                         Text("No plugins match “\(search)”.")
@@ -218,7 +233,7 @@ struct AddPluginPage: View {
                     .padding(.vertical, 16)
                 }
             } header: {
-                Text(search.isEmpty ? "Popular Plugins" : "On npm")
+                Text(foundFor.isEmpty ? "Popular Plugins" : "On npm")
             } footer: {
                 Text("These are made by their authors and published on npm, not by Kuvo Code.")
                     .foregroundStyle(.secondary)
@@ -238,7 +253,10 @@ struct AddPluginPage: View {
             await find()
         }
         .confirmationDialog("Add \(confirming.map(spec(of:)) ?? "")?", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), presenting: confirming) { package in
-            Button("Add Plugin") { add(spec(of: package)) }
+            Button("Add Plugin") {
+                add(spec(of: package))
+                done()
+            }
             Button("Cancel", role: .cancel) {}
         } message: { package in
             Text([package.description, "It runs code on \(computer) each time the engine starts."].compactMap { $0 }.joined(separator: "\n\n"))
@@ -247,6 +265,7 @@ struct AddPluginPage: View {
             BoxFolderBrowser(box: box, start: nil, primary: "Add Plugin") { path, home in
                 add(BoxPaths.setting(path, home: home))
                 choosingFolder = false
+                done()
             } cancel: {
                 choosingFolder = false
             }
@@ -256,21 +275,35 @@ struct AddPluginPage: View {
     /// What's added for a package: with the version typed, if one was (`name@1.2.0`).
     private func spec(of package: PluginSearch.Package) -> String {
         let typed = search.lowercased()
-        return typed.hasPrefix(package.name + "@") ? typed : package.name
+        return typed.hasPrefix(package.name + "@") && found?.missing == nil && foundFor == search ? typed : package.name
+    }
+
+    /// That npm has no package by the name typed (or not that version), once no package it found
+    /// starts with it: not while you're partway through a name it has.
+    private func saysMissing(_ found: PluginSearch) -> String? {
+        guard let missing = found.missing, foundFor == search else { return nil }
+        let typed = PluginEntry.package(of: search.lowercased())
+        if missing.dropFirst().contains("@") { return "npm doesn’t have \(missing)." }
+        return found.packages.contains(where: { $0.name.hasPrefix(typed) }) ? nil : "npm has no package named \(missing)."
     }
 
     private func find() async {
+        let asked = search
         isSearching = true
-        defer { isSearching = false }
         do {
-            let answer = try await app.box(box).searchPlugins(search)
+            let answer = try await app.box(box).searchPlugins(asked)
+            // A newer search took its place meanwhile: that one's answer goes in, not this.
+            guard !Task.isCancelled else { return }
             withAnimation(.ui) {
                 found = answer
+                foundFor = asked
                 failure = nil
             }
         } catch {
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
             failure = error.localizedDescription
         }
+        isSearching = false
     }
 
     /// Return: the package named exactly, once npm says it has it.
@@ -291,6 +324,7 @@ struct AddPluginPage: View {
         panel.message = "Choose the folder of a plugin of your own."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         add(BoxPaths.setting(url.path, home: NSHomeDirectory()))
+        done()
     }
 }
 

@@ -14,9 +14,13 @@ struct BoxFolderBrowser: View {
     let cancel: () -> Void
     @Environment(AppModel.self) private var app
     @State private var listing: BoxFolderListing?
-    @State private var failure: String?
+    /// Why the folder it went to couldn't be read, and which (Try Again reads it again).
+    @State private var failure: (path: String?, message: String)?
     /// Where it's going, while that's read.
     @State private var going: String?
+    @State private var naming = false
+    @State private var newName = ""
+    @State private var makeFailure: String?
 
     var body: some View {
         SettingsDetailPage {
@@ -27,8 +31,11 @@ struct BoxFolderBrowser: View {
             }
             Section {
                 if let failure {
-                    FailureLabel(title: "Couldn’t read this folder", detail: failure, retrying: "the folder") { go(to: going ?? listing?.path ?? start) }
-                } else if listing == nil {
+                    FailureLabel(title: "Couldn’t open \(failure.path.map { ($0 as NSString).lastPathComponent } ?? "your home folder")", detail: failure.message, retrying: "that folder") {
+                        go(to: failure.path)
+                    }
+                }
+                if listing == nil, failure == nil {
                     HStack {
                         Spacer()
                         Spinner(size: 20)
@@ -47,6 +54,7 @@ struct BoxFolderBrowser: View {
                             HStack(spacing: 10) {
                                 FolderIcon(isOpen: false, size: 17)
                                     .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
                                 Text(folder.name)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -65,6 +73,7 @@ struct BoxFolderBrowser: View {
                                 } else {
                                     Image(systemName: "chevron.right")
                                         .foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
                                 }
                             }
                             .contentShape(.rect)
@@ -75,20 +84,50 @@ struct BoxFolderBrowser: View {
                 }
             }
         } footer: {
-            EditorFooter(primary: primary, canDoPrimary: listing != nil && going == nil, onPrimary: {
+            EditorFooter(primary: primary, canDoPrimary: listing != nil && going == nil && failure == nil, onPrimary: {
                 if let listing { choose(listing.path, listing.home) }
             }, onCancel: cancel) {
-                if let listing {
-                    Text(BoxPaths.display(listing.path, home: listing.home))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .help(listing.path)
+                Button("New Folder…") {
+                    newName = ""
+                    naming = true
                 }
+                .buttonStyle(.glass)
+                .disabled(listing == nil || failure != nil)
             }
         }
+        .alert("New Folder", isPresented: $naming) {
+            TextField("Name", text: $newName)
+            Button("Create", action: makeFolder)
+                .disabled(!isGoodName)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("In \(listing.map { $0.path == $0.home ? "your home folder" : ($0.path as NSString).lastPathComponent } ?? "this folder").")
+        }
+        .alert("Couldn’t Make the Folder", isPresented: Binding(get: { makeFailure != nil }, set: { if !$0 { makeFailure = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(makeFailure ?? "")
+        }
         .task { await read(start, falling: true) }
+    }
+
+    /// A name a folder can have: not empty, no slash, not "." or "..".
+    private var isGoodName: Bool {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty && !name.contains("/") && name != "." && name != ".."
+    }
+
+    /// The new folder, made in the one you're in, opened.
+    private func makeFolder() {
+        guard let listing, isGoodName else { return }
+        let path = (listing.path as NSString).appendingPathComponent(newName.trimmingCharacters(in: .whitespacesAndNewlines))
+        Task {
+            do {
+                go(to: try await app.box(box).makeFolder(at: path))
+            } catch {
+                makeFailure = error.localizedDescription
+            }
+        }
     }
 
     private func go(to path: String?) {
@@ -111,7 +150,8 @@ struct BoxFolderBrowser: View {
         } catch let refusal as BoxRefusal where falling && path != nil && refusal.status == 404 {
             await read(nil, falling: false)
         } catch {
-            failure = error.localizedDescription
+            // Where you were stays, under what went wrong; Choose waits until it's read.
+            failure = (path, error.localizedDescription)
         }
     }
 }
@@ -137,32 +177,39 @@ private struct PathBar: View {
     }
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 2) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                    if index > 0 {
-                        Image(systemName: "chevron.compact.right")
-                            .foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
-                    }
-                    Button {
-                        go(step.path)
-                    } label: {
-                        if step.isHome {
-                            Label(step.title, systemImage: "house")
-                        } else {
-                            Text(step.title)
-                        }
-                    }
-                    .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: index < steps.count - 1))
-                    .fontWeight(index == steps.count - 1 ? .medium : .regular)
-                    .disabled(index == steps.count - 1)
-                    .accessibilityLabel(step.isHome ? "Home folder" : step.title)
-                }
-            }
-            .lineLimit(1)
+        // From the left while it fits; scrolled to its end when it doesn't, where you are.
+        ViewThatFits(in: .horizontal) {
+            row.frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(.horizontal) { row }
+                .scrollIndicators(.never)
+                .defaultScrollAnchor(.trailing)
         }
-        .scrollIndicators(.never)
-        .defaultScrollAnchor(.trailing)
+    }
+
+    private var row: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                if index > 0 {
+                    Image(systemName: "chevron.compact.right")
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                Button {
+                    go(step.path)
+                } label: {
+                    if step.isHome {
+                        Label(step.title, systemImage: "house")
+                    } else {
+                        Text(step.title)
+                    }
+                }
+                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: index < steps.count - 1))
+                .fontWeight(index == steps.count - 1 ? .medium : .regular)
+                .disabled(index == steps.count - 1)
+                .accessibilityLabel(step.isHome ? "Home folder" : step.title)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
     }
 }

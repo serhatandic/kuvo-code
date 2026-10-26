@@ -70,6 +70,12 @@ extension BoxClient {
         try await value(BoxFolderListing.self, "GET", path.map { "kuvo/folders?path=\(Workspace.queryValue($0))" } ?? "kuvo/folders")
     }
 
+    /// A new folder at `path`, as a folder panel's New Folder makes one: its full path.
+    func makeFolder(at path: String) async throws -> String {
+        struct Made: Decodable { var path: String }
+        return try await value(Made.self, "POST", "kuvo/folders", body: ["path": path]).path
+    }
+
     /// Where new worktrees go with `directory` as the Worktrees folder (nil: the engine's own).
     func worktreesWhere(_ directory: String?) async throws -> WorktreesWhere {
         try await value(WorktreesWhere.self, "GET", directory.map { "kuvo/worktrees/where?directory=\(Workspace.queryValue($0))" } ?? "kuvo/worktrees/where")
