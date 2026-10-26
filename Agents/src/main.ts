@@ -52,6 +52,7 @@ if (onMachine) {
   // The bridge and its agents keep their folders in Kuvo Code's (XDG_… there); the commands the
   // agents run get the machine's own back (machine.ts).
   takeOwnFolders()
+  // COMPAT(0.7 agents-runtime): sign-ins an older Mac carried over (`.from-mac`). Goes 3 months after 0.8.0.
   // Each machine signs its agents in on its own: none a Mac carried over before stays.
   if (home) dropCarriedSignIns(home)
   // Kuvo Code's commands (kuvo-wake) first, as for the engine, and where bots' and sessions'
@@ -91,11 +92,13 @@ process.on("uncaughtException", (error) => {
 
 const deps = new Deps(join(home, "runtime"), join(home, "cache"))
 if (onMachine) {
+  // COMPAT(0.7 agents-runtime): the programs an older bridge installed in `agents/runtime`. Goes 3 months after 0.8.0.
   // The agents' programs are the machine's own now, found on its login shell's PATH (which a
   // command over SSH doesn't get), not copies of Kuvo Code's.
   dropOwnPrograms(join(home, "runtime"))
   void refreshLoginPath()
 }
+// COMPAT(0.7 agents-runtime): `cache/install`. Goes 3 months after 0.8.0.
 // What an earlier bridge left of its downloads (it kept them on this Mac): nothing installs yet.
 rmSync(join(home, "cache", "install"), { recursive: true, force: true })
 const context = { home, temporary, deps }
@@ -264,6 +267,7 @@ void link.whenReady().then(() => {
     // What bots are still to be told of their chats, now and each minute, as your other computers' bots become known.
     if (groups) {
       const runner = groups.runner
+      // COMPAT(0.7 mac-group-chats): `pending-memory.json` from `GroupMigration`. Goes 3 months after 0.8.0.
       void runner.catchUpMemory().catch((error) => console.error("group memory:", error))
       setInterval(() => void runner.catchUpMemory().catch(() => {}), 60_000).unref?.()
     }

@@ -1,0 +1,86 @@
+{
+ "location": {
+  "directory": "/Users/me/Projects/shop"
+ },
+ "data": [
+  {
+   "id": "opencode.tool.input.repair",
+   "source": {
+    "type": "builtin"
+   },
+   "features": {
+    "server": true
+   },
+   "state": {
+    "status": "active"
+   }
+  },
+  {
+   "id": "opencode.config.worktree",
+   "source": {
+    "type": "builtin"
+   },
+   "features": {
+    "server": true
+   },
+   "state": {
+    "status": "active"
+   }
+  },
+  {
+   "id": "opencode.config.mcp",
+   "source": {
+    "type": "builtin"
+   },
+   "features": {
+    "server": true
+   },
+   "state": {
+    "status": "active"
+   }
+  },
+  {
+   "id": "opencode.wakatime",
+   "source": {
+    "type": "package",
+    "target": "opencode-wakatime",
+    "version": "1.4.0"
+   },
+   "features": {
+    "server": true
+   },
+   "state": {
+    "status": "active"
+   }
+  },
+  {
+   "id": "opencode-dcp",
+   "source": {
+    "type": "package",
+    "target": "@tarquinen/opencode-dcp",
+    "version": "3.2.0"
+   },
+   "features": {
+    "server": true,
+    "tui": true
+   },
+   "state": {
+    "status": "active"
+   }
+  },
+  {
+   "source": {
+    "type": "package",
+    "target": "opencode-doesnotexist-xyz-123"
+   },
+   "features": {
+    "server": true
+   },
+   "state": {
+    "status": "failed",
+    "error": "Plugin failed to load",
+    "ref": "err_7d5c182e"
+   }
+  }
+ ]
+}

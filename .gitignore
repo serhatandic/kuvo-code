@@ -7,3 +7,4 @@ build/
 *.xcuserstate
 Config/Signing.local.xcconfig
 Agents/node_modules/
+Packages/Box/node_modules/

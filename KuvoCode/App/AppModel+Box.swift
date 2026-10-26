@@ -27,6 +27,7 @@ extension AppModel {
     /// its `run/host.json`, for each call, so one started again later is reached); and Settings ›
     /// Integrations' catalog with this Mac's own paths.
     func boxEnvironment(_ shell: [String: String]) async -> [String: String] {
+        // COMPAT(0.7 mac-personalities): personalities where Kuvo Code kept them before, moved to the box. Goes 3 months after 0.8.0.
         // Your personalities, where it keeps them, from where Kuvo Code kept them before (once).
         Personalities.moveToBox()
         try? WakeUps.installCommand()

@@ -262,21 +262,24 @@ extension View {
     /// A click anywhere in it makes it the card you work in, as the button goes down: on what
     /// AppKit draws in it too (a reply's text, a terminal, a page), which a SwiftUI gesture never
     /// hears, and before what the click does, so a session picked in the sidebar leaves you in its
-    /// conversation. Not while it's out of reach (under Settings or the expanded panel), nor for
-    /// the window's own buttons over it.
-    func onCardClick(_ action: @escaping () -> Void) -> some View {
-        background(CardClicks(clicked: action))
+    /// conversation. So does the keyboard moving into it (Tab, a shortcut, a field that takes it).
+    /// Not while it's out of reach (under Settings or the expanded panel) or `isOn` says something
+    /// is over it (the command palette, a picture looked at closer), nor for the window's own
+    /// buttons over it.
+    func onCardClick(isOn: Bool = true, _ action: @escaping () -> Void) -> some View {
+        background(CardClicks(isOn: isOn, clicked: action))
     }
 }
 
 private struct CardClicks: NSViewRepresentable {
+    let isOn: Bool
     let clicked: () -> Void
 
     func makeNSView(context: Context) -> Watcher { Watcher() }
 
     func updateNSView(_ view: Watcher, context: Context) {
         view.clicked = clicked
-        view.isOn = context.environment.isEnabled
+        view.isOn = isOn && context.environment.isEnabled
     }
 
     static func dismantleNSView(_ view: Watcher, coordinator: ()) {
@@ -287,6 +290,7 @@ private struct CardClicks: NSViewRepresentable {
         var clicked: () -> Void = {}
         var isOn = true
         private var monitor: Any?
+        private var keyboard: NSKeyValueObservation?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -301,11 +305,31 @@ private struct CardClicks: NSViewRepresentable {
                 self.clicked()
                 return event
             }
+            keyboard = window?.observe(\.firstResponder) { [weak self] window, _ in
+                MainActor.assumeIsolated {
+                    guard let self, let view = window.firstResponder as? NSView, self.holds(view) else { return }
+                    // After what moved it is done (it can move while SwiftUI updates the window),
+                    // if it's still there.
+                    DispatchQueue.main.async { [weak self, weak view] in
+                        guard let self, let view, view.window?.firstResponder === view, self.holds(view) else { return }
+                        self.clicked()
+                    }
+                }
+            }
         }
 
         func stop() {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
+            keyboard = nil
+        }
+
+        /// Whether the keyboard is in this card: what has it shows inside the card (a view as big as
+        /// the window, as SwiftUI's own can be, is in none of them).
+        private func holds(_ view: NSView) -> Bool {
+            guard isOn, let window, view.window === window else { return false }
+            let shown = view.convert(view.visibleRect, to: nil)
+            return !shown.isEmpty && convert(bounds, to: nil).insetBy(dx: -1, dy: -1).contains(shown)
         }
 
         /// Close, minimize and zoom, which sit over the sidebar while the tab bar is hidden.

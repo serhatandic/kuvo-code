@@ -8,6 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-to-agents-"));
 process.env.KUVO_HOME = home;
@@ -98,7 +99,7 @@ test("a conversation goes on with the coding agents whole, with what was waiting
   })()), 405);
 });
 
-test("a bot's conversation becomes the new one, marked and told as its own, and the engine's goes", async () => {
+test("a bot's conversation becomes the new one, marked and told as its own, and the engine's goes", async t => {
   write(path.join(home, "bots", "kit.json"), JSON.stringify({ kuvo: 1, personalities: [], startingModel: sonnet, projects: [], rules: [], timeZone: "UTC" }));
   write(path.join(home, "bin", "bot-words.json"), JSON.stringify({
     kuvo: 1, templates: [], personalities: [], looks: { colors: [], shapes: [], faces: [] }, here: { mac: {}, machine: {} },
@@ -112,8 +113,9 @@ test("a bot's conversation becomes the new one, marked and told as its own, and 
   const engine = await engineFor({ id: "ses_scout", title: "Scout", agent: "build", location: { directory: path.join(folder, "workspace") }, metadata: { kuvo: { bot: "bot_scout00001" } } });
   const agents = await agentsBridge();
   // As Edit Bot changes its model from a phone: its conversation goes on with the agents.
-  // (Its record names a process that runs: this one.)
-  const handle = link.engineHandler(() => engine.at, { name: "lab" }, () => ({ ...agents.at, pid: process.pid }));
+  // (Its record names a process that runs as it: a stand-in.)
+  const pid = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(() => engine.at, { name: "lab" }, () => ({ ...agents.at, pid }));
   const parts = [];
   for await (const part of handle({ method: "PATCH", path: "kuvo/bots/bot_scout00001", headers: {}, body: Buffer.from(JSON.stringify({ model: sonnet })) }, {}, undefined)) parts.push(part);
   assert.equal(parts[0].head.status, 200, Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString());

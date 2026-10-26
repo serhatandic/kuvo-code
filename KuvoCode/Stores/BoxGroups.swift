@@ -130,11 +130,13 @@ final class BoxGroups {
 
     static var file: URL { AppInfo.supportDirectory.appending(path: "group-chats.json") }
     static var folder: URL { AppInfo.supportDirectory.appending(path: "group-chats") }
+    // COMPAT(0.7 machine-group-cache): `machine-groups.json` (0.7.0 to 0.8.0-beta.1). Goes 3 months after 0.8.0.
     /// Where 0.8.0-beta.1 kept what it saw of machines' chats.
     private static var oldFile: URL { AppInfo.supportDirectory.appending(path: "machine-groups.json") }
     private static var oldFolder: URL { AppInfo.supportDirectory.appending(path: "machine-groups") }
 
     init() {
+        // COMPAT(0.7 machine-group-cache): `machine-groups.json` taken in. Goes 3 months after 0.8.0.
         Self.takeOldCache()
         // As last seen: nothing's talking until its computer says so.
         chats = (JSONFile.read([Chat].self, from: Self.file, isoDates: true) ?? []).map { chat in
@@ -148,6 +150,7 @@ final class BoxGroups {
         reindex()
     }
 
+    // COMPAT(0.7 machine-group-cache): `machine-groups.json` taken in. Goes 3 months after 0.8.0.
     /// What 0.8.0-beta.1 kept of machines' chats (`machine-groups.json`, and their messages), taken
     /// into what's kept now, alongside what's there (this Mac's own, seeded as they moved), then
     /// gone.
@@ -336,6 +339,7 @@ final class BoxGroups {
         do {
             listed = try await api.boxGroups()
         } catch let error as ServerError where error.status == 404 {
+            // COMPAT(0.7 engine-stop): a 404 from an older Mac's agents bridge, taken as none. Goes 3 months after 0.8.0.
             // An older bridge: none run there yet.
             if let machine { running.remove(machine) }
             return
@@ -532,7 +536,10 @@ final class BoxGroups {
         let chat = Chat(machine: machine, group: group, held: held, speaking: state.speaking, discussing: state.discussing, paused: state.paused)
         if let index {
             guard chats[index] != chat else { return }
+            let wasUnread = isUnread(chats[index].group)
             chats[index] = chat
+            // Read on another client (the phone, another Mac): its notifications go here too.
+            if wasUnread, !isUnread(group) { Notifier.shared.clear(session: BotGroups.tabKey(group.id)) }
         } else {
             chats.append(chat)
             if logs[group.id] == nil { setLog(group.id, []) }

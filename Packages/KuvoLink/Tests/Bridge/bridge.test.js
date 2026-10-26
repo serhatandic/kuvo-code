@@ -9,12 +9,20 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter, once } from "node:events";
 import { after, test } from "node:test";
+import { runningAs } from "./running-as.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // The bridge keeps its state in KUVO_HOME, so give it a folder of its own before loading it.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-test-"));
 process.env.KUVO_HOME = home;
-after(() => fs.rmSync(home, { recursive: true, force: true }));
+// A home of its own beside the box's folder, never above it (as one under a TMPDIR inside your
+// home would be), so the box names its paths whole wherever the tests run.
+const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
+process.env.HOME = user;
+after(() => {
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(user, { recursive: true, force: true });
+});
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A phone's key as a phone has one (32 bytes, base64url), named for a test.
@@ -978,7 +986,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
-    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"],
+    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "plugins.search": ["POST", "kuvo/plugins/search"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
@@ -1167,7 +1175,7 @@ test("a phone asks a machine who & can name: its own bots and sessions, then its
     [["ses_own", null], ["ses_notes", "Studio"], ["ses_old", "oldbox"], ["ses_scout", "pi"]]);
 });
 
-test("a phone answers what an agent asks for while it browses on a machine, with the Mac closed: listed and answered as on the Mac, the answer going to the machine's browser", async () => {
+test("a phone answers what an agent asks for while it browses on a machine, with the Mac closed: listed and answered as on the Mac, the answer going to the machine's browser", async t => {
   const run = path.join(home, "run");
   fs.mkdirSync(run, { recursive: true });
   const asks = [
@@ -1207,7 +1215,7 @@ test("a phone answers what an agent asks for while it browses on a machine, with
     const handle = link.engineHandler(readEngine, { name: "Lokum" });
     // None while the browser isn't running: what one left behind was asked of no one now.
     assert.deepEqual((await answer(handle, "GET", "kuvo/asks")).json, { asks: [] });
-    fs.writeFileSync(path.join(run, "browser.pid"), String(process.pid));
+    fs.writeFileSync(path.join(run, "browser.pid"), String(await runningAs("kuvo-browser", t)));
     const listed = await answer(handle, "GET", "kuvo/asks");
     // A subagent's, in the conversation it works for, by that one's name.
     assert.deepEqual(listed.json.asks[0], { id: "ask-1", kind: "signIn", host: "github.com", machine: "Lokum", session: "ses_1", asker: "Fixer", username: true, password: true, saved: [], offersToSave: false });

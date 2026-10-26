@@ -1095,7 +1095,8 @@ private struct MarkdownPiece: View, Equatable {
 
     /// With TextKit: a few views a piece, where Textual makes several for every block.
     private var textKit: some View {
-        ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight)) { url in
+        // Its ```mermaid blocks drawn as diagrams, as in a Markdown file's preview.
+        ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation; web links in the browser.
             if let session = MessageMentions.session(in: url) {
                 if app.workspace.session(session) != nil { app.open(.session(session)) }

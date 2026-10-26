@@ -12,6 +12,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
 - **So every feature lives on the box**: in the engine, the bridges and `kuvo-link.js`. It works on every box, including a machine with the Mac closed, and every client can reach it.
   - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
+  - **Box code runs on both macOS and Linux.** This Mac's box and each Linux machine's run the same code, so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on lokum) before calling it done.
 
 ## UI and UX come first (strict)
 
@@ -23,6 +24,7 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 - See it yourself in a demo copy before calling it done, and look at it as the user will.
 - When a visible choice isn't obvious, mock the options and let the user pick.
 - When the machinery makes the right UI hard, change the machinery. Don't bend the UI around it.
+- **The right panel is only for common tools**: the browser, terminals, files, and Changes for coding sessions. A feature's own view goes where it belongs, never in a new panel tab: a popover or sheet on the conversation (like Artifacts), or a page in Settings.
 
 ## Reviews at checkpoints
 

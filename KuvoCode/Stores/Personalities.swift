@@ -170,6 +170,7 @@ final class Personalities {
         "kuvo/personalities/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)
     }
 
+    // COMPAT(0.7 mac-personalities): `personalities.json` and `personalities-removed.json`, moved to the box and kept in step for going back. Goes 3 months after 0.8.0.
     // MARK: Moving to the box
 
     /// Where Kuvo Code kept them before its box did (0.8.0 betas): a copy stays there, so going back

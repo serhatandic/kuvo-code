@@ -10,7 +10,7 @@ struct ReplyView: NSViewRepresentable {
     /// A reply's (with file links), or another's (a Markdown file's, with `images`).
     let parser: any MarkupParser
     var images: URL? = nil
-    /// ` ```mermaid ` blocks are drawn as diagrams (a Markdown file's preview).
+    /// ` ```mermaid ` blocks are drawn as diagrams (a reply, a Markdown file's preview).
     var diagrams = false
     var openURL: (URL) -> Bool = { _ in false }
     @Environment(\.messageFont) private var font
@@ -43,7 +43,7 @@ struct ReplyView: NSViewRepresentable {
         view.cardIsFocused = cardIsFocused
         let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents)) }
         view.show(markdown, document: {
-            if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style) }
+            if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
             return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images, diagrams: diagrams)
         }, style: style, marks: marks)
     }
@@ -196,6 +196,24 @@ final class ReplyPieceView: NSView {
 /// Prose, as TextKit lays it out: selectable, its links clickable.
 final class ReplyTextView: NSTextView, NSTextViewDelegate {
     var openURL: (URL) -> Bool = { _ in false }
+    nonisolated(unsafe) private var siteIcons: NSObjectProtocol?
+
+    deinit {
+        if let siteIcons { NotificationCenter.default.removeObserver(siteIcons) }
+    }
+
+    /// Whether a link to `site` is in its text, with its icon.
+    private func shows(site: String?) -> Bool {
+        guard let storage = textStorage, let site else { return false }
+        var found = false
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, stop in
+            if ((value as? NSTextAttachment)?.attachmentCell as? SiteIconCell)?.site == site {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
 
     convenience init() {
         let storage = NSTextStorage()
@@ -218,6 +236,14 @@ final class ReplyTextView: NSTextView, NSTextViewDelegate {
         // The document colors its links (a bot's name in its color, Find's marks in black).
         linkTextAttributes = [.cursor: NSCursor.pointingHand]
         delegate = self
+        // A site's icon that came: its links show it (`SiteIconCell`).
+        siteIcons = NotificationCenter.default.addObserver(forName: SiteIcons.loaded, object: nil, queue: .main) { [weak self] note in
+            let site = note.object as? String
+            MainActor.assumeIsolated {
+                guard let self, self.shows(site: site) else { return }
+                self.needsDisplay = true
+            }
+        }
     }
 
     func show(_ text: NSAttributedString) {

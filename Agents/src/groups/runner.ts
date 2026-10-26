@@ -194,6 +194,7 @@ export class GroupRunner {
     void this.dropLeftScratch()
   }
 
+  // COMPAT(0.7 mac-group-chats): tells bots what `GroupMigration` left them to be told. Goes 3 months after 0.8.0.
   /**
    * What a bot is still to be told of its chats (`pending-memory.json`): the chats it forgets go
    * from what it remembers, and it remembers the rest. Only bots known here now (this computer's,

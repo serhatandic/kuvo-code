@@ -26,6 +26,7 @@ extension PhoneLink {
         case ("POST", "uninstall", 4):
             app.removeMachine(machine.id, uninstall: true)
             return (200, Data("{}".utf8))
+        // COMPAT(0.7 engine-stop): `start`. Goes 3 months after 0.8.0.
         case ("POST", let action?, 4) where ["connect", "disconnect", "start"].contains(action):
             // What the page offers for it now, and only that.
             let offered = action == "connect" ? [.connect, .connectNow].contains(engine.offer) : engine.offer?.rawValue == action

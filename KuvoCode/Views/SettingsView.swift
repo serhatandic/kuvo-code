@@ -377,6 +377,9 @@ private struct SettingsSidebar: View {
 
     private var boxes: [SidebarBox] { app.boxes }
 
+    /// How far a swipe has pulled the computers' pages, which the name strip follows.
+    @State private var boxMotion = BoxPagerMotion()
+
     private var shownBinding: Binding<SidebarBox> {
         Binding { boxes.contains(shownBox) ? shownBox : .mac } set: { shownBox = $0 }
     }
@@ -389,7 +392,7 @@ private struct SettingsSidebar: View {
                 .frame(height: SidebarMetrics.rowHeight)
             SidebarSearchRow(text: $search)
             if boxes.count > 1, search.isEmpty {
-                BoxSwitchLine(boxes: boxes, selected: shownBinding)
+                BoxNameStrip(boxes: boxes, selected: shownBinding, motion: boxMotion, marksNews: false)
                     .padding(.top, 8)
             }
             if !search.isEmpty {
@@ -400,7 +403,7 @@ private struct SettingsSidebar: View {
                 .scrollIndicators(.never)
                 .fadingScrollEdges()
             } else if boxes.count > 1 {
-                BoxPager(boxes: boxes, selected: shownBinding) { box in
+                BoxPager(boxes: boxes, selected: shownBinding, motion: boxMotion) { box in
                     pages(of: box)
                 }
             } else {
@@ -698,6 +701,7 @@ struct SettingsUnread: View {
         HStack(spacing: 10) {
             Button("Try Again") { Task { await tryAgain() } }
             if let engine, !engine.isReady, !engine.connection.isUnderWay {
+                // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                 Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
             }
         }
