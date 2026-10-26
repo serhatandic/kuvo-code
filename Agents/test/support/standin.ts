@@ -37,6 +37,8 @@ export class StandIn {
   readonly metadata = new Map<string, any>()
   /** Titles given to sessions, by session. */
   readonly titles = new Map<string, string>()
+  /** More of what a session says of itself (its agent, permissions, a model with its effort), by session. */
+  readonly details = new Map<string, any>()
   /** Its events go out as the bridge's own (`emit`), not on its feed. */
   emitsAsBridge = false
   private held: (() => void)[] = []
@@ -164,8 +166,12 @@ export class StandIn {
         if (body?.metadata) this.metadata.set(session, body.metadata)
         return Response.json({ data: {} })
       }
-      if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.titles.has(session) ? { title: this.titles.get(session) } : {}), ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}), ...(this.metadata.has(session) ? { metadata: this.metadata.get(session) } : {}), location: { directory: this.directory } } })
-      if (what === "message") return Response.json({ data: [...conversation].reverse() })
+      if (!what) return Response.json({ data: { id: session, model: { providerID: "p", id: "m" }, ...(this.details.get(session) ?? {}), ...(this.titles.has(session) ? { title: this.titles.get(session) } : {}), ...(this.parents.has(session) ? { parentID: this.parents.get(session) } : {}), ...(this.metadata.has(session) ? { metadata: this.metadata.get(session) } : {}), location: { directory: this.directory } } })
+      if (what === "message") {
+        // Newest first, or oldest first with `order=asc`, `limit` at most, as the engine pages them.
+        const ordered = url.searchParams.get("order") === "asc" ? [...conversation] : [...conversation].reverse()
+        return Response.json({ data: ordered.slice(0, Number(url.searchParams.get("limit") ?? ordered.length) || ordered.length) })
+      }
       if (what === "synthetic") {
         if (this.busy.has(session) && this.queuesNotes) {
           this.synthetic.push({ session, text: body.text, description: body.description })

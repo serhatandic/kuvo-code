@@ -529,7 +529,12 @@ export function parseVerdict(text: string): { verdict: Verdict; reason: string }
 }
 
 /** The conversation since the goal was set, as the check reads it: who said and did what, the newest part if it's long. */
-export function transcript(messages: any[], since: number): string {
+/**
+ * What a conversation's messages say, for a model to read. Cut to its newest part when long, with
+ * `opening` (what you first asked, which may be older than `messages`) kept before it unless the
+ * part kept has it.
+ */
+export function transcript(messages: any[], since: number, opening?: any): string {
   const lines: string[] = []
   const cut = (text: string, limit: number) => (text.length > limit ? text.slice(0, limit) + " […]" : text)
   for (const message of messages) {
@@ -563,11 +568,14 @@ export function transcript(messages: any[], since: number): string {
     }
   }
   let text = lines.join("\n\n")
-  if (text.length > readLimit) {
+  const first = opening?.type === "user" ? `Person: ${cut(String(opening.text ?? ""), 4_000)}` : undefined
+  const firstShown = first !== undefined && messages.some((message) => message?.id === opening.id)
+  if (text.length > readLimit || (first && !firstShown)) {
     // Cut to its newest part, but what you first asked for stays: it's what the work is for.
-    const first = lines.find((each) => each.startsWith("Person: ")) ?? ""
-    const head = first.slice(0, 4_000)
-    text = (head ? head + "\n\n" : "") + "[…earlier turns left out]\n\n" + text.slice(text.length - (readLimit - head.length))
+    const head = first ?? lines.find((each) => each.startsWith("Person: ")) ?? ""
+    const tail = text.length > readLimit ? text.slice(text.length - (readLimit - head.length)) : text
+    if (!tail.includes(head)) text = (head ? head + "\n\n" : "") + "[…earlier turns left out]\n\n" + tail
+    else text = tail
   }
   return text || "(Nothing yet.)"
 }

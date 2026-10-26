@@ -49,4 +49,8 @@ private func asGitHubReads(_ url: URL) -> [String: String] {
     let fields = asGitHubReads(report.issueURL)
     #expect(report.issueURL.absoluteString.utf8.count < 8_000)
     #expect(fields["description"]?.hasSuffix("[…cut here: the rest didn’t fit in the link]") == true)
+    // Written in Turkish, with emoji: each letter takes more of the link, and it still fits.
+    let turkish = ProblemReport(description: String(repeating: "Çalışırken donuyor ğüş 😕 ", count: 400), versions: [("Kuvo Code", "0.8.0")])
+    #expect(turkish.issueURL.absoluteString.utf8.count < 8_000)
+    #expect(asGitHubReads(turkish.issueURL)["description"]?.hasPrefix("Çalışırken donuyor ğüş 😕") == true)
 }

@@ -79,6 +79,12 @@ export async function answerWithContext(api: Requester, onEngine: boolean, sessi
   return text(await api.request("POST", at(session) + "/generate", { prompt: shown, orAnother: true }, 180_000))
 }
 
+/** The first thing you asked in the conversation, however long it's grown since. */
+export async function opening(api: Requester, session: string): Promise<any | undefined> {
+  const answer = await api.request<{ data?: any[] }>("GET", at(session) + "/message?limit=5&order=asc").catch(() => undefined)
+  return (answer?.data ?? []).find((message) => message?.type === "user")
+}
+
 /** The conversation, oldest first: its newest part. */
 export async function messages(api: Requester, session: string, limit = 200): Promise<any[]> {
   const answer = await api.request<{ data?: any[] }>("GET", at(session) + `/message?limit=${limit}`)

@@ -10,7 +10,7 @@
 import { emit } from "./events"
 import type { GoalPlace, GoalPlaces } from "./goals"
 import { transcript } from "./goals"
-import { answerWithContext, at, line, messages, sessionInfo, type SessionInfo } from "./oneoff"
+import { answerWithContext, at, line, messages, opening, sessionInfo, type SessionInfo } from "./oneoff"
 
 /** What marks a handoff's note to the new conversation's agent, so clients show it as the handoff's. */
 export const handoffMarker = "[Handoff] "
@@ -49,6 +49,8 @@ export function continuedTitle(title?: string): string {
 export class Handoffs {
   /** Each conversation's latest, while the box runs. */
   private kept = new Map<string, Handoff>()
+  /** Those being checked before one starts: a second ask meanwhile (a double click, the phone and the Mac at once) is turned away. */
+  private starting = new Set<string>()
 
   constructor(private readonly places: GoalPlaces) {}
 
@@ -58,7 +60,16 @@ export class Handoffs {
 
   /** Starts one: answers with it writing, and says when it's done or why not (`kuvo.handoff`). */
   async start(session: string, next?: string): Promise<Handoff> {
-    if (this.kept.get(session)?.state === "writing") throw new HandoffError(409, "It's being handed off already.")
+    if (this.starting.has(session) || this.kept.get(session)?.state === "writing") throw new HandoffError(409, "It's being handed off already.")
+    this.starting.add(session)
+    try {
+      return await this.begin(session, next)
+    } finally {
+      this.starting.delete(session)
+    }
+  }
+
+  private async begin(session: string, next?: string): Promise<Handoff> {
     const place = this.place(session)
     const info = await sessionInfo(place.api, session).catch((error: any) => {
       throw new HandoffError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.")
@@ -76,14 +87,19 @@ export class Handoffs {
 
   private async carryOn(handoff: Handoff, info: SessionInfo, place: GoalPlace, next?: string) {
     const session = handoff.from
+    // The new conversation, once made: taken away again if what follows fails, so a retry
+    // doesn't leave an empty one behind each time.
+    let to: string | undefined
     try {
       let note: string
       try {
-        note = (await answerWithContext(place.api, place === this.places.engine, session, notePrompt, async () => transcript(await messages(place.api, session), 0))).trim()
+        note = (await answerWithContext(place.api, place === this.places.engine, session, notePrompt, async () => transcript(await messages(place.api, session), 0, await opening(place.api, session)))).trim()
       } catch (error: any) {
         throw new Error(`The handoff note couldn't be written: ${error?.message ?? error}`)
       }
       if (!note) throw new Error("The model wrote no handoff note.")
+      // Someone wrote to it meanwhile: two agents in one folder would get in each other's way.
+      if (await this.isActive(session, place)) throw new Error("The agent started working while the note was written. Hand it off once its turn ends.")
       const title = continuedTitle(info.title)
       const made = await place.api.request<{ data?: { id?: string } }>("POST", "/api/session", {
         title,
@@ -92,18 +108,21 @@ export class Handoffs {
         ...(info.agent ? { agent: info.agent } : {}),
         ...(info.permissions ? { permissions: info.permissions } : {}),
       })
-      const to = made?.data?.id
+      to = made?.data?.id
       if (!to) throw new Error("The new conversation couldn't be started.")
-      // Linked both ways, keeping what else their metadata says now (read again, as a client
-      // may have changed it while the note was written).
-      await this.link(place, to, { handoffFrom: session })
-      await this.link(place, session, { handoffTo: to })
       await place.api.request("POST", at(to) + "/synthetic", {
         text: `${handoffMarker}You're taking over from another conversation, "${info.title ?? "untitled"}". Its handoff note:\n\n${note}\n\n${next ? `What to do next: ${next}` : "Read it, say in a line what you'll do next, then wait for my next message."}`,
         description: `Carried on from “${line(info.title ?? "a conversation", 80)}”`,
       })
-      Object.assign(handoff, { state: "done", to, title })
+      const started = to
+      to = undefined
+      // Linked both ways, keeping what else their metadata says now (read again, as a client
+      // may have changed it while the note was written).
+      await this.link(place, started, { handoffFrom: session })
+      await this.link(place, session, { handoffTo: started })
+      Object.assign(handoff, { state: "done", to: started, title })
     } catch (error: any) {
+      if (to) await place.api.request("DELETE", at(to)).catch(() => {})
       Object.assign(handoff, { state: "failed", error: String(error?.message ?? error) })
     }
     this.told(handoff)

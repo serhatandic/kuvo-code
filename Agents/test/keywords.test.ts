@@ -54,6 +54,10 @@ function places(bridge = false): GoalPlaces {
 /** What the conversation was told (a note or a message), which a side question never is. */
 const told = (session = "ses_work") => engine.synthetic.filter((note) => note.session === session).length + engine.prompts(session).length
 
+// git as it is, without your own settings (a global ignore file would hide what a test makes).
+process.env.GIT_CONFIG_GLOBAL = "/dev/null"
+process.env.GIT_CONFIG_NOSYSTEM = "1"
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "kuvo-keywords-"))
   following = []
@@ -151,6 +155,7 @@ describe("a handoff", () => {
     engine.answers = ["## Handoff\nThe timer pauses on blur. Left: a test for it."]
     // What else the conversation's metadata says stays, even what changed while the note was written.
     engine.metadata.set("ses_work", { pinned: true, kuvo: { goal: "g" } })
+    engine.details.set("ses_work", { model: { providerID: "p", id: "m", variant: "high" }, agent: "plan", permissions: [{ permission: "bash", action: "allow", pattern: "*" }] })
     engine.holdingChecks = true
     const started = await handoffs.start("ses_work", "Write the test for it.")
     expect(started).toEqual({ from: "ses_work", state: "writing" })
@@ -169,7 +174,8 @@ describe("a handoff", () => {
     expect(engine.checks.map((check) => check.session)).toEqual(["ses_work"])
     // The new one: same folder and model, given the note and the next step, as a note the
     // conversation shows as the handoff's.
-    expect(engine.made[0]).toMatchObject({ title: "Pause on blur (continued)", location: { directory: "/tmp/project" }, model: { providerID: "p", id: "m" } })
+    // On the same model and effort, agent and permissions.
+    expect(engine.made[0]).toMatchObject({ title: "Pause on blur (continued)", location: { directory: "/tmp/project" }, model: { providerID: "p", id: "m", variant: "high" }, agent: "plan", permissions: [{ permission: "bash", action: "allow", pattern: "*" }] })
     const note = engine.synthetic.find((each) => each.session === handoff.to!)!
     expect(note.text).toStartWith(handoffMarker)
     expect(note.text).toContain("The timer pauses on blur. Left: a test for it.")
@@ -189,6 +195,43 @@ describe("a handoff", () => {
     expect((await route("ses_child")).status).toBe(409)
     expect((await route("ses_nowhere")).status).toBe(404)
     expect(engine.made).toHaveLength(0)
+  })
+
+  test("asked twice at once, it starts once", async () => {
+    const handoffs = new Handoffs(places())
+    engine.answers = ["## Handoff\nNote."]
+    const both = await Promise.all([handoffRoutes(handoffs, "POST", ["ses_work"], async () => ({})), handoffRoutes(handoffs, "POST", ["ses_work"], async () => ({}))])
+    expect(both.map((answer) => answer.status).sort()).toEqual([200, 409])
+    await until(() => handoffs.get("ses_work")?.state === "done")
+    expect(engine.made).toHaveLength(1)
+  })
+
+  test("the agent set to work while the note was written: no new conversation beside it", async () => {
+    const handoffs = new Handoffs(places())
+    engine.answers = ["## Handoff\nNote."]
+    engine.holdingChecks = true
+    await handoffs.start("ses_work")
+    await until(() => engine.checks.length === 1)
+    engine.holding = true
+    engine.write("ses_work", "One more thing.")
+    engine.answerChecks()
+    await until(() => handoffs.get("ses_work")?.state !== "writing")
+    expect(handoffs.get("ses_work")?.error).toContain("started working while the note was written")
+    expect(engine.made).toHaveLength(0)
+    engine.finish()
+  })
+
+  test("its note reads what you first asked, however long the conversation has grown", async () => {
+    const handoffs = new Handoffs(places(true))
+    const long = Array.from({ length: 300 }, (_, index) => ({ id: `msg_${1000 + index}`, type: "assistant", content: [{ type: "text", text: `Step ${index}: ` + "x".repeat(600) }], time: { created: 10 + index } }))
+    engine.session("ses_work", [{ id: "msg_0001", type: "user", text: "Make the timer pause on blur.", time: { created: 1 } }, ...long])
+    engine.answers = ["## Handoff\nNote."]
+    await handoffs.start("ses_work")
+    await until(() => handoffs.get("ses_work")?.state !== "writing")
+    const asked = engine.checks[0].prompt
+    expect(asked.split("Person: Make the timer pause on blur.")).toHaveLength(2)
+    expect(asked).toContain("[…earlier turns left out]")
+    expect(asked).toContain("Step 299")
   })
 
   test("waits for the agent's turn to end: two agents at work in one folder would get in each other's way", async () => {
@@ -296,6 +339,7 @@ describe("a review with fresh eyes", () => {
     writeFileSync(join(root, "secret.txt"), "the key\n")
     symlinkSync(join(root, "secret.txt"), join(folder, "app", "link.txt"))
     writeFileSync(join(folder, "other", "theirs.ts"), "elsewhere\n")
+    await run("git", ["-C", folder, "add", "other/theirs.ts"])
     const diff = await gitChanges(join(folder, "app"))
     expect(diff).toContain("+console.log(1)")
     expect(diff).toContain("dump.bin\n[a new file of 391 KB, not shown]")
@@ -328,5 +372,15 @@ describe("a conversation deleted", () => {
     // Gone after a restart too.
     const after = new Reviews(join(root, "reviews.json"), places(), async () => "")
     expect(after.get("ses_work")).toBeUndefined()
+  })
+
+  test("while the box was stopped, they go once it's back", async () => {
+    const question = { id: "btw_1", session: "ses_gone", question: "Why?", state: "answered", answer: "Because.", asked: 1, answered: 2 }
+    writeFileSync(join(root, "side-questions.json"), JSON.stringify([question, { ...question, id: "btw_2", session: "ses_work" }]))
+    writeFileSync(join(root, "reviews.json"), JSON.stringify([{ id: "rev_1", session: "ses_gone", state: "done", findings: [], started: 1, ended: 2 }]))
+    const questions = new SideQuestions(join(root, "side-questions.json"), places())
+    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => "")
+    await until(() => questions.list("ses_gone").length === 0 && reviews.get("ses_gone") === undefined)
+    expect(questions.list("ses_work")).toHaveLength(1)
   })
 })

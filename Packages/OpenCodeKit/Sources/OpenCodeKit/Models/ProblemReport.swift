@@ -23,9 +23,32 @@ public struct ProblemReport: Sendable, Equatable {
 
     /// The form's own title, before what's typed.
     static let titlePrefix = "[Bug]: "
-    /// What happened, at most, in the link: GitHub turns away links much longer than this. More
-    /// is cut, and the issue says so, to finish on the page.
-    public static let descriptionLimit = 4_000
+    /// What happened, at most, in the link once encoded (a "ç" takes 6 characters there, an emoji
+    /// 12): GitHub turns away links much longer than this. More is cut, and the issue says so,
+    /// to finish on the page.
+    public static let descriptionLimit = 6_000
+    static let cutNote = "\n\n[…cut here: the rest didn’t fit in the link]"
+
+    /// Encoded by hand: a "+" left as it is reads as a space on GitHub ("C++" would arrive as "C  ").
+    private static let allowed: CharacterSet = {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=#")
+        return allowed
+    }()
+
+    private static func encoded(_ text: String) -> String { text.addingPercentEncoding(withAllowedCharacters: allowed) ?? "" }
+
+    /// As much of `said` as fits in the link, with a note when some didn't.
+    static func fitting(_ said: String) -> String {
+        guard encoded(said).utf8.count > descriptionLimit else { return said }
+        // The most characters whose encoding, with the note, fits.
+        var low = 0, high = said.count
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if encoded(String(said.prefix(middle)) + cutNote).utf8.count <= descriptionLimit { low = middle } else { high = middle - 1 }
+        }
+        return String(said.prefix(low)) + cutNote
+    }
 
     /// The new issue's page, its form filled in: the title from the first line of what happened,
     /// what happened, and the versions, by the form's field IDs.
@@ -34,10 +57,7 @@ public struct ProblemReport: Sendable, Equatable {
         let first = said.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         let title = first.count > 72 ? String(first.prefix(71)).trimmingCharacters(in: .whitespaces) + "…" : first
         let system = versions.filter { $0.label != "Kuvo Code" }.map { "\($0.label): \($0.value)" }.joined(separator: ", ")
-        let shown = said.count > Self.descriptionLimit ? String(said.prefix(Self.descriptionLimit)) + "\n\n[…cut here: the rest didn’t fit in the link]" : said
-        // Encoded by hand: a "+" left as it is reads as a space on GitHub ("C++" would arrive as "C  ").
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "+&=#")
+        let shown = Self.fitting(said)
         let fields = [
             ("template", "bug_report.yml"),
             ("title", Self.titlePrefix + title),
@@ -46,7 +66,7 @@ public struct ProblemReport: Sendable, Equatable {
             ("macos", system),
         ]
         var components = URLComponents(url: Self.newIssue, resolvingAgainstBaseURL: false)!
-        components.percentEncodedQuery = fields.map { "\($0.0)=\($0.1.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }.joined(separator: "&")
+        components.percentEncodedQuery = fields.map { "\($0.0)=\(Self.encoded($0.1))" }.joined(separator: "&")
         return components.url!
     }
 

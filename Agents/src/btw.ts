@@ -10,7 +10,7 @@ import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
 import { transcript } from "./goals"
 import { newID } from "./ids"
-import { answerWithContext, messages, sessionInfo } from "./oneoff"
+import { answerWithContext, at, messages, opening, sessionInfo } from "./oneoff"
 
 export interface SideQuestion {
   id: string
@@ -61,7 +61,10 @@ export class SideQuestions {
         this.kept.set(question.session, [...(this.kept.get(question.session) ?? []), question])
       }
     } catch {}
-    for (const session of this.kept.keys()) this.follow(session)
+    for (const session of this.kept.keys()) {
+      this.follow(session)
+      void this.forgetIfGone(session)
+    }
   }
 
   private follow(session: string) {
@@ -70,8 +73,16 @@ export class SideQuestions {
       event: (type, data) => {
         if (type === "session.deleted" && data?.sessionID === session) this.forget(session)
       },
-      reconnected: () => {},
+      // Its deletion may have gone by while the feed was away.
+      reconnected: () => void this.forgetIfGone(session),
     }))
+  }
+
+  /** A conversation deleted while the box was stopped, or its feed away: its side questions go. */
+  private async forgetIfGone(session: string) {
+    await this.place(session).api.request("GET", at(session)).catch((error: any) => {
+      if (error?.status === 404) this.forget(session)
+    })
   }
 
   /** Answers those still waiting from before the box stopped. */
@@ -143,7 +154,7 @@ ${earlier.length ? `\nTheir side questions before this one, with your answers:\n
 ${question.question}
 </question>`
     try {
-      const answer = await answerWithContext(place.api, place === this.places.engine, question.session, prompt, async () => transcript(await messages(place.api, question.session), 0))
+      const answer = await answerWithContext(place.api, place === this.places.engine, question.session, prompt, async () => transcript(await messages(place.api, question.session), 0, await opening(place.api, question.session)))
       if (!answer.trim()) throw new Error("The model gave no answer.")
       question.state = "answered"
       question.answer = answer.trim()

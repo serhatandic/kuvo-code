@@ -10,7 +10,7 @@ import { join } from "node:path"
 import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
 import { newID } from "./ids"
-import { freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
+import { at, freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
 import { run } from "./proc"
 
 export type Severity = "bug" | "risk" | "nit"
@@ -44,8 +44,6 @@ export interface Review {
 const diffLimit = 80_000
 /** A new file bigger than this isn't read (a dump, a video): it's named, not shown. */
 const newFileLimit = 256_000
-/** git's own empty tree: a repository with no commits yet is compared with it. */
-const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 export class ReviewError extends Error {
   constructor(
@@ -82,7 +80,10 @@ export class Reviews {
         this.kept.set(review.session, review)
       }
     } catch {}
-    for (const session of this.kept.keys()) this.follow(session)
+    for (const session of this.kept.keys()) {
+      this.follow(session)
+      void this.forgetIfGone(session)
+    }
   }
 
   stopAll() {
@@ -98,8 +99,16 @@ export class Reviews {
       event: (type, data) => {
         if (type === "session.deleted" && data?.sessionID === session && this.kept.has(session)) this.dismiss(session)
       },
-      reconnected: () => {},
+      // Its deletion may have gone by while the feed was away.
+      reconnected: () => void this.forgetIfGone(session),
     }))
+  }
+
+  /** A conversation deleted while the box was stopped, or its feed away: its review goes. */
+  private async forgetIfGone(session: string) {
+    await this.place(session).api.request("GET", at(session)).catch((error: any) => {
+      if (error?.status === 404 && this.kept.has(session)) this.dismiss(session)
+    })
   }
 
   get(session: string): Review | undefined {
@@ -184,35 +193,40 @@ export class Reviews {
  * new files whole, but for big ones, links and ones that aren't text.
  */
 export async function gitChanges(directory: string): Promise<string> {
-  const git = (args: string[]) => run("git", ["-C", directory, ...args], { timeout: 30_000 })
+  const tooLong = "git took too long to read the changes."
+  const git = async (args: string[]) => {
+    const ran = await run("git", ["-C", directory, ...args], { timeout: 30_000 })
+    if (ran.timedOut) throw new Error(tooLong)
+    return ran
+  }
   const inside = await git(["rev-parse", "--is-inside-work-tree"])
   if (inside.code !== 0 || inside.stdout.trim() !== "true") throw new Error("This folder isn't a git repository, so there are no changes to review.")
   const head = await git(["rev-parse", "--verify", "-q", "HEAD"])
-  const base = head.code === 0 ? "HEAD" : emptyTree
+  // Before the first commit, against nothing: git's own empty tree, in the repository's own
+  // kind of hash (SHA-1 or SHA-256).
+  const base = head.code === 0 ? "HEAD" : (await git(["hash-object", "-t", "tree", "/dev/null"])).stdout.trim()
   const tracked = await git(["diff", base, "--relative", "--no-color", "--no-ext-diff"])
-  if (tracked.code !== 0) throw new Error(tracked.code === null || tracked.code === 143 || tracked.code === 137 ? "git took too long to read the changes." : tracked.stderr.trim().split("\n")[0] || "git couldn't read the changes.")
+  if (tracked.code !== 0) throw new Error(tracked.stderr.trim().split("\n")[0] || "git couldn't read the changes.")
   const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z"])
-  let added = ""
-  let budget = diffLimit - tracked.stdout.length
+  let text = tracked.stdout
+  // Each new file named; its words too while there's room (a review reads `diffLimit` at most).
   for (const file of untracked.stdout.split("\0").filter(Boolean).slice(0, 50)) {
-    if (budget <= 0) break
     try {
       const path = join(directory, file)
       const kind = lstatSync(path)
       // A link isn't followed (it could lead out of the folder, to something private).
       if (!kind.isFile()) continue
-      if (kind.size > newFileLimit) {
-        added += `\n--- /dev/null\n+++ b/${file}\n[a new file of ${Math.round(kind.size / 1024)} KB, not shown]\n`
+      const named = `\n--- /dev/null\n+++ b/${file}\n`
+      if (kind.size > newFileLimit || text.length + kind.size > diffLimit) {
+        text += named + `[a new file of ${Math.max(1, Math.round(kind.size / 1024))} KB, not shown]\n`
         continue
       }
-      const text = readFileSync(path, "utf8")
-      if (text.includes("\0")) continue
-      const shown = `\n--- /dev/null\n+++ b/${file}\n` + text.split("\n").map((each) => "+" + each).join("\n")
-      added += shown
-      budget -= shown.length
+      const words = readFileSync(path, "utf8")
+      if (words.includes("\0")) continue
+      text += named + words.split("\n").map((each) => "+" + each).join("\n")
     } catch {}
   }
-  return tracked.stdout + added
+  return text
 }
 
 export function reviewPrompt(diff: string): string {
