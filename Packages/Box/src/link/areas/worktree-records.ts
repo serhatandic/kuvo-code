@@ -7,6 +7,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { writePrivate } from "../files";
 import { K } from "../home";
+import type { WorktreeRecordShape } from "../../shared/routes/worktrees";
 
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
 // The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
@@ -21,18 +22,7 @@ export const branchPrefix = (): string => {
 };
 
 /** A worktree this box keeps, as `box/worktrees.json` has it. */
-export interface WorktreeRecord {
-  /** The project it's of, and the repository's checkout it is. */
-  project: string;
-  root: string;
-  /** Where its session runs: the project's place in its repository (`root` when there's none). */
-  folder?: string;
-  branch: string;
-  base?: string;
-  /** One made here: the branch it was made on, and what its name starts with. */
-  made?: string;
-  prefix?: string;
-}
+export type WorktreeRecord = WorktreeRecordShape;
 
 /** The worktrees this box keeps: `{project, root, folder, branch, base?}` each (`folder`: where
  * its session runs, the project's place in its repository; one made here also has `made`, the

@@ -14,6 +14,7 @@ import { pause } from "../../shared/wait";
 import { engineGet, readEngineFile } from "../engine/client";
 import { RUN } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
+import type { ListedAskShape } from "../../shared/routes/asks";
 
 /** What an agent asks for, as the browser keeps it (`run/browser-asks.json`): a sign-in (whether
  * it wants a username and a password), a code (with its prompt), or a step of yours (with what to
@@ -30,21 +31,7 @@ export interface BrowserAsk {
 }
 
 /** An ask as `kuvo/asks` lists it, as the Mac's does. */
-export interface ListedAsk {
-  id: string;
-  kind: BrowserAsk["kind"];
-  host: string;
-  machine: string;
-  session?: string;
-  asker?: string;
-  /** A sign-in's: whether it wants each, and no saved passwords to pick from (they're the Mac's). */
-  username?: boolean;
-  password?: boolean;
-  saved?: never[];
-  offersToSave?: boolean;
-  prompt?: string;
-  instruction?: string;
-}
+export type ListedAsk = ListedAskShape;
 
 /** A phone's answer to an ask, as it sends it (`POST kuvo/asks/<id>`). */
 export interface GivenAnswer {

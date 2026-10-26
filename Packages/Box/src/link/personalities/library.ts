@@ -12,18 +12,14 @@ import { plainName } from "../../shared/text";
 import { MOST_DOC } from "../documents/format";
 import { textOf, locked, writePrivate } from "../files";
 import { BOTS, RUN } from "../home";
+import type { Personality as PersonalityShape } from "../../shared/routes/personalities";
 
 /** A personality you made, as the library keeps it: its name and what it is, the SF Symbol it
  * shows, and its change's count. */
-export interface Personality {
-  id: string;
-  name: string;
-  description: string;
-  symbol: string;
-  updated: number;
+export type Personality = PersonalityShape & {
   // (It isn’t a removal.)
   removed?: never;
-}
+};
 
 /** A personality removed, noted with its count so no copy brings it back. */
 export interface PersonalityRemoval {

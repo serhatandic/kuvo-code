@@ -82,6 +82,7 @@ export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
+export type Credentials = Infer<typeof CREDENTIALS>;
 
 export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },

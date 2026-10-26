@@ -13,6 +13,7 @@ import { engineGet } from "../engine/client";
 import { writePrivate } from "../files";
 import { RUN } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
+import type { Credentials } from "../../shared/routes/box";
 
 /** An engine's event, as this reads it: its type, its session, and a failed run's error. */
 export interface SignInEvent {
@@ -44,12 +45,7 @@ interface EngineCredential {
 }
 
 /** A sign-in as `kuvo/credentials` lists it. */
-export interface ListedCredential {
-  id: string;
-  integrationID: string;
-  label: string;
-  active: boolean;
-}
+export type ListedCredential = Credentials["credentials"][number];
 
 const ENDED_SIGN_INS_FILE = path.join(RUN, "ended-sign-ins.json");
 
