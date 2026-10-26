@@ -16,7 +16,7 @@ export interface Doc {
   origin: string;
   kind: DocKind;
   n: number;
-  body: Record<string, any>;
+  body: Record<string, unknown>;
   h: string;
   envelope: SignedDoc;
 }
