@@ -152,6 +152,12 @@ private struct BottomStack: View {
         return waiting ? owner : nil
     }
 
+    /// What the composer offers after "/": the engine's commands and yours, and "/goal" where
+    /// its computer runs goals.
+    private var commands: [Command] {
+        catalog.commands(in: model.session.location.directory) + (model.takesGoals ? [Goal.command] : [])
+    }
+
     /// Subagents its agent handed work to that are at it now.
     private var subagentsAtWork: [SessionModel.Subagent] {
         model.subagents.filter { workspace.isWorking($0, for: model.id) }
@@ -197,6 +203,18 @@ private struct BottomStack: View {
                         .glassEffectID("offline", in: glass)
                         .transition(.opacity)
                 }
+                if let goal = model.goal {
+                    GoalBar(goal: goal, isHidden: $model.hidesGoal) {
+                        model.changeGoal(.pause)
+                    } resume: {
+                        model.changeGoal(.resume)
+                    } clear: {
+                        model.changeGoal(.clear)
+                    }
+                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                    .glassEffectID("goal", in: glass)
+                    .transition(.opacity)
+                }
                 if !subagentsAtWork.isEmpty {
                     SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: $model.hidesSubagents)
                         .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
@@ -237,7 +255,7 @@ private struct BottomStack: View {
                     hasQueue: !model.waiting.isEmpty,
                     history: { model.sentMessages },
                     folders: [model.session.location.directory] + workspace.extraFolders(model.session.location.directory),
-                    commands: catalog.commands(in: model.session.location.directory),
+                    commands: commands,
                     focusRequest: model.composerFocus,
                     isOffline: offlineMachine != nil,
                     blurRequest: model.composerBlur,
@@ -283,6 +301,7 @@ private struct BottomStack: View {
             .animation(.ui, value: subagentsAtWork.map(\.id))
             .animation(.ui, value: offlineMachine == nil)
             .animation(.ui, value: model.failure)
+            .animation(.ui, value: model.goal == nil)
             .animation(.ui, value: app.browserAsks.asks(for: model.session.id).map(\.id))
         }
         .padding(.horizontal, Metrics.gutter)
@@ -383,7 +402,7 @@ struct DraftSessionView: View {
                 model: startingModel,
                 isRunning: isCreating,
                 folders: [directory] + workspace.extraFolders(directory),
-                commands: catalog.commands(in: directory),
+                commands: catalog.commands(in: directory) + (workspace.agents(forFolder: directory)?.api != nil ? [Goal.command] : []),
                 focusRequest: focusRequest,
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { approval = $0 },

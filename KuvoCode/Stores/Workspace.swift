@@ -450,6 +450,7 @@ final class Workspace {
         if let model = models[id] { return model }
         let model = SessionModel(session: session, api: api)
         model.isReachable = reachable(folder)
+        model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
         models[id] = model
         return model
     }
@@ -531,6 +532,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
         // (which takes a moment, longer while it starts): read in place, the same messages,
@@ -598,6 +600,7 @@ final class Workspace {
                 return self.extraFolders(self.session(id)?.location.directory ?? directory)
             }
             model.isReachable = { [weak self] in isAgents ? self?.agents?.api != nil : self?.api != nil }
+            model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
             model.show(copy.messages)
             models[id] = model
             beforeEngine.insert(id)
@@ -612,6 +615,7 @@ final class Workspace {
             return self.extraFolders(self.session(id)?.location.directory ?? directory)
         }
         model.isReachable = reachable(directory)
+        model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
         model.show(copy.messages)
         models[id] = model
         return model
@@ -2581,6 +2585,7 @@ final class Workspace {
             model.reconnect(api)
             model.session = session
             model.isReachable = reachable(session.location.directory)
+            model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
             Task { await model.load() }
         }
     }

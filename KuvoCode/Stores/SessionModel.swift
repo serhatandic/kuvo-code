@@ -61,6 +61,8 @@ final class SessionModel {
     var hidesBackgroundJobs = false
     /// The bar of its wake-ups and watches shows only its line.
     var hidesWakes = false
+    /// The goal's bar shows only its line.
+    var hidesGoal = false
     /// The subagents' bar shows only its line, which still says they work.
     var hidesSubagents = false
     private(set) var forms: [FormRequest] = []
@@ -256,6 +258,8 @@ final class SessionModel {
     private(set) var waitsForEngine = false
     /// Whether its engine can be reached (a machine's is connected); set by the workspace.
     @ObservationIgnored var isReachable: () -> Bool = { true }
+    /// Its computer's agents bridge, which runs goals there (the workspace sets it).
+    @ObservationIgnored var goalBridge: () -> OutsideAgents? = { nil }
     /// What's done here waits while its engine can't be reached: it would only fail.
     private var canReach: Bool { !waitsForEngine && isReachable() }
     private(set) var changes: [FileDiff] = []
@@ -920,7 +924,7 @@ final class SessionModel {
             return
         }
         // A "!" or "/" command runs as typed; what you were replying to waits for a message.
-        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil
+        let isCommand = Self.shellCommand(in: draftText) != nil || SlashCommands.parse(draftText, commands: commands) != nil || GoalCommand(draftText) != nil
         let text = isCommand ? draftText : Quoting.message(quotes: draftQuotes, text: draftText)
         let files = draftFiles
         draftText = ""
@@ -933,7 +937,10 @@ final class SessionModel {
     /// be sent goes back there.
     func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, commands: [Command]) {
         sent += 1
-        if let command = Self.shellCommand(in: text) {
+        if let goal = GoalCommand(text) {
+            // For its computer's box, not the agent.
+            runGoal(goal, written: text, files: files)
+        } else if let command = Self.shellCommand(in: text) {
             // A "!" command takes no files: they wait in the composer for a message.
             if !files.isEmpty { draftFiles = files + draftFiles.filter { file in !files.contains { $0.path == file.path } } }
             runShell(command, written: text)
@@ -941,6 +948,57 @@ final class SessionModel {
             runCommand(name, arguments: arguments, files: files, for: model, queue: queue, written: text)
         } else {
             send(text, files: files, for: model, queue: queue)
+        }
+    }
+
+    // MARK: Goals
+
+    /// The goal it works toward, or the one it met, until it's put away: as its computer's box has it.
+    var goal: Goal? { goalBridge()?.goals[id] }
+
+    /// Whether its computer runs goals now (its agents bridge is up): "/goal" is offered then.
+    var takesGoals: Bool { goalBridge()?.api != nil }
+
+    /// "/goal …" sent: its computer's box sets the goal and starts the agent on it, or pauses,
+    /// resumes or takes away the one there. "/goal" alone shows it; with none, what to type is
+    /// left ready to finish. A goal is words: files wait in the composer. What can't be done comes
+    /// back to the composer as `written`, and says why.
+    private func runGoal(_ command: GoalCommand, written: String, files: [URL]) {
+        if !files.isEmpty { restore(text: "", files: files) }
+        if command == .show {
+            if goal == nil { restore(text: "/goal ") }
+            hidesGoal = false
+            return
+        }
+        guard takesGoals else {
+            restore(text: written)
+            failure = "Goals run beside the engine on its computer, and that part isn’t running now: \(goalBridge()?.failure ?? "try again in a moment.")"
+            return
+        }
+        changeGoal(command) { [weak self] in self?.restore(text: written) }
+    }
+
+    /// Changes the goal on its computer's box (the goal bar's buttons too); what can't be done is
+    /// said over the composer.
+    func changeGoal(_ command: GoalCommand, failed: @escaping () -> Void = {}) {
+        guard let api = goalBridge()?.api else { return }
+        let session = id
+        failure = nil
+        Task {
+            do {
+                switch command {
+                case .set(let condition):
+                    try await api.setGoal(session: session, condition: condition)
+                    hidesGoal = false
+                case .pause: try await api.pauseGoal(session: session)
+                case .resume: try await api.resumeGoal(session: session)
+                case .clear: try await api.clearGoal(session: session)
+                case .show: break
+                }
+            } catch {
+                failed()
+                fail(error)
+            }
         }
     }
 

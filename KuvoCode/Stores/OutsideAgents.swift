@@ -82,6 +82,10 @@ final class OutsideAgents {
     /// Auto: your list of models, and those held back at a limit until it resets.
     private(set) var auto = AutoList()
 
+    /// The goals conversations on its computer work toward, by session: the bridge runs them,
+    /// for the engine's sessions there and the agents' alike (`Goal`).
+    private(set) var goals: [String: Goal] = [:]
+
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
     static let order = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"]
@@ -239,6 +243,7 @@ final class OutsideAgents {
         server?.stop()
         server = nil
         api = nil
+        goals = [:]
     }
 
     /// A machine's bridge, through its engine's tunnel (`endpoint`; nil when that engine started
@@ -268,6 +273,7 @@ final class OutsideAgents {
         downSince = nil
         isDown = false
         api = nil
+        goals = [:]
     }
 
     /// A machine's bridge hasn't answered for a while (it stopped there, and didn't start again).
@@ -286,6 +292,7 @@ final class OutsideAgents {
                     isDown = false
                     onConnected?()
                     await loadAuto()
+                    await loadGoals()
                 case .disconnected:
                     // A machine's: said once it stays away (it starts again by itself after a crash).
                     guard machine != nil, downSince == nil else { break }
@@ -296,6 +303,7 @@ final class OutsideAgents {
                     }
                 case .event(let event):
                     if event.type == "kuvo.auto.updated" { await loadAuto() }
+                    if event.type == "kuvo.goal.updated", let update = try? event.payload(as: GoalUpdate.self) { goals[update.sessionID] = update.goal }
                     onEvent?(event)
                 }
             }
@@ -338,6 +346,13 @@ final class OutsideAgents {
     func loadAuto() async {
         guard let api, let list = try? await api.autoList() else { return }
         if list != auto { auto = list }
+    }
+
+    /// Its goals, as its bridge has them (each change comes as `kuvo.goal.updated` after).
+    func loadGoals() async {
+        guard let api, let list = try? await api.goals() else { return }
+        let read = Dictionary(list.map { ($0.session, $0) }, uniquingKeysWith: { $1 })
+        if read != goals { goals = read }
     }
 
     /// A Custom Auto list to show in Settings › Custom Auto as it opens (one picked to edit, or

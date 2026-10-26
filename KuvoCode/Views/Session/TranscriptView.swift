@@ -406,6 +406,9 @@ struct TranscriptView: View {
                             rows.append(.notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files"))
                         }
                     }
+                } else if notice.text.hasPrefix(Goal.marker) {
+                    // The box keeping the agent at its goal: given it, or told what's left.
+                    rows.append(.notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count))))
                 } else if notice.text.hasPrefix("Your last response hit the output token limit") {
                     // The engine asking the model to go on after a reply ran out of room.
                     rows.append(.notice(notice.id, "arrow.turn.down.right", "Hit the length limit for one reply, so it carried on"))

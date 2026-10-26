@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- `/goal` gives the agent a goal to keep at until it's met, like `/goal all tests pass`: it works turn after turn on its own, a check after each turn tells it what's left, and a bar over the composer shows how it's going, with Pause, Resume and Stop. Goals run on the computer the session is on, your Mac or a machine, with the window closed too.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.
 - Restarting the engine while it's still starting, or the engine stopping while it finishes starting, starts it again rather than leaving it stopped with nothing said.
 - Your personalities are kept by your Mac's background service, as a machine keeps them, so a change from your phone or another computer shows in Edit Bot at once and reaches your bots with the window closed. Those you wrote before are brought over as Kuvo Code starts, and a copy stays where they were.
