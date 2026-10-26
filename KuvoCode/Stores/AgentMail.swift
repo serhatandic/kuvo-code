@@ -883,6 +883,7 @@ extension AgentMail {
         await refreshElsewhere()
     }
 
+    // COMPAT(beta.1 mac-letters): `agent-letters.json` and `agent-letters-seen.json`, handed to the box. Goes 3 months after 0.8.0.
     // MARK: What an earlier Kuvo Code kept
 
     /// A letter an earlier Kuvo Code sent by mail itself, until its machine said it had it.

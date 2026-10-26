@@ -38,13 +38,13 @@ import Textual
         Snippet("Indented code", "    export PATH=$HOME/bin:$PATH", ["``` export PATH=$HOME/bin:$PATH"]),
         Snippet("A code block with Windows line ends", "```\r\necho $a$\r\n```\r\nand $b$", ["``` echo $a$", "and ⟨b⟩"]),
         Snippet("Escaped dollar signs", "Escaped: \\$5 and \\$10, and \\$x\\$.", ["Escaped: $5 and $10, and $x$."]),
-        Snippet("A link's address", "[Products](https://example.com/api?$filter=Price&$top=2) and $x$.", ["[Products](https://example.com/api?$filter=Price&$top=2) and ⟨x⟩."]),
+        Snippet("A link's address", "[Products](https://example.com/api?$filter=Price&$top=2) and $x$.", ["◉[Products](https://example.com/api?$filter=Price&$top=2) and ⟨x⟩."]),
         Snippet("A link's address on the next line", "[Products](\n/products?$filter=a&$top=2\n) after", ["[Products](/products?$filter=a&$top=2) after"]),
         Snippet("A link's title on the next line", "[Products](/products?$filter=a \"Title $x$\"\n) after", ["[Products](/products?$filter=a) after"]),
-        Snippet("A link written as its address", "<https://example.com/$a$/b$> and $y$", ["[https://example.com/$a$/b$](https://example.com/$a$/b$) and ⟨y⟩"]),
-        Snippet("A web address", "See https://example.com/$a$b and $y$.", ["See [https://example.com/$a$b](https://example.com/$a$b) and ⟨y⟩."]),
-        Snippet("A link definition", "[ref]: https://example.com/?$a=1$\n\n[Docs][ref] $z$", ["[Docs](https://example.com/?$a=1$) ⟨z⟩"]),
-        Snippet("A price before a link", "$5 [docs](https://example.com/?$top=2) here", ["$5 [docs](https://example.com/?$top=2) here"]),
+        Snippet("A link written as its address", "<https://example.com/$a$/b$> and $y$", ["◉[https://example.com/$a$/b$](https://example.com/$a$/b$) and ⟨y⟩"]),
+        Snippet("A web address", "See https://example.com/$a$b and $y$.", ["See ◉[https://example.com/$a$b](https://example.com/$a$b) and ⟨y⟩."]),
+        Snippet("A link definition", "[ref]: https://example.com/?$a=1$\n\n[Docs][ref] $z$", ["◉[Docs](https://example.com/?$a=1$) ⟨z⟩"]),
+        Snippet("A price before a link", "$5 [docs](https://example.com/?$top=2) here", ["$5 ◉[docs](https://example.com/?$top=2) here"]),
         Snippet("Right after a list marker", "- $$E=mc^2$$\n- next\n\n1. $$a^2$$\n2. $$b^2$$", ["- ⟪E=mc^2⟫", "- next", "1. ⟪a^2⟫", "2. ⟪b^2⟫"]),
         Snippet("After an item's label", "1. Energy: $$E=mc^2$$\n2. Next", ["1. Energy: ⟪E=mc^2⟫", "2. Next"]),
         Snippet("After an item's label, over a lazy line", "1. Energy: $$E =\nmc^2$$\n2. Next", ["1. Energy: ⟪E =\nmc^2⟫", "2. Next"]),
@@ -68,13 +68,13 @@ import Textual
         Snippet("Streaming in: a link's address not closed yet", "Plans start at $5 ([pricing](/plans?$currency", ["Plans start at $5 ([pricing](/plans?$currency"]),
         Snippet("Streaming in: code not closed yet", "It costs $10 and `$HOME", ["It costs $10 and `$HOME"]),
         Snippet("Formulas after one with bars, in a table row", "| f | g | h |\n|---|---|---|\n| $|x|$ | $x^2$ | \\(y\\) |", ["|0 f", "|1 g", "|2 h", "|0 ⟨|x|⟩", "|1 ⟨x^2⟩", "|2 ⟨y⟩"]),
-        Snippet("A price and a link's address in a table row", "| a | b |\n|---|---|\n| $5 | [buy](https://shop.com/?$ref=1) |", ["|0 a", "|1 b", "|0 $5", "|1 [buy](https://shop.com/?$ref=1)"]),
+        Snippet("A price and a link's address in a table row", "| a | b |\n|---|---|\n| $5 | [buy](https://shop.com/?$ref=1) |", ["|0 a", "|1 b", "|0 $5", "|1 ◉[buy](https://shop.com/?$ref=1)"]),
         Snippet("Opening a quote that opens a list item", "- > $$x^2$$", ["- > ⟪x^2⟫"]),
         Snippet("One SwiftUIMath can't draw", "Arrow $\\xrightarrow{f}$ here", ["Arrow $\\xrightarrow{f}$ here"]),
         Snippet("Commands drawn as ones SwiftUIMath has", "Boxed $\\boxed{42}$ and $a \\dots b$", ["Boxed ⟨\\boxed{42}⟩ and ⟨a \\dots b⟩"]),
         Snippet("Private-use characters in the text", "PUA \u{E000}0\u{E001} and \u{E000}12345678901234567890\u{E001}, \u{F0000}\u{F0001} and $x$ and $$y$$", ["PUA \u{E000}0\u{E001} and \u{E000}12345678901234567890\u{E001}, \u{F0000}\u{F0001} and ⟨x⟩ and", "```kuvo-math y"]),
         Snippet("Windows line ends", "Windows\r\n$$\r\nx^2\r\n$$\r\nline", ["Windows", "```kuvo-math x^2", "line"]),
-        Snippet("A web address without its scheme", "See www.example.com/$a$ and $y$.", ["See [www.example.com/$a$](http://www.example.com/$a$) and ⟨y⟩."]),
+        Snippet("A web address without its scheme", "See www.example.com/$a$ and $y$.", ["See ◉[www.example.com/$a$](http://www.example.com/$a$) and ⟨y⟩."]),
     ]
 
     @Test(arguments: snippets)
@@ -111,6 +111,9 @@ import Textual
             let body: String
             if let math = run.textual.attachment?.base as? InlineMath {
                 body = math.isDisplay ? "⟪\(math.latex)⟫" : "⟨\(math.latex)⟩"
+            } else if run.textual.attachment?.base is SiteIconAttachment {
+                // A web link's site icon, before it.
+                body = "◉"
             } else if run.inlinePresentationIntent?.contains(.code) == true {
                 body = "`\(characters)`"
             } else if let link = run.link {

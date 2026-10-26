@@ -701,6 +701,7 @@ struct SettingsUnread: View {
         HStack(spacing: 10) {
             Button("Try Again") { Task { await tryAgain() } }
             if let engine, !engine.isReady, !engine.connection.isUnderWay {
+                // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                 Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
             }
         }
