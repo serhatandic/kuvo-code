@@ -35,6 +35,7 @@ import Testing
     /// isn't touched.
     @Test func removingAMachineLeavesNothingThatStartsItAgain() throws {
         let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
         let root = home.appending(path: RemoteEngineInstaller.root)
         let gone = ["bin/kuvo-start", "bin/.kuvo-start-keeper", "bin/kuvo-launch", "bin/.kuvo-launch-keeper", "bin/.kuvo-boot",
                     "run/launch.env", "run/launch.notes", "keys/settings.json", "box/keys/KUVO_KEY_LINEAR_TOKEN",
@@ -49,7 +50,6 @@ import Testing
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tools.appending(path: "crontab"))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "crontab").path)
-        defer { try? FileManager.default.removeItem(at: home) }
 
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")

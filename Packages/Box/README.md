@@ -11,16 +11,18 @@ It's two programs of ours, built from this one TypeScript package:
 
 They stay two processes. The link has to stay up while the engine or the agents bridge is down. It
 runs the box's self-update, which replaces the agents bridge's files. And an older Mac starts the
-agents bridge itself. What they say to each other is defined once, in `src/shared`.
+agents bridge itself. What they say to each other is to be defined once, in `src/shared`.
 
 The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for released Macs is marked
 `COMPAT(<version> <item>)`: `scripts/compat.sh` lists it.
 
 ## Building
 
-After changing anything in `src`, run `scripts/build-box.sh` and commit `kuvo-link.js` with it. CI
-fails when it isn't built from the sources as they are (`build-box.sh --check`). `bun install` here,
-then `bun run check`, type-checks it. In a debug build of the app, `KUVO_BOX_SCRIPT` can name
+After changing anything in `src`, run `scripts/build-box.sh` and commit `kuvo-link.js` with it. It
+builds with the Bun CI has (1.4.2), so every computer builds the same file, and CI fails when the
+file isn't what the sources build, byte for byte (`build-box.sh --check`). `bun install
+--frozen-lockfile` here, then `bun run check`, type-checks what's typed (Node's types: it must
+run on Node too). In a debug build of the app, `KUVO_BOX_SCRIPT` can name
 `src/link/main.ts` itself, which the engine's Bun runs as it is.
 
 The bundle targets Node as well as Bun: the bridge's tests (`Packages/KuvoLink/Tests/Bridge`, `node

@@ -13,12 +13,13 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-in
 process.env.KUVO_HOME = home;
 // A home of its own beside the box's folder, never above it (as one under a TMPDIR inside your
 // home would be), so the box names its paths whole wherever the tests run.
-process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
+const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
+process.env.HOME = user;
 delete process.env.KUVO_INTEGRATIONS;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 after(() => {
   fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(process.env.HOME, { recursive: true, force: true });
+  fs.rmSync(user, { recursive: true, force: true });
 });
 
 const keyFile = name => path.join(home, "box", name.includes("__") ? "bot-keys" : "keys", name);
@@ -37,18 +38,18 @@ integrationScenarios({ link, home, mac: false, store: {
 // A machine's box is in its user's home (`~/.kuvo-code`), and its settings name its keys from
 // there, as `~/…`, the same on macOS and Linux, whatever the home is called.
 test("a box in your home names its keys from your home, as ~/", async () => {
-  const user = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-home-")));
-  after(() => fs.rmSync(user, { recursive: true, force: true }));
-  const box = path.join(user, ".kuvo-code");
+  const yours = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-home-")));
+  after(() => fs.rmSync(yours, { recursive: true, force: true }));
+  const box = path.join(yours, ".kuvo-code");
   fs.mkdirSync(path.join(box, "bin"), { recursive: true });
   fs.mkdirSync(path.join(box, "box"), { recursive: true });
   fs.writeFileSync(path.join(box, "box", "opencode.json"), "{}");
   fs.writeFileSync(path.join(box, "bin", "integrations.json"), JSON.stringify({ integrations: [
     { id: "todoist", title: "Todoist", summary: "Tasks", kind: "Code and Work", symbol: "checklist", site: "https://todoist.com", how: "Open source · your key", way: "package",
       keys: [{ name: "API_KEY", label: "API token", prompt: "From Todoist" }], variables: { API_KEY: "KUVO_KEY_TODOIST_API_KEY" },
-      settings: { type: "local", command: ["kuvo-npx", "@doist/todoist-mcp@1.0.0"], environment: { API_KEY: "{file:~/.kuvo-code/box/keys/KUVO_KEY_TODOIST_API_KEY}" }, codemode: false } },
+      settings: { type: "local", command: ["kuvo-npx", "@doist/todoist-mcp@1.0.0"], environment: { API_KEY: "{file:/Users/someone/Library/Kuvo keys/KUVO_KEY_TODOIST_API_KEY}" }, codemode: false } },
   ] }));
-  const saved = await boxRoute({ method: "POST", path: "kuvo/integrations/todoist", body: { keys: { API_KEY: "tok" } } }, { ...process.env, HOME: user, KUVO_HOME: box });
+  const saved = await boxRoute({ method: "POST", path: "kuvo/integrations/todoist", body: { keys: { API_KEY: "tok" } } }, { ...process.env, HOME: yours, KUVO_HOME: box });
   assert.equal(saved.status, 200, JSON.stringify(saved.value));
   const settings = JSON.parse(fs.readFileSync(path.join(box, "box", "opencode.json"), "utf8"));
   assert.equal(settings.mcp.servers.todoist.environment.API_KEY, "{file:~/.kuvo-code/box/keys/KUVO_KEY_TODOIST_API_KEY}");

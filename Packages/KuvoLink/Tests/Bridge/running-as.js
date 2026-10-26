@@ -11,6 +11,7 @@ export async function runningAs(name, t) {
   await new Promise((resolve, reject) => {
     child.stdout.once("data", resolve);
     child.once("error", reject);
+    child.once("exit", code => reject(new Error(`the process running as ${name} ended before it was ready (${code})`)));
   });
   return child.pid;
 }

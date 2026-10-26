@@ -17,10 +17,11 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-test-"));
 process.env.KUVO_HOME = home;
 // A home of its own beside the box's folder, never above it (as one under a TMPDIR inside your
 // home would be), so the box names its paths whole wherever the tests run.
-process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
+const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
+process.env.HOME = user;
 after(() => {
   fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(process.env.HOME, { recursive: true, force: true });
+  fs.rmSync(user, { recursive: true, force: true });
 });
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 

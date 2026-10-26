@@ -385,12 +385,12 @@ class LinkHost {
     }
     if (hello?.v !== 1 || !await this.authorize(responder.rs, hello, from))
       return refuse();
-    const { message, transport: transport2 } = responder.writeMessage2(Buffer.from(JSON.stringify(this.hello)));
+    const { message, transport } = responder.writeMessage2(Buffer.from(JSON.stringify(this.hello)));
     for (const old of this.sessions.values())
       if (old.from.equals(from))
         this.end(old, false);
     const phone = { key: responder.rs, name: String(hello.name ?? ""), address: from };
-    this.sessions.set(id, { id, from, number, phone, transport: transport2, incoming: new Map, running: new Map, sockets: new Map });
+    this.sessions.set(id, { id, from, number, phone, transport, incoming: new Map, running: new Map, sockets: new Map });
     this.send(relaySend(from, frame(Frame.handshake2, number, message)));
   }
   message(session, { head, body }) {
@@ -479,10 +479,10 @@ class LinkHost {
     const socket = { handle: null, opened: false };
     session.sockets.set(id, socket);
     const live = () => this.sessions.get(session.id) === session && session.sockets.get(id) === socket;
-    const reply = (head, body, end2) => {
+    const reply = (head, body, end) => {
       if (!live())
         return;
-      for (const piece of pieces(head, body, end2))
+      for (const piece of pieces(head, body, end))
         this.seal(session, piece);
     };
     const end = (error) => {
@@ -1023,9 +1023,9 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
   if (parts.length === 2) {
     if (method !== "GET")
       return { status: 405, value: {} };
-    const { problem: problem2 } = readSettings();
+    const { problem } = readSettings();
     const { entries, engineDown } = await integrationEntries(catalog, engine, signal);
-    return { status: 200, value: { integrations: entries, ...engineDown ? { engineDown } : {}, ...problem2 ? { problem: problem2 } : {} } };
+    return { status: 200, value: { integrations: entries, ...engineDown ? { engineDown } : {}, ...problem ? { problem } : {} } };
   }
   const entry = parts.length === 3 ? catalog.find((each) => each.id === parts[2]) : null;
   if (!entry)
@@ -1233,28 +1233,28 @@ async function botKeysAnswer(method, requestPath, body, engine, file, later) {
   const catalog = integrationCatalog(file);
   const keyed = botKeyed(catalog);
   const names = await keyNames();
-  const shared = (entry2) => Object.values(entry2.variables).every((variable) => names.includes(variable));
+  const shared = (entry) => Object.values(entry.variables).every((variable) => names.includes(variable));
   const without = (gone) => names.filter((name) => !gone.includes(name));
   if (parts.length === 4) {
     if (method === "GET")
-      return { status: 200, value: { keys: keyed.map((entry2) => ({
-        integration: entry2.id,
-        own: hasOwnKeys(bot, entry2, names),
-        shared: shared(entry2),
-        title: entry2.title,
-        symbol: entry2.symbol,
-        keys: (entry2.keys ?? []).map(({ name, label, prompt }) => ({ name, label, prompt })),
-        ...entry2.help ? { help: entry2.help } : {}
+      return { status: 200, value: { keys: keyed.map((entry) => ({
+        integration: entry.id,
+        own: hasOwnKeys(bot, entry, names),
+        shared: shared(entry),
+        title: entry.title,
+        symbol: entry.symbol,
+        keys: (entry.keys ?? []).map(({ name, label, prompt }) => ({ name, label, prompt })),
+        ...entry.help ? { help: entry.help } : {}
       })) } };
     if (method !== "DELETE")
       return { status: 405, value: {} };
-    const had = keyed.filter((entry2) => hasOwnKeys(bot, entry2, names));
+    const had = keyed.filter((entry) => hasOwnKeys(bot, entry, names));
     const own = names.filter((name) => name.endsWith(botVariable("", bot)));
     const written = writeBotSettings(bot, catalog, without(own));
     for (const name of own)
       await deleteKey(name);
-    for (const entry2 of had)
-      reconnectForBot(engine, entry2.id, bot, later);
+    for (const entry of had)
+      reconnectForBot(engine, entry.id, bot, later);
     return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
   }
   if (parts.length !== 5)
@@ -1350,9 +1350,9 @@ function boxProjects(kit, file = PROJECTS_FILE) {
 }
 function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
   const projects = locked(lock, () => {
-    const projects2 = change(readProjects(file));
-    writePrivate(file, JSON.stringify({ version: 1, projects: projects2 }, null, 2));
-    return projects2;
+    const projects = change(readProjects(file));
+    writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
+    return projects;
   });
   for (const tell of projectFollowers)
     tell();
@@ -1578,10 +1578,10 @@ function branchSlug(title, limit = 40) {
   const latin = inLatin(inLatin(String(title).toLowerCase()).normalize("NFKD")).replace(/\p{M}/gu, "").replace(/ı/g, "i");
   let name = "";
   for (const word of latin.split(/[^\p{L}\p{N}]+/u)) {
-    const ascii2 = [...word].filter((character) => character.charCodeAt(0) < 128).join("");
-    if (!ascii2)
+    const ascii = [...word].filter((character) => character.charCodeAt(0) < 128).join("");
+    if (!ascii)
       continue;
-    const next = name ? `${name}-${ascii2}` : ascii2;
+    const next = name ? `${name}-${ascii}` : ascii;
     if (next.length > limit)
       break;
     name = next;
@@ -1670,20 +1670,20 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
     }
     const { sessions, active } = await sessionsHere(engine, signal);
     const worktrees = [];
-    for (const tree2 of list) {
-      const here = sessions.filter((session) => inside(session.location?.directory ?? session.directory, tree2.root));
-      const entry = { path: tree2.root, folder: tree2.folder ?? tree2.root, project: tree2.project, projectName: path.basename(tree2.project), branch: tree2.branch, sessions: here.length, working: here.some((session) => active.has(session.id)) };
-      if (tree2.base)
-        entry.base = tree2.base;
-      if (fs.existsSync(tree2.root)) {
-        const status = await gitLater(tree2.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
+    for (const tree of list) {
+      const here = sessions.filter((session) => inside(session.location?.directory ?? session.directory, tree.root));
+      const entry = { path: tree.root, folder: tree.folder ?? tree.root, project: tree.project, projectName: path.basename(tree.project), branch: tree.branch, sessions: here.length, working: here.some((session) => active.has(session.id)) };
+      if (tree.base)
+        entry.base = tree.base;
+      if (fs.existsSync(tree.root)) {
+        const status = await gitLater(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
         if (status !== null) {
           entry.uncommitted = status.length > 0;
-          const ahead = tree2.base ? await gitLater(tree2.root, ["rev-list", "--count", `${tree2.base}..HEAD`]) : null;
+          const ahead = tree.base ? await gitLater(tree.root, ["rev-list", "--count", `${tree.base}..HEAD`]) : null;
           if (ahead !== null && /^\d+$/.test(ahead))
             entry.ahead = Number(ahead);
         }
-        const size = await sizeLater(tree2.root);
+        const size = await sizeLater(tree.root);
         if (size !== undefined)
           entry.size = size;
       }
@@ -1721,9 +1721,9 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
     }
     if (prefix !== kept)
       writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
-    const tree2 = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...base ? { base } : {}, made: branch, prefix };
-    updateWorktrees((list2) => [...list2.filter((each) => each.root !== root), tree2]);
-    return { status: 200, value: tree2 };
+    const tree = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...base ? { base } : {}, made: branch, prefix };
+    updateWorktrees((list) => [...list.filter((each) => each.root !== root), tree]);
+    return { status: 200, value: tree };
   }
   if (route === "kuvo/worktrees/record") {
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...typeof body?.base === "string" ? { base: body.base } : {} };
@@ -1732,7 +1732,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
       return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
     if (!fs.existsSync(given.root))
       return { status: 404, value: message("That worktree isn't on this machine any more.") };
-    updateWorktrees((list2) => list2.some((each) => each.root === given.root) ? list2 : [...list2, given]);
+    updateWorktrees((list) => list.some((each) => each.root === given.root) ? list : [...list, given]);
     return { status: 200, value: {} };
   }
   const tree = list.find((each) => each.root === body?.path);
@@ -1759,7 +1759,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
       return { status: 502, value: message(error?.message ?? String(error)) };
     }
     gitIn(tree.project, ["branch", body?.forget === true ? "-D" : "-d", tree.branch]);
-    updateWorktrees((list2) => list2.filter((each) => each.root !== tree.root), tree);
+    updateWorktrees((list) => list.filter((each) => each.root !== tree.root), tree);
     return { status: 200, value: {} };
   }
   return { status: 404, value: {} };
@@ -2312,23 +2312,23 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       phoneHere();
     const route = request.path.split("?")[0];
     if (route === "kuvo/info") {
-      let engine2 = {};
+      let engine = {};
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
       let started = null;
-      if (engine2.pid)
+      if (engine.pid)
         try {
           started = fs.statSync(ENGINE_FILE).mtimeMs / 1000;
         } catch {}
-      const running = Boolean(engine2.pid && runs(engine2.pid, `${K}/engine/`));
+      const running = Boolean(engine.pid && runs(engine.pid, `${K}/engine/`));
       const stopped = fs.existsSync(path.join(RUN, "stopped"));
       const chats = path.join(K, "chats");
       try {
         fs.mkdirSync(chats, { recursive: true });
       } catch {}
       yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine2.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info })) };
+      yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info })) };
       return;
     }
     const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
@@ -2353,11 +2353,11 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
     if (/^kuvo\/integrations(\/|\?|$)/.test(request.path)) {
       if (!ownsSettings())
         return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
-      let engine2 = null;
+      let engine = null;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
-      const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine2, signal);
+      const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
     if (route === "kuvo/folders") {
@@ -2377,11 +2377,11 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       }
     }
     if (/^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path)) {
-      let engine2 = null;
+      let engine = null;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
-      const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine2);
+      const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
       return yield* json(status, value);
     }
     if (/^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path)) {
@@ -2445,11 +2445,11 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       const slot = IS_MAC && request.fromApp ? "appPairing" : "pairing";
       if (method === "DELETE") {
         const token = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("token");
-        updateLink((link2) => {
-          if (!link2?.[slot] || token && link2[slot].token !== token)
+        updateLink((link) => {
+          if (!link?.[slot] || token && link[slot].token !== token)
             return null;
-          delete link2[slot];
-          return link2;
+          delete link[slot];
+          return link;
         });
         macLink.wake?.();
         return yield* json(200, {});
@@ -2576,16 +2576,16 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       return yield* forward(target, path2, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
     }
     if (route === "kuvo/accounts/ended" || /^kuvo\/accounts\/[^/]+\/forget$/.test(route)) {
-      let engine2 = null;
+      let engine = null;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
-      if (!engine2?.port)
+      if (!engine?.port)
         return yield* json(503, { message: "The engine isn't running." });
       if (route === "kuvo/accounts/ended") {
         if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
           return yield* json(405, {});
-        return yield* json(200, { providers: await endedProviders(engine2).catch(() => []) });
+        return yield* json(200, { providers: await endedProviders(engine).catch(() => []) });
       }
       if (request.method.toUpperCase() !== "POST")
         return yield* json(405, {});
@@ -2595,21 +2595,21 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       } catch {}
       if (!id || id.includes("/"))
         return yield* json(404, {});
-      return yield* await forgetPlan(engine2, id).catch(() => false) ? json(200, {}) : json(404, {});
+      return yield* await forgetPlan(engine, id).catch(() => false) ? json(200, {}) : json(404, {});
     }
     if (route === "kuvo/accounts/credentials") {
       if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
         return yield* text(405, "Read them with GET.");
-      let engine2;
+      let engine;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {
         return yield* text(503, "The engine isn't running.");
       }
       let listed;
       try {
-        const response = await fetch(`http://127.0.0.1:${engine2.port}/api/credential`, {
-          headers: { authorization: `Basic ${Buffer.from(`opencode:${engine2.password}`).toString("base64")}` },
+        const response = await fetch(`http://127.0.0.1:${engine.port}/api/credential`, {
+          headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
           signal
         });
         if (!response.ok)
@@ -2676,16 +2676,16 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       return yield* followed(() => ({ worktrees: readWorktrees() }), worktreeFollowers, signal);
     }
     if (/^kuvo\/worktrees(\/(remove|record|where))?$/.test(route)) {
-      let engine2 = null;
+      let engine = null;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
       if (route === "kuvo/worktrees/where") {
         if (request.method.toUpperCase() !== "GET")
           return yield* json(405, {});
-        return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine2, signal));
+        return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine, signal));
       }
-      const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine2, signal);
+      const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
       return yield* json(status, value);
     }
     if (route === "kuvo/bots/keys/refresh") {
@@ -2701,11 +2701,11 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       return yield* json(200, {});
     }
     if (/^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route)) {
-      let engine2 = null;
+      let engine = null;
       try {
-        engine2 = readEngine();
+        engine = readEngine();
       } catch {}
-      const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine2);
+      const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine);
       return yield* json(status, value);
     }
     const toAgents = route.match(/^kuvo\/sessions\/([^/]+)\/agents$/);
@@ -2737,12 +2737,12 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
       if (!target)
         return yield* groupJSON(503, { message: IS_MAC ? "Group chats on this Mac are starting. Try again in a moment." : "Group chats run with the coding agents' bridge, which isn't running on this machine." });
       if (request.method.toUpperCase() === "POST" && route.split("/").length === 3 && Buffer.from(request.body ?? []).includes("&")) {
-        let text2 = "";
+        let text = "";
         try {
-          text2 = JSON.parse(Buffer.from(request.body).toString())?.text;
+          text = JSON.parse(Buffer.from(request.body).toString())?.text;
         } catch {}
         const working = refreshOwnShared(readEngine);
-        if (typeof text2 === "string" && nameMissing(text2, listedAgents().agents)) {
+        if (typeof text === "string" && nameMissing(text, listedAgents().agents)) {
           await Promise.race([working, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
         }
       }
@@ -4338,8 +4338,8 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
   const listed = () => {
     if (!folder)
       return { wakes: [], watches: [], paused: false };
-    const { wakes: wakes2, watches: watches2, paused } = readWakes(folder);
-    return { wakes: wakes2.map(listedWake), watches: watches2, paused };
+    const { wakes, watches, paused } = readWakes(folder);
+    return { wakes: wakes.map(listedWake), watches, paused };
   };
   if (!action && (method === "GET" || method === "HEAD"))
     return yield* json(200, listed());
@@ -4662,7 +4662,7 @@ class NoticeHold {
     this.settle();
   }
   static kept(entries) {
-    return JSON.stringify(entries.map(({ notice, wall, seen: seen2, at, due }) => ({ notice, at: wall, seen: seen2, attended: due > at })));
+    return JSON.stringify(entries.map(({ notice, wall, seen, at, due }) => ({ notice, at: wall, seen, attended: due > at })));
   }
   get inUse() {
     const now = this.now();
@@ -4686,7 +4686,7 @@ class NoticeHold {
           entry.seen = true;
       this.shown = this.shown.filter((each) => now - each.at < SHOWN_WITHIN);
       for (const each of shown) {
-        const entry = this.held.find((entry2) => !entry2.seen && showsNotice(each, entry2.notice));
+        const entry = this.held.find((entry) => !entry.seen && showsNotice(each, entry.notice));
         if (entry)
           entry.seen = true;
         else
@@ -4705,10 +4705,10 @@ class NoticeHold {
     const now = this.now();
     const inUse = this.inUse;
     const mark = inUse ? this.shown.findIndex((each) => now - each.at < SHOWN_WITHIN && showsNotice(each, notice)) : -1;
-    const seen2 = mark >= 0;
-    if (seen2)
+    const seen = mark >= 0;
+    if (seen)
       this.shown.splice(mark, 1);
-    this.held.push({ notice, at: now, wall: this.wall(), due: inUse ? now + holdFor(notice.category) : now, seen: seen2 });
+    this.held.push({ notice, at: now, wall: this.wall(), due: inUse ? now + holdFor(notice.category) : now, seen });
     this.settle();
     return true;
   }
@@ -4825,15 +4825,15 @@ async function noticeFor(event, get) {
     }
     return null;
   };
-  const about = (shown2, category, body, extra = {}, { answerable = true, untitled = "New Session" } = {}) => {
-    const bot = isBot(shown2);
+  const about = (shown, category, body, extra = {}, { answerable = true, untitled = "New Session" } = {}) => {
+    const bot = isBot(shown);
     return {
-      title: shown2.title || untitled,
-      subtitle: bot ? undefined : projectNameOf(shown2.location?.directory ?? ""),
+      title: shown.title || untitled,
+      subtitle: bot ? undefined : projectNameOf(shown.location?.directory ?? ""),
       body,
       category,
-      thread: shown2.id,
-      data: { session: shown2.id, ...extra, ...answerable ? {} : { answerable: "0" } }
+      thread: shown.id,
+      data: { session: shown.id, ...extra, ...answerable ? {} : { answerable: "0" } }
     };
   };
   switch (event.type) {
@@ -4961,10 +4961,10 @@ function steering(background, { after = STEER_AFTER, now = Date.now, schedule = 
     const due = Math.min(...blocking.values()) + after;
     timers.set(session, schedule(() => {
       timers.delete(session);
-      const { blocking: blocking2, steers: steers2 } = of(session);
-      if (!blocking2.size || !steers2.size)
+      const { blocking, steers } = of(session);
+      if (!blocking.size || !steers.size)
         return;
-      if (Math.min(...blocking2.values()) + after > now())
+      if (Math.min(...blocking.values()) + after > now())
         return consider(session);
       background(session);
       timers.set(session, schedule(() => {
@@ -5277,7 +5277,7 @@ async function inConversation(ask, readEngine) {
 }
 async function watchAsks(tell, { signal, every = 2000, read = readAsks, answered = () => {} } = {}) {
   const told = new Set;
-  let seen2 = new Set;
+  let seen = new Set;
   while (!signal?.aborted) {
     try {
       const asks = read();
@@ -5289,13 +5289,13 @@ async function watchAsks(tell, { signal, every = 2000, read = readAsks, answered
         answered(id);
       }
       for (const ask of asks) {
-        if (told.has(ask.id) || !seen2.has(ask.id))
+        if (told.has(ask.id) || !seen.has(ask.id))
           continue;
         const { ask: shown, asker } = await inConversation(ask);
         if (tell(askNotice(shown, asker)))
           told.add(ask.id);
       }
-      seen2 = open;
+      seen = open;
     } catch {}
     await pause(every, signal);
   }
@@ -5518,10 +5518,10 @@ function readSettings(file = CONFIG_FILE) {
     return { problem: link && error?.code === "ENOENT" ? "It's a link to a file that isn't there, so Kuvo Code leaves it alone." : `It couldn't be read, so Kuvo Code leaves it alone (${error?.code ?? error?.message}).` };
   }
   try {
-    const parsed2 = text.trim() ? JSON.parse(text) : {};
-    if (!isObject(parsed2))
+    const parsed = text.trim() ? JSON.parse(text) : {};
+    if (!isObject(parsed))
       throw new Error("not an object");
-    return { settings: parsed2 };
+    return { settings: parsed };
   } catch {
     return { problem: "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)" };
   }
@@ -5726,7 +5726,7 @@ function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
 async function answerKeys(method, route, body) {
   try {
     if (route === "kuvo/keys")
-      return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter((name2) => !name2.includes("__")) } } : { status: 405, value: {} };
+      return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter((name) => !name.includes("__")) } } : { status: 405, value: {} };
     const parts = route.split("/");
     let name = "";
     try {
@@ -6060,8 +6060,8 @@ function removeAsMac(link, entries) {
 }
 function removePhones(link, by, entries) {
   const macs = macsOf(link);
-  const allowed2 = new Set([...(link.phones ?? []).map((phone) => phone.key), ...macs]);
-  if (!allowed2.has(by) || !Array.isArray(entries) || !entries.length || entries.length > MOST_AT_ONCE)
+  const allowed = new Set([...(link.phones ?? []).map((phone) => phone.key), ...macs]);
+  if (!allowed.has(by) || !Array.isArray(entries) || !entries.length || entries.length > MOST_AT_ONCE)
     return false;
   if (!entries.every((entry) => fits(entry, macs)))
     return false;
@@ -6186,8 +6186,8 @@ function held(envelope) {
   if (!doc) {
     try {
       const bytes = Buffer.from(envelope.d, "base64url");
-      const parsed2 = JSON.parse(bytes.toString("utf8"));
-      doc = { origin: parsed2.origin, kind: parsed2.kind, n: parsed2.n, body: isObject(parsed2.body) ? parsed2.body : {}, h: shortHash(bytes), envelope };
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      doc = { origin: parsed.origin, kind: parsed.kind, n: parsed.n, body: isObject(parsed.body) ? parsed.body : {}, h: shortHash(bytes), envelope };
     } catch {
       return null;
     }
@@ -6314,8 +6314,8 @@ function digestOf(link) {
     if (doc)
       have.push([doc.origin, doc.kind, doc.n, doc.h]);
   }
-  for (const [origin, seen2] of Object.entries(link?.views ?? {}))
-    have.push([origin, "personalities", seen2.n, seen2.h]);
+  for (const [origin, seen] of Object.entries(link?.views ?? {}))
+    have.push([origin, "personalities", seen.n, seen.h]);
   const own = ownSign(link);
   if (own) {
     for (const kind of ownKinds())
@@ -6375,9 +6375,9 @@ function docsWork(state, sender, docs, { stay = null } = {}) {
   const { link } = state;
   const sends = new Map;
   const to = (peer, change) => {
-    const docs2 = sends.get(peer.key) ?? { peer, give: [] };
-    change(docs2);
-    sends.set(peer.key, docs2);
+    const docs = sends.get(peer.key) ?? { peer, give: [] };
+    change(docs);
+    sends.set(peer.key, docs);
   };
   const given = Array.isArray(docs?.give) ? docs.give.slice(0, 64) : [];
   if (isObject(docs?.part)) {
@@ -6435,7 +6435,7 @@ function docsWork(state, sender, docs, { stay = null } = {}) {
     for (const envelope of Object.values(link.docs ?? {})) {
       const doc = held(envelope);
       if (doc && behind(docKey(doc.origin, doc.kind), doc.n, doc.h) && takenBy(link, sender.key, doc.origin, doc.kind))
-        to(sender, (docs2) => docs2.give.push(envelope));
+        to(sender, (docs) => docs.give.push(envelope));
     }
     if (!docs.reply) {
       for (const [key, there] of theirs) {
@@ -6452,17 +6452,17 @@ function docsWork(state, sender, docs, { stay = null } = {}) {
   const ownNow = ownDocs(state);
   const peers = docPeers(link);
   const mine = ownSign(link);
-  for (const doc of took.filter((doc2) => doc2.kind !== "personalities" && !doc2.mine)) {
+  for (const doc of took.filter((doc) => doc.kind !== "personalities" && !doc.mine)) {
     for (const peer of peers) {
       if (peer.key !== sender.key && peer.sign !== doc.origin && takenBy(link, peer.key, doc.origin, doc.kind))
-        to(peer, (docs2) => docs2.give.push(doc.envelope));
+        to(peer, (docs) => docs.give.push(doc.envelope));
     }
   }
   for (const made of Object.values(ownNow)) {
     if (made.changed) {
       for (const peer of peers)
         if (takenBy(link, peer.key, mine, "phones"))
-          to(peer, (docs2) => docs2.give.push(made.envelope));
+          to(peer, (docs) => docs.give.push(made.envelope));
     }
   }
   if (state.theirs) {
@@ -6471,21 +6471,21 @@ function docsWork(state, sender, docs, { stay = null } = {}) {
       const record = link.own[kind];
       const there = state.theirs.get(docKey(mine, kind));
       if (senderPeer && !made.changed && (!there || there.n < record.n || there.n === record.n && there.h > record.h))
-        to(senderPeer, (docs2) => docs2.give.push(made.envelope));
+        to(senderPeer, (docs) => docs.give.push(made.envelope));
     }
     delete state.theirs;
   }
   if (ask) {
     const senderPeer = peers.find((peer) => peer.key === sender.key) ?? sender;
-    to(senderPeer, (docs2) => {
-      docs2.have = digestOf(link);
-      docs2.reply = true;
+    to(senderPeer, (docs) => {
+      docs.have = digestOf(link);
+      docs.reply = true;
     });
   }
   return {
     took,
     left: left.filter((each) => each !== stay),
-    send: [...sends.values()].filter((docs2) => docs2.give.length || docs2.have).map(({ peer, ...docs2 }) => ({ to: peer, docs: { ...docs2, give: dedupe(docs2.give) } }))
+    send: [...sends.values()].filter((docs) => docs.give.length || docs.have).map(({ peer, ...docs }) => ({ to: peer, docs: { ...docs, give: dedupe(docs.give) } }))
   };
 }
 var dedupe = (envelopes) => [...new Map(envelopes.map((envelope) => [envelope.d, envelope])).values()];
@@ -6795,7 +6795,7 @@ function agentsNamed(texts, excluding, agents) {
   const named = [];
   for (const text of texts) {
     for (const { reference } of namesIn(text, references).reverse()) {
-      if (named.some((agent2) => agent2.session === reference.session))
+      if (named.some((agent) => agent.session === reference.session))
         continue;
       const agent = byName.get(foldName(reference.name));
       if (agent)
@@ -6825,12 +6825,12 @@ function nameAgents(message, { excluding = null, here = null, agents = [] } = {}
 }
 function composeAgents(own, ownID, peers, told, moved = new Map) {
   const agents = own.map((agent) => ({ ...keptAgent({ ...agent, machine: undefined }), ...ownID ? { machine: ownID } : {} }));
-  const seen2 = new Set(agents.map((agent) => agent.session));
+  const seen = new Set(agents.map((agent) => agent.session));
   for (const peer of peers) {
     for (const agent of told[peer.key]?.list ?? []) {
-      if (seen2.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key)
+      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key)
         continue;
-      seen2.add(agent.session);
+      seen.add(agent.session);
       const { machine, ...rest } = agent;
       agents.push(peer.kind === "machine" ? { ...rest, ...peer.id ? { machine: peer.id } : {} } : { ...rest, ...machine ? { machine } : {} });
     }
@@ -6841,12 +6841,12 @@ function namedAgents(own, peers, told, moved = new Map) {
   const entry = (agent, machine) => ({ session: agent.session, name: agent.name, kind: agent.kind, machine, project: agent.project ?? null, about: agent.about ?? null });
   const titled = (agent) => agent.kind === "bot" || Boolean(agent.name) && agent.name !== "New session";
   const agents = own.filter(titled).map((agent) => entry(agent, null));
-  const seen2 = new Set(agents.map((agent) => agent.session));
+  const seen = new Set(agents.map((agent) => agent.session));
   for (const peer of peers) {
     for (const agent of told[peer.key]?.list ?? []) {
-      if (!titled(agent) || seen2.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key)
+      if (!titled(agent) || seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key)
         continue;
-      seen2.add(agent.session);
+      seen.add(agent.session);
       agents.push(entry(agent, peer.kind === "machine" ? peer.id ?? peer.name ?? null : agent.machine ?? peer.name ?? null));
     }
   }
@@ -6879,21 +6879,21 @@ async function ownAgents(readEngine, machine, kit = readKit(), readBridge = read
   return [...bots, ...recent].map(keptAgent);
 }
 function lettersSeen(now) {
-  let seen2 = {};
+  let seen = {};
   try {
-    seen2 = JSON.parse(fs.readFileSync(LETTERS_SEEN, "utf8"));
+    seen = JSON.parse(fs.readFileSync(LETTERS_SEEN, "utf8"));
   } catch {}
-  for (const [key, at] of Object.entries(seen2))
+  for (const [key, at] of Object.entries(seen))
     if (now - at > LETTER_MEMORY)
-      delete seen2[key];
-  return seen2;
+      delete seen[key];
+  return seen;
 }
 var seenAlready = (id, now = Date.now()) => (id in lettersSeen(now));
 function noteSeen(id, now = Date.now()) {
   locked(PEER_LOCK, () => {
-    const seen2 = lettersSeen(now);
-    seen2[id] = now;
-    writePrivate(LETTERS_SEEN, JSON.stringify(seen2));
+    const seen = lettersSeen(now);
+    seen[id] = now;
+    writePrivate(LETTERS_SEEN, JSON.stringify(seen));
   });
 }
 var delivering = new Set;
@@ -7356,13 +7356,13 @@ function sendDocs(host, link, sends) {
 async function receiveDocs(sender, docs, host) {
   const before = readPersonalities();
   let work = null, library = before;
-  const link = updateLink((link2) => {
-    if (!link2)
+  const link = updateLink((link) => {
+    if (!link)
       return null;
-    const state = { link: link2, library: before, parts: docParts };
+    const state = { link, library: before, parts: docParts };
     work = docsWork(state, sender, docs);
     library = state.library;
-    return link2;
+    return link;
   });
   if (!work || !link)
     return;
@@ -7380,11 +7380,11 @@ async function afterDocs(work, before, library, link, host) {
 function docsChanged(host, { greet = false, tell = false } = {}) {
   const library = readPersonalities();
   let work = null;
-  const link = updateLink((link2) => {
-    if (!link2?.sign)
+  const link = updateLink((link) => {
+    if (!link?.sign)
       return null;
-    work = greet ? greetWork({ link: link2, library }) : changedWork({ link: link2, library }, tell);
-    return link2;
+    work = greet ? greetWork({ link, library }) : changedWork({ link, library }, tell);
+    return link;
   });
   if (work && link) {
     if (!IS_MAC)
@@ -7591,18 +7591,18 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
           } catch {}
       }
       if (letter.gaveUp === true || seatAge(letter) > SEAT_LETTER_LIFE) {
-        const told3 = giveUpSeat(id, letter, ask);
-        if (told3)
-          telling.push(told3);
+        const told = giveUpSeat(id, letter, ask);
+        if (told)
+          telling.push(told);
         continue;
       }
       const to = peers.find((each) => each.key === letter.peer);
       if (!to || offline || now - (letterTries.get(id) ?? 0) < 60000)
         continue;
       letterTries.set(id, now);
-      const told2 = sendSeatLetter(host, to, id, letter, link, now, ask);
-      if (told2)
-        telling.push(told2);
+      const told = sendSeatLetter(host, to, id, letter, link, now, ask);
+      if (told)
+        telling.push(told);
       continue;
     }
     const lives = moved.get(letter.to);
@@ -7673,7 +7673,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
   }
   return Promise.all(telling);
 }
-function receiveMail(body, host, peerMail2 = () => {}, attended = () => {}) {
+function receiveMail(body, host, peerMail = () => {}, attended = () => {}) {
   const link = readLink();
   const opened = openMail(body, link);
   if (!opened)
@@ -7684,20 +7684,20 @@ function receiveMail(body, host, peerMail2 = () => {}, attended = () => {}) {
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
   if (attention && typeof payload.at === "number")
     attended(sender.key, attention, payload.at);
-  peerMail2(sender, payload);
+  peerMail(sender, payload);
 }
 function heardFromMac(mac, payload, now = Date.now()) {
   const link = readLink();
   const legacy = !macSign(link, mac) && Array.isArray(payload.peers) && typeof payload.at === "number" && payload.at > (link?.legacy?.[mac]?.at ?? 0);
   if (!legacy && now - (link?.macSeen?.[mac] ?? 0) < 3600000)
     return;
-  const changed = updateLink((link2) => {
-    if (!link2 || !macsOf(link2).includes(mac))
+  const changed = updateLink((link) => {
+    if (!link || !macsOf(link).includes(mac))
       return null;
     if (legacy)
-      takeLegacyPeers(link2, mac, payload.peers, payload.at, payload.moved);
-    forgetOldMacs(link2, mac, now);
-    return link2;
+      takeLegacyPeers(link, mac, payload.peers, payload.at, payload.moved);
+    forgetOldMacs(link, mac, now);
+    return link;
   });
   if (changed && legacy)
     writeAgents(changed);
@@ -7708,10 +7708,10 @@ function confirmPhone(phone) {
   if (!known || !where || known.address === where)
     return;
   updateLink((link) => {
-    const known2 = link?.phones?.find((each) => each.key === phone.key.toString("base64url"));
-    if (!known2 || !where || known2.address === where)
+    const known = link?.phones?.find((each) => each.key === phone.key.toString("base64url"));
+    if (!known || !where || known.address === where)
       return null;
-    known2.address = where;
+    known.address = where;
     return link;
   });
 }
@@ -7756,9 +7756,9 @@ function verifyBoxes(text, keys = UPDATE_KEYS) {
   if (!key)
     throw new Error("It isn't signed with a key this machine trusts.");
   const bytes = Buffer.from(given.manifest, "base64");
-  const publicKey2 = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
+  const publicKey = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI, key]), format: "der", type: "spki" });
   if (!crypto.verify(null, Buffer.concat([Buffer.from(`kuvo-box v1
-`), bytes]), publicKey2, Buffer.from(given.signature, "base64")))
+`), bytes]), publicKey, Buffer.from(given.signature, "base64")))
     throw new Error("Its signature doesn't match.");
   const manifest = JSON.parse(bytes.toString("utf8"));
   if (manifest?.kuvo !== "box/1" || !RELEASE_VERSION.test(manifest.version ?? "") || typeof manifest.engine !== "string" || !/^[0-9][0-9A-Za-z.-]*$/.test(manifest.engine) || !isObject(manifest.pack) || typeof manifest.pack.url !== "string" || !/^[0-9a-f]{64}$/.test(manifest.pack.sha256 ?? ""))
@@ -8298,12 +8298,12 @@ function macLinkWait(ms) {
     macLink.wake = done;
   });
 }
-async function linkHost(call2, body) {
+async function linkHost(call, body) {
   const host = appHost();
   if (!host)
     return null;
   try {
-    return await askHost(host, call2, body ?? {});
+    return await askHost(host, call, body ?? {});
   } catch {
     return null;
   }
@@ -8418,11 +8418,11 @@ function takeMacDocuments(link, given) {
   }
   for (const envelope of Object.values(isObject(given.held) ? given.held : {}).slice(0, 256))
     takeDoc(link, envelope);
-  for (const [origin, seen2] of Object.entries(isObject(given.views) ? given.views : {}).slice(0, 256)) {
-    if (!SIGN.test(origin) || !isObject(seen2) || !Number.isSafeInteger(seen2.n) || seen2.n < 1)
+  for (const [origin, seen] of Object.entries(isObject(given.views) ? given.views : {}).slice(0, 256)) {
+    if (!SIGN.test(origin) || !isObject(seen) || !Number.isSafeInteger(seen.n) || seen.n < 1)
       continue;
-    if (!link.views?.[origin] || seen2.n > link.views[origin].n)
-      link.views = { ...link.views ?? {}, [origin]: { n: seen2.n, h: String(seen2.h ?? "") } };
+    if (!link.views?.[origin] || seen.n > link.views[origin].n)
+      link.views = { ...link.views ?? {}, [origin]: { n: seen.n, h: String(seen.h ?? "") } };
   }
   const left = Array.isArray(given.left) ? given.left.filter((key) => typeof key === "string" && KEY.test(key)) : [];
   if (left.length)
@@ -8467,10 +8467,10 @@ function sendGone(gone) {
   if (!host?.welcomed)
     return [];
   let envelope = null;
-  const link = updateLink((link2) => {
-    const made = link2?.sign ? ownDoc(link2, "peers", macPeersBody(link2)) : null;
+  const link = updateLink((link) => {
+    const made = link?.sign ? ownDoc(link, "peers", macPeersBody(link)) : null;
     envelope = made?.envelope ?? null;
-    return made?.changed ? link2 : null;
+    return made?.changed ? link : null;
   }) ?? readLink();
   if (!envelope || !link?.key)
     return [];
@@ -8493,11 +8493,11 @@ function tellUntold() {
   const untold = (Array.isArray(link?.untold) ? link.untold : []).filter(fitsPeer);
   const again = untold.filter((peer) => peersOf(link).some((each) => each.key === peer.key));
   if (again.length) {
-    updateLink((link2) => {
-      if (!link2?.untold)
+    updateLink((link) => {
+      if (!link?.untold)
         return null;
-      link2.untold = link2.untold.filter((peer) => !again.some((each) => each.key === peer.key));
-      return link2;
+      link.untold = link.untold.filter((peer) => !again.some((each) => each.key === peer.key));
+      return link;
     });
   }
   tellGone(untold.filter((peer) => !again.includes(peer)).map(cleanPeer));
@@ -8591,14 +8591,14 @@ async function* macLinkRoute(route, request, signal) {
       const again = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("key");
       const library = readPersonalities();
       let docs = [];
-      const link = updateLink((link2) => {
-        if (!link2?.sign)
+      const link = updateLink((link) => {
+        if (!link?.sign)
           return null;
-        if (again && Array.isArray(link2.left))
-          link2.left = link2.left.filter((key) => key !== again);
-        const own = ownDocs({ link: link2, library });
-        docs = [...Object.values(own).map((made) => made.envelope), ...Object.values(link2.docs ?? {}).sort((a, b) => a.d < b.d ? -1 : 1)];
-        return link2;
+        if (again && Array.isArray(link.left))
+          link.left = link.left.filter((key) => key !== again);
+        const own = ownDocs({ link, library });
+        docs = [...Object.values(own).map((made) => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => a.d < b.d ? -1 : 1)];
+        return link;
       });
       if (!link)
         return yield* json(503, { message: "This Mac's link has no keys yet." });
@@ -8618,12 +8618,12 @@ async function* macLinkRoute(route, request, signal) {
       if (method !== "GET")
         return yield* json(405, {});
       const library = readPersonalities();
-      updateLink((link2) => {
-        if (!link2?.sign)
+      updateLink((link) => {
+        if (!link?.sign)
           return null;
-        const before = JSON.stringify(link2.own ?? {});
-        ownDocs({ link: link2, library });
-        return JSON.stringify(link2.own ?? {}) === before ? null : link2;
+        const before = JSON.stringify(link.own ?? {});
+        ownDocs({ link, library });
+        return JSON.stringify(link.own ?? {}) === before ? null : link;
       });
       const link = readLink();
       return yield* json(200, { ...macPhones().documents, have: link?.sign ? digestOf(link) : [] });
@@ -8687,11 +8687,11 @@ async function* macLinkRoute(route, request, signal) {
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
-            const seen2 = lettersSeen(now);
+            const seen = lettersSeen(now);
             for (const [id, at] of Object.entries(given.seen))
               if (LETTER_ID.test(id) && typeof at === "number" && now - at < LETTER_MEMORY)
-                seen2[id] = Math.max(seen2[id] ?? 0, at);
-            writePrivate(LETTERS_SEEN, JSON.stringify(seen2));
+                seen[id] = Math.max(seen[id] ?? 0, at);
+            writePrivate(LETTERS_SEEN, JSON.stringify(seen));
           });
         }
       } catch {
@@ -8724,9 +8724,9 @@ async function* macLinkRoute(route, request, signal) {
   }
 }
 function macNoticeHold(clock = {}) {
-  let held2 = [];
+  let held = [];
   try {
-    held2 = JSON.parse(fs.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   return new NoticeHold({
     ...clock,
@@ -8751,7 +8751,7 @@ function macNoticeHold(clock = {}) {
       }
       return sent > 0;
     },
-    held: held2,
+    held,
     save: (entries) => {
       try {
         if (entries.length)
@@ -9143,13 +9143,13 @@ async function run() {
   };
   for (let tries = 0;tries < 60 && old && isBridge(old); tries++)
     await sleep(50);
-  let held2 = [];
+  let held = [];
   try {
-    held2 = JSON.parse(fs.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
-    held: held2,
+    held,
     save: (entries) => {
       try {
         if (entries.length)
@@ -9160,10 +9160,10 @@ async function run() {
     }
   });
   const tell = (notice) => hold.tell(notice);
-  const answered2 = (id) => hold.resolve(id);
+  const answered = (id) => hold.resolve(id);
   watchBox({ tell, hold });
   watchSeats(() => current);
-  watchAsks(tell, { answered: answered2 });
+  watchAsks(tell, { answered });
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
   setTimeout(() => {
@@ -9527,13 +9527,13 @@ function setupDocs(link) {
 function leave(mac) {
   if (typeof mac !== "string" || !KEY.test(mac))
     return false;
-  const link = updateLink((link2) => {
-    if (!link2 || !macsOf(link2).includes(mac))
+  const link = updateLink((link) => {
+    if (!link || !macsOf(link).includes(mac))
       return null;
-    leaveMac(link2, mac);
-    pruneDocs(link2);
-    foldPhones(link2);
-    return link2;
+    leaveMac(link, mac);
+    pruneDocs(link);
+    foldPhones(link);
+    return link;
   });
   if (!link)
     return false;
@@ -9644,260 +9644,259 @@ if (main) {
   }
 }
 export {
-  writeLink,
-  writeAgents,
-  worktreesWhere,
-  watchSeats,
-  watchEvents,
-  watchBox,
-  watchAsks,
-  wakeOf,
-  wakeFolder,
-  versionOrder,
-  verifyBoxes,
-  updatesBlocked,
-  updateStatus,
-  updateNight,
-  updateLink,
-  update,
-  translateSettings,
-  toolRun,
-  tellWorktree,
-  tellSeatPeers,
-  takeSeatLetters,
-  takeSeat,
-  takePhones,
-  takePersonalitiesDocument,
-  takePersonalities,
-  takeMacDocuments,
-  takeLetter,
-  takeLegacyPeers,
-  takeDoc,
-  takeAgents,
-  stopMacPeers,
-  stopMacLink,
-  steering,
-  startUpdate,
-  socketAllowed,
-  skillsIn,
-  skillTrashEntry,
-  skillName,
-  skillAbout,
-  signingKeyOf,
-  signInReturn,
-  signDoc,
-  showsAll,
-  settleHeld,
-  settleBot,
-  setMacPeers,
-  setBoxKey,
-  serveBox,
-  sendWakes,
-  sendOutbox,
-  selftest,
-  seatPeers,
-  seatPayloads,
-  searchPlugins,
-  sealOneWay,
-  runMacPeers,
-  runMacLink,
-  retellBots,
-  repeatText,
-  removePhones,
-  removeAsMac,
-  relaySend,
-  relayPush,
-  relayHello,
-  refreshedRules,
-  refreshOwn,
-  refreshBotsKeys,
-  reconnectEverywhere,
-  receiveMail,
-  receiveDocs,
-  readWorktrees,
-  readWords,
-  readWakes,
-  readSettings,
-  readRemovedWorktrees,
-  readRelay,
-  readProjects,
-  readPersonalities,
-  readPeerAgents,
-  readLink,
-  readKit,
-  readFrame,
-  readDoc,
-  readAsks,
-  pushTo,
-  publicOf,
-  projectNameOf,
-  pieces,
-  phoneSeenLately,
-  personalitiesDocument,
-  peersOf,
-  peerOf,
-  peerMail,
-  pairingLink,
-  pairPhone,
-  ownsSettings,
-  ownSign,
-  ownRefreshed,
-  ownDoc,
-  ownAgents,
-  openOneWay,
-  openMail,
-  noticeJSON,
-  noticeFor,
-  noteSignIn,
-  noteOlderMacs,
-  noteLauncher,
-  noteDocsChanged,
-  noLongerNeeded,
-  nextWake,
-  newerVersion,
-  newSigningSeed,
-  newPairing,
-  newKey,
-  namesIn,
-  namesHash,
-  namedAgents,
-  nameWorktreeBranch,
-  nameAgents,
-  movedOf,
-  messageID,
-  mergePersonalities,
-  mcpCatalog,
-  maskedNamed,
-  maskedHexValues,
-  masked,
-  markingHashes,
-  makeFolder,
-  makeBot,
-  mailFor,
-  macsOf,
-  macTell,
-  macNoticeHold,
-  macLink,
-  macFront,
-  macDocsChanged,
-  macAnswers,
-  listedAsk,
-  listWakes,
-  listFolders,
-  listBots,
-  letterWent,
-  letterMail,
-  leaveMac,
-  leave,
-  keysNamedHere,
-  keepSkillTrashClear,
-  keepKeeper,
-  keepJobs,
-  jobLine,
-  jobInMemory,
-  isUpdating,
-  isSecretName,
-  holdFor,
-  holdArchived,
-  groupNotice,
-  greetWork,
-  fromRelay,
-  fromPhone,
-  freshenBots,
-  freshenBot,
-  frame,
-  forgetPlan,
-  forgetPhones,
-  forgetOldMacs,
-  forgetLeftKeys,
-  followed,
-  foldPhones,
-  firstMessageOf,
-  engineHandler,
-  engineControl,
-  engineConnect,
-  endedProviders,
-  encodeMessage,
-  docsWork,
-  docsChanged,
-  docMails,
-  docBytes,
-  digestOf,
-  describePermission,
-  describeForm,
-  deliverLeftAnswers,
-  deleteBot,
-  deepMerged,
-  decodeMessage,
-  connectOnce,
-  confirmUpdate,
-  confirmPhone,
-  composeLetter,
-  composeAgents,
-  checkDrift,
-  changedWork,
-  changeSettings,
-  changeProjects,
-  changePersonalities,
-  changeBot,
-  carryToAgents,
-  carrySeat,
-  canonicalPath,
-  branchSlug,
-  boxVersion,
-  boxProjects,
-  botVariable,
-  botTemplates,
-  botPersonalities,
-  botInstructions,
-  authorizePhone,
-  attentionGiven,
-  askNotice,
-  askAnswer,
-  applySettings,
-  answerWorktrees,
-  answerSkills,
-  answerProjects,
-  answerPersonalities,
-  answerIntegrations,
-  answerBotKeys,
-  answerAsk,
-  announce,
-  allowed,
-  allWakes,
-  agentsAllowed,
-  adoptBox,
-  addressOf,
-  addMacDefaults,
-  addFromCatalog,
-  UPDATE_KEYS,
-  STEER_AFTER,
-  SKILL_REPOSITORIES,
-  SHOWN_WITHIN,
-  SEEN_FILE,
-  RESTORED_WAIT,
-  PROLOGUE,
-  NoticeHold,
-  NOTICE_LIMIT,
-  NEWS_HOLD,
-  MOST_DOC,
-  MAIL_PROLOGUE,
-  MAC_BOX_ROUTES,
-  LinkHost,
-  LONGEST_LEASE,
-  LINK_FILE,
-  LETTER_WAIT,
-  KEEP_FOR,
-  IS_MAC,
-  IKResponder,
-  IKInitiator,
-  Frame,
-  FROM_PHONE,
-  FILE_LIMIT,
-  FEATURES,
-  CipherState,
-  BRIDGE_VERSION,
+  ASK_HOLD,
   BOT_MEMORY_RULE,
-  ASK_HOLD
+  BRIDGE_VERSION,
+  CipherState,
+  FEATURES,
+  FILE_LIMIT,
+  FROM_PHONE,
+  Frame,
+  IKInitiator,
+  IKResponder,
+  IS_MAC,
+  KEEP_FOR,
+  LETTER_WAIT,
+  LINK_FILE,
+  LONGEST_LEASE,
+  LinkHost,
+  MAC_BOX_ROUTES,
+  MAIL_PROLOGUE,
+  MOST_DOC,
+  NEWS_HOLD,
+  NOTICE_LIMIT,
+  NoticeHold,
+  PROLOGUE,
+  RESTORED_WAIT,
+  SEEN_FILE,
+  SHOWN_WITHIN,
+  SKILL_REPOSITORIES,
+  STEER_AFTER,
+  UPDATE_KEYS,
+  addFromCatalog,
+  addMacDefaults,
+  addressOf,
+  adoptBox,
+  agentsAllowed,
+  allWakes,
+  allowed,
+  announce,
+  answerAsk,
+  answerBotKeys,
+  answerIntegrations,
+  answerPersonalities,
+  answerProjects,
+  answerSkills,
+  answerWorktrees,
+  applySettings,
+  askAnswer,
+  askNotice,
+  attentionGiven,
+  authorizePhone,
+  botInstructions,
+  botPersonalities,
+  botTemplates,
+  botVariable,
+  boxProjects,
+  boxVersion,
+  branchSlug,
+  canonicalPath,
+  carrySeat,
+  carryToAgents,
+  changeBot,
+  changePersonalities,
+  changeProjects,
+  changeSettings,
+  changedWork,
+  checkDrift,
+  composeAgents,
+  composeLetter,
+  confirmPhone,
+  confirmUpdate,
+  connectOnce,
+  decodeMessage,
+  deepMerged,
+  deleteBot,
+  deliverLeftAnswers,
+  describeForm,
+  describePermission,
+  digestOf,
+  docBytes,
+  docMails,
+  docsChanged,
+  docsWork,
+  encodeMessage,
+  endedProviders,
+  engineConnect,
+  engineControl,
+  engineHandler,
+  firstMessageOf,
+  foldPhones,
+  followed,
+  forgetLeftKeys,
+  forgetOldMacs,
+  forgetPhones,
+  forgetPlan,
+  frame,
+  freshenBot,
+  freshenBots,
+  fromPhone,
+  fromRelay,
+  greetWork,
+  groupNotice,
+  holdArchived,
+  holdFor,
+  isSecretName,
+  isUpdating,
+  jobInMemory,
+  jobLine,
+  keepJobs,
+  keepKeeper,
+  keepSkillTrashClear,
+  keysNamedHere,
+  leave,
+  leaveMac,
+  letterMail,
+  letterWent,
+  listBots,
+  listFolders,
+  listWakes,
+  listedAsk,
+  macAnswers,
+  macDocsChanged,
+  macFront,
+  macLink,
+  macNoticeHold,
+  macTell,
+  macsOf,
+  mailFor,
+  makeBot,
+  makeFolder,
+  markingHashes,
+  masked,
+  maskedHexValues,
+  maskedNamed,
+  mcpCatalog,
+  mergePersonalities,
+  messageID,
+  movedOf,
+  nameAgents,
+  nameWorktreeBranch,
+  namedAgents,
+  namesHash,
+  namesIn,
+  newKey,
+  newPairing,
+  newSigningSeed,
+  newerVersion,
+  nextWake,
+  noLongerNeeded,
+  noteDocsChanged,
+  noteLauncher,
+  noteOlderMacs,
+  noteSignIn,
+  noticeFor,
+  noticeJSON,
+  openMail,
+  openOneWay,
+  ownAgents,
+  ownDoc,
+  ownRefreshed,
+  ownSign,
+  ownsSettings,
+  pairPhone,
+  pairingLink,
+  peerMail,
+  peerOf,
+  peersOf,
+  personalitiesDocument,
+  phoneSeenLately,
+  pieces,
+  projectNameOf,
+  publicOf,
+  pushTo,
+  readAsks,
+  readDoc,
+  readFrame,
+  readKit,
+  readLink,
+  readPeerAgents,
+  readPersonalities,
+  readProjects,
+  readRelay,
+  readRemovedWorktrees,
+  readSettings,
+  readWakes,
+  readWords,
+  readWorktrees,
+  receiveDocs,
+  receiveMail,
+  reconnectEverywhere,
+  refreshBotsKeys,
+  refreshOwn,
+  refreshedRules,
+  relayHello,
+  relayPush,
+  relaySend,
+  removeAsMac,
+  removePhones,
+  repeatText,
+  retellBots,
+  runMacLink,
+  runMacPeers,
+  sealOneWay,
+  searchPlugins,
+  seatPayloads,
+  seatPeers,
+  selftest,
+  sendOutbox,
+  sendWakes,
+  serveBox,
+  setBoxKey,
+  setMacPeers,
+  settleBot,
+  settleHeld,
+  showsAll,
+  signDoc,
+  signInReturn,
+  signingKeyOf,
+  skillAbout,
+  skillName,
+  skillTrashEntry,
+  skillsIn,
+  socketAllowed,
+  startUpdate,
+  steering,
+  stopMacLink,
+  stopMacPeers,
+  takeAgents,
+  takeDoc,
+  takeLegacyPeers,
+  takeLetter,
+  takeMacDocuments,
+  takePersonalities,
+  takePersonalitiesDocument,
+  takePhones,
+  takeSeat,
+  takeSeatLetters,
+  tellSeatPeers,
+  tellWorktree,
+  toolRun,
+  translateSettings,
+  update,
+  updateLink,
+  updateNight,
+  updateStatus,
+  updatesBlocked,
+  verifyBoxes,
+  versionOrder,
+  wakeFolder,
+  wakeOf,
+  watchAsks,
+  watchBox,
+  watchEvents,
+  watchSeats,
+  worktreesWhere,
+  writeAgents,
+  writeLink
 };
-// Built from Packages/Box/src f062d06bb19769b3e0845e8a160ecc0f0d853a5e810f7437268dde5bfd5c7535

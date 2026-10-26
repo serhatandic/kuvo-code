@@ -7,7 +7,7 @@
       "ESNext"
     ],
     "types": [
-      "bun"
+      "node"
     ],
     "strict": true,
     "noEmit": true,
