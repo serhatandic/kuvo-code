@@ -6201,7 +6201,6 @@ const ownPhones = link => ({
 // kind from. No clock decides anything: boxes tell each other what they have as they meet
 // (`have`), what changed as it changes (`give`), and what they have again with their agents.
 
-
 // COMPAT(beta.1 peers-list): a Mac that gave no signing key signs no documents. Goes when 0.8.0 ships.
 // The signing key a Mac of this box's gave in setup, over SSH; null for one that gave none yet (a
 // Mac with Kuvo Code 0.8.0-beta.1, PROTOCOL.md "For released Macs").

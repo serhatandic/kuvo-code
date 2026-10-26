@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { processRuns, promptedFolders } from "../src/shared/platform"
 
-// Where macOS and Linux differ, each side held whichever system runs this: a box tells its own
+// Where macOS and Linux differ, each side tested on whichever system runs this: a box tells its own
 // programs from whatever took their process's number after a crash (Linux by /proc, a stand-in
 // folder here; macOS, without one, by their being alive), and leaves the folders a Mac asks you
 // about out of what it looks into.
@@ -31,6 +31,7 @@ test("Linux: a process is the program its command line names, and no other", () 
   // Its number taken by something else after a crash.
   expect(processRuns(process.pid, "kuvo-browser", folder)).toBe(false)
   // Alive (this test's parent), but not listed there.
+  expect(process.ppid).toBeGreaterThan(1)
   expect(processRuns(process.ppid, "kuvo-agents", folder)).toBe(false)
 })
 

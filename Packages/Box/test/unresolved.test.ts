@@ -8,15 +8,25 @@ import { join } from "node:path"
 // for those errors alone. It goes once main.ts is checked as the rest is.
 
 const link = join(import.meta.dir, "../src/link")
+// Can't find a name (2304, 2552), a module's export (2305, 2614, 2724), or the value of a shorthand
+// property (18004); used before it's declared (2448).
+const UNRESOLVED = /error TS(2304|2305|2448|2552|2614|2724|18004)\b/
 
 test("everything main.ts uses is declared there or imported", () => {
+  const source = readFileSync(join(link, "main.ts"), "utf8")
+  expect(source.startsWith("// @ts-nocheck\n")).toBe(true)
   const copy = join(link, ".unresolved-main.ts")
-  writeFileSync(copy, readFileSync(join(link, "main.ts"), "utf8").replace(/^\/\/ @ts-nocheck\n/, "//\n"))
+  writeFileSync(copy, "//" + source.slice("// @ts-nocheck".length))
   try {
-    const tsc = Bun.spawnSync([join(import.meta.dir, "../node_modules/.bin/tsc"), "--noEmit", "--skipLibCheck", "--target", "ESNext", "--module", "ESNext",
-      "--moduleResolution", "bundler", "--types", "node", "--esModuleInterop", copy])
-    const unresolved = tsc.stdout.toString().split("\n").filter(line => /error TS(2304|2305|2552|2614|2724)/.test(line))
-    expect(unresolved).toEqual([])
+    // Its own runtime runs tsc, so it needs no node on PATH; no DOM, whose globals (`name`,
+    // `status`, `origin`…) would stand in for names that went.
+    const tsc = Bun.spawnSync([process.execPath, join(import.meta.dir, "../node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck",
+      "--target", "ESNext", "--lib", "ESNext", "--module", "ESNext", "--moduleResolution", "bundler", "--types", "node", "--esModuleInterop", copy])
+    const output = tsc.stdout.toString()
+    // It ran, and found what an unchecked file always has: else nothing here would show.
+    expect(tsc.exitCode).toBe(2)
+    expect(output).toContain("error TS")
+    expect(output.split("\n").filter(line => UNRESOLVED.test(line))).toEqual([])
   } finally {
     rmSync(copy, { force: true })
   }

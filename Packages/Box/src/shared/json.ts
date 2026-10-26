@@ -11,4 +11,4 @@ export function sortedJSON(value: unknown): string {
 }
 
 /** A JSON object (not an array, not null): what a record read from a file or a peer has to be. */
-export const isObject = (value: unknown): value is Record<string, any> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);

@@ -55,7 +55,7 @@ export function signDoc(seed: string, kind: DocKind, n: number, body: object): S
 // (`h`, its bytes' hash, as digests name it), or null.
 export function readDoc(envelope: unknown): Doc | null {
   if (!isObject(envelope) || typeof envelope.d !== "string" || typeof envelope.s !== "string" || envelope.d.length > Math.ceil(MOST_DOC * 4 / 3) + 4) return null;
-  let bytes, doc;
+  let bytes: Buffer, doc: unknown;
   try {
     bytes = Buffer.from(envelope.d, "base64url");
     if (bytes.length > MOST_DOC || bytes.toString("base64url") !== envelope.d) return null;
@@ -64,17 +64,18 @@ export function readDoc(envelope: unknown): Doc | null {
     return null;
   }
   if (!isObject(doc) || doc.v !== 1 || !(DOC_KINDS as readonly unknown[]).includes(doc.kind) || typeof doc.origin !== "string" || !SIGN.test(doc.origin)
-    || !Number.isSafeInteger(doc.n) || doc.n < 1 || !isObject(doc.body)) return null;
+    || !Number.isSafeInteger(doc.n) || (doc.n as number) < 1 || !isObject(doc.body)) return null;
   try {
     const signature = Buffer.from(envelope.s, "base64url");
     if (signature.length !== 64 || !crypto.verify(null, Buffer.concat([DOC_SIGNED, bytes]), edPublic(doc.origin), signature)) return null;
   } catch {
     return null;
   }
-  return { origin: doc.origin, kind: doc.kind, n: doc.n, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
+  return { origin: doc.origin, kind: doc.kind as DocKind, n: doc.n as number, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
 }
 
-// One this box keeps (`link.docs`, checked as it came), read again; remembered, as it's read often.
+// One this box keeps (`link.docs`, checked as it came, so trusted as it reads), read again;
+// remembered, as it's read often.
 const heldDocs = new Map<string, Doc>();
 export function held(envelope: SignedDoc | null | undefined): Doc | null {
   if (typeof envelope?.d !== "string") return null;
