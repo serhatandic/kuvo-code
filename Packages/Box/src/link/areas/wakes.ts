@@ -7,14 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { oneLine } from "../../shared/text";
 import { sleep } from "../../shared/wait";
-import { MOVING, isMoving } from "../bots/here";
+import { isMoving, MOVING } from "../bots/here";
 import { engineGet } from "../engine/client";
 import { messageID } from "../engine/sessions";
-import { textOf, listOf } from "../files";
 import { listOf, textOf } from "../files";
 import { watchFolders } from "../follow";
-import { BOTS, RUN } from "../home";
-import { SESSION_WAKES, WAKE_COMMAND } from "../home";
+import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
 
 // What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
 // the folders the app keeps on the machine, so a phone has them with the Mac closed: a bot's

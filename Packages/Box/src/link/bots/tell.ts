@@ -14,13 +14,11 @@ import { isObject } from "../../shared/json";
 import { ownsSettings, readSettings } from "../areas/config";
 import { call } from "../engine/client";
 import { listOf, textOf } from "../files";
-import { BOTS, HERE, IS_MAC } from "../home";
-import { WAKE_COMMAND } from "../home";
+import { BOTS, HERE, IS_MAC, WAKE_COMMAND } from "../home";
 import { botPersonalities } from "../personalities/library";
-import { botHere, isMoving } from "./here";
-import { noteBotsChanged } from "./here";
+import { botHere, isMoving, noteBotsChanged } from "./here";
 import { jobOf } from "./jobs";
-import { NO_KIT, botInstructions, readKit, readMacKit, zoneOf } from "./kit";
+import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
 import { listBots } from "./list";
 
 const TOLD_FILE = "told.json";

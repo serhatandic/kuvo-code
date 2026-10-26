@@ -3,14 +3,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { MOVING, botHere, isModel, isMoving } from "../bots/here";
+import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
 import { call, engineGet } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
-import { BOTS, HERE } from "../home";
-import { SESSION_WAKES } from "../home";
+import { BOTS, HERE, SESSION_WAKES } from "../home";
 import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 

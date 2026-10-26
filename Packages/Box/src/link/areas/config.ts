@@ -9,9 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, sameJSON, sortedJSON } from "../../shared/json";
 import { locked, writePrivate } from "../files";
-import { BOX, CONFIG_LOCK, ENGINE_CONFIG, IS_MAC } from "../home";
-import { shownRoot } from "../home";
-import { APP_KEY_FILES } from "../home";
+import { APP_KEY_FILES, BOX, CONFIG_LOCK, ENGINE_CONFIG, IS_MAC, shownRoot } from "../home";
 
 export const CONFIG_FILE = IS_MAC ? path.join(ENGINE_CONFIG, "opencode", "opencode.json") : path.join(BOX, "opencode.json");
 const OWN_MARK = IS_MAC ? null : CONFIG_FILE;

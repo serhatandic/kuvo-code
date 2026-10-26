@@ -10,10 +10,9 @@ import { DESCRIPTION } from "../areas/wakes";
 import { call } from "../engine/client";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
-import { isModel } from "./here";
-import { noteBotsChanged } from "./here";
+import { isModel, noteBotsChanged } from "./here";
 import { firstMessageOf } from "./jobs";
-import { NO_KIT, botInstructions, readKit, runsWithAgents } from "./kit";
+import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
 

@@ -5,9 +5,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { textOf, listOf } from "../files";
-import { K } from "../home";
-import { ENGINE_CONFIG, IN_TEST_FOLDER } from "../home";
+import { listOf, textOf } from "../files";
+import { ENGINE_CONFIG, IN_TEST_FOLDER, K } from "../home";
 
 // Where its engine reads the skills you add: its settings folder's (its XDG_CONFIG_HOME), which is
 // in this box's folder on a machine, and the app's engine's on a Mac (KUVO_ENGINE_CONFIG), so a
