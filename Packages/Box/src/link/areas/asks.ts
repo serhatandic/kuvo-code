@@ -224,7 +224,9 @@ export async function watchAsks(
 // as a Mac's), and answered.
 export async function* asksRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, route, readEngine, info, json } = context;
-  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  // The list is read with GET or HEAD, as every box's lists are; its events with GET.
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && !(method === "HEAD" && route === "kuvo/asks")) return yield* json(405, {});
   const read = async () => ({
     asks: await Promise.all(readAsks().map(async ask => {
       const { ask: shown, asker } = await inConversation(ask, readEngine);

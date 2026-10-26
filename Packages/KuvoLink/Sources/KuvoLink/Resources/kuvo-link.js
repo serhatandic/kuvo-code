@@ -302,7 +302,8 @@ async function watchAsks(tell, { signal, every = 2000, read = readAsks, answered
 }
 async function* asksRoute(context) {
   const { request, signal, route, readEngine, info, json } = context;
-  if (request.method.toUpperCase() !== "GET")
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && !(method === "HEAD" && route === "kuvo/asks"))
     return yield* json(405, {});
   const read = async () => ({
     asks: await Promise.all(readAsks().map(async (ask) => {
@@ -8153,7 +8154,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.72";
+var BRIDGE_VERSION = "0.9.73";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

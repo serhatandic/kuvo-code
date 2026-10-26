@@ -1248,7 +1248,7 @@ when there's nothing to say), never with an empty body. A host serves:
   time they change (added, fired, canceled, paused), `{"sessions": [{session, wakes: [{id, due,
   note, every}], watches: [{letters, every, check, note}], paused}]}` with notes and checks whole,
   and only conversations that have any or are paused.
-- On a Mac, `kuvo/asks`: what agents ask you for while they browse, on the Mac or a machine: a
+- `kuvo/asks` (`GET` or `HEAD`): what agents ask you for while they browse (a box's own; a Mac's, its machines' too): a
   sign-in (the fields the page has, and the accounts Passwords keeps for the site, never
   their passwords), a one-time code, or a step only you can do. `kuvo/asks/events` is the same
   list as a response that doesn't end: a line of JSON now, and another each time it changes.

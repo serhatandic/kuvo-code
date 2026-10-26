@@ -35,6 +35,13 @@
       ]
     },
     {
+      "name": "what agents ask you for, read with GET or HEAD alike",
+      "steps": [
+        { "send": "GET kuvo/asks", "expect": { "status": 200, "whole": true, "json": { "asks": [] } } },
+        { "send": "HEAD kuvo/asks", "expect": { "status": 200, "whole": true, "json": { "asks": [] } } }
+      ]
+    },
+    {
       "name": "the phones paired here, none yet",
       "steps": [
         { "send": "GET kuvo/phones", "expect": { "status": 200, "whole": true, "json": { "phones": [] } } }
