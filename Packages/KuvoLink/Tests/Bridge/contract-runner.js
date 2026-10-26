@@ -391,6 +391,7 @@ function unshaped(shape, value, at = "body") {
   if (shape === "string" || shape === "number") return typeof value === shape ? null : `${at} should be a ${shape}, but is ${show(value)}`;
   if (shape === "bool") return typeof value === "boolean" ? null : `${at} should be true or false, but is ${show(value)}`;
   if (shape === "null") return value === null ? null : `${at} should be null, but is ${show(value)}`;
+  if (!isPlain(shape)) return `${at}: ${show(shape)} isn't a shape`;
   if ("literal" in shape) return value === shape.literal ? null : `${at} should be ${show(shape.literal)}, but is ${show(value)}`;
   if ("list" in shape) {
     if (!Array.isArray(value)) return `${at} should be a list, but is ${show(value)}`;
@@ -426,7 +427,7 @@ function unshaped(shape, value, at = "body") {
     const whys = shape.oneOf.map(each => unshaped(each, value, at));
     return whys.includes(null) ? null : `${at} is none of what it can be: ${whys.join("; ")}`;
   }
-  throw new Error(`not a shape: ${JSON.stringify(shape)}`);
+  return `${at}: ${show(shape)} isn't a shape`;
 }
 
 const routeOf = (pattern, method, route) => {
@@ -440,12 +441,14 @@ function offShape(method, requestPath, answer) {
   const route = requestPath.split("?")[0];
   if (shapes.passedOn.some(prefix => route.startsWith(prefix))) return null;
   const isJSON = answer.type.startsWith("application/json");
-  const known = shapes.routes.find(each => routeOf(each.route, method.toUpperCase(), route));
+  const verb = method.toUpperCase();
+  // A HEAD is held to its GET's shape, or has no body.
+  const known = shapes.routes.find(each => routeOf(each.route, verb, route)) ?? (verb === "HEAD" ? shapes.routes.find(each => routeOf(each.route, "GET", route)) : undefined);
   // A refusal says why in the one way all do, or in its route's own where it has one. A HEAD's
   // answer has no body.
   if (answer.status >= 400) return isJSON ? unshaped(known?.answers[answer.status] ?? shapes.error, answer.json, "the refusal") : null;
-  if (method.toUpperCase() === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in Packages/Box/src/shared/routes`;
-  if (!known) return `${method.toUpperCase()} ${route} has no shape in Packages/Box/src/shared/routes`;
+  if (verb === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in Packages/Box/src/shared/routes`;
+  if (!known) return `${verb} ${route} has no shape in Packages/Box/src/shared/routes`;
   const shape = known.answers[answer.status];
   if (shape === undefined) return `${known.route} has no shape for ${answer.status}`;
   if (shape === "bytes") return null;
@@ -550,6 +553,19 @@ export function contract({ box: as, root: folder, files }) {
     const { cases } = JSON.parse(read(vectors, "shapes/cases.json"));
     assert.ok(cases.length > 20);
     for (const each of cases) assert.equal(unshaped(each.shape, "value" in each ? each.value : undefined) === null, each.matches, JSON.stringify(each));
+  });
+
+  // And judge an answer by its route alike: which route it is, its status, a refusal, a HEAD.
+  test("both runners judge an answer by its route alike (Vectors/routes/shapes/routes.json)", () => {
+    const { cases } = JSON.parse(read(vectors, "shapes/routes.json"));
+    assert.ok(cases.length > 15);
+    for (const each of cases) {
+      const [method, requestPath] = each.send.split(" ");
+      let json;
+      try { json = JSON.parse(each.body); } catch {}
+      const why = offShape(method, requestPath, { status: each.status, type: each.type, text: each.body, json });
+      assert.equal(why === null, each.matches, `${JSON.stringify(each)}: ${why}`);
+    }
   });
 
   // The Mac's runner holds its matching to the same cases.

@@ -1,7 +1,7 @@
 // Skills (PROTOCOL.md, "Skills"): each box's own skills folder, its Recently Deleted, and GitHub's
 // collections, which a box reaches for every client.
 
-import { type Infer, bool, list, map, number, object, type RouteShape, string } from "../shape";
+import { bool, type Infer, list, map, NOTHING, number, object, type RouteShape, string } from "../shape";
 
 /** The skills folder: where its engine reads them, the folders in it by name (not hidden ones),
  * and those installed from GitHub, by folder, with the repository and folder there they came from. */
@@ -45,8 +45,8 @@ export type SkillCollection = Infer<typeof SKILL_COLLECTION>;
 export const SKILL_ROUTES: RouteShape[] = [
   { route: "GET kuvo/skills", answers: { 200: SKILLS } },
   { route: "GET kuvo/skills/:name", answers: { 200: SKILL_TEXT } },
-  { route: "PUT kuvo/skills/:name", answers: { 200: object({}) } },
-  { route: "DELETE kuvo/skills/:name", answers: { 200: object({}) } },
+  { route: "PUT kuvo/skills/:name", answers: { 200: NOTHING } },
+  { route: "DELETE kuvo/skills/:name", answers: { 200: NOTHING } },
   { route: "GET kuvo/skill-trash", answers: { 200: SKILL_TRASH } },
   { route: "POST kuvo/skill-trash/:id/restore", answers: { 200: SKILL_NAMED } },
   { route: "GET kuvo/skill-library", answers: { 200: SKILL_LIBRARY } },

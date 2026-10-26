@@ -2,10 +2,16 @@
 // made, changed, deleted, brought here from another computer and told what it is now, and its keys
 // of its own ("Bots' own keys").
 
-import { bool, type Infer, list, map, nullable, number, object, type RouteShape, string } from "../shape";
+import { bool, type Infer, list, map, NOTHING, nullable, number, object, type RouteShape, string, words } from "../shape";
 
 /** How a bot looks: its colour, shape and face, by their names (`kuvo/bots/templates`' `looks`). */
-export const LOOK = object({ color: string, shape: string, face: string });
+/** The colors, shapes and faces a bot can have: those the apps draw (bot-words.json's `looks`). */
+export const LOOKS = {
+  colors: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
+  shapes: ["round", "squircle", "pebble", "gem", "bloom"],
+  faces: ["calm", "happy", "sleepy", "wink", "curious", "bright"],
+} as const;
+export const LOOK = object({ color: words(...LOOKS.colors), shape: words(...LOOKS.shapes), face: words(...LOOKS.faces) });
 /** A model as a bot names it: its id, its provider, and the variant (effort) it runs at, if any. */
 export const MODEL = object({ id: string, providerID: string, "variant?": string });
 
@@ -87,14 +93,10 @@ export type BotKeys = Infer<typeof BOT_KEYS>;
 export type BotKeyValues = Infer<typeof BOT_KEY_VALUES>;
 export type BotKeyKept = Infer<typeof BOT_KEY_KEPT>;
 
-const NOTHING = object({});
-
 export const BOT_ROUTES: RouteShape[] = [
   { route: "GET kuvo/bots", answers: { 200: BOTS } },
-  { route: "HEAD kuvo/bots", answers: { 200: BOTS } },
   { route: "POST kuvo/bots", answers: { 201: MADE } },
   { route: "GET kuvo/bots/templates", answers: { 200: TEMPLATES } },
-  { route: "HEAD kuvo/bots/templates", answers: { 200: TEMPLATES } },
   { route: "POST kuvo/bots/retell", answers: { 200: NOTHING } },
   { route: "POST kuvo/bots/keys/refresh", answers: { 200: NOTHING } },
   { route: "PATCH kuvo/bots/:id", answers: { 200: CHANGED } },

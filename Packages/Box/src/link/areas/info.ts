@@ -3,29 +3,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { FEATURES, type Feature } from "../../shared/features";
+import { FEATURES } from "../../shared/features";
 import { processRuns as runs } from "../../shared/platform";
 import type { EngineRecord } from "../../shared/records";
+import type { MachineInfo } from "../../shared/routes/box";
 import { ENGINE_FILE, K, RUN } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { BRIDGE_VERSION } from "../version";
-
-/** What `kuvo/info` answers: this box, its bridge's and engine's versions, whether the engine runs
- * (and when it came up, in seconds since 1970) or is stopped on purpose, whether the coding agents'
- * bridge runs, its folder of chats, and its features; with what the handler adds (its name). */
-export interface BoxInfo {
-  kind: "machine";
-  bridge: string;
-  engine: string | null;
-  started: number | null;
-  running: boolean;
-  stopped: boolean;
-  agents: boolean;
-  chats: string;
-  features: readonly Feature[];
-  name?: string;
-  [more: string]: unknown;
-}
 
 export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { readEngine, bridge, info } = context;
@@ -44,6 +28,6 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
   const chats = path.join(K, "chats");
   try { fs.mkdirSync(chats, { recursive: true }); } catch {}
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info } satisfies BoxInfo)) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...(info as { name: string }) } satisfies MachineInfo)) };
   return;
 }

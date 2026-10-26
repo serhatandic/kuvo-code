@@ -2,7 +2,7 @@
 // your phones reach directly, and the usage panel's numbers. (Its other own routes, `kuvo/machines`,
 // `kuvo/mac` and `kuvo/claude-code`, have no scenario asking them yet.)
 
-import { any, bool, type Infer, list, literal, object, type RouteShape, string } from "../shape";
+import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
 
 /** What only a Mac answers, besides what every box does (`FEATURES`): `usage` while it has the
  * usage panel (PROTOCOL.md, "Features"). */
@@ -19,8 +19,8 @@ export type Hosts = Infer<typeof HOSTS>;
 
 export const MAC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/hosts", answers: { 200: HOSTS } },
-  { route: "DELETE kuvo/hosts/:machine", answers: { 200: object({}) } },
+  { route: "DELETE kuvo/hosts/:machine", answers: { 200: NOTHING } },
   // The usage panel's numbers, as UsageKit gives them to a phone: its own record.
   { route: "GET kuvo/usage", answers: { 200: any } },
-  { route: "POST kuvo/usage/refresh", answers: { 200: object({}) } },
+  { route: "POST kuvo/usage/refresh", answers: { 200: NOTHING } },
 ];

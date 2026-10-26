@@ -53,47 +53,6 @@
    }
   },
   {
-   "route": "HEAD kuvo/asks",
-   "answers": {
-    "200": {
-     "object": {
-      "asks": {
-       "list": {
-        "object": {
-         "id": "string",
-         "kind": {
-          "oneOf": [
-           {
-            "literal": "signIn"
-           },
-           {
-            "literal": "code"
-           },
-           {
-            "literal": "action"
-           }
-          ]
-         },
-         "host": "string",
-         "machine?": "string",
-         "session?": "string",
-         "asker?": "string",
-         "username?": "bool",
-         "password?": "bool",
-         "saved?": {
-          "list": "string"
-         },
-         "offersToSave?": "bool",
-         "prompt?": "string",
-         "instruction?": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  {
    "route": "POST kuvo/asks/:id",
    "answers": {
     "200": {
@@ -114,58 +73,81 @@
          "name": "string",
          "look": {
           "object": {
-           "color": "string",
-           "shape": "string",
-           "face": "string"
-          }
-         },
-         "machine?": "string",
-         "job": "string",
-         "jobDetails": "string",
-         "paused": "bool",
-         "wakes?": "number",
-         "watching": "number",
-         "agents": "bool",
-         "personality?": "string",
-         "model?": {
-          "object": {
-           "id": "string",
-           "providerID": "string",
-           "variant?": "string"
-          }
-         },
-         "folder": "string",
-         "project?": "string",
-         "created?": "string",
-         "memoryJob?": {
-          "object": {
-           "line": "string",
-           "section": "string"
-          }
-         }
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  {
-   "route": "HEAD kuvo/bots",
-   "answers": {
-    "200": {
-     "object": {
-      "bots": {
-       "list": {
-        "object": {
-         "id": "string",
-         "session": "string",
-         "name": "string",
-         "look": {
-          "object": {
-           "color": "string",
-           "shape": "string",
-           "face": "string"
+           "color": {
+            "oneOf": [
+             {
+              "literal": "mint"
+             },
+             {
+              "literal": "sky"
+             },
+             {
+              "literal": "indigo"
+             },
+             {
+              "literal": "violet"
+             },
+             {
+              "literal": "pink"
+             },
+             {
+              "literal": "coral"
+             },
+             {
+              "literal": "orange"
+             },
+             {
+              "literal": "amber"
+             },
+             {
+              "literal": "lime"
+             },
+             {
+              "literal": "graphite"
+             }
+            ]
+           },
+           "shape": {
+            "oneOf": [
+             {
+              "literal": "round"
+             },
+             {
+              "literal": "squircle"
+             },
+             {
+              "literal": "pebble"
+             },
+             {
+              "literal": "gem"
+             },
+             {
+              "literal": "bloom"
+             }
+            ]
+           },
+           "face": {
+            "oneOf": [
+             {
+              "literal": "calm"
+             },
+             {
+              "literal": "happy"
+             },
+             {
+              "literal": "sleepy"
+             },
+             {
+              "literal": "wink"
+             },
+             {
+              "literal": "curious"
+             },
+             {
+              "literal": "bright"
+             }
+            ]
+           }
           }
          },
          "machine?": "string",
@@ -211,9 +193,81 @@
         "name": "string",
         "look": {
          "object": {
-          "color": "string",
-          "shape": "string",
-          "face": "string"
+          "color": {
+           "oneOf": [
+            {
+             "literal": "mint"
+            },
+            {
+             "literal": "sky"
+            },
+            {
+             "literal": "indigo"
+            },
+            {
+             "literal": "violet"
+            },
+            {
+             "literal": "pink"
+            },
+            {
+             "literal": "coral"
+            },
+            {
+             "literal": "orange"
+            },
+            {
+             "literal": "amber"
+            },
+            {
+             "literal": "lime"
+            },
+            {
+             "literal": "graphite"
+            }
+           ]
+          },
+          "shape": {
+           "oneOf": [
+            {
+             "literal": "round"
+            },
+            {
+             "literal": "squircle"
+            },
+            {
+             "literal": "pebble"
+            },
+            {
+             "literal": "gem"
+            },
+            {
+             "literal": "bloom"
+            }
+           ]
+          },
+          "face": {
+           "oneOf": [
+            {
+             "literal": "calm"
+            },
+            {
+             "literal": "happy"
+            },
+            {
+             "literal": "sleepy"
+            },
+            {
+             "literal": "wink"
+            },
+            {
+             "literal": "curious"
+            },
+            {
+             "literal": "bright"
+            }
+           ]
+          }
          }
         },
         "machine?": "string",
@@ -266,83 +320,81 @@
          "instructions": "string",
          "look": {
           "object": {
-           "color": "string",
-           "shape": "string",
-           "face": "string"
-          }
-         },
-         "personality?": "string",
-         "wantsProject": "bool"
-        }
-       }
-      },
-      "personalities": {
-       "list": {
-        "object": {
-         "id": "string",
-         "name": "string",
-         "description": "string",
-         "custom?": "bool"
-        }
-       }
-      },
-      "looks": {
-       "object": {
-        "colors": {
-         "list": "string"
-        },
-        "shapes": {
-         "list": "string"
-        },
-        "faces": {
-         "list": "string"
-        }
-       }
-      },
-      "startingModel": {
-       "map": {
-        "oneOf": [
-         {
-          "object": {
-           "id": "string",
-           "providerID": "string",
-           "variant?": "string"
-          }
-         },
-         "null"
-        ]
-       }
-      },
-      "projects": {
-       "list": {
-        "object": {
-         "directory": "string",
-         "name": "string",
-         "machine?": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  {
-   "route": "HEAD kuvo/bots/templates",
-   "answers": {
-    "200": {
-     "object": {
-      "templates": {
-       "list": {
-        "object": {
-         "id": "string",
-         "name": "string",
-         "job": "string",
-         "instructions": "string",
-         "look": {
-          "object": {
-           "color": "string",
-           "shape": "string",
-           "face": "string"
+           "color": {
+            "oneOf": [
+             {
+              "literal": "mint"
+             },
+             {
+              "literal": "sky"
+             },
+             {
+              "literal": "indigo"
+             },
+             {
+              "literal": "violet"
+             },
+             {
+              "literal": "pink"
+             },
+             {
+              "literal": "coral"
+             },
+             {
+              "literal": "orange"
+             },
+             {
+              "literal": "amber"
+             },
+             {
+              "literal": "lime"
+             },
+             {
+              "literal": "graphite"
+             }
+            ]
+           },
+           "shape": {
+            "oneOf": [
+             {
+              "literal": "round"
+             },
+             {
+              "literal": "squircle"
+             },
+             {
+              "literal": "pebble"
+             },
+             {
+              "literal": "gem"
+             },
+             {
+              "literal": "bloom"
+             }
+            ]
+           },
+           "face": {
+            "oneOf": [
+             {
+              "literal": "calm"
+             },
+             {
+              "literal": "happy"
+             },
+             {
+              "literal": "sleepy"
+             },
+             {
+              "literal": "wink"
+             },
+             {
+              "literal": "curious"
+             },
+             {
+              "literal": "bright"
+             }
+            ]
+           }
           }
          },
          "personality?": "string",
@@ -430,9 +482,81 @@
           "name": "string",
           "look": {
            "object": {
-            "color": "string",
-            "shape": "string",
-            "face": "string"
+            "color": {
+             "oneOf": [
+              {
+               "literal": "mint"
+              },
+              {
+               "literal": "sky"
+              },
+              {
+               "literal": "indigo"
+              },
+              {
+               "literal": "violet"
+              },
+              {
+               "literal": "pink"
+              },
+              {
+               "literal": "coral"
+              },
+              {
+               "literal": "orange"
+              },
+              {
+               "literal": "amber"
+              },
+              {
+               "literal": "lime"
+              },
+              {
+               "literal": "graphite"
+              }
+             ]
+            },
+            "shape": {
+             "oneOf": [
+              {
+               "literal": "round"
+              },
+              {
+               "literal": "squircle"
+              },
+              {
+               "literal": "pebble"
+              },
+              {
+               "literal": "gem"
+              },
+              {
+               "literal": "bloom"
+              }
+             ]
+            },
+            "face": {
+             "oneOf": [
+              {
+               "literal": "calm"
+              },
+              {
+               "literal": "happy"
+              },
+              {
+               "literal": "sleepy"
+              },
+              {
+               "literal": "wink"
+              },
+              {
+               "literal": "curious"
+              },
+              {
+               "literal": "bright"
+              }
+             ]
+            }
            }
           },
           "machine?": "string",
@@ -490,9 +614,81 @@
           "name": "string",
           "look": {
            "object": {
-            "color": "string",
-            "shape": "string",
-            "face": "string"
+            "color": {
+             "oneOf": [
+              {
+               "literal": "mint"
+              },
+              {
+               "literal": "sky"
+              },
+              {
+               "literal": "indigo"
+              },
+              {
+               "literal": "violet"
+              },
+              {
+               "literal": "pink"
+              },
+              {
+               "literal": "coral"
+              },
+              {
+               "literal": "orange"
+              },
+              {
+               "literal": "amber"
+              },
+              {
+               "literal": "lime"
+              },
+              {
+               "literal": "graphite"
+              }
+             ]
+            },
+            "shape": {
+             "oneOf": [
+              {
+               "literal": "round"
+              },
+              {
+               "literal": "squircle"
+              },
+              {
+               "literal": "pebble"
+              },
+              {
+               "literal": "gem"
+              },
+              {
+               "literal": "bloom"
+              }
+             ]
+            },
+            "face": {
+             "oneOf": [
+              {
+               "literal": "calm"
+              },
+              {
+               "literal": "happy"
+              },
+              {
+               "literal": "sleepy"
+              },
+              {
+               "literal": "wink"
+              },
+              {
+               "literal": "curious"
+              },
+              {
+               "literal": "bright"
+              }
+             ]
+            }
            }
           },
           "machine?": "string",
@@ -602,211 +798,378 @@
    "route": "GET kuvo/info",
    "answers": {
     "200": {
-     "object": {
-      "kind": {
-       "oneOf": [
-        {
+     "oneOf": [
+      {
+       "object": {
+        "kind": {
          "literal": "mac"
         },
-        {
-         "literal": "machine"
-        }
-       ]
-      },
-      "name": "string",
-      "engine": {
-       "oneOf": [
-        "string",
-        "null"
-       ]
-      },
-      "app?": "string",
-      "bridge?": "string",
-      "features": {
-       "list": {
-        "oneOf": [
-         {
-          "literal": "accounts.credentials"
-         },
-         {
-          "literal": "accounts.ended"
-         },
-         {
-          "literal": "agents"
-         },
-         {
-          "literal": "asks"
-         },
-         {
-          "literal": "attention"
-         },
-         {
-          "literal": "bots"
-         },
-         {
-          "literal": "bots.edit"
-         },
-         {
-          "literal": "bots.keys"
-         },
-         {
-          "literal": "bots.make"
-         },
-         {
-          "literal": "btw"
-         },
-         {
-          "literal": "config"
-         },
-         {
-          "literal": "config.apply"
-         },
-         {
-          "literal": "engine.restart"
-         },
-         {
-          "literal": "engine.start"
-         },
-         {
-          "literal": "file"
-         },
-         {
-          "literal": "folders"
-         },
-         {
-          "literal": "goals"
-         },
-         {
-          "literal": "groups"
-         },
-         {
-          "literal": "groups.delete"
-         },
-         {
-          "literal": "groups.edit"
-         },
-         {
-          "literal": "groups.joinable"
-         },
-         {
-          "literal": "groups.make"
-         },
-         {
-          "literal": "groups.seats"
-         },
-         {
-          "literal": "handoff"
-         },
-         {
-          "literal": "integrations"
-         },
-         {
-          "literal": "keys"
-         },
-         {
-          "literal": "mcp.catalog"
-         },
-         {
-          "literal": "named"
-         },
-         {
-          "literal": "personalities"
-         },
-         {
-          "literal": "plugins.search"
-         },
-         {
-          "literal": "personalities.events"
-         },
-         {
-          "literal": "phones"
-         },
-         {
-          "literal": "phones.pair"
-         },
-         {
-          "literal": "projects"
-         },
-         {
-          "literal": "reviews"
-         },
-         {
-          "literal": "sessions.agents"
-         },
-         {
-          "literal": "shell.stop"
-         },
-         {
-          "literal": "sign-in.return"
-         },
-         {
-          "literal": "skills"
-         },
-         {
-          "literal": "skills.trash"
-         },
-         {
-          "literal": "update"
-         },
-         {
-          "literal": "wakes"
-         },
-         {
-          "literal": "wakes.edit"
-         },
-         {
-          "literal": "wakes.events"
-         },
-         {
-          "literal": "worktrees"
-         },
-         {
-          "literal": "worktrees.events"
-         },
-         {
-          "literal": "worktrees.where"
-         },
-         {
-          "literal": "bots.events"
-         },
-         {
-          "literal": "bots.job"
-         },
-         {
-          "literal": "accounts.ended"
-         },
-         {
-          "literal": "claude-code"
-         },
-         {
-          "literal": "hosts"
-         },
-         {
-          "literal": "mac"
-         },
-         {
-          "literal": "machines"
-         },
-         {
-          "literal": "usage"
+        "name": "string",
+        "app": "string",
+        "engine": "string",
+        "features": {
+         "list": {
+          "oneOf": [
+           {
+            "literal": "accounts.credentials"
+           },
+           {
+            "literal": "accounts.ended"
+           },
+           {
+            "literal": "agents"
+           },
+           {
+            "literal": "asks"
+           },
+           {
+            "literal": "attention"
+           },
+           {
+            "literal": "bots"
+           },
+           {
+            "literal": "bots.edit"
+           },
+           {
+            "literal": "bots.keys"
+           },
+           {
+            "literal": "bots.make"
+           },
+           {
+            "literal": "btw"
+           },
+           {
+            "literal": "config"
+           },
+           {
+            "literal": "config.apply"
+           },
+           {
+            "literal": "engine.restart"
+           },
+           {
+            "literal": "engine.start"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "folders"
+           },
+           {
+            "literal": "goals"
+           },
+           {
+            "literal": "groups"
+           },
+           {
+            "literal": "groups.delete"
+           },
+           {
+            "literal": "groups.edit"
+           },
+           {
+            "literal": "groups.joinable"
+           },
+           {
+            "literal": "groups.make"
+           },
+           {
+            "literal": "groups.seats"
+           },
+           {
+            "literal": "handoff"
+           },
+           {
+            "literal": "integrations"
+           },
+           {
+            "literal": "keys"
+           },
+           {
+            "literal": "mcp.catalog"
+           },
+           {
+            "literal": "named"
+           },
+           {
+            "literal": "personalities"
+           },
+           {
+            "literal": "plugins.search"
+           },
+           {
+            "literal": "personalities.events"
+           },
+           {
+            "literal": "phones"
+           },
+           {
+            "literal": "phones.pair"
+           },
+           {
+            "literal": "projects"
+           },
+           {
+            "literal": "reviews"
+           },
+           {
+            "literal": "sessions.agents"
+           },
+           {
+            "literal": "shell.stop"
+           },
+           {
+            "literal": "sign-in.return"
+           },
+           {
+            "literal": "skills"
+           },
+           {
+            "literal": "skills.trash"
+           },
+           {
+            "literal": "update"
+           },
+           {
+            "literal": "wakes"
+           },
+           {
+            "literal": "wakes.edit"
+           },
+           {
+            "literal": "wakes.events"
+           },
+           {
+            "literal": "worktrees"
+           },
+           {
+            "literal": "worktrees.events"
+           },
+           {
+            "literal": "worktrees.where"
+           },
+           {
+            "literal": "bots.events"
+           },
+           {
+            "literal": "bots.job"
+           },
+           {
+            "literal": "accounts.ended"
+           },
+           {
+            "literal": "claude-code"
+           },
+           {
+            "literal": "hosts"
+           },
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machines"
+           },
+           {
+            "literal": "usage"
+           }
+          ]
          }
-        ]
+        },
+        "agents": "bool",
+        "started": {
+         "oneOf": [
+          "number",
+          "null"
+         ]
+        },
+        "chats": "string",
+        "integrations": {
+         "map": "string"
+        }
        }
       },
-      "agents": "bool",
-      "started": {
-       "oneOf": [
-        "number",
-        "null"
-       ]
-      },
-      "chats": "string",
-      "running?": "bool",
-      "stopped?": "bool",
-      "integrations?": {
-       "map": "string"
+      {
+       "object": {
+        "kind": {
+         "literal": "machine"
+        },
+        "name": "string",
+        "bridge": "string",
+        "engine": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "features": {
+         "list": {
+          "oneOf": [
+           {
+            "literal": "accounts.credentials"
+           },
+           {
+            "literal": "accounts.ended"
+           },
+           {
+            "literal": "agents"
+           },
+           {
+            "literal": "asks"
+           },
+           {
+            "literal": "attention"
+           },
+           {
+            "literal": "bots"
+           },
+           {
+            "literal": "bots.edit"
+           },
+           {
+            "literal": "bots.keys"
+           },
+           {
+            "literal": "bots.make"
+           },
+           {
+            "literal": "btw"
+           },
+           {
+            "literal": "config"
+           },
+           {
+            "literal": "config.apply"
+           },
+           {
+            "literal": "engine.restart"
+           },
+           {
+            "literal": "engine.start"
+           },
+           {
+            "literal": "file"
+           },
+           {
+            "literal": "folders"
+           },
+           {
+            "literal": "goals"
+           },
+           {
+            "literal": "groups"
+           },
+           {
+            "literal": "groups.delete"
+           },
+           {
+            "literal": "groups.edit"
+           },
+           {
+            "literal": "groups.joinable"
+           },
+           {
+            "literal": "groups.make"
+           },
+           {
+            "literal": "groups.seats"
+           },
+           {
+            "literal": "handoff"
+           },
+           {
+            "literal": "integrations"
+           },
+           {
+            "literal": "keys"
+           },
+           {
+            "literal": "mcp.catalog"
+           },
+           {
+            "literal": "named"
+           },
+           {
+            "literal": "personalities"
+           },
+           {
+            "literal": "plugins.search"
+           },
+           {
+            "literal": "personalities.events"
+           },
+           {
+            "literal": "phones"
+           },
+           {
+            "literal": "phones.pair"
+           },
+           {
+            "literal": "projects"
+           },
+           {
+            "literal": "reviews"
+           },
+           {
+            "literal": "sessions.agents"
+           },
+           {
+            "literal": "shell.stop"
+           },
+           {
+            "literal": "sign-in.return"
+           },
+           {
+            "literal": "skills"
+           },
+           {
+            "literal": "skills.trash"
+           },
+           {
+            "literal": "update"
+           },
+           {
+            "literal": "wakes"
+           },
+           {
+            "literal": "wakes.edit"
+           },
+           {
+            "literal": "wakes.events"
+           },
+           {
+            "literal": "worktrees"
+           },
+           {
+            "literal": "worktrees.events"
+           },
+           {
+            "literal": "worktrees.where"
+           },
+           {
+            "literal": "bots.events"
+           },
+           {
+            "literal": "bots.job"
+           }
+          ]
+         }
+        },
+        "agents": "bool",
+        "started": {
+         "oneOf": [
+          "number",
+          "null"
+         ]
+        },
+        "chats": "string",
+        "running": "bool",
+        "stopped": "bool"
+       }
       }
-     }
+     ]
     }
    }
   },
@@ -1080,17 +1443,6 @@
    }
   },
   {
-   "route": "HEAD kuvo/attention",
-   "answers": {
-    "200": {
-     "object": {
-      "inUse": "bool",
-      "held": "number"
-     }
-    }
-   }
-  },
-  {
    "route": "POST kuvo/attention",
    "answers": {
     "200": {
@@ -1174,18 +1526,6 @@
    }
   },
   {
-   "route": "HEAD kuvo/accounts/ended",
-   "answers": {
-    "200": {
-     "object": {
-      "providers": {
-       "list": "string"
-      }
-     }
-    }
-   }
-  },
-  {
    "route": "POST kuvo/accounts/:provider/forget",
    "answers": {
     "200": {
@@ -1213,28 +1553,9 @@
    }
   },
   {
-   "route": "HEAD kuvo/accounts/credentials",
-   "answers": {
-    "200": {
-     "object": {
-      "credentials": {
-       "list": {
-        "object": {
-         "id": "string",
-         "integrationID": "string",
-         "label": "string",
-         "active": "bool"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  {
    "route": "POST kuvo/engine/:control",
    "answers": {
-    "200": {
+    "202": {
      "object": {}
     }
    }
@@ -1328,9 +1649,81 @@
             "name": "string",
             "look?": {
              "object": {
-              "color": "string",
-              "shape": "string",
-              "face": "string"
+              "color": {
+               "oneOf": [
+                {
+                 "literal": "mint"
+                },
+                {
+                 "literal": "sky"
+                },
+                {
+                 "literal": "indigo"
+                },
+                {
+                 "literal": "violet"
+                },
+                {
+                 "literal": "pink"
+                },
+                {
+                 "literal": "coral"
+                },
+                {
+                 "literal": "orange"
+                },
+                {
+                 "literal": "amber"
+                },
+                {
+                 "literal": "lime"
+                },
+                {
+                 "literal": "graphite"
+                }
+               ]
+              },
+              "shape": {
+               "oneOf": [
+                {
+                 "literal": "round"
+                },
+                {
+                 "literal": "squircle"
+                },
+                {
+                 "literal": "pebble"
+                },
+                {
+                 "literal": "gem"
+                },
+                {
+                 "literal": "bloom"
+                }
+               ]
+              },
+              "face": {
+               "oneOf": [
+                {
+                 "literal": "calm"
+                },
+                {
+                 "literal": "happy"
+                },
+                {
+                 "literal": "sleepy"
+                },
+                {
+                 "literal": "wink"
+                },
+                {
+                 "literal": "curious"
+                },
+                {
+                 "literal": "bright"
+                }
+               ]
+              }
              }
             },
             "session": "string",
@@ -1466,9 +1859,81 @@
              "name": "string",
              "look?": {
               "object": {
-               "color": "string",
-               "shape": "string",
-               "face": "string"
+               "color": {
+                "oneOf": [
+                 {
+                  "literal": "mint"
+                 },
+                 {
+                  "literal": "sky"
+                 },
+                 {
+                  "literal": "indigo"
+                 },
+                 {
+                  "literal": "violet"
+                 },
+                 {
+                  "literal": "pink"
+                 },
+                 {
+                  "literal": "coral"
+                 },
+                 {
+                  "literal": "orange"
+                 },
+                 {
+                  "literal": "amber"
+                 },
+                 {
+                  "literal": "lime"
+                 },
+                 {
+                  "literal": "graphite"
+                 }
+                ]
+               },
+               "shape": {
+                "oneOf": [
+                 {
+                  "literal": "round"
+                 },
+                 {
+                  "literal": "squircle"
+                 },
+                 {
+                  "literal": "pebble"
+                 },
+                 {
+                  "literal": "gem"
+                 },
+                 {
+                  "literal": "bloom"
+                 }
+                ]
+               },
+               "face": {
+                "oneOf": [
+                 {
+                  "literal": "calm"
+                 },
+                 {
+                  "literal": "happy"
+                 },
+                 {
+                  "literal": "sleepy"
+                 },
+                 {
+                  "literal": "wink"
+                 },
+                 {
+                  "literal": "curious"
+                 },
+                 {
+                  "literal": "bright"
+                 }
+                ]
+               }
               }
              },
              "session": "string",
@@ -1594,9 +2059,81 @@
          "name": "string",
          "look?": {
           "object": {
-           "color": "string",
-           "shape": "string",
-           "face": "string"
+           "color": {
+            "oneOf": [
+             {
+              "literal": "mint"
+             },
+             {
+              "literal": "sky"
+             },
+             {
+              "literal": "indigo"
+             },
+             {
+              "literal": "violet"
+             },
+             {
+              "literal": "pink"
+             },
+             {
+              "literal": "coral"
+             },
+             {
+              "literal": "orange"
+             },
+             {
+              "literal": "amber"
+             },
+             {
+              "literal": "lime"
+             },
+             {
+              "literal": "graphite"
+             }
+            ]
+           },
+           "shape": {
+            "oneOf": [
+             {
+              "literal": "round"
+             },
+             {
+              "literal": "squircle"
+             },
+             {
+              "literal": "pebble"
+             },
+             {
+              "literal": "gem"
+             },
+             {
+              "literal": "bloom"
+             }
+            ]
+           },
+           "face": {
+            "oneOf": [
+             {
+              "literal": "calm"
+             },
+             {
+              "literal": "happy"
+             },
+             {
+              "literal": "sleepy"
+             },
+             {
+              "literal": "wink"
+             },
+             {
+              "literal": "curious"
+             },
+             {
+              "literal": "bright"
+             }
+            ]
+           }
           }
          },
          "session": "string",
@@ -1752,9 +2289,81 @@
              "name": "string",
              "look?": {
               "object": {
-               "color": "string",
-               "shape": "string",
-               "face": "string"
+               "color": {
+                "oneOf": [
+                 {
+                  "literal": "mint"
+                 },
+                 {
+                  "literal": "sky"
+                 },
+                 {
+                  "literal": "indigo"
+                 },
+                 {
+                  "literal": "violet"
+                 },
+                 {
+                  "literal": "pink"
+                 },
+                 {
+                  "literal": "coral"
+                 },
+                 {
+                  "literal": "orange"
+                 },
+                 {
+                  "literal": "amber"
+                 },
+                 {
+                  "literal": "lime"
+                 },
+                 {
+                  "literal": "graphite"
+                 }
+                ]
+               },
+               "shape": {
+                "oneOf": [
+                 {
+                  "literal": "round"
+                 },
+                 {
+                  "literal": "squircle"
+                 },
+                 {
+                  "literal": "pebble"
+                 },
+                 {
+                  "literal": "gem"
+                 },
+                 {
+                  "literal": "bloom"
+                 }
+                ]
+               },
+               "face": {
+                "oneOf": [
+                 {
+                  "literal": "calm"
+                 },
+                 {
+                  "literal": "happy"
+                 },
+                 {
+                  "literal": "sleepy"
+                 },
+                 {
+                  "literal": "wink"
+                 },
+                 {
+                  "literal": "curious"
+                 },
+                 {
+                  "literal": "bright"
+                 }
+                ]
+               }
               }
              },
              "session": "string",
@@ -2354,13 +2963,17 @@
   {
    "route": "GET kuvo/config",
    "answers": {
-    "200": "any"
+    "200": {
+     "map": "any"
+    }
    }
   },
   {
    "route": "PATCH kuvo/config",
    "answers": {
-    "200": "any"
+    "200": {
+     "map": "any"
+    }
    }
   },
   {
@@ -2395,7 +3008,9 @@
        "list": "string"
       },
       "applied": "bool",
-      "settings": "any"
+      "settings": {
+       "map": "any"
+      }
      }
     }
    }
@@ -2437,7 +3052,9 @@
   {
    "route": "POST kuvo/mcp/catalog/:id",
    "answers": {
-    "200": "any"
+    "200": {
+     "map": "any"
+    }
    }
   },
   {
@@ -2652,55 +3269,7 @@
    }
   },
   {
-   "route": "HEAD kuvo/wakes",
-   "answers": {
-    "200": {
-     "object": {
-      "sessions": {
-       "list": {
-        "object": {
-         "session": "string",
-         "next?": "number",
-         "watching": "bool"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  {
    "route": "GET kuvo/wakes/:session",
-   "answers": {
-    "200": {
-     "object": {
-      "wakes": {
-       "list": {
-        "object": {
-         "id": "string",
-         "due": "number",
-         "note": "string",
-         "every?": "string"
-        }
-       }
-      },
-      "watches": {
-       "list": {
-        "object": {
-         "letters": "string",
-         "every": "string",
-         "check": "string",
-         "note": "string"
-        }
-       }
-      },
-      "paused": "bool"
-     }
-    }
-   }
-  },
-  {
-   "route": "HEAD kuvo/wakes/:session",
    "answers": {
     "200": {
      "object": {

@@ -59,6 +59,20 @@ import Testing
         }
     }
 
+    /// Judging an answer by its route as the machine's runner does (`routes/shapes/routes.json`).
+    @Test func bothRunnersJudgeAnswersByTheirRouteAlike() throws {
+        let file = try #require(RouteScenarios.folder).appending(path: "shapes/routes.json")
+        let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let cases = read["cases"] as? [[String: Any]] ?? []
+        #expect(cases.count > 15)
+        for each in cases {
+            let send = (each["send"] as? String ?? "").split(separator: " ", maxSplits: 1).map(String.init)
+            let why = RouteShapes.offShape(send.first ?? "", send.count > 1 ? send[1] : "", status: each["status"] as? Int ?? 0, type: each["type"] as? String ?? "",
+                                           body: Data((each["body"] as? String ?? "").utf8))
+            #expect((why == nil) == (each["matches"] as? Bool), "\(each): \(why ?? "")")
+        }
+    }
+
     /// The machine's runner sets its box up with what a Mac leaves on a machine (`routes/box`):
     /// these say it's still what this Mac's code writes. `scripts/route-vectors.sh` writes them again.
     @Test func theMachinesRunnerHasWhatAMacLeavesThere() throws {
@@ -789,7 +803,7 @@ nonisolated enum RouteShapes {
         }
         if let fields = shape["object"] as? [String: Any] {
             guard let values = value as? [String: Any] else { return "\(at) should be an object, but is \(shown(value))" }
-            let named = Dictionary(uniqueKeysWithValues: fields.map { name, each in (name.hasSuffix("?") ? String(name.dropLast()) : name, (shape: each, optional: name.hasSuffix("?"))) })
+            let named = Dictionary(fields.map { name, each in (name.hasSuffix("?") ? String(name.dropLast()) : name, (shape: each, optional: name.hasSuffix("?"))) }, uniquingKeysWith: { first, _ in first })
             for key in values.keys.sorted() where named[key] == nil { return "\(at).\(key) isn't a field it has" }
             for name in named.keys.sorted() {
                 let field = named[name]!
@@ -822,7 +836,8 @@ nonisolated enum RouteShapes {
         let isJSON = type.hasPrefix("application/json")
         let json = isJSON ? try? JSONSerialization.jsonObject(with: body, options: .fragmentsAllowed) : nil
         let verb = method.uppercased()
-        let found = routes.first { matches($0["route"] as? String ?? "", verb, route) }
+        // A HEAD is held to its GET's shape, or has no body.
+        let found = routes.first { matches($0["route"] as? String ?? "", verb, route) } ?? (verb == "HEAD" ? routes.first { matches($0["route"] as? String ?? "", "GET", route) } : nil)
         // A refusal says why in the one way all do, or in its route's own where it has one. A
         // HEAD's answer has no body.
         if status >= 400 { return isJSON ? unshaped((found?["answers"] as? [String: Any])?[String(status)] ?? file["error"] ?? NSNull(), json, at: "the refusal") : nil }

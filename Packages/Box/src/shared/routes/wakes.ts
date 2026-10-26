@@ -1,7 +1,7 @@
 // Wake-ups and watches (PROTOCOL.md, `kuvo/wakes`): a conversation's or a bot's, as the bar over
 // the Mac's composer shows them.
 
-import { type Infer, bool, list, number, object, type RouteShape, string } from "../shape";
+import { bool, type Infer, list, NOTHING, number, object, type RouteShape, string } from "../shape";
 
 /** A wake-up waiting: when it's due (seconds since 1970), what it says, and how often it comes
  * back (left out for one that doesn't). */
@@ -20,12 +20,10 @@ export type WakeList = Infer<typeof WAKE_LIST>;
 
 export const WAKE_ROUTES: RouteShape[] = [
   { route: "GET kuvo/wakes", answers: { 200: WAKE_LIST } },
-  { route: "HEAD kuvo/wakes", answers: { 200: WAKE_LIST } },
   { route: "GET kuvo/wakes/:session", answers: { 200: WAKES } },
-  { route: "HEAD kuvo/wakes/:session", answers: { 200: WAKES } },
   { route: "POST kuvo/wakes/:session", answers: { 200: WAKES } },
   { route: "POST kuvo/wakes/:session/watch", answers: { 200: WAKES } },
   { route: "POST kuvo/wakes/:session/pause", answers: { 200: WAKES } },
-  { route: "POST kuvo/wakes/:session/cancel", answers: { 200: object({}) } },
-  { route: "POST kuvo/wakes/:session/now", answers: { 200: object({}) } },
+  { route: "POST kuvo/wakes/:session/cancel", answers: { 200: NOTHING } },
+  { route: "POST kuvo/wakes/:session/now", answers: { 200: NOTHING } },
 ];

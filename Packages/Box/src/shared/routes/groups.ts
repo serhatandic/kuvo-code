@@ -3,7 +3,7 @@
 // answers (Agents/src/groups/link.ts), and the box passes its answers on as they are: these are
 // the shapes it answers in.
 
-import { any, bool, type Infer, list, nullable, number, object, oneOf, literal, type RouteShape, string, words } from "../shape";
+import { any, bool, type Infer, list, literal, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 import { LOOK } from "./bots";
 
 /** A bot as a chat lists it: who it is, how it looks (left out when its description doesn't
@@ -114,8 +114,6 @@ export type GroupChanged = Infer<typeof GROUP_CHANGED>;
 export type GroupActivity = Infer<typeof ACTIVITY>;
 export type GroupChat = Infer<typeof CHAT>;
 export type Joinable = Infer<typeof JOINABLE>;
-
-const NOTHING = object({});
 
 export const GROUP_ROUTES: RouteShape[] = [
   { route: "GET kuvo/groups", answers: { 200: GROUPS } },

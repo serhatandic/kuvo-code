@@ -2,26 +2,37 @@
 // updates, the phones paired with it, whether you're at a computer, and who `&` can name.
 
 import { FEATURES } from "../features";
-import { BYTES, bool, type Infer, list, map, nullable, number, object, type RouteShape, string, words } from "../shape";
+import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 import { MAC_FEATURES } from "./mac";
 
 /** What the box is and runs (`kuvo/info`): a Mac's names its app's version and its integrations, a
  * machine's its bridge's version and whether its engine runs or is stopped on purpose. `started`:
  * when the engine running now came up, in seconds since 1970 (null while none runs). */
-export const INFO = object({
-  kind: words("mac", "machine"),
-  name: string,
-  engine: nullable(string),
-  "app?": string,
-  "bridge?": string,
-  features: list(words(...FEATURES, ...MAC_FEATURES)),
-  agents: bool,
-  started: nullable(number),
-  chats: string,
-  "running?": bool,
-  "stopped?": bool,
-  "integrations?": map(string),
-});
+export const INFO = oneOf(
+  object({
+    kind: literal("mac"),
+    name: string,
+    app: string,
+    engine: string,
+    features: list(words(...FEATURES, ...MAC_FEATURES)),
+    agents: bool,
+    started: nullable(number),
+    chats: string,
+    integrations: map(string),
+  }),
+  object({
+    kind: literal("machine"),
+    name: string,
+    bridge: string,
+    engine: nullable(string),
+    features: list(words(...FEATURES)),
+    agents: bool,
+    started: nullable(number),
+    chats: string,
+    running: bool,
+    stopped: bool,
+  }),
+);
 
 /** An update's step under way. */
 const STEP = words("checking", "downloading", "downloading the engine", "checking it", "installing", "starting");
@@ -66,11 +77,11 @@ export const ENDED = object({ providers: list(string) });
 export const CREDENTIALS = object({ credentials: list(object({ id: string, integrationID: string, label: string, active: bool })) });
 
 export type BoxInfo = Infer<typeof INFO>;
+/** A machine's, as its link answers. */
+export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
-
-const NOTHING = object({});
 
 export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },
@@ -82,16 +93,13 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "POST kuvo/phones/pair", answers: { 200: PAIRING } },
   { route: "DELETE kuvo/phones/pair", answers: { 200: NOTHING } },
   { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
-  { route: "HEAD kuvo/attention", answers: { 200: ATTENTION } },
   { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
   { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },
   { route: "POST kuvo/attention/answered", answers: { 200: NOTHING } },
   { route: "GET kuvo/named", answers: { 200: NAMED } },
   { route: "GET kuvo/accounts/ended", answers: { 200: ENDED } },
-  { route: "HEAD kuvo/accounts/ended", answers: { 200: ENDED } },
   { route: "POST kuvo/accounts/:provider/forget", answers: { 200: NOTHING } },
   { route: "GET kuvo/accounts/credentials", answers: { 200: CREDENTIALS } },
-  { route: "HEAD kuvo/accounts/credentials", answers: { 200: CREDENTIALS } },
-  { route: "POST kuvo/engine/:control", answers: { 200: NOTHING } },
+  { route: "POST kuvo/engine/:control", answers: { 202: NOTHING } },
   { route: "POST kuvo/shell/:id/stop", answers: { 200: object({ stopped: words("signal", "removed") }) } },
 ];

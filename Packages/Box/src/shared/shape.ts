@@ -33,9 +33,11 @@ export const literal = <const L extends string | number | boolean>(value: L) => 
 /** One of these words. */
 export const words = <const W extends readonly string[]>(...each: W) => ({ oneOf: each.map(word => ({ literal: word })) as { [I in keyof W]: { readonly literal: W[I] } } }) as const;
 export const nullable = <S extends Shape>(shape: S) => oneOf(shape, "null");
+/** An answer that says nothing more than that it's done: `{}`. */
+export const NOTHING = object({});
 
-type Required<F> = { [K in keyof F as K extends `${string}?` ? never : K]: Infer<F[K]> };
-type Optional<F> = { [K in keyof F as K extends `${infer Name}?` ? Name : never]?: Infer<F[K]> };
+type RequiredFields<F> = { [K in keyof F as K extends `${string}?` ? never : K]: Infer<F[K]> };
+type OptionalFields<F> = { [K in keyof F as K extends `${infer Name}?` ? Name : never]?: Infer<F[K]> };
 type Flat<T> = { [K in keyof T]: T[K] } & {};
 
 /** The type of a value of shape `S`. */
@@ -44,9 +46,9 @@ export type Infer<S> = S extends "string" ? string
   : S extends "bool" ? boolean
   : S extends "null" ? null
   : S extends "any" ? unknown
-  : S extends { readonly list: infer Of } ? Infer<Of>[]
+  : S extends { readonly list: infer Of } ? readonly Infer<Of>[]
   : S extends { readonly map: infer Of } ? Record<string, Infer<Of>>
-  : S extends { readonly object: infer F } ? Flat<Required<F> & Optional<F>>
+  : S extends { readonly object: infer F } ? Flat<RequiredFields<F> & OptionalFields<F>>
   : S extends { readonly oneOf: infer Of extends readonly unknown[] } ? Infer<Of[number]>
   : S extends { readonly literal: infer L } ? L
   : never;
@@ -56,7 +58,8 @@ export const BYTES = "bytes";
 
 /** A route's answers by status: a shape for its JSON, or `BYTES`. */
 export interface RouteShape {
-  /** `METHOD path`, a `:name` part standing for any one part (`GET kuvo/wakes/:session`). */
+  /** `METHOD path`, a `:name` part standing for any one part (`GET kuvo/wakes/:session`). A HEAD
+   * is held to its GET's shape, or has no body. */
   readonly route: string;
   readonly answers: { readonly [status: number]: Shape | typeof BYTES };
 }

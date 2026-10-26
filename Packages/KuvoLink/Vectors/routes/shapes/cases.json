@@ -480,6 +480,136 @@
    },
    "value": {},
    "matches": false
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": null,
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": 2,
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": true,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": false
+   },
+   "value": 0,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": false
+   },
+   "value": false,
+   "matches": true
+  },
+  {
+   "shape": {
+    "literal": 1
+   },
+   "value": true,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": "1"
+   },
+   "value": 1,
+   "matches": false
+  },
+  {
+   "shape": {
+    "list": "string"
+   },
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {}
+   },
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": {
+    "map": {
+     "object": {
+      "a": "number"
+     }
+    }
+   },
+   "value": {
+    "x": {
+     "a": 1
+    }
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "map": {
+     "object": {
+      "a": "number"
+     }
+    }
+   },
+   "value": {
+    "x": {
+     "a": 1,
+     "b": 2
+    }
+   },
+   "matches": false
+  },
+  {
+   "shape": "bytes",
+   "value": "x",
+   "matches": false
+  },
+  {
+   "shape": {
+    "nothing": 1
+   },
+   "value": 1,
+   "matches": false
   }
  ]
 }

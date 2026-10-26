@@ -1,7 +1,7 @@
 // What agents ask you for while they browse (PROTOCOL.md, `kuvo/asks`): a sign-in, a code or a
 // step only you can do, as the cards over the composer show them, and a client's answer.
 
-import { bool, type Infer, list, object, type RouteShape, string, words } from "../shape";
+import { bool, type Infer, list, NOTHING, object, type RouteShape, string, words } from "../shape";
 
 /** One ask: what kind, on which site, and the machine whose browser it is (by name; left out for
  * a Mac's own), the conversation it's for and its name (`asker`), when known. A sign-in says
@@ -30,6 +30,5 @@ export type Asks = Infer<typeof ASKS>;
 
 export const ASK_ROUTES: RouteShape[] = [
   { route: "GET kuvo/asks", answers: { 200: ASKS } },
-  { route: "HEAD kuvo/asks", answers: { 200: ASKS } },
-  { route: "POST kuvo/asks/:id", answers: { 200: object({}) } },
+  { route: "POST kuvo/asks/:id", answers: { 200: NOTHING } },
 ];

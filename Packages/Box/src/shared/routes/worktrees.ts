@@ -1,7 +1,7 @@
 // Worktrees (PROTOCOL.md, "Worktrees"): the git worktrees the box's sessions run in, each on a
 // branch of its own, made, listed and removed by the box, and where new ones go.
 
-import { bool, type Infer, list, nullable, number, object, oneOf, type RouteShape, string } from "../shape";
+import { bool, type Infer, list, NOTHING, nullable, number, object, oneOf, type RouteShape, string } from "../shape";
 
 /** A worktree as the box keeps it: the project it's of, the repository's checkout it is (`root`),
  * where its session runs (the project's place in it; left out in one an older Mac kept, where
@@ -65,8 +65,6 @@ export type WorktreeRecordShape = Infer<typeof WORKTREE_RECORD>;
 export type ListedWorktree = Infer<typeof WORKTREE>;
 export type Worktrees = Infer<typeof WORKTREES>;
 export type WorktreesWhere = Infer<typeof WHERE>;
-
-const NOTHING = object({});
 
 export const WORKTREE_ROUTES: RouteShape[] = [
   { route: "GET kuvo/worktrees", answers: { 200: WORKTREES } },

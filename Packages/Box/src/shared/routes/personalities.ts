@@ -2,7 +2,7 @@
 // any client, and the library whole for the app beside the box, which meets it with your other
 // computers' copies.
 
-import { type Infer, list, literal, number, object, type RouteShape, string } from "../shape";
+import { type Infer, list, literal, NOTHING, number, object, type RouteShape, string } from "../shape";
 
 /** A personality you made: its id (`custom.…`), name and what it is, the SF Symbol it shows, and
  * its change's count. */
@@ -30,5 +30,5 @@ export const PERSONALITY_ROUTES: RouteShape[] = [
   { route: "GET kuvo/personalities/document", answers: { 200: LIBRARY } },
   { route: "POST kuvo/personalities/take", answers: { 200: TAKEN } },
   { route: "PATCH kuvo/personalities/:id", answers: { 200: PERSONALITY } },
-  { route: "DELETE kuvo/personalities/:id", answers: { 200: object({}) } },
+  { route: "DELETE kuvo/personalities/:id", answers: { 200: NOTHING } },
 ];

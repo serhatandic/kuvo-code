@@ -80,7 +80,7 @@ export function wakeFolder(session: string): string | null {
 // Each session here with a wake-up or a watch, as the Mac lists them in `kuvo/wakes`: its soonest
 // wake-up and whether it watches. Bots' come with `kuvo/bots`.
 export function listWakes(): WakeList["sessions"] {
-  const sessions: WakeList["sessions"] = [];
+  const sessions: WakeList["sessions"][number][] = [];
   for (const name of listOf(SESSION_WAKES)) {
     const folder = path.join(SESSION_WAKES, name);
     const session = (textOf(path.join(folder, "session")) ?? "").trim();

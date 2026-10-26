@@ -1,10 +1,10 @@
 // This box's own settings (PROTOCOL.md, "kuvo/config"), Also Apply, Settings › MCP Servers'
 // popular servers, and its integrations' keys.
 
-import { any, bool, type Infer, list, object, type RouteShape, string, words } from "../shape";
+import { any, bool, type Infer, list, map, NOTHING, object, type RouteShape, string, words } from "../shape";
 
 /** The engine's settings file, the whole document as it is: the engine's to define, so `any`. */
-export const CONFIG = any;
+export const CONFIG = map(any);
 
 /** What Also Apply made of the changes here: each made, at its path; the entries this box doesn't
  * have that some were to (their paths); the paths it keeps its own; the servers that stay on Macs;
@@ -55,6 +55,6 @@ export const SETTINGS_ROUTES: RouteShape[] = [
   { route: "POST kuvo/mcp/catalog/:id", answers: { 200: CONFIG } },
   { route: "GET kuvo/keys", answers: { 200: KEYS } },
   { route: "GET kuvo/keys/:name", answers: { 200: KEY } },
-  { route: "PUT kuvo/keys/:name", answers: { 200: object({}) } },
-  { route: "DELETE kuvo/keys/:name", answers: { 200: object({}) } },
+  { route: "PUT kuvo/keys/:name", answers: { 200: NOTHING } },
+  { route: "DELETE kuvo/keys/:name", answers: { 200: NOTHING } },
 ];
