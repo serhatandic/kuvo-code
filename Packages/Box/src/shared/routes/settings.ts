@@ -23,11 +23,13 @@ export const CONFIG_APPLIED = object({
 /** One of Settings › MCP Servers' popular servers, as this box has it: how it's reached
  * (`signIn`, `open` or `local`), whether it's added, whether Integrations added it, and whether
  * it uses a Mac's own apps (only ever true on a Mac's box). */
+/** How a popular server is reached: what a box can say of one it offers. */
+export const MCP_ACCESS = ["signIn", "open", "local"] as const;
 export const MCP_CATALOG_SERVER = object({
   id: string,
   title: string,
   summary: string,
-  access: words("signIn", "open", "local"),
+  access: words(...MCP_ACCESS),
   added: bool,
   integration: bool,
   macOnly: bool,

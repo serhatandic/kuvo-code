@@ -8341,6 +8341,48 @@ import fs43 from "node:fs";
 // Packages/Box/src/link/areas/mcp-catalog.ts
 import fs42 from "node:fs";
 import path42 from "node:path";
+
+// Packages/Box/src/shared/shape.ts
+var string = "string";
+var bool = "bool";
+var any = "any";
+var list = (of) => ({ list: of });
+var map = (of) => ({ map: of });
+var object = (fields) => ({ object: fields });
+var words = (...each) => ({ oneOf: each.map((word) => ({ literal: word })) });
+var NOTHING = object({});
+
+// Packages/Box/src/shared/routes/settings.ts
+var CONFIG = map(any);
+var CONFIG_APPLIED = object({
+  made: list(object({ path: list(string), value: any })),
+  leftOut: list(list(string)),
+  kept: list(list(string)),
+  macOnly: list(string),
+  keys: list(string),
+  applied: bool,
+  settings: CONFIG
+});
+var MCP_ACCESS = ["signIn", "open", "local"];
+var MCP_CATALOG_SERVER = object({
+  id: string,
+  title: string,
+  summary: string,
+  access: words(...MCP_ACCESS),
+  added: bool,
+  integration: bool,
+  macOnly: bool
+});
+var MCP_CATALOG = object({ servers: list(MCP_CATALOG_SERVER) });
+var KEYS = object({ keys: list(string) });
+var KEY2 = object({ value: string });
+
+// Packages/Box/src/link/areas/mcp-catalog.ts
+var accessOf = (server) => {
+  const access = server.access ?? "open";
+  return MCP_ACCESS.includes(access) ? access : null;
+};
+var offered = (server, mac) => typeof server?.id === "string" && (mac || !server.macOnly) && accessOf(server) !== null;
 var CATALOG_FILE = path42.join(K, "bin", "mcp-catalog.json");
 function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
   let servers = [];
@@ -8348,13 +8390,13 @@ function mcpCatalog(settings, file = CATALOG_FILE, mac = IS_MAC) {
     servers = JSON.parse(fs42.readFileSync(file, "utf8")).servers ?? [];
   } catch {}
   return {
-    servers: servers.filter((server) => typeof server?.id === "string" && (mac || !server.macOnly)).map((server) => {
+    servers: servers.filter((server) => offered(server, mac)).map((server) => {
       const added = valueAt(settings, [...SERVERS, server.id]) !== undefined;
       return {
         id: server.id,
         title: String(server.title ?? ""),
         summary: String(server.summary ?? ""),
-        access: String(server.access ?? "open"),
+        access: accessOf(server),
         added,
         integration: added && Boolean(server.integration),
         macOnly: mac && Boolean(server.macOnly)
@@ -8367,7 +8409,7 @@ function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = C
   try {
     servers = JSON.parse(fs42.readFileSync(catalog, "utf8")).servers ?? [];
   } catch {}
-  const server = servers.find((each) => each?.id === id && (mac || !each.macOnly));
+  const server = servers.find((each) => each?.id === id && offered(each, mac));
   if (!server || !isObject(server.settings))
     return { status: 404 };
   const { settings, problem } = readSettings(file);
