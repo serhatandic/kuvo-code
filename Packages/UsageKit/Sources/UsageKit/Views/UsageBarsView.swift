@@ -78,6 +78,18 @@ struct UsageBarsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(Motion.spring, value: layout.displayGroups.map(\.provider.id))
+        #if DEBUG
+        .task {
+            // KUVO_DEMO_FOLDS=<seconds>: the first bar's detail opens and folds eight times, to
+            // watch the fold with no one clicking.
+            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
+            for _ in 0..<8 {
+                try? await Task.sleep(for: .seconds(wait))
+                guard let first = layout.displayGroups.first?.id else { continue }
+                withAnimation(Motion.spring) { expanded = expanded == nil ? first : nil }
+            }
+        }
+        #endif
     }
 
     /// The limit the bar shows, or the provider's first reading of any kind when it has no
