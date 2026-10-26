@@ -40,6 +40,7 @@ for Linux's tools).
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
 | C1–C3 Attach pictures, PDFs, files; a picture named where you write ("[Image 1]"), its name gone with it | AttachmentRoutesTests, AttachmentsTests, SentFilesTests, ComposerFieldTests | how the names and links look in the field and your bubble (a look before and after) |
 | C4 Quote part of a reply and answer it, the answer taking the keyboard | QuotingTests, ComposerFieldTests | |
+| Every key you type stays, also while the app is busy; sending still clears the field | ComposerTypingTests | |
 | The card you work in looks it: a click anywhere in it (a reply's words too), the keyboard moving into it, a tab picked in the tab bar, a session picked in the sidebar; not clicks in Settings over it | WindowFocusTests, WindowTabsTests | the click on a sidebar row or a tab itself (SwiftUI buttons take no queued clicks in the tests' window, which is never key): the tests make the store call the button does |
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests | |
 | D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Agents/test |
