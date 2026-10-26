@@ -20,6 +20,8 @@ struct YourMessage: View {
     var folders: [String] = []
     var attachments: [AttachmentItem] = []
     var comments: [ReviewComment] = []
+    /// The title of the widget it was sent from (`WidgetAnswer`).
+    var widget: String?
     let sent: Date
     /// Sent from your iPhone.
     var fromPhone = false
@@ -45,9 +47,11 @@ struct YourMessage: View {
         return hovering
     }
 
-    /// What VoiceOver reads for it: its comments on the changes, what it says, and what's attached.
+    /// What VoiceOver reads for it: the widget it came from, its comments on the changes, what it
+    /// says, and what's attached.
     private var spoken: String {
-        let parts = comments.map { "Comment on \($0.location): \($0.text)" }
+        let parts = (widget.map { ["From \(WidgetAnswer.name($0))"] } ?? [])
+            + comments.map { "Comment on \($0.location): \($0.text)" }
             + [text].filter { !$0.isEmpty }
             + (attachments.isEmpty ? [] : [attachments.count == 1 ? "1 attachment" : "\(attachments.count) attachments"])
         return "You: " + parts.joined(separator: ". ")
@@ -82,7 +86,7 @@ struct YourMessage: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments)
+            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments, widget: widget)
             // Always laid out, shown under the pointer: nothing moves when they appear.
             HStack(spacing: 0) {
                 Text(MessageTime.sentAt(sent) + (fromPhone ? " · from iPhone" : ""))

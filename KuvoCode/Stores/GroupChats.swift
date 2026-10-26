@@ -65,7 +65,7 @@ final class GroupChats {
             } catch {
                 let key = BotGroups.tabKey(id)
                 let draft = Drafts.shared[key].text
-                Drafts.shared[key].text = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                Drafts.shared[key].text = [WidgetAnswer.split(text).text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 Modal.show(error)
             }
         }

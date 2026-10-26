@@ -46,6 +46,19 @@ import Testing
         #expect(model.failure != nil)
     }
 
+    /// What a widget sent that didn't go comes back as its words alone, not the note naming the
+    /// widget, and leaves your review comments for your own message.
+    @Test func aWidgetsAnswerThatDidntGoComesBackAsItsWords() async throws {
+        defer { done() }
+        StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json(["message": "Model is overloaded"], status: 400) }
+        let model = try #require(workspace.model(for: id))
+        model.reviewComments = [ReviewComment(file: "a.swift", line: 2, side: .new, snippet: "x", text: "Rename x")]
+        model.send(WidgetAnswer.message("Show it in minutes", from: "Build times this week"), for: nil, withComments: false)
+        try await until { model.failure != nil }
+        #expect(model.draftText == "Show it in minutes")
+        #expect(model.reviewComments.map(\.text) == ["Rename x"])
+    }
+
     /// A conversation on a model whose account you signed out of: said at once, naming what to
     /// sign in to, and nothing sent (the engine takes such a message and drops it without a
     /// word); your message stays to send once you've signed in or picked another model.

@@ -170,15 +170,26 @@ nonisolated enum AgentReferences {
 }
 
 /// A message you sent, as the app wrote it for the agent: your words, then the blocks it adds
-/// (the agents you named with "&", your comments on the changes, the note of attached files, and
-/// last that it came from your phone), taken apart again for wherever it shows: its bubble, a
-/// draft, the export, a title.
+/// (the widget it came from, the agents you named with "&", your comments on the changes, the note
+/// of attached files, and last that it came from your phone), taken apart again for wherever it
+/// shows: its bubble, a draft, the export, a title.
 nonisolated enum SentMessage {
     static func split(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference]) {
+        let (text, comments, paths, references, _) = parts(message)
+        return (text, comments, paths, references)
+    }
+
+    /// The title of the widget a message was sent from (`WidgetAnswer`).
+    static func widget(of message: String) -> String? {
+        parts(message).widget
+    }
+
+    private static func parts(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference], widget: String?) {
         let (withComments, paths) = Attachments.split(FromPhone.split(message).text)
         let (withReferences, comments) = ReviewComments.split(withComments)
-        let (text, references) = AgentReferences.split(withReferences)
-        return (text, comments, paths, references)
+        let (withWidget, references) = AgentReferences.split(withReferences)
+        let (text, widget) = WidgetAnswer.split(withWidget)
+        return (text, comments, paths, references, widget)
     }
 
     /// The message as written: its words, without the blocks.

@@ -64,8 +64,9 @@ struct TranscriptView: View {
         }
         // The reply being written draws its words from it.
         .environment(model.writing)
-        // What a widget writes back goes to this conversation's agent, as yours.
-        .environment(\.answerAgent) { text in model.submit(text, files: [], for: nil, queue: false, commands: []) }
+        // What a widget writes back goes to this conversation's agent, as yours: as words, never
+        // a command or keyword the page could run as you, and without your review comments.
+        .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
@@ -709,7 +710,8 @@ private struct RowView: View, Equatable {
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
             let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
-            YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments, sent: Date(timeIntervalSince1970: message.time.created / 1000),
+            YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
+                        widget: SentMessage.widget(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
                         // Not in a bot's conversation, which is the bot's one: a session made from
                         // it would be no bot's, in no list you'd look in.
@@ -719,7 +721,7 @@ private struct RowView: View, Equatable {
         case .pending(let item):
             let (text, comments, paths, references) = SentMessage.split(item.text)
             UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
-                       status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
+                       widget: SentMessage.widget(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
                 .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
@@ -792,6 +794,8 @@ struct UserBubble: View {
     var folders: [String] = []
     var attachments: [AttachmentItem] = []
     var comments: [ReviewComment] = []
+    /// The title of the widget it was sent from (`WidgetAnswer`), which shows over it.
+    var widget: String?
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
@@ -840,6 +844,9 @@ struct UserBubble: View {
             if !attachments.isEmpty {
                 MessageAttachments(items: attachments)
                     .padding(.bottom, text.isEmpty ? 0 : 2)
+            }
+            if let widget {
+                WidgetAnswerChip(title: widget)
             }
             ForEach(comments) { comment in
                 CommentReference(comment: comment)

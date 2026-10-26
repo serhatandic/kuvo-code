@@ -113,7 +113,7 @@ struct GroupChatView: View {
     private static func findParts(_ message: GroupMessage) -> [ConversationFind.Part] {
         switch message.kind {
         case .meeting, .note: []
-        default: message.author == nil ? UserBubble.findParts(message.text).map(ConversationFind.Part.plain) : [.markdown(message.text)]
+        default: message.author == nil ? UserBubble.findParts(WidgetAnswer.split(message.text).text).map(ConversationFind.Part.plain) : [.markdown(message.text)]
         }
     }
 
@@ -141,7 +141,7 @@ struct GroupChatView: View {
     private func undo(from message: GroupMessage) {
         Task {
             guard let taken = await groups.undo(from: message.id, in: group.id) else { return }
-            let (quotes, text) = Quoting.draft(of: taken)
+            let (quotes, text) = Quoting.draft(of: WidgetAnswer.split(taken).text)
             let draft = Drafts.shared[draftKey].text
             Drafts.shared[draftKey].text = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
             Drafts.shared[draftKey].quotes = quotes + Drafts.shared[draftKey].quotes
@@ -233,7 +233,8 @@ private struct GroupMessageRow: View, Equatable {
                 .frame(maxWidth: .infinity)
                 .multilineTextAlignment(.center)
         } else if message.author == nil {
-            YourMessage(text: message.text, references: MessageMentions.agents(namedIn: message.text).map(\.reference),
+            let (text, widget) = WidgetAnswer.split(message.text)
+            YourMessage(text: text, references: MessageMentions.agents(namedIn: text).map(\.reference), widget: widget,
                         sent: message.time, undo: undo,
                         undoNote: "The chat goes back to before this message, and the message comes back to the composer. The bots are told to set aside what was taken back.",
                         isOffline: isOffline)

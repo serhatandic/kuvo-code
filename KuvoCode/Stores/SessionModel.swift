@@ -896,7 +896,7 @@ final class SessionModel {
                 editTranscript { $0.removeLocal(id: id) }
                 // It didn't go: back in the composer as it was, ahead of anything written since
                 // (after one sent before it that didn't go either, in the order they were sent).
-                let (quotes, text) = Quoting.draft(of: written)
+                let (quotes, text) = Quoting.draft(of: WidgetAnswer.split(written).text)
                 restoreFailed(text: text, files: files, quotes: quotes, comments: comments)
                 fail(error)
             }

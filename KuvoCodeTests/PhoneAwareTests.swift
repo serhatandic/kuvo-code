@@ -31,6 +31,17 @@ import Testing
         return engine.requests("POST", "/api/session/ses_1/prompt").last?.body["text"] as? String
     }
 
+    /// A widget's answer from the phone: the box adds that it's from the phone, after the widget
+    /// it names, and both come back apart.
+    @Test func aWidgetsAnswerFromThePhoneKeepsItsWidget() async throws {
+        let box = try await TestBox(engine: engine.url)
+        defer { box.stop(); engine.stop() }
+        let sent = try #require(try await send(WidgetAnswer.message("Show it in minutes", from: "Build times this week"), through: box))
+        #expect(FromPhone.isFromPhone(sent))
+        #expect(SentMessage.words(of: sent) == "Show it in minutes")
+        #expect(SentMessage.widget(of: sent) == "Build times this week")
+    }
+
     @Test func whatAPhoneSendsSaysSoAndYourBubbleDoesnt() async throws {
         let box = try await TestBox(engine: engine.url)
         defer { box.stop(); engine.stop() }

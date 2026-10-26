@@ -34,13 +34,18 @@ struct WidgetCard: View {
         self.send = send
         _height = State(initialValue: Self.heights[call.id] ?? 0)
     }
+    @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.cardIsFocused) private var cardIsFocused
     @Environment(\.showWidgetLarge) private var showLarge
 
     /// Over its conversation's card, as the panel grows over the window.
     private func openLarge(html: String, title: String?) {
-        showLarge?(LargeWidget(id: call.id, html: html, title: title, send: send))
+        showLarge?(LargeWidget(id: call.id, html: html, title: title, send: answer(from: title)))
+    }
+
+    /// What the page writes back, sent with which widget it came from (`WidgetAnswer`).
+    private func answer(from title: String?) -> (String) -> Void {
+        { [send] text in send(WidgetAnswer.message(text, from: title)) }
     }
 
     private static let shape = RoundedRectangle(cornerRadius: 12)
@@ -122,44 +127,19 @@ struct WidgetCard: View {
         return html
     }
 
-    /// `draft`: still being written, this many bytes so far.
+    /// The page alone, edged quietly, with its name in a caption under it. Open Larger and Copy
+    /// come at the caption's end while the pointer's over it, never over the page, where a page
+    /// keeps its own controls. `draft`: still being written, this many bytes so far.
     private func card(html: String, title: String?, draft: Int? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .foregroundStyle(.tint)
-                Text(title.flatMap { $0.isEmpty ? nil : $0 } ?? "Made for you")
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                if let draft {
-                    Spinner(size: 11)
-                    if let size = Self.written(draft) {
-                        Text(size)
-                            .foregroundStyle(.tertiary)
-                            .monospacedDigit()
-                    }
-                } else {
-                    // Only where there's a card for it to cover.
-                    if showLarge != nil {
-                        MessageActionButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open Larger") { openLarge(html: html, title: title) }
-                            .accessibilityLabel("Open Larger")
-                    }
-                    CopyButton(text: html, help: "Copy Its HTML")
-                }
-            }
-            .font(.callout)
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
-            .frame(height: 32)
-            Divider()
-            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: draft != nil, send: send)
+        VStack(alignment: .leading, spacing: 6) {
+            WidgetPage(html: html, accent: NSColor.controlAccentColor, height: $height, isDraft: draft != nil, send: answer(from: title))
                 .frame(height: max(height, 60))
                 .onChange(of: height) { if height > 0 { Self.heights[call.id] = height } }
+                .clipShape(Self.shape)
+                .overlay(Self.shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+            caption(html: html, title: title, draft: draft)
         }
-        .background(Surface.cardFill(scheme, focused: cardIsFocused), in: Self.shape)
-        .clipShape(Self.shape)
-        .recessedWell(Self.shape)
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
         #if DEBUG
         // KUVO_DEMO_WIDGET_LARGE: the first widget shown opens larger.
         .onAppear {
@@ -171,6 +151,67 @@ struct WidgetCard: View {
             }
         }
         #endif
+    }
+
+    private func caption(html: String, title: String?, draft: Int?) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sparkles.rectangle.stack")
+            Text(WidgetAnswer.name(title))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let draft {
+                Spinner(size: 10)
+                if let size = Self.written(draft) {
+                    Text(size)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+            } else {
+                HStack(spacing: 2) {
+                    // Only where there's a card for it to cover.
+                    if showLarge != nil {
+                        MessageActionButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open Larger") { openLarge(html: html, title: title) }
+                    }
+                    CopyButton(text: html, help: "Copy Its HTML")
+                }
+                .opacity(isHovering ? 1 : 0)
+                // Out of reach while they're hidden, Tab's too; VoiceOver has them as the
+                // caption's actions.
+                .disabled(!isHovering)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(minHeight: 24)
+        .padding(.leading, 4)
+        // One element for VoiceOver, whose buttons are there only on hover; the page itself is
+        // read on its own, before it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(WidgetAnswer.name(title))
+        .accessibilityValue(draft != nil ? "Being made" : "")
+        .accessibilityActions {
+            if draft == nil {
+                if showLarge != nil { Button("Open Larger") { openLarge(html: html, title: title) } }
+                Button("Copy Its HTML") { Clipboard.copy(html) }
+            }
+        }
+    }
+}
+
+/// Over a message a widget sent for you: which widget it came from.
+struct WidgetAnswerChip: View {
+    let title: String
+
+    var body: some View {
+        Label(WidgetAnswer.name(title), systemImage: "sparkles.rectangle.stack")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Color.primary.opacity(0.06), in: .capsule)
+            .frame(maxWidth: 420, alignment: .trailing)
+            .help("Sent by clicking in what the agent made")
     }
 }
 
@@ -226,7 +267,7 @@ private struct LargeWidgetView: View {
             HStack(spacing: 6) {
                 Image(systemName: "sparkles.rectangle.stack")
                     .foregroundStyle(.tint)
-                Text(widget.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Made for you")
+                Text(WidgetAnswer.name(widget.title))
                     .fontWeight(.medium)
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -618,3 +659,4 @@ private final class WeakHandler: NSObject, WKScriptMessageHandler {
         target?.userContentController(controller, didReceive: message)
     }
 }
+

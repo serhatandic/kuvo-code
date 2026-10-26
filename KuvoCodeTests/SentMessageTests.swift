@@ -98,4 +98,25 @@ import Testing
         #expect(SentMessage.split(sent(words)).text == words)
         #expect(SentMessage.split(words).references.isEmpty)
     }
+
+    /// What you click in a widget goes to the agent naming the widget it came from, and your
+    /// bubble shows your words with the widget over them.
+    @Test func whatAWidgetSendsNamesTheWidget() {
+        let answer = WidgetAnswer.message("Show it in minutes", from: "Build times\nthis week")
+        #expect(answer.contains("<from-widget>") && answer.contains("Build times this week"))
+        let back = SentMessage.split(answer)
+        #expect(back.text == "Show it in minutes")
+        #expect(SentMessage.widget(of: answer) == "Build times this week")
+        // One without a title is still from a widget.
+        #expect(SentMessage.widget(of: WidgetAnswer.message("Yes", from: nil)) == "")
+        #expect(WidgetAnswer.name("") == "Made for you")
+        // Its title names no agents, whatever it says; its words still can.
+        let mira = AgentMail.Agent(session: "ses_mira", name: "Mira", kind: "bot", about: "Plans")
+        #expect(AgentReferences.named(in: [WidgetAnswer.message("A", from: "Ask &Mira")], agents: [mira]).isEmpty)
+        #expect(AgentReferences.named(in: [WidgetAnswer.message("Ask &Mira", from: "Plans")], agents: [mira]).map(\.session) == ["ses_mira"])
+        // What you typed yourself isn't, even naming the tag.
+        let typed = "What does <from-widget> do?"
+        #expect(SentMessage.split(sent(typed)).text == typed)
+        #expect(SentMessage.widget(of: typed) == nil)
+    }
 }
