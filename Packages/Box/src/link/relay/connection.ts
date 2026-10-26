@@ -1,11 +1,7 @@
 // @ts-nocheck
-// The relay connection
+// The relay connection: one at a time, served until it ends.
 
 import { addressOf, EMPTY } from "../crypto/keys";
-import { docsChanged } from "../documents/exchange";
-import { readEngineFile } from "../engine/client";
-import { announce } from "../peers/agents";
-import { confirmUpdate } from "../updates/update";
 import { readRelay, relayHello, relaySend } from "./frames";
 
 // What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
@@ -17,17 +13,9 @@ export function fromRelay(host, message, self) {
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
 }
 
-// What a machine's link does once the relay's welcomed it: your other computers hear who's here,
-// and it tells who's there; a new bridge an update put here says it's well.
-function machineWelcomed(host) {
-  announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
-  try { docsChanged(host, { greet: true }); } catch {}
-  try { confirmUpdate(); } catch {}
-}
-
 // Connects once, serves until the connection ends (or `host.disconnect()`). Resolves whether it got
-// as far as welcome. `onWelcome(host)`: what's done then.
-export function connectOnce(relay, secret, host, onWelcome = machineWelcomed) {
+// as far as welcome. `onWelcome(host)`: what's done then (a machine's `run` says, `machineWelcomed`).
+export function connectOnce(relay, secret, host, onWelcome = () => {}) {
   return new Promise(resolve => {
     const self = addressOf(secret);
     let welcomed = false;

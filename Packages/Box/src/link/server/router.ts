@@ -34,6 +34,8 @@ import { AGENTS, agentsRoute, engineRoute } from "./forward";
 
 // `when(route, request)`: whether it takes the request (a route's match, for one with a part of its
 // own); `answer(context, match)`: its answer, as it comes.
+// Their order counts where they overlap: a list and its events come before the route for one of
+// its own ("events" isn't an id), as personalities', asks' and wake-ups' do.
 const ROUTES = [
   { when: route => route === "kuvo/info", answer: infoRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }) => fileAt(request.path, json) },
@@ -61,7 +63,9 @@ const ROUTES = [
   { when: route => route === "kuvo/personalities/document" || route === "kuvo/personalities/take", answer: personalitiesDocumentRoute },
   { when: route => route.match(/^kuvo\/personalities(?:\/([^/]+))?$/), answer: personalityRoute },
   { when: route => route === "kuvo/bots/templates", answer: botTemplatesRoute },
+  // (A new bot; reading them is `botsRoute`, further on.)
   { when: (route, request) => request.method.toUpperCase() === "POST" && route === "kuvo/bots", answer: newBotRoute },
+  // The box's projects, as the sidebar and Edit Project change them (PROTOCOL.md, "Projects").
   { when: route => route === "kuvo/projects" || route === "kuvo/projects/events", answer: ({ request, readEngine, readBridge, signal }) => answerProjects(request, readEngine, readBridge, signal) },
   { when: route => route === "kuvo/worktrees/events", answer: worktreeEventsRoute },
   { when: route => /^kuvo\/worktrees(\/(remove|record|where))?$/.test(route), answer: worktreesRoute },

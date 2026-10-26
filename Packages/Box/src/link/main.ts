@@ -41,14 +41,14 @@ import { addressOf, newKey, publicOf } from "./crypto/keys";
 import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
 import { docsNoted, noteDocsChanged, onDocsChanged } from "./documents/changed";
 import { docsChanged, macDocsChanged } from "./documents/exchange";
-import { held, newSigningSeed, ownSign, SIGN } from "./documents/format";
+import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { watchBox } from "./engine/watch";
 import { writePrivate } from "./files";
 import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
-import { answered, deliverLeftAnswers, sendOutbox } from "./letters/outbox";
+import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -172,6 +172,14 @@ onLinkWritten(link => {
 });
 
 // ---- The commands ----
+
+// What a machine's link does once the relay's welcomed it: your other computers hear who's here,
+// and it tells who's there; a new bridge an update put here says it's well.
+function machineWelcomed(host) {
+  announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
+  try { docsChanged(host, { greet: true }); } catch {}
+  try { confirmUpdate(); } catch {}
+}
 
 async function run() {
   // One bridge at a time: a newer one (the engine restarted) takes over.
@@ -318,7 +326,7 @@ async function run() {
       send: () => {},
     });
     current = host;
-    const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host);
+    const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
     attempt = welcomed ? 0 : attempt + 1;
     await sleep(Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
   }

@@ -107,7 +107,6 @@ export function setMacPeers(link, given) {
   return { link, gone };
 }
 
-const ADDRESS_TEXT = /^[A-Za-z0-9_-]{22}$/;
 
 // `kuvo/link/…`, for this Mac's app.
 export async function* macLinkRoute(route, request, signal) {

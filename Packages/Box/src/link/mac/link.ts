@@ -1,15 +1,6 @@
 // @ts-nocheck
-// This Mac's box's link (PROTOCOL.md, "This Mac's box: the relay")
-// On a Mac, `serve` holds the relay connection a machine's `run` holds, in the same process: your
-// phones' sessions, paired and pairing as on a machine, answered here. Its keys stay in your
-// Keychain: the app gives them as the link starts (`link/identity`), and they're kept in memory
-// only; without them the link stays off and says why, and never makes keys of its own. Its app says
-// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet). Your other
-// computers' mail is taken here, as a machine takes it: documents, agents, letters, group chats'.
-// What a phone asks of the Mac's own routes, which only the app answers yet, goes to it through the
-// host (`link/route`).
-// Here: whether it's wanted, how it's doing, its keys, and the machines told they're let go;
-// mac/relay runs it.
+// This Mac's box's link (PROTOCOL.md, "This Mac's box: the relay"): whether it's wanted, how it's
+// doing, its keys from the app, and the machines told they're let go. mac/relay runs it.
 
 import { macPeersBody, ownDoc } from "../documents/work";
 import { linkHost } from "../host-interface";

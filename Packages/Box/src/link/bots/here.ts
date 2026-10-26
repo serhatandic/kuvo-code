@@ -1,7 +1,6 @@
 // @ts-nocheck
-// A bot that lives here, as its folder has it now: its description (as the app last wrote it, or
-// as changed here), its conversation, and whether that runs with the coding agents; null for one
-// without a description (made before them, until the Mac connects) or a conversation.
+// A bot that lives here: what its folder has, whether it's moving, its model, and who follows its
+// changes.
 
 import path from "node:path";
 import { textOf } from "../files";
@@ -14,6 +13,9 @@ import { BOTS } from "../home";
 // The version of `bot.json` this reads (the app's `Bot.Descriptor`).
 export const DESCRIPTION = 1;
 
+// A bot that lives here, as its folder has it now: its description (as the app last wrote it, or
+// as changed here), its conversation, and whether that runs with the coding agents; null for one
+// without a description (made before them, until the Mac connects) or a conversation.
 export function botHere(id) {
   if (typeof id !== "string" || !/^bot_[A-Za-z0-9]+$/.test(id)) return null;
   const folder = path.join(BOTS, id);

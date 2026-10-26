@@ -8,8 +8,6 @@ import { followed } from "../follow";
 import { PERSONALITIES_FILE, personalitiesDocument, personalityFollowers, readPersonalities } from "../personalities/library";
 import { answerPersonalities, retellBots, takePersonalitiesDocument } from "../personalities/take";
 
-// New bots and group chats, made here as New Bot and New Group Chat make them on the Mac,
-// which takes them in when it next connects.
 // The library followed: a line now, and again as it changes, from a route here, a peer's copy
 // met, or another process (a Mac's `box personalities` over SSH, the bridge beside this box).
 export async function* personalityEventsRoute(context) {

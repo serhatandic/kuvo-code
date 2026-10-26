@@ -19,6 +19,7 @@ export async function* botTemplatesRoute(context) {
   return yield* json(200, botTemplates(kit, info.name));
 }
 
+// New bots, made here as New Bot makes them on the Mac, which takes them in when it next connects.
 export async function* newBotRoute(context) {
   const { request, signal, readEngine, bridge, info, json } = context;
   const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);

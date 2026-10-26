@@ -11,6 +11,7 @@ import { addFromCatalog, mcpCatalog } from "./mcp-catalog";
 // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
 export async function* settingsRoute(context) {
   const { request, route, json } = context;
+  // Its own, once Kuvo Code has made them so; until then, as the Mac that started it has them.
   if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
   const method = request.method.toUpperCase();
   // A file that can't be used says why twice: in words to show (`message`), and the file's
