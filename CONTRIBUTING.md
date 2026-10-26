@@ -268,7 +268,7 @@ when you're there to answer.
 | `KUVO_DEMO_APPEARANCE` | `light` or `dark` |
 | `KUVO_DEMO_CHANGES` | Show the side panel |
 | `KUVO_DEMO_PANEL` | Open tools in the panel, comma-separated: `terminal`, `browser=<address>`, `machine=<machine>` (its browser), `files`, `file=<path>`, `changes`, `run`, `expand`, `toggle=<seconds>` (expands and collapses it a few times) |
-| `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT` |
+| `KUVO_DEMO_WINDOW` | Window size, as `WIDTHxHEIGHT`, moved onto the screen if it was past its edge |
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
@@ -295,6 +295,7 @@ when you're there to answer.
 | `KUVO_DEMO_WELCOME` | No tabs, so the welcome card shows |
 | `KUVO_DEMO_NEW_BOT` | The New Bot editor, open |
 | `KUVO_DEMO_BOT`, `KUVO_DEMO_BOT_PROMPT` | Make the bot `<name>\|<job>\|<its details>[\|<machine>[\|<project folder>]]` unless one has that name (its job kept as the bot keeps it with set_job; leave it empty for a bot that asks for one, and the machine empty for this Mac), open it, and give it this task |
+| `KUVO_DEMO_MADE` | What the conversation in view made, its popover open: `open`, `timeline` (a bot's Timeline), or a thing's file name, opened |
 | `KUVO_DEMO_OPEN_STEPS` | Every step in the conversation shows its details, opened, and so does the thinking |
 | `KUVO_DEMO_FOLDS` | Seconds: the conversation's lines of steps, and the bars over its composer, open and fold a few times, that far apart, to look at how they move (with `KUVO_DEMO_SLOW`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |

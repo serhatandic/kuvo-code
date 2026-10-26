@@ -6,6 +6,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- See what your agents made: a tray button on a bot's or group chat's bar opens what was made there. A bot's Shelf shows what it marked final, its memory with the words that changed, its pages, documents and pictures, and every change on its Timeline; a group chat's Timeline shows each bot's face and when one took up another's work; a coding session shows what it made besides code. Open anything to step through its versions, see what each changed (the words in prose, the lines in code, the one before beside a picture), and put an older version back. It's kept on the computer the agents run on, your Mac or a machine, and reads the same from your phone.
+- Bots can mark something they made as final, so it's first on their Shelf.
+- Settings › Storage shows how much the older versions of what your agents made take on each computer, lets you choose how much they may take, and clears them. Likely secrets and files git ignores are never copied.
+- A group chat's side panel no longer offers Changes and Files for a project it doesn't have: it opens on a new tab instead.
 - Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
 - The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.
 - After you quote part of a reply (or reply to all of it), you can start typing your answer at once: it has the keyboard, with the cursor ready. Quoting the same part again takes you back to its answer.

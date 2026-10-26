@@ -592,6 +592,8 @@ final class AppModel {
         environment["KUVO_GROUPS_MEMORY_KEY"] = BotGroups.memoryKey
         // Who can be named with & in a chat: this Mac's agents and its machines', as its box lists them.
         environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
+        // Its record of what agents made, in the box's own folder, as a machine's is in `~/.kuvo-code`.
+        environment["KUVO_ARTIFACTS"] = BoxProcess.home.appending(path: "artifacts").path
         Task { await agents.start(engine: binary, environment: environment) }
         // Your time zone or how you write dates changed: meetings go by the new ones.
         if clockObservers.isEmpty {

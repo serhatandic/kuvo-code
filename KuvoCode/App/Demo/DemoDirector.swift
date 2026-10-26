@@ -60,6 +60,9 @@ enum DemoDirector {
             frame.size = CGSize(width: size[0], height: size[1])
             if environment["KUVO_DEMO_OFFSCREEN"] != nil, let screen = shown.screen ?? NSScreen.main {
                 frame.origin = CGPoint(x: screen.frame.maxX + 40, y: screen.frame.minY)
+            } else if let screen = NSScreen.main, !screen.visibleFrame.contains(frame) {
+                // On the screen, for what can't sit past its edge (a popover is kept on it).
+                frame.origin = CGPoint(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - frame.height - 40)
             }
             shown.setFrame(frame, display: true, animate: false)
             // Again once window restoration has settled.

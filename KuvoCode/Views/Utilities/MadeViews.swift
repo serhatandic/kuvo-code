@@ -1,0 +1,1289 @@
+import AppKit
+import KuvoLink
+import OpenCodeKit
+import PDFKit
+import Quartz
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// Where something was made, as the conversation's bar shows it: a bot's, a group chat's, or a
+/// coding session's (which shows only what isn't code: its Changes are in the panel).
+enum MadePlace: Equatable {
+    case bot(Bot)
+    case group(BotGroup, box: String)
+    case session(String, box: String)
+
+    var scope: ArtifactScope {
+        switch self {
+        case .bot(let bot): .bot(bot.id)
+        case .group(let group, _): .group(group.id)
+        case .session(let id, _): .session(id)
+        }
+    }
+
+    var box: String {
+        switch self {
+        case .bot(let bot): bot.machine ?? BoxClient.mac
+        case .group(_, let box), .session(_, let box): box
+        }
+    }
+
+    var key: String { "\(box)|\(scope)" }
+
+    var isSession: Bool { if case .session = self { true } else { false } }
+    var isGroup: Bool { if case .group = self { true } else { false } }
+
+    /// What it shows: a session, only what it made besides code.
+    func shows(_ artifact: ArtifactSummary) -> Bool {
+        isSession ? ArtifactWords.isOutput(artifact) : true
+    }
+}
+
+// MARK: - The button
+
+/// The button on a conversation's bar that shows what was made there, in a popover over the
+/// conversation, as other coding apps show a task's outputs. It follows the record while the
+/// conversation shows, for its dot: something new since you last looked. A coding session's shows
+/// only once the session has made something besides code.
+struct MadeButton: View {
+    let place: MadePlace
+    @Environment(AppModel.self) private var app
+    @State private var things: MadeThings?
+    @State private var isOpen = false
+    /// When you last looked, by place, on this Mac: the newest thing's time then.
+    @AppStorage("made.seen") private var seen: String = "{}"
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if let things, isShown(things) {
+                Button { isOpen.toggle() } label: {
+                    Label(title, systemImage: "tray.full")
+                }
+                .buttonStyle(CardActionStyle())
+                .background(isOpen ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+                .overlay(alignment: .topTrailing) {
+                    if hasNew(things) {
+                        Circle()
+                            .fill(.tint)
+                            .frame(width: 6, height: 6)
+                            .offset(x: -4, y: 4)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .help(title)
+                .accessibilityLabel(title)
+                .accessibilityValue(hasNew(things) ? "Something new" : "")
+                .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+                    MadePopover(things: things, place: place) { isOpen = false }
+                }
+                .onChange(of: isOpen) { _, open in if open { markSeen(things) } }
+                .onChange(of: newest(things)) { if isOpen { markSeen(things) } }
+            }
+            // Always there, for the record to be followed before the button shows (an empty
+            // stack would never start its task).
+            Color.clear.frame(width: 0, height: 0)
+        }
+        .task(id: place.key) {
+            let made = MadeThings(box: app.box(place.box), scope: place.scope)
+            things = made
+            await made.follow()
+        }
+        // KUVO_DEMO_MADE: the popover open (`open`, `timeline`, or a thing's name to open it), for screenshots.
+        .onChange(of: things?.state) { _, state in
+            guard state == .loaded, let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MADE"], !demo.isEmpty, !isOpen else { return }
+            if demo == "timeline" { things?.mode = .timeline }
+            // After the window has settled, so it points at the button.
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                isOpen = true
+            }
+        }
+        // The first time a place is read here, what it has is what you've seen (a session's
+        // first output, though, is news).
+        .onChange(of: things?.state) { _, state in
+            guard state == .loaded, let things, seenTimes[place.key] == nil else { return }
+            store(place.isSession ? 0 : newest(things))
+        }
+    }
+
+    private var title: String {
+        switch place {
+        case .bot(let bot): "What \(bot.name) Made"
+        case .group: "What the Chat Made"
+        case .session: "What This Session Made"
+        }
+    }
+
+    private func isShown(_ things: MadeThings) -> Bool {
+        !place.isSession || things.artifacts.contains(where: place.shows)
+    }
+
+    private func newest(_ things: MadeThings) -> Double {
+        things.artifacts.filter(place.shows).map(\.updated).max() ?? 0
+    }
+
+    private var seenTimes: [String: Double] {
+        (try? JSONDecoder().decode([String: Double].self, from: Data(seen.utf8))) ?? [:]
+    }
+
+    private func hasNew(_ things: MadeThings) -> Bool {
+        guard let last = seenTimes[place.key] else { return false }
+        return newest(things) > last
+    }
+
+    private func markSeen(_ things: MadeThings) { store(newest(things)) }
+
+    private func store(_ time: Double) {
+        var times = seenTimes
+        times[place.key] = time
+        if let data = try? JSONEncoder().encode(times), let text = String(data: data, encoding: .utf8) { seen = text }
+    }
+}
+
+// MARK: - The popover
+
+/// What was made in a conversation, in its popover: a bot's Shelf (its Timeline a click away), a
+/// group chat's Timeline (a face per bot, one bot's on its own), a coding session's outputs besides
+/// code. Something opened shows over the list, which keeps its place underneath.
+struct MadePopover: View {
+    @Bindable var things: MadeThings
+    let place: MadePlace
+    let close: () -> Void
+    @Environment(AppModel.self) private var app
+    @State private var opened: ArtifactHeader?
+
+    var body: some View {
+        ZStack {
+            list
+                .offset(x: opened == nil ? 0 : -40)
+                .opacity(opened == nil ? 1 : 0)
+                .allowsHitTesting(opened == nil)
+                .accessibilityHidden(opened != nil)
+            if let opened {
+                ArtifactDetail(things: things, header: opened, back: backTitle, close: close) {
+                    withAnimation(.ui) { self.opened = nil }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .frame(width: 400, height: height)
+        .task {
+            // KUVO_DEMO_MADE=<a thing's name>: it opened, for screenshots.
+            guard let name = ProcessInfo.processInfo.environment["KUVO_DEMO_MADE"], !["open", "timeline"].contains(name) else { return }
+            for _ in 0..<20 where opened == nil {
+                if let found = things.artifacts.first(where: { $0.name == name }) { opened = found.header } else { try? await Task.sleep(for: .milliseconds(200)) }
+            }
+        }
+        // The Timeline, while it shows (the list is followed by the button, for its dot).
+        .task(id: "\(showsTimeline)|\(things.only ?? "")") {
+            if showsTimeline { await things.followTimeline() }
+        }
+    }
+
+    /// As tall as there's room for, and the same whatever it shows, so it never jumps.
+    private var height: CGFloat {
+        let room = (NSScreen.main?.visibleFrame.height ?? 800) - 160
+        return min(560, max(room, 260))
+    }
+
+    private var showsTimeline: Bool { place.isGroup || (!place.isSession && things.mode == .timeline) }
+
+    private var shown: [ArtifactSummary] { things.artifacts.filter(place.shows) }
+
+    private var backTitle: String {
+        if place.isSession { return "Made" }
+        return showsTimeline ? "Timeline" : "Shelf"
+    }
+
+    private var list: some View {
+        VStack(spacing: 0) {
+            header
+            content
+            if place.isSession { changesNote }
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text(heading)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            switch place {
+            case .bot:
+                PillPicker(options: [.init(value: MadeThings.Mode.shelf, title: "Shelf"), .init(value: .timeline, title: "Timeline")], selection: $things.mode)
+                    .fixedSize()
+            case .group(let group, _):
+                botFilter(group)
+            case .session:
+                EmptyView()
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .frame(height: 40)
+    }
+
+    /// The button's own words.
+    private var heading: String {
+        switch place {
+        case .bot(let bot): "What \(bot.name) Made"
+        case .group: "What the Chat Made"
+        case .session: "What This Session Made"
+        }
+    }
+
+    /// A coding session's code changes are in the panel.
+    private var changesNote: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 8) {
+                Text("Its code changes are in the side panel.")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Button("Show Changes") {
+                    close()
+                    app.utilities.revealChanges()
+                }
+                .buttonStyle(TextButtonStyle(outset: true))
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 16)
+            .frame(height: 36)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// Who to show in a group chat's Timeline: everyone, or one bot (asked of its computer).
+    private func botFilter(_ group: BotGroup) -> some View {
+        Menu {
+            Picker("Show", selection: $things.only) {
+                Text("Everyone").tag(String?.none)
+                Divider()
+                ForEach(group.members, id: \.self) { member in
+                    Text(app.bots.bot(member)?.name ?? "A bot that left").tag(Optional(member))
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 5) {
+                if let only = things.only, let bot = app.bots.bot(only) {
+                    BotAvatar(look: bot.look, size: 14, animates: false)
+                    Text(bot.name)
+                } else {
+                    Text("Everyone")
+                }
+                MenuChevron()
+            }
+            .font(.system(size: 12.5, weight: .medium))
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+        .fixedSize()
+        .help("Show what one bot made, or everyone")
+        .accessibilityLabel("Show")
+        .accessibilityValue(things.only.flatMap { app.bots.bot($0)?.name } ?? "Everyone")
+    }
+
+    // MARK: Content
+
+    @ViewBuilder private var content: some View {
+        switch showsTimeline ? things.timelineState : things.state {
+        case .loading:
+            Spinner(size: 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Loading")
+        case .failed(let why):
+            MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
+        case .loaded:
+            if showsTimeline {
+                if things.entries.isEmpty {
+                    empty
+                } else {
+                    TimelineList(things: things, colored: place.isGroup, open: open)
+                }
+            } else if shown.isEmpty {
+                empty
+            } else if place.isSession {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(shown) { artifact in
+                            MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.bottom, 8)
+                }
+            } else {
+                ShelfList(things: things, open: open)
+            }
+        }
+    }
+
+    private var empty: some View {
+        let detail = switch place {
+        case .bot(let bot): "What \(bot.name) writes, makes and keeps in its memory shows up here, with every version."
+        case .group: things.only == nil ? "What the bots in this chat write and make shows up here, each with its face." : "This bot hasn’t made anything in this chat yet."
+        case .session: "Pictures, documents and other files this session makes, besides code, show up here."
+        }
+        return MadeNotice(symbol: "tray", title: "Nothing Made Yet", detail: detail)
+    }
+
+    private func open(_ header: ArtifactHeader) {
+        withAnimation(.ui) { opened = header }
+    }
+}
+
+// MARK: - Shelf
+
+/// A bot's Shelf: what it marked final first, then its memory (its latest change in its words),
+/// pages, documents, images, skills and downloads, with its other files folded at the end.
+private struct ShelfList: View {
+    let things: MadeThings
+    let open: (ArtifactHeader) -> Void
+    @State private var showsOther = false
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(ArtifactWords.shelf(things.artifacts), id: \.section) { shelf in
+                    switch shelf.section {
+                    case .images:
+                        SectionTitle(title: shelf.section.rawValue, count: shelf.artifacts.count)
+                        ImageGrid(things: things, images: shelf.artifacts, open: open)
+                    case .other:
+                        otherFiles(shelf.artifacts)
+                    default:
+                        SectionTitle(title: shelf.section.rawValue, count: shelf.artifacts.count)
+                        ForEach(shelf.artifacts) { artifact in
+                            if artifact.name == "MEMORY.md", shelf.section == .memory {
+                                MemoryCard(things: things, artifact: artifact) { open(artifact.header) }
+                            } else {
+                                MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+                            }
+                        }
+                    }
+                }
+                if things.next != nil {
+                    Button("Show More") { Task { await things.more() } }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                }
+            }
+            .padding(.bottom, 12)
+        }
+    }
+
+    /// Code and other files, folded: the Shelf is for what the bot made for you.
+    @ViewBuilder private func otherFiles(_ artifacts: [ArtifactSummary]) -> some View {
+        Button {
+            withAnimation(.ui) { showsOther.toggle() }
+        } label: {
+            HStack(spacing: 5) {
+                Text("Other Files")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("\(artifacts.count)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(showsOther ? 0 : -90))
+                    .accessibilityHidden(true)
+                Spacer()
+            }
+            .frame(height: 22)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 2)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .help(showsOther ? "Hide Other Files" : "Show Other Files")
+        .accessibilityValue(showsOther ? "Expanded" : "Collapsed")
+        if showsOther {
+            ForEach(artifacts) { artifact in
+                MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+            }
+        }
+    }
+}
+
+private struct SectionTitle: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+            // A count only where there are enough to count.
+            if count >= 5 { Text("\(count)").foregroundStyle(.tertiary) }
+            Spacer()
+        }
+        .font(.system(size: 13))
+        .frame(height: 22)
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A bot's memory on its Shelf: its latest change, read in its words.
+private struct MemoryCard: View {
+    let things: MadeThings
+    let artifact: ArtifactSummary
+    let open: () -> Void
+    @State private var changes: ArtifactChanges?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(ArtifactWords.when(artifact.latest.at))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if let lines = artifact.latest.lines { MadeDiffStat(lines: lines) }
+                }
+                if case .words(let lines, _, _) = changes {
+                    let changed = lines.filter { if case .folded = $0 { false } else if case .same = $0 { false } else { true } }
+                    ChangedWords(lines: Array(changed.prefix(3)), lineLimit: 3, selectable: false)
+                        .font(.system(size: 13))
+                        .lineSpacing(2)
+                } else {
+                    Text(artifact.name)
+                        .font(.system(size: 13, weight: .medium))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+            .contentShape(.rect(cornerRadius: 10))
+            .hoverHighlight(in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Its memory")
+        .accessibilityHint("Shows its memory and every version")
+        .task(id: artifact.latest.n) {
+            changes = try? await things.changes(of: artifact.id, version: artifact.latest.n)
+        }
+    }
+}
+
+/// Pictures as thumbnails, newest first: two rows of them, the rest a click away.
+private struct ImageGrid: View {
+    let things: MadeThings
+    let images: [ArtifactSummary]
+    let open: (ArtifactHeader) -> Void
+    @State private var showsAll = false
+
+    var body: some View {
+        let shown = showsAll ? images : Array(images.prefix(8))
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+            ForEach(shown) { image in
+                Button { open(image.header) } label: {
+                    Thumbnail(things: things, id: image.id, version: image.latest.n, side: 90)
+                        .aspectRatio(1, contentMode: .fit)
+                        .clipShape(.rect(cornerRadius: 8))
+                        .specularRim(RoundedRectangle(cornerRadius: 8), strength: 0.7)
+                        .contentShape(.rect(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .clickablePointer()
+                .help(image.name)
+                .accessibilityLabel(image.name)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        if images.count > shown.count {
+            Button("Show All \(images.count)") { withAnimation(.ui) { showsAll = true } }
+                .buttonStyle(TextButtonStyle(outset: true))
+                .font(.system(size: 12))
+                .padding(.horizontal, 16)
+                .padding(.top, 2)
+        }
+    }
+}
+
+/// A picture's version, small, or its kind's symbol while it comes (or if it can't).
+private struct Thumbnail: View {
+    let things: MadeThings
+    let id: String
+    let version: Int
+    let side: CGFloat
+    var symbol = "photo"
+    @State private var image: NSImage?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        // As big as it's given, the picture filling it.
+        Rectangle()
+            .fill(Surface.well(scheme))
+            .overlay {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: min(side / 3, 16)))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .clipped()
+        .task(id: "\(id)#\(version)") {
+            image = await things.thumbnail(of: id, version: version, side: side)
+        }
+    }
+}
+
+// MARK: - Timeline
+
+/// Every version made, newest first, by day: who made it (a bot's face in a group chat), and a
+/// hand-off where a bot took up what another made.
+private struct TimelineList: View {
+    let things: MadeThings
+    let colored: Bool
+    let open: (ArtifactHeader) -> Void
+
+    var body: some View {
+        let days = Dictionary(grouping: things.entries) { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0.version.at)) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(days.keys.sorted(by: >), id: \.self) { day in
+                    Text(ArtifactWords.day(day))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(height: 22)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                        .padding(.bottom, 2)
+                        .accessibilityAddTraits(.isHeader)
+                    ForEach(days[day] ?? []) { entry in
+                        if let from = entry.version.handoff?.from { HandoffMark(from: from) }
+                        MadeRow(things: things, header: entry.artifact, version: entry.version, showsBot: colored, timeOnly: true) { open(entry.artifact) }
+                    }
+                }
+                if things.timelineNext != nil {
+                    Button("Show Earlier") { Task { await things.moreTimeline() } }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                }
+            }
+            .padding(.bottom, 12)
+        }
+    }
+}
+
+/// "Taken up from Ben", over the version that took it up.
+private struct HandoffMark: View {
+    let from: String
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 10, weight: .semibold))
+            Text("Taken up from \(app.bots.bot(from)?.name ?? "another bot")")
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .padding(.leading, 56)
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - Rows
+
+/// A thing made: a small picture of it (or its bot, in a group chat's Timeline, or its kind), its
+/// name, what happened to it and when, and how much changed.
+struct MadeRow: View {
+    let things: MadeThings
+    let header: ArtifactHeader
+    let version: ArtifactVersion
+    var versions: Int?
+    var showsBot = false
+    var timeOnly = false
+    let open: () -> Void
+    @Environment(AppModel.self) private var app
+
+    /// The bot it was made for, by name.
+    private var owner: String? { header.where.bots.first.flatMap { app.bots.bot($0)?.name } }
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 10) {
+                leading
+                    .frame(width: 30, height: 30)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(ArtifactWords.name(header, bot: owner))
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if header.pinned != nil, timeOnly {
+                            Text("Final")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tint)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.tint.opacity(0.14), in: .capsule)
+                        }
+                    }
+                    Text(subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 6)
+                if let lines = version.lines, version.status == .modified {
+                    MadeDiffStat(lines: lines)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+        }
+        .buttonStyle(ListRowButtonStyle(isSelected: false, cornerRadius: 8))
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Shows it and its versions")
+    }
+
+    @ViewBuilder private var leading: some View {
+        if showsBot, let bot = version.by.bot.flatMap({ app.bots.bot($0) }) {
+            BotAvatar(look: bot.look, size: 26, animates: false)
+        } else if header.kind == .image, version.kept {
+            Thumbnail(things: things, id: header.id, version: version.n, side: 30)
+                .clipShape(.rect(cornerRadius: 7))
+                .specularRim(RoundedRectangle(cornerRadius: 7), strength: 0.6)
+        } else {
+            FileKindIcon(name: header.name, kind: header.kind, type: header.type)
+        }
+    }
+
+    private var subtitle: String {
+        // On the Timeline, what happened and when; on a list of things, when it last changed.
+        var parts: [String] = []
+        if timeOnly {
+            parts.append(ArtifactWords.what(version, bot: showsBot ? version.by.bot.flatMap { app.bots.bot($0)?.name } : nil))
+            parts.append(ArtifactWords.time(version.at))
+        } else {
+            if version.status == .deleted || version.by.kind != "agent" { parts.append(ArtifactWords.what(version)) }
+            parts.append(ArtifactWords.when(version.at))
+        }
+        if let versions, versions > 1 { parts.append("\(versions) versions") }
+        if header.gone != nil, version.status != .deleted { parts.append("since deleted") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A file's icon as Finder and Changes show it, by its kind of file; a kind's symbol for one macOS
+/// has no icon for.
+private struct FileKindIcon: View {
+    let name: String
+    let kind: Artifact.Kind
+    let type: String
+
+    var body: some View {
+        if let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? UTType(mimeType: self.type) {
+            Image(nsImage: NSWorkspace.shared.icon(for: type))
+                .resizable()
+                .frame(width: 28, height: 28)
+        } else {
+            Image(systemName: ArtifactWords.symbol(kind: kind, type: self.type))
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// How much a version changed, as Changes shows it, said in words to VoiceOver.
+private struct MadeDiffStat: View {
+    let lines: ArtifactVersion.Lines
+
+    var body: some View {
+        DiffStat(additions: lines.added, deletions: lines.removed)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(lines.added) \(lines.added == 1 ? "line" : "lines") added, \(lines.removed) removed")
+    }
+}
+
+/// A quiet notice in the popover: why nothing shows, in a few words.
+private struct MadeNotice: View {
+    let symbol: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 22))
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 2)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 280)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Words that changed
+
+/// Prose with the words that changed marked: added in green, removed in red and struck through;
+/// VoiceOver says which.
+struct ChangedWords: View {
+    let lines: [ArtifactChanges.Line]
+    var lineLimit: Int?
+    var selectable = true
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Group {
+                    switch line {
+                    case .same(let text): Text(text.isEmpty ? " " : text)
+                    case .added(let text):
+                        Text(Self.marked(text, .added)).accessibilityLabel("Added: " + text)
+                    case .removed(let text):
+                        Text(Self.marked(text, .removed)).accessibilityLabel("Removed: " + text)
+                    case .changed(let runs):
+                        Text(runs.reduce(into: AttributedString()) { $0 += Self.marked($1.text, $1.mark) })
+                            .accessibilityLabel(Self.spoken(runs))
+                    case .folded(let count):
+                        Text(count == 1 ? "1 line the same" : "\(count) lines the same")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 2)
+                    }
+                }
+                .lineLimit(lineLimit)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(Selectable(on: selectable))
+    }
+
+    /// A changed line as it's heard: the words kept, then what was removed and added.
+    static func spoken(_ runs: [ArtifactChanges.Run]) -> String {
+        runs.map { run in
+            switch run.mark {
+            case .same: run.text
+            case .added: " added: " + run.text + ";"
+            case .removed: " removed: " + run.text + ";"
+            }
+        }.joined()
+    }
+
+    static func marked(_ text: String, _ mark: ArtifactChanges.Run.Mark) -> AttributedString {
+        var string = AttributedString(text)
+        switch mark {
+        case .same: break
+        case .added:
+            string.foregroundColor = .additions
+            string.backgroundColor = Color.additions.opacity(0.14)
+        case .removed:
+            string.foregroundColor = .deletions
+            string.backgroundColor = Color.deletions.opacity(0.13)
+            string.strikethroughStyle = .single
+        }
+        return string
+    }
+
+    private struct Selectable: ViewModifier {
+        let on: Bool
+        func body(content: Content) -> some View {
+            if on { content.textSelection(.enabled) } else { content }
+        }
+    }
+}
+
+// MARK: - One thing and its versions
+
+/// One thing made, at a version: arrows step through its versions (what it was before the agent
+/// first changed it too), and Show Changes marks what that version changed (words in prose, lines
+/// in code, the one before above it for pictures and PDFs). An older version can be put back.
+struct ArtifactDetail: View {
+    let things: MadeThings
+    let header: ArtifactHeader
+    let back: String
+    let close: () -> Void
+    let done: () -> Void
+    @State private var artifact: Artifact?
+    @State private var failure: String?
+    @State private var at: Int?
+    @State private var showsChanges = true
+    /// Restore asked, waiting for your yes in place: the version.
+    @State private var restoring: ArtifactVersion?
+    @State private var isRestoring = false
+    @State private var problem: String?
+    @Environment(AppModel.self) private var app
+    @Environment(\.colorScheme) private var scheme
+
+    /// The bot it was made for, by name.
+    private var owner: String? { header.where.bots.first.flatMap { app.bots.bot($0)?.name } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            let version = artifact.flatMap { artifact in artifact.versions.first { $0.n == at } ?? artifact.versions.last }
+            top(version)
+            if let artifact, let version {
+                versionBar(artifact, version)
+                    .padding(.bottom, 6)
+                if let restoring { confirm(artifact, restoring) }
+                if let problem {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(problem)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.system(size: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+                Divider()
+                VersionBody(things: things, artifact: artifact, version: version, showsChanges: showsChanges && comparable(artifact, version))
+                    .id("\(artifact.id)#\(version.n)#\(showsChanges)")
+            } else if let failure {
+                Divider()
+                MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show It", detail: failure)
+            } else {
+                Divider()
+                Spinner(size: 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: header.id) { await load() }
+        // It changed meanwhile (a new version): read again, staying on the version in view.
+        .onChange(of: newest) { Task { await load() } }
+        .onChange(of: at) { problem = nil; restoring = nil }
+    }
+
+    /// Its newest version, as the list or the Timeline in view says.
+    private var newest: Int? {
+        things.artifacts.first { $0.id == header.id }?.latest.n ?? things.entries.first { $0.artifact.id == header.id }?.version.n
+    }
+
+    private func load() async {
+        do {
+            artifact = try await things.artifact(header.id)
+            failure = nil
+        } catch {
+            if artifact == nil { failure = error.localizedDescription }
+        }
+    }
+
+    private func top(_ version: ArtifactVersion?) -> some View {
+        HStack(spacing: 4) {
+            Button(action: done) {
+                Label(back, systemImage: "chevron.left")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(CardActionStyle())
+            .keyboardShortcut(.cancelAction)
+            .help("Back to \(back)")
+            Text(ArtifactWords.name(header, bot: owner))
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+            Spacer(minLength: 6)
+            if let artifact, let version, canRestore(artifact, version) {
+                Button { withAnimation(.ui) { restoring = version } } label: {
+                    Label("Restore…", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(CardActionStyle())
+                .disabled(isRestoring || restoring != nil)
+                .help(version.before == true ? "Put it back as it was before" : "Put this version back in the file")
+            }
+            if let artifact {
+                Button {
+                    Task {
+                        do {
+                            try await things.pin(artifact.id, artifact.pinned == nil)
+                            await load()
+                        } catch {
+                            problem = error.localizedDescription
+                        }
+                    }
+                } label: {
+                    Label(artifact.pinned == nil ? "Pin" : "Unpin", systemImage: artifact.pinned == nil ? "pin" : "pin.slash")
+                }
+                .buttonStyle(CardActionStyle())
+                .help(artifact.pinned == nil ? "Pin it to the top" : artifact.pinned?.by == "bot" ? "Unpin (its bot marked it final)" : "Unpin")
+                // This Mac's file, as it is now: in the panel's Files, or in Finder.
+                if things.box.box == BoxClient.mac, artifact.gone == nil, FileManager.default.fileExists(atPath: artifact.path) {
+                    Button {
+                        close()
+                        app.utilities.revealFile(URL(fileURLWithPath: artifact.path))
+                    } label: {
+                        Label("Open in the Side Panel", systemImage: "sidebar.right")
+                    }
+                    .buttonStyle(CardActionStyle())
+                    .help("Open in the Side Panel")
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: artifact.path)])
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    .buttonStyle(CardActionStyle())
+                    .help("Show in Finder")
+                }
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .frame(height: 40)
+    }
+
+    /// An older version, kept, of a file its box can write back.
+    private func canRestore(_ artifact: Artifact, _ version: ArtifactVersion) -> Bool {
+        artifact.restorable == true && version.kept && version.status != .deleted && version.n != artifact.versions.last?.n
+    }
+
+    private func previous(_ artifact: Artifact, _ version: ArtifactVersion) -> ArtifactVersion? {
+        artifact.versions.last { $0.n < version.n }
+    }
+
+    /// Whether this version's changes can be shown: there's one before with a copy (or code's own
+    /// change), and it's text, a picture or a PDF.
+    private func comparable(_ artifact: Artifact, _ version: ArtifactVersion) -> Bool {
+        guard version.status != .deleted else { return false }
+        if version.patch != nil { return true }
+        guard version.kept, let previous = previous(artifact, version), previous.kept || previous.status == .deleted else { return false }
+        return artifact.type.hasPrefix("text/") || artifact.type == "application/json" || artifact.kind == .image || artifact.type == "application/pdf"
+    }
+
+    private func versionBar(_ artifact: Artifact, _ version: ArtifactVersion) -> some View {
+        let all = artifact.versions
+        let index = all.firstIndex { $0.n == version.n } ?? all.count - 1
+        let made = artifact.made
+        let position = version.before == true ? "Before" : "Version \((made.firstIndex { $0.n == version.n } ?? 0) + 1) of \(made.count)"
+        return HStack(spacing: 6) {
+            Button { withAnimation(.ui) { at = all[max(0, index - 1)].n } } label: {
+                Label("Previous Version", systemImage: "chevron.left")
+            }
+            .buttonStyle(CardActionStyle())
+            .disabled(index == 0)
+            .help("Previous Version")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(position)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .monospacedDigit()
+                Text(ArtifactWords.what(version, bot: version.by.bot.flatMap { app.bots.bot($0)?.name }) + " · " + ArtifactWords.when(version.at))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .accessibilityElement(children: .combine)
+            Button { withAnimation(.ui) { at = all[min(all.count - 1, index + 1)].n } } label: {
+                Label("Next Version", systemImage: "chevron.right")
+            }
+            .buttonStyle(CardActionStyle())
+            .disabled(index == all.count - 1)
+            .help("Next Version")
+            Spacer(minLength: 6)
+            if comparable(artifact, version) {
+                Toggle("Show Changes", isOn: $showsChanges)
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .font(.system(size: 12))
+                    .fixedSize()
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+    }
+
+    /// Restore's yes, in place (a dialog would close the popover): what it puts back, and what
+    /// that replaces.
+    private func confirm(_ artifact: Artifact, _ version: ArtifactVersion) -> some View {
+        let name = ArtifactWords.name(header, bot: owner)
+        let latest = artifact.versions.last
+        let replaces = latest?.status == .deleted
+            ? "\(name) was deleted: this brings it back."
+            : "This replaces \(name) as it is now. What’s there now is kept as a version first, so you can undo this the same way."
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(version.before == true ? "Put back \(name) as it was before?" : "Put back this version of \(name)?")
+                .font(.system(size: 12.5, weight: .semibold))
+            Text(replaces)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { withAnimation(.ui) { restoring = nil } }
+                    .keyboardShortcut(.cancelAction)
+                Button {
+                    Task { await restore(artifact, version) }
+                } label: {
+                    if isRestoring { Spinner(size: 11) } else { Text("Restore") }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isRestoring)
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Surface.well(scheme), in: .rect(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .transition(.opacity)
+    }
+
+    private func restore(_ artifact: Artifact, _ version: ArtifactVersion) async {
+        isRestoring = true
+        defer { isRestoring = false }
+        do {
+            self.artifact = try await things.restore(artifact.id, version: version.n)
+            withAnimation(.ui) {
+                restoring = nil
+                at = nil
+            }
+        } catch {
+            restoring = nil
+            problem = error.localizedDescription
+        }
+    }
+}
+
+/// A version's content: prose and code as text (what it changed marked, with Show Changes),
+/// pictures and PDFs as themselves (the one before above it), pages and documents in Quick Look.
+private struct VersionBody: View {
+    let things: MadeThings
+    let artifact: Artifact
+    let version: ArtifactVersion
+    let showsChanges: Bool
+    @State private var loaded: Loaded?
+    @State private var failure: String?
+    /// What's shown in place of the changes, when they couldn't be read.
+    @State private var note: String?
+
+    /// The most of a text shown here (the rest in the side panel or Finder).
+    private static let textLimit = 200_000
+
+    enum Loaded {
+        case changes(ArtifactChanges)
+        case text(String, cut: Bool)
+        case image(NSImage, before: NSImage?)
+        case pdf(PDFDocument, before: PDFDocument?)
+        case quickLook(URL)
+        case other
+    }
+
+    var body: some View {
+        Group {
+            if version.status == .deleted {
+                notice("Deleted", symbol: "trash", "It was deleted in this version. Step back to see what it was.")
+            } else if !version.kept, version.patch == nil {
+                notice(version.reason == .secret || version.reason == .ignored ? "Not Kept" : "No Copy", symbol: version.reason == .secret ? "lock" : "clock.arrow.circlepath",
+                       (version.reason ?? .cleared).words)
+            } else if let failure {
+                notice("Can’t Show It", symbol: "exclamationmark.triangle", failure)
+            } else {
+                switch loaded {
+                case nil:
+                    Spinner(size: 16).frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .changes(.words(let lines, _, _)):
+                    ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
+                case .changes(.lines(let patch, _, _)):
+                    ScrollView([.vertical, .horizontal]) { PatchText(patch: patch).padding(.vertical, 8) }
+                case .changes:
+                    notice("Can’t Compare", symbol: "doc", "Its changes can’t be shown for this kind of file.")
+                case .text(let text, let cut):
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                            Text(text)
+                                .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                        }
+                        .transcriptFont()
+                        .padding(16)
+                    }
+                case .image(let image, let before):
+                    pair(before.map { AnyView(Image(nsImage: $0).resizable().scaledToFit()) }, AnyView(Image(nsImage: image).resizable().scaledToFit()))
+                case .pdf(let document, let before):
+                    pair(before.map { AnyView(PDFPreview(document: $0)) }, AnyView(PDFPreview(document: document)))
+                case .quickLook(let url):
+                    QuickLookPreview(url: url)
+                case .other:
+                    notice(artifact.name, symbol: ArtifactWords.symbol(kind: artifact.kind, type: artifact.type), ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { await load() }
+        .onDisappear {
+            if case .quickLook(let url) = loaded { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        }
+    }
+
+    private var previous: ArtifactVersion? { artifact.versions.last { $0.n < version.n } }
+
+    private func load() async {
+        do {
+            let isImage = artifact.kind == .image || artifact.type.hasPrefix("image/")
+            if isImage || artifact.type == "application/pdf" {
+                let data = try await things.bytes(of: artifact.id, version: version.n)
+                var before: Data?
+                if showsChanges, let previous, previous.kept { before = try? await things.bytes(of: artifact.id, version: previous.n) }
+                if isImage, let image = NSImage(data: data) {
+                    loaded = .image(image, before: before.flatMap { NSImage(data: $0) })
+                } else if !isImage, let document = PDFDocument(data: data) {
+                    loaded = .pdf(document, before: before.flatMap { PDFDocument(data: $0) })
+                } else {
+                    loaded = .other
+                }
+                return
+            }
+            if showsChanges || !version.kept {
+                // Its changes; if they can't be read (the one before was cleared), the version itself.
+                do {
+                    loaded = .changes(try await things.changes(of: artifact.id, version: version.n))
+                    return
+                } catch {
+                    guard version.kept else { throw error }
+                    note = "What changed can’t be shown: the version before isn’t kept. This is the version itself."
+                }
+            }
+            let data = try await things.bytes(of: artifact.id, version: version.n)
+            let isText = artifact.type.hasPrefix("text/") && artifact.type != "text/html" || artifact.type == "application/json"
+            if isText, let text = String(data: data, encoding: .utf8) {
+                let cut = text.utf8.count > Self.textLimit
+                loaded = .text(cut ? String(text.prefix(Self.textLimit)) : text, cut: cut)
+            } else {
+                loaded = .quickLook(try Self.previewFile(data, name: artifact.name, id: artifact.id, version: version.n))
+            }
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    /// The version as a file of its own in the app's temporary folder, for Quick Look; gone once shown.
+    private static func previewFile(_ data: Data, name: String, id: String, version: Int) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "Made previews").appending(path: "\(id)-\(version)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: name)
+        try data.write(to: file)
+        return file
+    }
+
+    /// The version before above this one (Show Changes), or this one alone.
+    @ViewBuilder private func pair(_ before: AnyView?, _ now: AnyView) -> some View {
+        if let before {
+            VStack(spacing: 8) {
+                labeled("Before", before)
+                labeled("This Version", now)
+            }
+            .padding(12)
+        } else {
+            now.padding(12)
+        }
+    }
+
+    private func labeled(_ title: String, _ content: AnyView) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func notice(_ title: String, symbol: String, _ detail: String) -> some View {
+        MadeNotice(symbol: symbol, title: title, detail: detail)
+    }
+}
+
+/// A unified diff's lines, added and removed in their colors.
+private struct PatchText: View {
+    let patch: String
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(patch.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                let mark = line.first
+                Text(line.isEmpty ? " " : String(line))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(mark == "+" ? Color.additions : mark == "-" ? Color.deletions : mark == "@" ? .secondary : .primary)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(mark == "+" ? Color.additions.opacity(0.1) : mark == "-" ? Color.deletions.opacity(0.1) : .clear)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .textSelection(.enabled)
+    }
+}
+
+/// A PDF, scrolled through.
+private struct PDFPreview: NSViewRepresentable {
+    let document: PDFDocument
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.backgroundColor = .clear
+        view.document = document
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        if view.document !== document { view.document = document }
+    }
+}
+
+/// A page, a document or a spreadsheet, as Quick Look shows it.
+private struct QuickLookPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .compact) ?? QLPreviewView()
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ view: QLPreviewView, context: Context) {
+        if (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
+    }
+}

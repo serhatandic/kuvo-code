@@ -678,6 +678,8 @@ struct MainView: View {
                 Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
                     GroupAvatar(faces: faces(of: group), size: 20)
                 } actions: {
+                    // What its bots made, in a popover over the chat.
+                    MadeButton(place: .group(group, box: groups.machine(of: group.id) ?? BoxClient.mac))
                     Button("Edit Group Chat", systemImage: "slider.horizontal.3") { tabs.openGroupEditor(group: group) }
                         .help("Edit Group Chat: its name, bots and lead")
                         .disabled(app.moves.isMoving(group.id))
@@ -703,6 +705,9 @@ struct MainView: View {
                             }
                     } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
                 } actions: {
+                    // What it made, in a popover over the conversation: a bot's Shelf, or a
+                    // session's outputs besides code (its Changes are in the panel).
+                    MadeButton(place: bot.map { .bot($0) } ?? .session(id, box: RemoteFolder.parse(directory)?.machine ?? BoxClient.mac))
                     if let bot {
                         Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                             .help("Edit Bot: its look, job, wake-ups and memory")

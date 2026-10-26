@@ -1,4 +1,5 @@
 import AppKit
+import KuvoLink
 import OpenCodeKit
 import SwiftUI
 
@@ -10,6 +11,12 @@ struct StorageSettings: View {
     @State private var cleaningUp = false
     @State private var confirmingLogs = false
     @State private var confirmingDownloads = false
+    /// What this Mac's box keeps of what agents made, as it says (`kuvo/artifacts/storage`).
+    @State private var made: ArtifactStorage?
+    @State private var madeFailure: String?
+    @State private var confirmingOlder = false
+    /// Whose: this Mac's box, or a machine's (each keeps its own).
+    @State private var madeBox = BoxClient.mac
 
     var body: some View {
         ScrollingSettingsForm {
@@ -90,6 +97,56 @@ struct StorageSettings: View {
             }
 
             Section {
+                if !app.machines.list.isEmpty {
+                    Picker("Computer", selection: $madeBox) {
+                        Text("This Mac").tag(BoxClient.mac)
+                        ForEach(app.machines.list) { machine in Text(machine.name).tag(machine.id) }
+                    }
+                    .onChange(of: madeBox) { made = nil; madeFailure = nil; Task { await loadMade() } }
+                }
+                if let made {
+                    LabeledContent {
+                        Text(Self.format(Int64(made.copies)))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    } label: {
+                        Text("Copies of what agents made")
+                        Text("Each version of the files agents write or change, so you can see what changed and put one back. Never what looks like a secret, and only the changes for code git keeps.")
+                    }
+                    Picker(selection: Binding(get: { Self.budgetChoice(made.budget) }, set: { budget in Task { await setBudget(budget) } })) {
+                        ForEach(Self.budgets, id: \.self) { Text(Self.format(Int64($0))).tag($0) }
+                    } label: {
+                        Text("Older versions keep up to")
+                        Text("Past it, the oldest go first. The newest version of each file, memory, skills and what’s pinned always stay.")
+                    }
+                    LabeledContent {
+                        Button("Clear…") { confirmingOlder = true }
+                            .disabled(made.older == 0)
+                    } label: {
+                        Text("Older versions")
+                        Text(made.older == 0 ? "None kept." : "\(Self.format(Int64(made.older))) now.")
+                    }
+                    if made.low {
+                        Label("The disk is nearly full, so only the newest version of each file keeps a copy until \(Self.format(Int64(made.floor))) is free again.", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .font(.callout)
+                    }
+                } else if madeFailure == nil {
+                    HStack(spacing: 8) {
+                        Spinner(size: 14)
+                        Text("Adding it up…").foregroundStyle(.secondary)
+                    }
+                }
+                if let madeFailure {
+                    Label(madeFailure, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+            } header: {
+                Text("What Agents Made")
+            }
+
+            Section {
                 LabeledContent {
                     Button("Delete…") { confirmingLogs = true }
                         .disabled((report?.size(of: .logs) ?? 0) == 0)
@@ -111,6 +168,11 @@ struct StorageSettings: View {
         .task { await load() }
         .settingsDetail(isPresented: $cleaningUp, title: "Clean Up Old Sessions", onDismiss: { Task { await load() } }) {
             OldSessions { cleaningUp = false }
+        }
+        .confirmationDialog("Clear older versions?", isPresented: $confirmingOlder) {
+            Button("Clear", role: .destructive) { Task { await clearOlder() } }
+        } message: {
+            Text("Their copies go; each stays listed, without one. The newest version of each file, memory, skills and what’s pinned stay.")
         }
         .confirmationDialog("Delete the logs?", isPresented: $confirmingLogs) {
             Button("Delete", role: .destructive) {
@@ -137,7 +199,45 @@ struct StorageSettings: View {
         workspace.sessions.filter { Workspace.isArchived($0) && !RemoteFolder.isRemote($0.location.directory) }.count
     }
 
+    /// The budgets to pick from for older versions.
+    static let budgets: [Double] = [256, 512, 1024, 2048, 5120, 10240].map { $0 * 1024 * 1024 }
+
+    /// The one shown for `budget`: the nearest (one set elsewhere may be between).
+    static func budgetChoice(_ budget: Double) -> Double {
+        budgets.min { abs($0 - budget) < abs($1 - budget) } ?? budget
+    }
+
+    private func loadMade() async {
+        do {
+            made = try await app.box(madeBox).value(ArtifactStorage.self, "GET", "kuvo/artifacts/storage")
+            madeFailure = nil
+        } catch {
+            if made == nil { madeFailure = error.localizedDescription }
+        }
+    }
+
+    private func setBudget(_ budget: Double) async {
+        struct Budget: Encodable { var budget: Double }
+        do {
+            made = try await app.box(madeBox).value(ArtifactStorage.self, "POST", "kuvo/artifacts/storage", body: Budget(budget: budget))
+            madeFailure = nil
+        } catch {
+            madeFailure = error.localizedDescription
+        }
+    }
+
+    private func clearOlder() async {
+        do {
+            let (status, data) = try await app.box(madeBox).send("POST", "kuvo/artifacts/storage/clear", body: Data("{}".utf8))
+            if !(200..<300).contains(status) { madeFailure = BoxRefusal(status: status, data: data).message }
+        } catch {
+            madeFailure = error.localizedDescription
+        }
+        await loadMade()
+    }
+
     private func load() async {
+        await loadMade()
         let worktrees = Array(Set(workspace.worktrees.values.map(\.root))).filter { !RemoteFolder.isRemote($0) }
         report = await Task.detached { StorageReport.measure(worktrees: worktrees) }.value
     }
