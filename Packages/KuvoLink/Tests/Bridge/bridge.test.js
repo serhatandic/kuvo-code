@@ -975,7 +975,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   // Where each one is reached: a route a client would ask first, answered with whatever this box
   // has now, never as one it doesn't have (403).
   const routes = {
-    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], agents: ["GET", "kuvo/agents/api/session"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
+    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
     "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], groups: ["GET", "kuvo/groups"],
