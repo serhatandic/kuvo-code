@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Also Apply (PROTOCOL.md, "kuvo/config/apply")
 // Changes made to another computer's settings, made to this box's too, when you ask ("Also Apply
 // to…"): each as it was made there, {path, before, after} (absent or null: nothing). A list of
@@ -12,16 +11,39 @@ import fs from "node:fs";
 import { isObject, sameJSON } from "../../shared/json";
 import { locked } from "../files";
 import { CONFIG_LOCK, IS_MAC } from "../home";
+import type { ConfigApplied } from "../../shared/routes/settings";
 import { CONFIG_FILE, keysNamedHere, readSettings, settingAt, valueAt, writeSettings } from "./config";
+import type { SettingChange, Settings, SettingsChanged } from "./config";
 import { CATALOG_FILE } from "./mcp-catalog";
+
+/** A change made to another computer's settings, as Also Apply sends it: the path of keys it's at,
+ * and the value there before and after (absent or null: nothing). */
+export interface ChangeMade {
+  path: string[];
+  before?: unknown;
+  after?: unknown;
+}
+
+/** What `translateSettings` makes of the changes here: each made, at its path; the entries this
+ * box doesn't have that some were to; the paths it keeps its own; and the servers that stay on Macs. */
+export interface Translated {
+  made: SettingChange[];
+  leftOut: string[][];
+  kept: string[][];
+  macOnly: string[];
+}
+
+/** What `applySettings` answers: what was made (or would be, with `dry`), with the keys those name,
+ * whether something was, and the settings now; or why nothing was. */
+export type SettingsApplied = ({ status: 200 } & ConfigApplied) | { status: number; message: string; problem?: string } | SettingsChanged;
 
 // The engine's own agents, on every computer whether its settings name them or not.
 const BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
-const isRules = keys => ["permissions", "policies"].includes(keys[keys.length - 1]);
+const isRules = (keys: string[]) => ["permissions", "policies"].includes(keys[keys.length - 1]);
 
 // Something each computer keeps its own: its shell (each picks from its own), and a worktrees
 // folder on its disk (one relative to each project goes).
-function keptOwn(change) {
+function keptOwn(change: ChangeMade): boolean {
   if (sameJSON(change.path, ["shell"])) return true;
   if (!sameJSON(change.path, ["worktree", "directory"])) return false;
   const folder = typeof change.after === "string" ? change.after : typeof change.before === "string" ? change.before : null;
@@ -30,7 +52,7 @@ function keptOwn(change) {
 
 // The named entry (an MCP server, an agent, a command, a provider) `keys` is a field of, when it's
 // one a computer may not have (the engine's own agents it always has).
-function entryOf(keys) {
+function entryOf(keys: string[]): string[] | null {
   if (keys[0] === "mcp" && keys.length >= 4 && keys[1] === "servers") return keys.slice(0, 3);
   if (keys[0] === "agents" && keys.length >= 3 && BUILT_IN_AGENTS.includes(keys[1])) return null;
   if (["agents", "commands", "providers"].includes(keys[0]) && keys.length >= 3) return keys.slice(0, 2);
@@ -39,16 +61,16 @@ function entryOf(keys) {
 
 // What a computer needs to have for `change` to be made there: the entry it's a field of, or the
 // agent `default_agent` names.
-function neededFor(change) {
+function neededFor(change: ChangeMade): string[] | null {
   if (sameJSON(change.path, ["default_agent"]) && typeof change.after === "string" && !BUILT_IN_AGENTS.includes(change.after)) return ["agents", change.after];
   return entryOf(change.path);
 }
 
 // The servers that use a Mac's own apps, as a Mac's catalog names them (its `macOnly`, and the
 // servers it marks so).
-function macOnlyServers(file = CATALOG_FILE) {
+function macOnlyServers(file = CATALOG_FILE): Set<string> {
   try {
-    const catalog = JSON.parse(fs.readFileSync(file, "utf8"));
+    const catalog: { macOnly?: unknown; servers?: { id?: unknown; macOnly?: unknown }[] } = JSON.parse(fs.readFileSync(file, "utf8"));
     const named = [...(Array.isArray(catalog.macOnly) ? catalog.macOnly : []), ...(catalog.servers ?? []).filter(server => server?.macOnly).map(server => server.id)];
     return new Set(named.filter(id => typeof id === "string"));
   } catch {
@@ -57,7 +79,7 @@ function macOnlyServers(file = CATALOG_FILE) {
 }
 
 // The keys `value` names: integrations' shared keys, not a bot's own.
-function keyNamesIn(value, names = new Set()) {
+function keyNamesIn(value: unknown, names: Set<string> = new Set()): Set<string> {
   if (typeof value === "string") for (const [name] of value.matchAll(/KUVO_KEY_[A-Z0-9_]+/g)) { if (!name.includes("__")) names.add(name); }
   else if (Array.isArray(value)) value.forEach(each => keyNamesIn(each, names));
   else if (isObject(value)) Object.values(value).forEach(each => keyNamesIn(each, names));
@@ -67,10 +89,10 @@ function keyNamesIn(value, names = new Set()) {
 // What `changes` make of `settings`, here: {made: [{path, value}], leftOut: [entry], kept: [path],
 // macOnly: [server]}: what's made; the entries it doesn't have that some were to; what it keeps its
 // own; and the servers that stay on Macs.
-export function translateSettings(changes, settings, { mac = IS_MAC, macOnly = macOnlyServers() } = {}) {
+export function translateSettings(changes: ChangeMade[], settings: Settings, { mac = IS_MAC, macOnly = macOnlyServers() }: { mac?: boolean; macOnly?: Set<string> } = {}): Translated {
   let here = settings;
-  const made = [], leftOut = [], kept = [], stayed = [];
-  const has = (list, item) => list.some(each => sameJSON(each, item));
+  const made: SettingChange[] = [], leftOut: string[][] = [], kept: string[][] = [], stayed: string[] = [];
+  const has = (list: unknown[], item: unknown) => list.some(each => sameJSON(each, item));
   for (const change of changes) {
     const keys = change.path;
     if (!mac && keys.length >= 3 && keys[0] === "mcp" && keys[1] === "servers" && macOnly.has(keys[2])) {
@@ -94,7 +116,7 @@ export function translateSettings(changes, settings, { mac = IS_MAC, macOnly = m
     // leaves) this box's own, rather than standing in for them.
     if (isRules(keys) && (Array.isArray(before) || Array.isArray(after)) && (before === null || Array.isArray(before)) && (after === null || Array.isArray(after))) {
       const was = (before ?? []).map(keysNamedHere), now = (after ?? []).map(keysNamedHere);
-      const current = Array.isArray(valueAt(here, keys)) ? valueAt(here, keys) : [];
+      const current = Array.isArray(valueAt(here, keys)) ? valueAt(here, keys) as unknown[] : [];
       const removed = was.filter(item => !has(now, item));
       const added = now.filter(item => !has(was, item));
       const staying = current.filter(item => !has(removed, item));
@@ -111,14 +133,15 @@ export function translateSettings(changes, settings, { mac = IS_MAC, macOnly = m
 // as `translateSettings` makes them, in one write (none with `dry`). {status, made, leftOut, kept,
 // macOnly, keys, applied, settings}: `keys`, those `made` names, for a client to bring along first
 // where this box hasn't its own; `applied`, something was made, or every change was already so.
-export function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, options = {}) {
+export function applySettings(body: { changes?: ChangeMade[]; dry?: unknown } | null | undefined, file = CONFIG_FILE, lock = CONFIG_LOCK, options: { mac?: boolean; macOnly?: Set<string> } = {}): SettingsApplied {
   const changes = body?.changes;
   const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every(change =>
     Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16
     && change.path.every(key => typeof key === "string" && key.length >= 1 && key.length <= 200));
   if (!fits) return { status: 400, message: "Send {\"changes\": [{\"path\": [keys…], \"before\": …, \"after\": …}]}." };
-  return locked(lock, () => {
-    const { settings, problem } = readSettings(file);
+  return locked(lock, (): SettingsApplied => {
+    // (Its settings are there whenever there's no problem.)
+    const { settings, problem } = readSettings(file) as { settings: Settings; problem?: string };
     if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
     const result = translateSettings(changes, settings, options);
     if (result.made.some(change => change.path.slice(0, -1).some((_, at) => {
@@ -127,9 +150,9 @@ export function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, opti
     }))) return { status: 400, message: "A path goes through objects only; send a list whole, at its own path." };
     const keys = [...keyNamesIn(result.made.map(change => change.value))].sort();
     const applied = result.made.length > 0 || (!result.leftOut.length && !result.kept.length && !result.macOnly.length);
-    if (body.dry === true || !result.made.length) return { status: 200, ...result, keys, applied, settings };
+    if (body!.dry === true || !result.made.length) return { status: 200, ...result, keys, applied, settings } satisfies { status: 200 } & ConfigApplied;
     const written = writeSettings(settings, result.made, file);
     if (written.status !== 200) return written;
-    return { status: 200, ...result, keys, applied, settings: written.settings };
+    return { status: 200, ...result, keys, applied, settings: (written as { settings: Settings }).settings } satisfies { status: 200 } & ConfigApplied;
   });
 }

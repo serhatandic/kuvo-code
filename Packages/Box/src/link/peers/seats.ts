@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Group chats across your computers (PROTOCOL.md, "Peers": `seat`)
 // The coding agents' bridge here runs this box's group chats, and its bots' turns in chats on your
 // other computers (Agents/src/groups/peer.ts). This link carries what goes between them: what the
@@ -21,12 +20,87 @@ import { LETTER_ID, LETTER_MEMORY, SENDING, letterTries } from "../letters/lette
 import { readLink } from "../state";
 import { readPeerAgents } from "./directory";
 import { mailFor, peersOf } from "./known";
+import type { BotLook, ToldAgents } from "../../shared/records";
+import type { DocPart, PendingParts } from "../documents/parts";
+import type { LinkHost } from "../relay/host";
+import type { LinkState } from "../state";
+import type { MailSender, Peer } from "./known";
+
+// What the coding agents' bridge sends and takes, as this link handles it. The bridge defines them
+// (Agents/src/groups/peer.ts and post.ts); these follow its shapes as far as the link reads them.
+
+/** The kinds of mail between two computers' bridges for their group chats (the bridge's `SeatMail`). */
+export type SeatMailKind = "turn" | "state" | "result" | "steer" | "stop" | "drop" | "work" | "report" | "memory";
+
+/** A mail between two computers' bridges (the bridge's `SeatMail`): its kind, and for what a bot
+ * remembers of a chat (`memory`), whose and which chat's. The rest goes as it is. */
+export interface SeatMail {
+  kind: SeatMailKind;
+  memory?: { bot: string; chat: string; [field: string]: unknown };
+  [field: string]: unknown;
+}
+
+/** One line of what the bridge sends (`GET /api/kuvo/peers/mail`, its `Line`): for the computer
+ * `to` (its key), and whether it mustn't be lost (`durable`). */
+export interface SeatLine {
+  id: string;
+  to: string;
+  mail: SeatMail;
+  durable: boolean;
+}
+
+/** A letter of seat mail that mustn't be lost (`run/outbox/sending/<id>.json`): for the computer
+ * `peer`, when it was left, whom it was last sent to, whether it's given up, and how long it's
+ * waited with this link online (ms). */
+export interface SeatLetter {
+  peer: string;
+  seat: SeatMail;
+  at: number;
+  sentTo?: string;
+  gaveUp?: boolean;
+  aged?: number;
+}
+
+/** What goes in a mail for a seat: the mail whole (with its letter's id when it mustn't be lost),
+ * or a part of it. */
+export type SeatPayload = { seat: SeatMail; seatID?: string } | { seatPart: DocPart };
+
+/** One of your other computers, as the bridge hears of it (`PUT /api/kuvo/peers`): whether it takes a chat's turns. */
+export interface SeatBox {
+  key: string;
+  name: string;
+  seats: boolean;
+}
+
+/** A bot on another of your computers, as the bridge hears of it (its `PeerBot`): its computer
+ * (`box`, by key), its own conversation there, and how it looks. */
+export interface SeatBot {
+  id: string;
+  name: string;
+  job: string;
+  box: string;
+  session: string;
+  look?: BotLook;
+}
+
+/** Who can be in this box's group chats from your other computers, as the bridge hears it. */
+export interface SeatPeers {
+  boxes: SeatBox[];
+  bots: SeatBot[];
+}
+
+/** What sends a mail on the relay. */
+export type SeatHost = Pick<LinkHost, "send">;
+
+/** An ask of the coding agents' bridge's `/api/kuvo/peers` routes: its answer, or why not (an
+ * error, with the `status` it answered). */
+export type BridgeAsk = (method: string, route: string, body?: unknown, signal?: AbortSignal) => Promise<Response>;
 
 // A mail's whole seat at most this big; bigger, in parts of DOC_PART.
 const SEAT_WHOLE = 48_000;
-const seatParts = new Map();
+const seatParts = new Map<string, PendingParts>();
 
-export const bridgeAsk = async (method, route, body, signal) => {
+export const bridgeAsk: BridgeAsk = async (method, route, body, signal) => {
   const target = readBridgeFile();
   if (!target?.port || !target?.password) throw new Error("The coding agents' bridge isn't running.");
   const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/peers${route}`, {
@@ -46,14 +120,14 @@ export const bridgeAsk = async (method, route, body, signal) => {
 export const SEAT_LETTER_LIFE = LETTER_MEMORY;
 export const ONLINE_STEP = 5 * 60_000;
 // Each letter's last round, as counted (none yet since the link started: its first round doesn't count).
-export const seatRounds = new Map();
-export const seatAge = letter => (typeof letter?.aged === "number" && Number.isFinite(letter.aged) ? letter.aged : 0);
+export const seatRounds = new Map<string, number>();
+export const seatAge = (letter: Pick<SeatLetter, "aged"> | null | undefined): number => (typeof letter?.aged === "number" && Number.isFinite(letter.aged) ? letter.aged : 0);
 
 // What goes for one seat mail: whole, or in parts that are put together where it goes (its JSON's
 // UTF-8 bytes, base64url, so each part fits a mail whatever the words are); null for one too big to
 // be put together there (more than MOST_PARTS). `id`: one that mustn't be lost, as its letter is
 // named (said back, `delivered`, once it's whole there).
-export function seatPayloads(mail, id) {
+export function seatPayloads(mail: SeatMail, id?: string): SeatPayload[] | null {
   const json = JSON.stringify(mail);
   if (Buffer.byteLength(json) <= SEAT_WHOLE) return [{ seat: mail, ...(id ? { seatID: id } : {}) }];
   const d = Buffer.from(json).toString("base64url");
@@ -65,7 +139,7 @@ export function seatPayloads(mail, id) {
 
 // The bridge's mail for `to`, sent now, each part as a mail of its own: whether it all went, or
 // "too big" for one that can't go at all (said in the log).
-function sendSeat(host, to, mail, id, link = readLink()) {
+function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail, id: string | undefined, link: LinkState | null = readLink()): boolean | "too big" {
   const peer = peersOf(link).find(each => each.key === to);
   if (!peer || !host) return false;
   const payloads = seatPayloads(mail, id);
@@ -74,7 +148,8 @@ function sendSeat(host, to, mail, id, link = readLink()) {
     return "too big";
   }
   for (const payload of payloads) {
-    const bytes = mailFor(peer, { ...payload, at: Date.now() }, link);
+    // (A peer found, so a link.)
+    const bytes = mailFor(peer, { ...payload, at: Date.now() }, link!);
     if (!bytes) return false;
     try { host.send(bytes); } catch { return false; }
   }
@@ -83,13 +158,14 @@ function sendSeat(host, to, mail, id, link = readLink()) {
 
 // A seat mail that came (whole, or once its parts are all here), to the bridge; one that mustn't be
 // lost said to have come, once the bridge has it, or to be sent again when it couldn't be given.
-export async function takeSeat(sender, payload, send, ask = bridgeAsk) {
-  let mail = null, id = null;
+export async function takeSeat(sender: MailSender, payload: Record<string, unknown>, send: (to: MailSender, message: { delivered: { id: string; ok: boolean; why?: string; retry?: boolean } }) => void, ask: BridgeAsk = bridgeAsk): Promise<void> {
+  let mail: unknown = null, id: string | null = null;
   if (isObject(payload.seat)) {
     mail = payload.seat;
     id = typeof payload.seatID === "string" ? payload.seatID : null;
   } else if (isObject(payload.seatPart)) {
-    const whole = assemble(seatParts, sender.key, payload.seatPart);
+    // (Checked as a part there.)
+    const whole = assemble(seatParts, sender.key, payload.seatPart as unknown as DocPart);
     if (!whole) return;
     try { mail = JSON.parse(Buffer.from(whole.d, "base64url").toString("utf8")); } catch { return; }
     id = whole.s || null;
@@ -106,17 +182,17 @@ export async function takeSeat(sender, payload, send, ask = bridgeAsk) {
 
 // Who can be in this box's group chats from your other computers: each peer (taking a chat's turns
 // when its `features` say `groups.seats`), and the bots it told of, by their id.
-export function seatPeers(link = readLink(), told = readPeerAgents(undefined, undefined, link)) {
+export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents(undefined, undefined, link)): SeatPeers {
   const peers = peersOf(link);
   return {
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
-      .map(agent => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
+      .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
   };
 }
 
 let toldSeatPeers = "";
-export async function tellSeatPeers(link = readLink(), force = false, ask = bridgeAsk) {
+export async function tellSeatPeers(link: LinkState | null = readLink(), force = false, ask: BridgeAsk = bridgeAsk): Promise<void> {
   const peers = seatPeers(link);
   const text = JSON.stringify(peers);
   if (!force && text === toldSeatPeers) return;
@@ -128,7 +204,7 @@ export async function tellSeatPeers(link = readLink(), force = false, ask = brid
 // be lost, left as a letter (`run/outbox/sending`, which `sendOutbox` sends again each minute until
 // it's there) and sent at once. What a bot remembers of a chat goes for any of the same bot and chat
 // still waiting to go: only the newest matters. True once it's this link's to deliver.
-export function carrySeat(host, given, link = readLink(), now = Date.now()) {
+export function carrySeat(host: SeatHost | null | undefined, given: SeatLine, link: LinkState | null = readLink(), now = Date.now()): boolean {
   if (!isObject(given) || typeof given.to !== "string" || !isObject(given.mail) || typeof given.id !== "string") return false;
   if (given.durable !== true) {
     sendSeat(host, given.to, given.mail, undefined, link);
@@ -136,13 +212,13 @@ export function carrySeat(host, given, link = readLink(), now = Date.now()) {
   }
   const id = given.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
   if (!LETTER_ID.test(id)) return false;
-  const letter = { peer: given.to, seat: given.mail, at: now };
+  const letter: SeatLetter = { peer: given.to, seat: given.mail, at: now };
   try {
     fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
     if (given.mail.kind === "memory") {
       for (const name of listOf(SENDING)) {
         if (!name.endsWith(".json")) continue;
-        let other;
+        let other: SeatLetter | null;
         try { other = JSON.parse(fs.readFileSync(path.join(SENDING, name), "utf8")); } catch { continue; }
         if (other?.peer !== given.to || other?.seat?.kind !== "memory" || other.seat.memory?.bot !== given.mail.memory?.bot || other.seat.memory?.chat !== given.mail.memory?.chat) continue;
         fs.rmSync(path.join(SENDING, name), { force: true });
@@ -158,7 +234,7 @@ export function carrySeat(host, given, link = readLink(), now = Date.now()) {
 
 // A letter of a group chat's mail that mustn't be lost, sent to its computer now: noted as tried
 // (sent again in a minute), or, too big ever to go, given up (the log says so).
-export function sendSeatLetter(host, to, id, letter, link, now, ask = bridgeAsk) {
+export function sendSeatLetter(host: SeatHost | null | undefined, to: Peer, id: string, letter: SeatLetter, link: LinkState | null, now: number, ask: BridgeAsk = bridgeAsk): Promise<void> | null {
   const file = path.join(SENDING, `${id}.json`);
   if (letter.sentTo !== to.key) try { writePrivate(file, JSON.stringify({ ...letter, sentTo: to.key })); } catch {}
   const went = sendSeat(host, to.key, letter.seat, id, link);
@@ -173,8 +249,8 @@ export function sendSeatLetter(host, to, id, letter, link, now, ask = bridgeAsk)
 // the letter goes once the bridge has answered at all: a 4xx (an older bridge, group chats off here)
 // is an answer too, so it isn't told again forever. Until then it's kept, marked, and not sent. The
 // telling, or null while one is under way.
-const tellingGaveUp = new Set();
-export function giveUpSeat(id, letter, ask = bridgeAsk) {
+const tellingGaveUp = new Set<string>();
+export function giveUpSeat(id: string, letter: SeatLetter, ask: BridgeAsk = bridgeAsk): Promise<void> | null {
   const file = path.join(SENDING, `${id}.json`);
   letterTries.delete(id);
   if (letter.gaveUp !== true) try { writePrivate(file, JSON.stringify({ ...letter, gaveUp: true })); } catch {}
@@ -188,7 +264,7 @@ export function giveUpSeat(id, letter, ask = bridgeAsk) {
 
 // Follows what the bridge sends, while it runs (`carrySeat`), saying what mustn't be lost is taken
 // once it's left as a letter. Each time it follows anew, it tells the bridge who your computers are.
-export async function watchSeats(host, signal) {
+export async function watchSeats(host: () => SeatHost | null | undefined, signal?: AbortSignal): Promise<void> {
   let attempt = 0;
   while (!signal?.aborted) {
     try {
@@ -197,13 +273,14 @@ export async function watchSeats(host, signal) {
       await tellSeatPeers(readLink(), true).catch(() => {});
       let buffer = "";
       const decoder = new TextDecoder();
-      for await (const chunk of response.body) {
+      // (An answer that follows has a body.)
+      for await (const chunk of response.body!) {
         buffer += decoder.decode(chunk, { stream: true });
         let end;
         while ((end = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, end);
           buffer = buffer.slice(end + 1);
-          let given;
+          let given: SeatLine;
           try { given = JSON.parse(line); } catch { continue; }
           if (carrySeat(host(), given) && given.durable === true) bridgeAsk("POST", "/sent", { ids: [given.id] }).catch(() => {});
         }

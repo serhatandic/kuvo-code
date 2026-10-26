@@ -1,26 +1,31 @@
-// @ts-nocheck
 // The phones paired with this box (PROTOCOL.md, "Paired phones"): listed, removed, and a link to
 // pair another.
 
 import { parsed } from "../../shared/json";
+import type { PAIRING } from "../../shared/routes/box";
+import type { Infer } from "../../shared/shape";
 import { noteDocsChanged } from "../documents/changed";
 import { IS_MAC } from "../home";
 import { newPairingToken, pairingLink, removeAsMac, removePhones } from "../phones";
+import type { AnswerPiece, RouteContext } from "../server/context";
 import { macLink, readLink, updateLink } from "../state";
+import type { LinkState, Pairing } from "../state";
 
 // The phones paired with this machine, and removing some (a lost one, say), from any phone
 // paired with it: what a removal takes off stays off (see `removePhones`).
-export async function* phonesRoute(context) {
+export async function* phonesRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { phone, json } = context;
   const link = readLink();
   const asking = phone?.key?.toString("base64url");
+  // TODO(types): not held to `Phones` (shared/routes/box.ts): a phone kept here may have no name
+  // (`Phone.name` is optional in state.ts), which the shape's `name: string` doesn't allow.
   return yield* json(200, {
     phones: (link?.phones ?? []).map(each => ({ key: each.key, name: each.name, added: each.added ?? null, pairing: each.pairing ?? "", you: each.key === asking })),
   });
 }
 
 // Removing some, by a phone paired here, or this Mac's app.
-export async function* phonesRemoveRoute(context) {
+export async function* phonesRemoveRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, phone, phonesChanged, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   const given = parsed(request.body);
@@ -30,7 +35,7 @@ export async function* phonesRemoveRoute(context) {
   // On this Mac, one before any phone's paired here (no link file yet) is kept all the same,
   // so the phone stays out once it's taken.
   const changed = updateLink(kept => {
-    const link = kept ?? (asMac ? { phones: [], removed: [] } : null);
+    const link: LinkState | null = kept ?? (asMac ? { phones: [], removed: [] } : null);
     return link && (asMac ? removeAsMac(link, given?.phones) : removePhones(link, phone?.key?.toString("base64url"), given?.phones)) ? link : null;
   });
   if (!changed) return yield* json(400, { message: "Only phones paired here can be removed, and never your Mac." });
@@ -42,7 +47,7 @@ export async function* phonesRemoveRoute(context) {
 
 // A link for another phone to pair with this machine, as `kuvo-link.js pair` shows one: good
 // once, for a while; a new one takes the place of the last. DELETE ends it.
-export async function* pairingRoute(context) {
+export async function* pairingRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, json } = context;
   const method = request.method.toUpperCase();
   // This Mac's Settings › Phone has one of its own, apart from a phone's.
@@ -63,5 +68,6 @@ export async function* pairingRoute(context) {
   const link = updateLink(current => current?.relay && current?.secret ? { ...current, [slot]: newPairingToken() } : null);
   if (!link) return yield* json(409, { message: IS_MAC ? "The phone link isn't ready yet. Try again in a moment." : "This machine has no relay to pair through." });
   macLink.wake?.();
-  return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] }), ends: Math.floor(link[slot].expires / 1000) });
+  // (A box with a relay to pair through has its keys and name too.)
+  return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] } as LinkState & { relay: string; secret: string; key: string; name: string; pairing: Pairing }), ends: Math.floor(link[slot]!.expires / 1000) } satisfies Infer<typeof PAIRING>);
 }

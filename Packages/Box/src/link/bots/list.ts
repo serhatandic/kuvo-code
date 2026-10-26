@@ -1,6 +1,6 @@
-// @ts-nocheck
 // This box's bots, listed (`kuvo/bots`).
 
+import type { BotLook, ListedBot } from "../../shared/routes/bots";
 import { readWakes } from "../areas/wakes";
 import { listOf } from "../files";
 import { BOTS, IS_MAC } from "../home";
@@ -13,8 +13,8 @@ import { jobOf } from "./jobs";
 // coding agents). One without a description or a session isn't listed. With `memory`, each also
 // with `memoryJob`, its job as its memory has it now (`{line, section}`, empty for none), left out
 // when its memory can't be read.
-export function listBots(machine, { memory = false } = {}) {
-  const bots = [];
+export function listBots(machine?: string, { memory = false }: { memory?: boolean } = {}): ListedBot[] {
+  const bots: { created: string; bot: ListedBot }[] = [];
   for (const id of listOf(BOTS)) {
     const here = botHere(id);
     if (!here) continue;
@@ -27,7 +27,9 @@ export function listBots(machine, { memory = false } = {}) {
         id,
         session,
         name: described.name,
-        look: described.look,
+        // TODO(types): its look as the app wrote it in bot.json, passed on unchecked (holding it to
+        // `BotLook` would take a check here).
+        look: described.look as BotLook,
         machine: IS_MAC ? undefined : machine || undefined,
         job: job.line,
         jobDetails: job.details,
