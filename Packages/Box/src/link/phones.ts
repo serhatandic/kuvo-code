@@ -8,20 +8,12 @@
 // are held to Vectors/link.json.
 
 import crypto from "node:crypto";
-import fs from "node:fs";
 import { isObject } from "../shared/json";
 import { addressOf, publicOf } from "./crypto/keys";
 import { noteDocsChanged } from "./documents/changed";
-import { NEEDED_FILE } from "./home";
-import { ADDRESS, KEY, macDoc, macsOf, needed, phoneDocs } from "./peers/known";
+import { held } from "./documents/format";
+import { ADDRESS, KEY, macDoc, macsOf } from "./peers/known";
 import { readLink, updateLink } from "./state";
-
-// Nothing to answer any more (the last phone gone, a pairing run out, no link.json): the keeper
-// starts this bridge no more, unless a pairing began meanwhile.
-export function noLongerNeeded() {
-  try { fs.rmSync(NEEDED_FILE, { force: true }); } catch {}
-  if (needed(readLink())) try { fs.writeFileSync(NEEDED_FILE, "", { mode: 0o600 }); } catch {}
-}
 
 // Lets in phones in link.json, and a new one showing the pairing token (once, in time), noting
 // where it is on the relay, for its notifications. Where a paired one is changes once its session
@@ -186,3 +178,6 @@ export function pairingLink(link) {
   });
   return `kuvo-link://pair?${query}`;
 }
+
+// The phones documents this box takes now: its Macs' and its peers'.
+export const phoneDocs = link => Object.values(link?.docs ?? {}).map(held).filter(doc => doc?.kind === "phones");

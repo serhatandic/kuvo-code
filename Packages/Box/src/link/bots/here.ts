@@ -4,9 +4,15 @@
 // without a description (made before them, until the Mac connects) or a conversation.
 
 import path from "node:path";
-import { DESCRIPTION } from "../areas/wakes";
 import { textOf } from "../files";
 import { BOTS } from "../home";
+
+// What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
+// the folders the app keeps on the machine, so a phone has them with the Mac closed: a bot's
+// description (`bot.json`, which the app writes from its list), its session, and the wake-ups,
+// watches and pause that `kuvo-wake` keeps beside them.
+// The version of `bot.json` this reads (the app's `Bot.Descriptor`).
+export const DESCRIPTION = 1;
 
 export function botHere(id) {
   if (typeof id !== "string" || !/^bot_[A-Za-z0-9]+$/.test(id)) return null;

@@ -14,14 +14,8 @@ import { listOf, textOf } from "../files";
 import { followed, watchFolders } from "../follow";
 import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
 
-// What the Mac answers for them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`), answered here from
-// the folders the app keeps on the machine, so a phone has them with the Mac closed: a bot's
-// description (`bot.json`, which the app writes from its list), its session, and the wake-ups,
-// watches and pause that `kuvo-wake` keeps beside them.
-// The version of `bot.json` this reads (the app's `Bot.Descriptor`).
-export const DESCRIPTION = 1;
+// What a wake-up's message starts with, as the Mac words it.
 export const WAKE_MARKER = "[Wake-up] ";
-
 
 // How often a wake-up comes back, as its name says (the app's Wakes.Repeat): 30m, 2h, 1d, 1w or
 // weekdays, within a year; null for anything else.

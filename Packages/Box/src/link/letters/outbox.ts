@@ -11,17 +11,25 @@ import { plainName, prefixBytes } from "../../shared/text";
 import { asked, peerTargets, readEngineFile } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
-import { IS_MAC } from "../home";
+import { IS_MAC, RUN } from "../home";
 import { announce, toldPeers } from "../peers/agents";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, peersOf } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
 import { readLink } from "../state";
-import { composeLetter, cutText, LETTER_BYTES, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, placeOfSession, RELAY_GONE_AFTER, REPLIES, SENDING } from "./letter";
+import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTries, OUTBOX, placeOfSession, SENDING } from "./letter";
 
 // Senders being told of to their letters' boxes first (one made a moment ago, which those boxes
 // don't know yet): its letter goes the round after.
 const introducing = new Map();
+
+export const REPLIES = path.join(RUN, "replies");
+
+export const LETTER_BYTES = 24_000;
+
+// Without the relay this long, this box's letters go to the Mac instead, which collects them
+// over SSH.
+export const RELAY_GONE_AFTER = 5 * 60_000;
 
 // This Mac's conversations waiting for a letter's answer, by the letter (`kuvo/link/letters`):
 // answered here, in memory, as the box takes the answer itself; once it's there, which box it went

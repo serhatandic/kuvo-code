@@ -1,6 +1,6 @@
 // @ts-nocheck
-// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
-// quotes at a line's start, emphasis around words, code ticks, a link's address.
+// What's news for your phones in an engine's or a group chat's events, said as the Mac's
+// notifications say it.
 
 import path from "node:path";
 import { cut } from "../../shared/text";
@@ -11,6 +11,8 @@ import { isHiddenRun } from "../engine/sessions";
 import { IS_MAC, K } from "../home";
 import { showsAll } from "./mask";
 
+// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
+// quotes at a line's start, emphasis around words, code ticks, a link's address.
 const plain = text => String(text ?? "")
   .replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "")
   .replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1")

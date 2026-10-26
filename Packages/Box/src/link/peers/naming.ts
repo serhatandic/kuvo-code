@@ -4,7 +4,7 @@
 // one is, with its address, so it can read it (read_conversation) or write to it (send_message).
 // Both sides read the same cases (Vectors/routes/names/agent-naming.json), so they can't drift.
 
-import { keptAgent, peerOf } from "./directory";
+import { peerOf } from "./directory";
 
 // A block the app adds to the end of a message (MessageBlock.swift): its tag on a line of its own,
 // its heading, what's in it, then its closing tag, with nothing after.
@@ -142,23 +142,6 @@ export function nameAgents(message, { excluding = null, here = null, agents = []
   if (named === words) return message;
   const at = message.indexOf(words);
   return at < 0 ? message : message.slice(0, at) + named + message.slice(at + words.length);
-}
-
-// Everyone, for list_agents here: this box's own (`machine` its name on its Macs), then each peer's
-// it alone lists (`peerOf`): a machine's by its name; a Mac's its own (none), and the agents of
-// machines it speaks for (those whose link doesn't talk to other computers yet), by theirs.
-export function composeAgents(own, ownID, peers, told, moved = new Map()) {
-  const agents = own.map(agent => ({ ...keptAgent({ ...agent, machine: undefined }), ...(ownID ? { machine: ownID } : {}) }));
-  const seen = new Set(agents.map(agent => agent.session));
-  for (const peer of peers) {
-    for (const agent of told[peer.key]?.list ?? []) {
-      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
-      seen.add(agent.session);
-      const { machine, ...rest } = agent;
-      agents.push(peer.kind === "machine" ? { ...rest, ...(peer.id ? { machine: peer.id } : {}) } : { ...rest, ...(machine ? { machine } : {}) });
-    }
-  }
-  return { machine: ownID ?? null, agents };
 }
 
 // Who `&` can name here (`kuvo/named`), as a Mac's composer offers them: this box's own (`machine`

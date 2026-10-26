@@ -10,7 +10,6 @@ import { RUN } from "../home";
 
 export const OUTBOX = path.join(RUN, "outbox");
 export const SENDING = path.join(OUTBOX, "sending");
-export const REPLIES = path.join(RUN, "replies");
 export const LETTERS_SEEN = path.join(RUN, "letters-seen.json");
 
 // A letter older than a day isn't delivered; one is remembered two days (no doubles, no replays).
@@ -23,12 +22,8 @@ export const cutText = (text, most = LETTER_TEXT) => {
   if (words.length <= most) return words;
   return words.slice(0, /[\uDC00-\uDFFF]/.test(words[most]) ? most - 1 : most);
 };
-export const LETTER_BYTES = 24_000;
 
 export const LETTER_ID = /^[A-Za-z0-9_-]{6,80}$/;
-// Without the relay this long, this box's letters go to the Mac instead, which collects them
-// over SSH.
-export const RELAY_GONE_AFTER = 5 * 60_000;
 
 // What the receiving agent reads, as the Mac and kuvo-browser.js word it (AgentMail.compose).
 export const composeLetter = (name, session, words, waits) =>
@@ -53,4 +48,5 @@ export async function placeOfSession(session, targets) {
   return null;
 }
 
+// When each letter was last sent, by id: one goes again each minute until its box says it has it.
 export const letterTries = new Map();

@@ -1,11 +1,6 @@
 // @ts-nocheck
-// `PATCH kuvo/bots/<id>`, as the Mac's: a bot that lives here changed as Edit Bot changes it (its
-// name, look, personality or model), in its description and in its conversation, which is told as
-// the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
-// change in as it next connects (Bots.takeIn).
-// What a bot's conversation was last told, kept in its folder (`told.json`, so a restart doesn't
-// tell every bot again): its conversation, what it was told (a digest), and the folder its own
-// rules were last put right for. It's told again only when what it would be told changes.
+// A bot's conversation told what it is, as the Mac tells it: the kit's words, with its job as its
+// memory has it now.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +16,9 @@ import { jobOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
 import { listBots } from "./list";
 
+// What a bot's conversation was last told, kept in its folder (`told.json`, so a restart doesn't
+// tell every bot again): its conversation, what it was told (a digest), and the folder its own
+// rules were last put right for. It's told again only when what it would be told changes.
 const TOLD_FILE = "told.json";
 export const toldDigest = text => crypto.createHash("sha256").update(text).digest("hex");
 function toldOf(folder) {

@@ -10,7 +10,7 @@ import { IS_MAC, RUN } from "../home";
 // Something changed here, from another process (`setup`, `pair`, a Mac's `box personalities`, over
 // SSH): the bridge notes it within seconds (`docsNoted`), and tells the others.
 const DOCS_CHANGED = path.join(RUN, "docs.changed");
-// How this Mac's box tells them (main.ts says).
+// How this Mac's box tells them: main.ts sets it as it loads, before anything here can be noted.
 let changedHere = () => {};
 export const onDocsChanged = (then: () => void) => {
   changedHere = then;

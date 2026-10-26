@@ -1,5 +1,7 @@
 // @ts-nocheck
-// The events in a `text/event-stream` body, parsed.
+// Watching this box's engine and its coding agents' bridge: their events followed, and what the
+// box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
+// that steers an agent read at once).
 
 import { pause } from "../../shared/wait";
 import { noteSignIn } from "../areas/accounts";
@@ -8,6 +10,7 @@ import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { engineGet, readBridgeFile, readEngineFile } from "./client";
 
+// The events in a `text/event-stream` body, parsed.
 async function* serverEvents(body) {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -127,14 +130,6 @@ function backgroundTools(engine, session) {
 }
 
 
-// Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
-// and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
-// each one's notification to `tell` and each request answered to `answered`, and doing what the
-// box does as they come.
-// `bots`: only its bots' part (this Mac's box, whose app does the rest of a machine's work);
-// `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
-// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`); `hold`:
-// where those notices wait, settled each time the events are heard again (`settleHeld`).
 // What a box watches its engine and its coding agents' bridge for, as a machine's link (`run`)
 // and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
 // ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
@@ -145,6 +140,14 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
 }
 
+// Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
+// and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
+// each one's notification to `tell` and each request answered to `answered`, and doing what the
+// box does as they come.
+// `bots`: only its bots' part (this Mac's box, whose app does the rest of a machine's work);
+// `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
+// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`); `hold`:
+// where those notices wait, settled each time the events are heard again (`settleHeld`).
 // `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
 // `steers`: your messages to an agent waiting on a command read at once (`steering`), the engine's.
 export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter } = {}) {

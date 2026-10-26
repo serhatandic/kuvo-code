@@ -1,8 +1,9 @@
 // @ts-nocheck
 // Peers (PROTOCOL.md, "Peers")
 // The other boxes a Mac set this one up with: itself and its other machines, each as that Mac's
-// newest peers document names them, so one a Mac removed leaves every box it lists. And mail
-// between them: sealed for one of them, and opened from one.
+// newest peers document names them, so one a Mac removed leaves every box it lists. Its Macs: those
+// that set it up, each until it removes this box or isn't heard from in 30 days. And mail between
+// them: sealed for one of them, and opened from one.
 
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
@@ -34,12 +35,11 @@ export function forgetOldMacs(link, keep, now = Date.now()) {
   if (gone.includes(link.mac)) link.mac = keep;
 }
 
+// A Mac's own document of `kind`, as this box holds it (signed with that Mac's key), or null.
 export function macDoc(link, mac, kind) {
   const sign = macSign(link, mac);
   return sign ? held(link.docs?.[docKey(sign, kind)]) : null;
 }
-// The phones documents this box takes now: its Macs' and its peers'.
-export const phoneDocs = link => Object.values(link?.docs ?? {}).map(held).filter(doc => doc?.kind === "phones");
 
 // A Mac that no longer counts here (it removed this machine, or wasn't heard from in 30 days): what
 // it gave goes, and the phones it listed with it; another Mac's stay.
@@ -137,6 +137,3 @@ export function mailFor(peer, payload, link) {
   return relaySend(Buffer.from(peer.address, "base64url"), sealed);
 }
 const MAX_MAIL = 65_600 - 17;
-
-// Something to answer: a paired phone, a pairing code waiting, or other boxes of yours to talk to.
-export const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));

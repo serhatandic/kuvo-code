@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
+// A conversation this box's engine runs carried on with its coding agents (`kuvo/sessions/<id>/agents`).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +14,7 @@ import { BOTS, HERE, SESSION_WAKES } from "../home";
 import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 
+// Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
 const carrying = new Set();
 
 // A file a waiting message brings (the engine's form of it), as the agents' bridge takes one.

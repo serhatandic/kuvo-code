@@ -86,3 +86,20 @@ export function peerOf(session, peers, told, moved = new Map()) {
 
 // Put away: archived, as a Mac archives one (`kuvo.archived` in its metadata) or the engine does.
 export const isPutAway = session => session?.metadata?.["kuvo.archived"] === true || Boolean(session?.metadata?.kuvo?.archived) || Boolean(session?.time?.archived);
+
+// Everyone, for list_agents here: this box's own (`machine` its name on its Macs), then each peer's
+// it alone lists (`peerOf`): a machine's by its name; a Mac's its own (none), and the agents of
+// machines it speaks for (those whose link doesn't talk to other computers yet), by theirs.
+export function composeAgents(own, ownID, peers, told, moved = new Map()) {
+  const agents = own.map(agent => ({ ...keptAgent({ ...agent, machine: undefined }), ...(ownID ? { machine: ownID } : {}) }));
+  const seen = new Set(agents.map(agent => agent.session));
+  for (const peer of peers) {
+    for (const agent of told[peer.key]?.list ?? []) {
+      if (seen.has(agent.session) || peerOf(agent.session, peers, told, moved)?.key !== peer.key) continue;
+      seen.add(agent.session);
+      const { machine, ...rest } = agent;
+      agents.push(peer.kind === "machine" ? { ...rest, ...(peer.id ? { machine: peer.id } : {}) } : { ...rest, ...(machine ? { machine } : {}) });
+    }
+  }
+  return { machine: ownID ?? null, agents };
+}

@@ -1,7 +1,8 @@
 // @ts-nocheck
 // This box's agents, as its peers hear of them (PROTOCOL.md, "Peers")
 // Who this box's agents are (its bots, its latest titled sessions), told to its peers as that
-// changes, and written with what they told into `run/agents.json`.
+// changes, and written with what they told into `run/agents.json` (what a Mac that's gone told,
+// forgotten).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -15,9 +16,8 @@ import { readBridgeFile } from "../engine/client";
 import { locked, textOf, writePrivate } from "../files";
 import { IS_MAC, K } from "../home";
 import { macLink, readLink } from "../state";
-import { AGENTS_FILE, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, fitsAgent, isPutAway, keptAgent, readPeerAgents } from "./directory";
+import { AGENTS_FILE, composeAgents, fitsAgent, isPutAway, keptAgent, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, readPeerAgents } from "./directory";
 import { mailFor, movedOf, peersOf } from "./known";
-import { composeAgents } from "./naming";
 import { tellSeatPeers } from "./seats";
 
 // What peers only `mac` named told this box, and what that Mac said over SSH, gone with it.

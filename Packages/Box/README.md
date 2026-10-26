@@ -57,7 +57,7 @@ src/link/
                  sending them
   letters/       agents' messages to agents on other boxes: the outbox, and those that come here
   phones.ts      paired phones
-  bots/ personalities/   bots, and the personalities library
+  bots/ personalities/   bots, and the personalities library (yours, and others' copies taken)
   server/        the route table (a path to its area, nothing else), forwarding to the engine and
                  who a prompt names with "&", the server on a Mac
   mac/           this Mac's box: its link on the relay, what its app asks of it, its notices, its

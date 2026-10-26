@@ -14,7 +14,7 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { pause } from "../../shared/wait";
 import { DOC_PART, MOST_PARTS } from "../documents/format";
-import { assemble } from "../documents/work";
+import { assemble } from "../documents/parts";
 import { readBridgeFile } from "../engine/client";
 import { listOf, writePrivate } from "../files";
 import { LETTER_ID, LETTER_MEMORY, SENDING, letterTries } from "../letters/letter";

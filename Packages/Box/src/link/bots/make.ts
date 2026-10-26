@@ -1,4 +1,5 @@
 // @ts-nocheck
+// New bots made here (`POST kuvo/bots`), as New Bot makes them on the Mac.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -6,11 +7,10 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { newID, plainName, stamp } from "../../shared/text";
 import { boxProjects } from "../areas/projects";
-import { DESCRIPTION } from "../areas/wakes";
 import { call } from "../engine/client";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
-import { isModel, noteBotsChanged } from "./here";
+import { DESCRIPTION, isModel, noteBotsChanged } from "./here";
 import { firstMessageOf } from "./jobs";
 import { botInstructions, NO_KIT, readKit, runsWithAgents } from "./kit";
 import { listBots } from "./list";

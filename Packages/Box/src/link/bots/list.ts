@@ -1,10 +1,5 @@
 // @ts-nocheck
-// This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
-// look, job, personality and model as the app last described it (or as changed here), and what its
-// folder says now (paused, its next wake-up, how many things it watches, whether it runs with the
-// coding agents). One without a description or a session isn't listed. With `memory`, each also
-// with `memoryJob`, its job as its memory has it now (`{line, section}`, empty for none), left out
-// when its memory can't be read.
+// This box's bots, listed (`kuvo/bots`).
 
 import { readWakes } from "../areas/wakes";
 import { listOf } from "../files";
@@ -12,6 +7,12 @@ import { BOTS, IS_MAC } from "../home";
 import { botHere, isModel } from "./here";
 import { jobOf } from "./jobs";
 
+// This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
+// look, job, personality and model as the app last described it (or as changed here), and what its
+// folder says now (paused, its next wake-up, how many things it watches, whether it runs with the
+// coding agents). One without a description or a session isn't listed. With `memory`, each also
+// with `memoryJob`, its job as its memory has it now (`{line, section}`, empty for none), left out
+// when its memory can't be read.
 export function listBots(machine, { memory = false } = {}) {
   const bots = [];
   for (const id of listOf(BOTS)) {

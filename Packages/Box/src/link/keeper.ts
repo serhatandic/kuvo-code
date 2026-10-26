@@ -1,17 +1,30 @@
 // @ts-nocheck
-// The box's keeper, and the bridge it keeps running
+// The box's keeper, the bridge it keeps running, and whether the bridge is needed (`run/link.needed`,
+// which the keeper reads).
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { processRuns as runs } from "../shared/platform";
 import { textOf } from "./files";
-import { K, PID_FILE, RUN, SCRIPT } from "./home";
+import { K, NEEDED_FILE, PID_FILE, RUN, SCRIPT } from "./home";
+import { peersOf } from "./peers/known";
+import { readLink } from "./state";
 
 // (Whether a process is alive, and runs what it should: `alive` and `runs`, ../shared/platform.)
 
 // Another bridge.
 export const isBridge = pid => pid !== process.pid && runs(pid, "kuvo-link.js");
+
+// Something to answer: a paired phone, a pairing code waiting, or other boxes of yours to talk to.
+export const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));
+
+// Nothing to answer any more (the last phone gone, a pairing run out, no link.json): the keeper
+// starts this bridge no more, unless a pairing began meanwhile.
+export function noLongerNeeded() {
+  try { fs.rmSync(NEEDED_FILE, { force: true }); } catch {}
+  if (needed(readLink())) try { fs.writeFileSync(NEEDED_FILE, "", { mode: 0o600 }); } catch {}
+}
 
 // The box's keeper (`bin/kuvo-start`), started again if it went: it keeps the engine and this
 // bridge running.

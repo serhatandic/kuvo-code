@@ -18,7 +18,8 @@ import { cleanMoved, leaveMac, macDoc, macsOf, ownKey, peersOf } from "../peers/
 import { mergePersonalities, MOST_COUNT, readPersonalities } from "../personalities/library";
 import { foldPhones, ownPhones } from "../phones";
 import { macLink, macSign, updateLink } from "../state";
-import { bodyHash, DOC_PART, docKey, held, MOST_DOC, MOST_PARTS, ownSign, readDoc, shortHash, signDoc } from "./format";
+import { bodyHash, DOC_PART, docKey, held, MOST_DOC, ownSign, readDoc, shortHash, signDoc } from "./format";
+import { assemble } from "./parts";
 
 // Whether this box takes `kind` from `origin`: who its boxes are, only from its own Macs; phones and
 // personalities from those Macs, its peers, and itself (a copy of its own it lost count of).
@@ -150,28 +151,6 @@ export function digestOf(link) {
   const own = ownSign(link);
   if (own) for (const kind of ownKinds()) if (link.own?.[kind]) have.push([own, kind, link.own[kind].n, link.own[kind].h]);
   return have;
-}
-
-// A document too big for one mail comes in parts (`{whole, i, of, d, s}`: `whole`, its `d`'s hash),
-// put together here, at most four on their way from one box at a time. The document once all are
-// here, or null.
-export function assemble(parts, from, part) {
-  if (!isObject(part) || typeof part.whole !== "string" || !Number.isInteger(part.i) || !Number.isInteger(part.of) || part.of < 2 || part.of > MOST_PARTS
-    || part.i < 0 || part.i >= part.of || typeof part.d !== "string" || part.d.length > DOC_PART || typeof part.s !== "string") return null;
-  const key = `${from} ${part.whole}`;
-  let pending = parts.get(key);
-  if (!pending || pending.of !== part.of) {
-    const theirs = [...parts.keys()].filter(each => each.startsWith(`${from} `));
-    if (theirs.length >= 4) parts.delete(theirs[0]);
-    pending = { of: part.of, s: part.s, pieces: new Map() };
-    parts.set(key, pending);
-  }
-  pending.pieces.set(part.i, part.d);
-  if (pending.pieces.size < part.of) return null;
-  parts.delete(key);
-  const d = Array.from({ length: part.of }, (_, i) => pending.pieces.get(i)).join("");
-  if (crypto.createHash("sha256").update(d).digest("base64url") !== part.whole) return null;
-  return { d, s: pending.s };
 }
 
 // What goes to one box (`{give, have, reply}`), as the mails it takes: documents together while

@@ -1,4 +1,5 @@
 // @ts-nocheck
+// A bot here changed or deleted, as Edit Bot and Delete Bot… do on the Mac.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -19,6 +20,10 @@ import { listBots } from "./list";
 import { fitsLook, signInRefusal } from "./make";
 import { tellBot, toldNow } from "./tell";
 
+// `PATCH kuvo/bots/<id>`, as the Mac's: a bot that lives here changed as Edit Bot changes it (its
+// name, look, personality or model), in its description and in its conversation, which is told as
+// the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
+// change in as it next connects (Bots.takeIn).
 export async function changeBot(id, given, readEngine, readBridge, machine, signal) {
   const no = (status, message) => ({ status, value: { message } });
   const here = botHere(id);

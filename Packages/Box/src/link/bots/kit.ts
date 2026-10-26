@@ -1,5 +1,6 @@
 // @ts-nocheck
-// Bots and group chats made here
+// What a box makes its bots with and tells them: the kit the Mac gives it, Kuvo Code's words for
+// bots, New Bot's templates, and whether a model runs with the coding agents.
 
 import fs from "node:fs";
 import os from "node:os";
