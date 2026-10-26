@@ -27,34 +27,31 @@ import { fileURLToPath } from "node:url";
 import { DOC_KINDS } from "../shared/documents";
 import { isObject, parsed } from "../shared/json";
 import { alive, processRuns as runs } from "../shared/platform";
-import { cut, plainName, prefixBytes } from "../shared/text";
+import { plainName, prefixBytes } from "../shared/text";
 import { pause, sleep } from "../shared/wait";
-import { asked, call, engineGet, readBridgeFile, readEngineFile } from "./engine/client";
-import { isHiddenRun } from "./engine/sessions";
+import { asked, readBridgeFile, readEngineFile } from "./engine/client";
 import { listOf, locked, textOf, writePrivate } from "./files";
 import { macLink, onLinkWritten, readLink, updateLink } from "./state";
 import { BOTS, ENGINE_FILE, IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE } from "./home";
 import { addressOf, EMPTY, newKey, publicOf } from "./crypto/keys";
 import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
 import { Frame, frame, readRelay, relayHello, relaySend } from "./relay/frames";
-import { showsAll } from "./notices/mask";
 import { bodyHash, DOC_PART, docKey, held, MOST_DOC, MOST_PARTS, newSigningSeed, ownSign, readDoc, shortHash, SIGN, signDoc } from "./documents/format";
 import { searchPlugins } from "./areas/plugins";
 import { listFolders, makeFolder } from "./areas/folders";
-import { endedProviders, forgetPlan, noteSignIn } from "./areas/accounts";
+import { endedProviders, forgetPlan } from "./areas/accounts";
 import { answerAsk, askAnswer, inConversation, listedAsk, readAsks, watchAsks } from "./areas/asks";
-import { appHost, askHost, forgetHostProof, KeysUnavailable, proveHost } from "./host-interface";
-import { botVariable, deleteKey, keyNames, keyWork, readKey, STORED_KEY, writeKey } from "./keys";
+import { appHost, forgetHostProof, KeysUnavailable, proveHost } from "./host-interface";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { applySettings } from "./areas/apply";
 import { noticeJSON, pushTo } from "./notices/notice";
-import { readRemovedWorktrees, readWorktrees, worktreeFollowers } from "./areas/worktree-records";
+import { readWorktrees, worktreeFollowers } from "./areas/worktree-records";
 import { LinkHost } from "./relay/host";
 import { followed } from "./follow";
-import { answerIntegrations, answerOnce, integrationCatalog, INTEGRATIONS_FILE, reconnectEverywhere } from "./areas/integrations";
+import { answerIntegrations, answerOnce, reconnectEverywhere } from "./areas/integrations";
 import { allWakes, holdArchived, listWakes, sendWakes, wakeFollowers } from "./areas/wakes";
-import { answerProjects, boxProjects, readProjects } from "./areas/projects";
-import { answerWorktrees, nameWorktreeBranch, tellWorktree, worktreesWhere } from "./areas/worktrees";
+import { answerProjects, boxProjects } from "./areas/projects";
+import { answerWorktrees, worktreesWhere } from "./areas/worktrees";
 import { answerSkills, keepSkillTrashClear } from "./areas/skills";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./server/paths";
 import { forgetPhones, phoneHere } from "./compat/leave-running";
@@ -63,9 +60,7 @@ import { changePersonalities, fitsLibrary, FULL_LIBRARY, keptPersonality, meetPe
 import { addFromCatalog, mcpCatalog } from "./areas/mcp-catalog";
 import { adoptBox } from "./compat/adopt-settings";
 import { answerKeys, setBoxKey } from "./areas/box-keys";
-import { shownRoot } from "./home";
-import { APP_KEY_FILES, SESSION_WAKES } from "./home";
-import { soon } from "../shared/wait";
+import { SESSION_WAKES } from "./home";
 import { macSign } from "./state";
 import { UPDATE_KEYS, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, updateNight, updateState, updateStatus, updatesBlocked } from "./updates/update";
 import { GROUP_ROUTE, forwardGroups, groupJSON } from "./areas/groups";
@@ -75,12 +70,20 @@ import { keepJobs } from "./bots/jobs";
 import { listBots } from "./bots/list";
 import { NO_KIT, botTemplates, forgetOldKit, readKit } from "./bots/kit";
 import { botFollowers } from "./bots/here";
-import { freshenBot, freshenBots, settleBot, tellBot, toldNow } from "./bots/tell";
+import { freshenBots, settleBot, tellBot, toldNow } from "./bots/tell";
 import { makeBot } from "./bots/make";
 import { messageID } from "./engine/sessions";
 import { carryToAgents } from "./areas/carry";
 import { changeBot, deleteBot, forgetLeftKeys } from "./bots/edit";
 import { answerWakes } from "./areas/wakes";
+import { HELD_FILE, NoticeHold, attentionGiven } from "./notices/hold";
+import { watchBox } from "./engine/watch";
+import { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
+import { linkHost } from "./host-interface";
+import { macMoving } from "./host-interface";
+import { BRIDGE_VERSION } from "./version";
+import { FEATURES } from "../shared/features";
+import { peerTargets } from "./engine/client";
 
 // What moved into modules, as this file exported it (the bridge's tests import it from here).
 export { addressOf, newKey, publicOf } from "./crypto/keys";
@@ -89,6 +92,8 @@ export { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRela
 export { isSecretName, markingHashes, masked, maskedHexValues, maskedNamed, namesHash, showsAll } from "./notices/mask";
 export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingKeyOf } from "./documents/format";
 export { IS_MAC, LINK_FILE } from "./home";
+export { BRIDGE_VERSION } from "./version";
+export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
@@ -123,23 +128,14 @@ export { freshenBot, freshenBots, refreshedRules, settleBot } from "./bots/tell"
 export { makeBot } from "./bots/make";
 export { carryToAgents } from "./areas/carry";
 export { changeBot, deleteBot, forgetLeftKeys } from "./bots/edit";
+export { ASK_HOLD, LONGEST_LEASE, NEWS_HOLD, NoticeHold, RESTORED_WAIT, SHOWN_WITHIN, attentionGiven, holdFor } from "./notices/hold";
+export { describeForm, describePermission, groupNotice, noticeFor, projectNameOf, settleHeld } from "./notices/news";
+export { STEER_AFTER, steering, watchBox, watchEvents } from "./engine/watch";
+export { answerBotKeys, refreshBotsKeys } from "./areas/bot-keys";
 
 // This file, for what the box runs again as a command of its own.
 scriptIs(fileURLToPath(import.meta.url));
 
-// Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
-// compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.72";
-// What this box answers, one name per route or group of routes a client might check, as
-// `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
-// meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start` and `update`,
-// and the Mac's own routes besides.
-export const FEATURES = [
-  "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "btw", "config", "config.apply",
-  "engine.restart", "engine.start", "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "plugins.search", "personalities.events", "phones", "phones.pair", "projects", "reviews", "sessions.agents", "shell.stop", "sign-in.return",
-  "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",
-];
 const PAIRING_MINUTES = 10;
 
 // ---- Forwarding to the engine ----
@@ -285,192 +281,6 @@ async function* forward(target, path, request, signal, allows, naming = null, do
     }
   } finally {
     reader.cancel().catch(() => {});
-  }
-}
-
-// MARK: Bots' own keys (PROTOCOL.md, "Bots' own keys"): keys a bot here has of its own for the
-// integrations you bring a key for, kept where this box keeps its keys (`<variable>__<BOT>`: a
-// machine's in `box/bot-keys`, this Mac's in its Keychain, through the app) and named by a settings
-// file of its folder's own, so only its conversation uses them. A bot that works in a project uses
-// that project's.
-
-/** Where the engine reads a bot's own keys, as its settings name the folder: this Mac's app's
- * (`KUVO_KEYS`, where it keeps each key in a file named by its variable), or a machine's
- * `box/bot-keys`. */
-const BOT_KEY_FOLDER = APP_KEY_FILES;
-const botKeyFolder = () => BOT_KEY_FOLDER ?? `${shownRoot}/box/bot-keys`;
-
-/** The integrations a bot can have keys of its own for: those you bring a key for. */
-const botKeyed = catalog => catalog.filter(entry => ["token", "package"].includes(entry.way) && entry.settings && Object.keys(entry.variables ?? {}).length
-  && Object.values(entry.variables).every(variable => typeof variable === "string" && STORED_KEY.test(variable)));
-
-/** Whether `bot` has every key of its own for `entry`, among the keys kept (`names`). */
-const hasOwnKeys = (bot, entry, names) => Object.values(entry.variables).every(variable => names.includes(botVariable(variable, bot)));
-
-/** `entry`'s server as `bot`'s conversation runs it: each of its keys (`{file:<a folder>/<variable>}`)
- * the bot's own in its place (`{file:<bot keys' folder>/<variable>__<BOT>}`). */
-function botServer(entry, bot) {
-  const folder = botKeyFolder();
-  const swapped = value => {
-    if (typeof value === "string") {
-      return Object.values(entry.variables).reduce((text, variable) =>
-        text.replace(new RegExp(`\\{file:[^{}]*/${variable}\\}`, "g"), () => `{file:${folder}/${botVariable(variable, bot)}}`), value);
-    }
-    if (Array.isArray(value)) return value.map(swapped);
-    if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, swapped(inner)]));
-    return value;
-  };
-  return swapped(entry.settings);
-}
-
-/** Its folder's settings as they are, and where; `problem` when they aren't plain JSON (left alone). */
-function botSettings(bot) {
-  const folder = path.join(BOTS, bot, "workspace", ".opencode");
-  const file = path.join(folder, "opencode.json");
-  const text = textOf(file);
-  if (text === null || !text.trim()) return { folder, file, settings: {} };
-  let settings;
-  try { settings = JSON.parse(text); } catch {}
-  const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
-  if (!isObject(settings) || (settings.mcp !== undefined && !isObject(settings.mcp)) || (settings.mcp?.servers !== undefined && !isObject(settings.mcp.servers))) {
-    return { folder, file, problem: "Its folder's settings aren't plain JSON, so its own keys can't be named there." };
-  }
-  return { folder, file, settings };
-}
-
-/** Its folder's settings naming a server for each integration it has its own keys for (among the
- * keys kept, `names`), and no longer one for those it had them for; the rest of the file as it was
- * (the Mac's BotKeys.change). */
-function writeBotSettings(bot, catalog, names) {
-  const { folder, file, settings: old, problem } = botSettings(bot);
-  if (problem) return { status: 409, message: problem };
-  const suffix = botVariable("", bot);
-  const usesOwn = server => (JSON.stringify(server).match(/KUVO_KEY_[A-Z0-9_]+/g) ?? []).some(name => name.endsWith(suffix));
-  const servers = Object.fromEntries(Object.entries(old.mcp?.servers ?? {}).filter(([, server]) => !usesOwn(server)));
-  for (const entry of botKeyed(catalog)) if (hasOwnKeys(bot, entry, names)) servers[entry.id] = botServer(entry, bot);
-  const mcp = { ...(old.mcp ?? {}) };
-  if (Object.keys(servers).length) mcp.servers = servers;
-  else delete mcp.servers;
-  const next = { ...old };
-  if (Object.keys(mcp).length) next.mcp = mcp;
-  else delete next.mcp;
-  if (JSON.stringify(next) === JSON.stringify(old)) return { status: 200 };
-  if (Object.keys(next).length) {
-    writePrivate(file, JSON.stringify(next, null, 2) + "\n");
-  } else {
-    fs.rmSync(file, { force: true });
-    try { fs.rmdirSync(folder); } catch {}
-  }
-  return { status: 200 };
-}
-
-/** Each bot here: its folder's settings as its keys and this box's integrations are now (a
- * server's newer version, say, or settings that came with it from another computer naming its
- * keys there). As the box starts, and from a client (`POST kuvo/bots/keys/refresh`). */
-export function refreshBotsKeys(file = INTEGRATIONS_FILE) {
-  return keyWork(() => refreshingBotsKeys(file));
-}
-
-async function refreshingBotsKeys(file) {
-  const bots = listOf(BOTS).filter(bot => {
-    const here = botHere(bot);
-    return here && !here.described.project;
-  });
-  if (!bots.length) return;
-  const catalog = integrationCatalog(file);
-  const names = await keyNames();
-  for (const bot of bots) writeBotSettings(bot, catalog, names);
-}
-
-/** Its server, connected again in the bot's folder a moment later, with the keys it has now. */
-function reconnectForBot(engine, id, bot, later) {
-  if (!engine?.port) return;
-  const folder = path.join(BOTS, bot, "workspace");
-  later(() => fetch(`http://127.0.0.1:${engine.port}/api/experimental/mcp/${encodeURIComponent(id)}/connect`, {
-    method: "POST",
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) },
-  }).catch(() => {}), 2_000);
-}
-
-/** `kuvo/bots/<id>/keys…`, for a bot that lives on this box. `later` runs what waits a moment (a
- * test's own). Where its keys are kept can't be reached (this Mac's app not answering): `503 {"message"}`. */
-export async function answerBotKeys(method, requestPath, body, engine, file = INTEGRATIONS_FILE, later = soon) {
-  try {
-    return await keyWork(() => botKeysAnswer(method, requestPath, body, engine, file, later));
-  } catch (error) {
-    if (error instanceof KeysUnavailable) return { status: 503, value: { message: error.message } };
-    throw error;
-  }
-}
-
-async function botKeysAnswer(method, requestPath, body, engine, file, later) {
-  const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
-  const message = text => ({ message: text });
-  const bot = parts[2];
-  const here = botHere(bot);
-  if (!here) return { status: 404, value: message("That bot isn’t on this computer.") };
-  if (here.described.project) return { status: 409, value: message(`${here.described.name} works in a project, so it uses the keys that project's sessions use.`) };
-  const catalog = integrationCatalog(file);
-  const keyed = botKeyed(catalog);
-  // Which keys are kept, by name: whether it has its own, and whether the box has shared ones, never
-  // reading a key to say so.
-  const names = await keyNames();
-  const shared = entry => Object.values(entry.variables).every(variable => names.includes(variable));
-  const without = gone => names.filter(name => !gone.includes(name));
-  if (parts.length === 4) {
-    // Each with what Edit Bot shows of it: its name, symbol, the keys it takes and where to get them.
-    if (method === "GET") return { status: 200, value: { keys: keyed.map(entry => ({ integration: entry.id, own: hasOwnKeys(bot, entry, names), shared: shared(entry),
-      title: entry.title, symbol: entry.symbol, keys: (entry.keys ?? []).map(({ name, label, prompt }) => ({ name, label, prompt })), ...(entry.help ? { help: entry.help } : {}) })) } };
-    if (method !== "DELETE") return { status: 405, value: {} };
-    // All of them, as it leaves this box: what it moved with goes with it, and any left from
-    // integrations no longer here.
-    const had = keyed.filter(entry => hasOwnKeys(bot, entry, names));
-    const own = names.filter(name => name.endsWith(botVariable("", bot)));
-    // Its settings without them first, so none names a key that's gone if one can't be taken away.
-    const written = writeBotSettings(bot, catalog, without(own));
-    for (const name of own) await deleteKey(name);
-    for (const entry of had) reconnectForBot(engine, entry.id, bot, later);
-    return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
-  }
-  if (parts.length !== 5) return { status: 404, value: {} };
-  const entry = keyed.find(each => each.id === parts[4]);
-  if (!entry) return { status: 404, value: message("A bot can't have a key of its own for that here.") };
-  const fields = Object.keys(entry.variables);
-  const variableOf = name => botVariable(entry.variables[name], bot);
-  switch (method) {
-    case "GET": {
-      if (!hasOwnKeys(bot, entry, names)) return { status: 404, value: {} };
-      const keys = {};
-      for (const name of fields) keys[name] = (await readKey(variableOf(name))) ?? "";
-      return { status: 200, value: { keys } };
-    }
-    case "PUT": {
-      const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
-      if (!fields.every(name => typeof given[name] === "string" && given[name].trim())) {
-        const labels = (entry.keys ?? []).map(key => key.label).join(" and ") || fields.join(" and ");
-        return { status: 400, value: message(`${entry.title} needs ${labels}: send them as {"keys": {"${fields[0]}": …}}.`) };
-      }
-      // Its folder's settings are checked first: none are written where they can't be named.
-      const { problem } = botSettings(bot);
-      if (problem) return { status: 409, value: message(problem) };
-      for (const name of fields) await writeKey(variableOf(name), given[name].trim());
-      writeBotSettings(bot, catalog, [...names, ...fields.map(variableOf)]);
-      reconnectForBot(engine, entry.id, bot, later);
-      return { status: 200, value: { integration: entry.id, own: true, shared: shared(entry) } };
-    }
-    case "DELETE": {
-      if (!hasOwnKeys(bot, entry, names)) return { status: 404, value: {} };
-      // Its folder's settings are checked first: its key stays while they can't say it's gone.
-      const { problem } = botSettings(bot);
-      if (problem) return { status: 409, value: message(problem) };
-      const own = fields.map(variableOf);
-      const written = writeBotSettings(bot, catalog, without(own));
-      for (const name of own) await deleteKey(name);
-      reconnectForBot(engine, entry.id, bot, later);
-      return written.status === 200 ? { status: 200, value: {} } : { status: written.status, value: message(written.message) };
-    }
-    default:
-      return { status: 405, value: {} };
   }
 }
 
@@ -991,560 +801,6 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
     }
     return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
   };
-}
-
-// ---- Notices held while you're at a computer (PROTOCOL.md, "kuvo/attention") ----
-// A client in use (the Mac app, while you're at the Mac) tells the box so, for a short lease it
-// renews. While one is, each notice waits a little before it goes to your phones, and doesn't go
-// if it was answered meanwhile (a permission, a question, an ask) or seen: its conversation came
-// on that client's screen, or the client showed it in a notification of its own. When the last
-// lease ends (it ran out, or the client said it's not in use), what waits goes at once; with none,
-// notices go at once. So a client that vanishes (a Mac's lid closed) holds nothing back for longer
-// than a hold.
-
-// How long a notice waits while you're at a computer: what's asked of you less than news.
-export const ASK_HOLD = 30_000;
-export const NEWS_HOLD = 60_000;
-// The longest lease a client gets: one it doesn't renew is over by then.
-export const LONGEST_LEASE = 60_000;
-// A client's notification of a notice's news and the notice itself come apart (each box hears the
-// engine on its own): one shown this long before the notice still counts.
-export const SHOWN_WITHIN = 10_000;
-// Where a running bridge keeps what's held.
-const HELD_FILE = path.join(RUN, "held-notices.json");
-// What a bridge before held waits this long for its clients to say they're still in use (a Mac
-// renews every 15 seconds), as they were when it stopped: then it goes, unless they're back.
-export const RESTORED_WAIT = 20_000;
-// A notice that couldn't go (no relay just now) is tried again this often, for this long.
-const RETRY_EVERY = 5_000;
-const TRY_FOR = 10 * 60_000;
-// Requests answered lately: one answered before its notice was made (the engine is asked who's
-// asking first) never goes.
-const MOST_ANSWERED = 200;
-const ASKED = new Set(["permission", "question", "ask"]);
-export const holdFor = category => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
-
-// What a notice is about (its conversation, or group chat), and what answering takes it back.
-const shownIn = notice => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
-const answeredBy = notice => notice?.data?.request ?? notice?.data?.ask;
-// Whether a client's notification (`{session, ask, request?}`) is of this notice: the request or
-// ask it's about, when it names one; else its conversation, and asked of you or news alike.
-const showsNotice = (shown, notice) => shown.request !== undefined
-  ? shown.request === answeredBy(notice)
-  : shown.session === shownIn(notice) && shown.ask === ASKED.has(notice.category);
-
-// What a client said (`POST kuvo/attention`'s body, or a Mac's mail): `{seconds, sessions,
-// shown}`, its lease cut to the longest; null for what isn't that.
-export function attentionGiven(given) {
-  if (!isObject(given) || typeof given.for !== "number" || !Number.isFinite(given.for) || given.for < 0) return null;
-  if (given.sessions !== undefined && (!Array.isArray(given.sessions) || !given.sessions.every(each => typeof each === "string"))) return null;
-  if (given.shown !== undefined && (!Array.isArray(given.shown)
-    || !given.shown.every(each => isObject(each) && typeof each.session === "string" && (each.ask === undefined || typeof each.ask === "boolean")
-      && (each.request === undefined || typeof each.request === "string")))) return null;
-  return {
-    seconds: Math.min(given.for, LONGEST_LEASE / 1000),
-    sessions: (given.sessions ?? []).slice(0, 50),
-    shown: (given.shown ?? []).slice(0, 50).map(each => ({ session: each.session, ask: each.ask === true, ...(each.request !== undefined ? { request: each.request } : {}) })),
-  };
-}
-
-// A clock for time gone by that a change of the date or time can't move.
-const monotonic = () => performance.now();
-
-export class NoticeHold {
-  // `send(notice)`: to your phones; false when it can't go now. `now`, `setTimer` and `clearTimer`:
-  // the clock (a test's own), `now` for time gone by; `wall`, the date, for what's kept. `save(entries)`:
-  // what's held, kept for a bridge that starts again, which gives them back as `held`: what was held
-  // for a client in use with the rest of its hold, and what was seen kept seen, while its clients
-  // have a moment to say they're still there (`RESTORED_WAIT`); what was only waiting for the relay,
-  // at once.
-  constructor({ send, now = monotonic, wall = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, save = () => {}, held = [] }) {
-    Object.assign(this, { send, now, wall, setTimer, clearTimer, save });
-    this.leases = new Map();
-    // When each client last spoke (its word's `at`): an older word, come late, is let go.
-    this.heard = new Map();
-    // Notifications clients showed lately, for notices that come after them.
-    this.shown = [];
-    this.answered = [];
-    this.timer = null;
-    const start = this.now(), today = this.wall();
-    const restored = (Array.isArray(held) ? held : []).filter(entry => isObject(entry?.notice) && typeof entry.at === "number");
-    this.held = restored.map(entry => {
-      const age = Math.min(Math.max(today - entry.at, 0), TRY_FOR);
-      // One held for a client keeps the rest of its hold; one only waiting for the relay goes now.
-      // (One kept before bridge 0.9.61 doesn't say: taken as held for a client, that once.)
-      const due = entry.attended !== false ? start - age + holdFor(entry.notice.category) : start - age;
-      return { notice: entry.notice, wall: entry.at, at: start - age, due: Math.max(due, start - age), seen: entry.seen === true };
-    });
-    if (restored.some(entry => entry.attended !== false)) this.leases.set("restored", start + RESTORED_WAIT);
-    this.saved = NoticeHold.kept(this.held);
-    this.settle();
-  }
-
-  // What's kept of what's held, as JSON: when each was made, by the date.
-  static kept(entries) {
-    // `attended`: held because a client was in use, not only waiting for the relay.
-    return JSON.stringify(entries.map(({ notice, wall, seen, at, due }) => ({ notice, at: wall, seen, attended: due > at })));
-  }
-
-  // Whether a client is in use now, and how many notices wait.
-  get inUse() {
-    const now = this.now();
-    return [...this.leases.values()].some(until => until > now);
-  }
-  get count() { return this.held.length; }
-
-  // `client` is in use for `seconds` more, with `sessions` on its screen and `shown` in its own
-  // notifications just now; 0: it isn't any more. `at`: when it said so, by its own clock, for words
-  // that can come out of order (mail).
-  attend(client, { seconds, sessions = [], shown = [] }, at) {
-    if (typeof at === "number") {
-      if (at < (this.heard.get(client) ?? -Infinity)) return;
-      this.heard.set(client, at);
-    }
-    if (seconds > 0) {
-      const now = this.now();
-      this.leases.set(client, now + seconds * 1000);
-      const onScreen = new Set(sessions);
-      for (const entry of this.held) if (onScreen.has(shownIn(entry.notice))) entry.seen = true;
-      // Each notification stands for one notice: the oldest held of it, or the next to come.
-      this.shown = this.shown.filter(each => now - each.at < SHOWN_WITHIN);
-      for (const each of shown) {
-        const entry = this.held.find(entry => !entry.seen && showsNotice(each, entry.notice));
-        if (entry) entry.seen = true;
-        else this.shown.push({ ...each, at: now });
-      }
-      this.shown = this.shown.slice(-200);
-    } else {
-      this.leases.delete(client);
-    }
-    this.settle();
-  }
-
-  // A notice for your phones: it goes now, or once its hold ends. True: it's taken.
-  tell(notice) {
-    const answer = answeredBy(notice);
-    if (answer !== undefined && this.answered.includes(answer)) return true;
-    const now = this.now();
-    const inUse = this.inUse;
-    // Shown by a client in use just before it came: that notification is spent.
-    const mark = inUse ? this.shown.findIndex(each => now - each.at < SHOWN_WITHIN && showsNotice(each, notice)) : -1;
-    const seen = mark >= 0;
-    if (seen) this.shown.splice(mark, 1);
-    this.held.push({ notice, at: now, wall: this.wall(), due: inUse ? now + holdFor(notice.category) : now, seen });
-    this.settle();
-    return true;
-  }
-
-  // A request or an ask answered (or gone): its notice, waiting, never goes.
-  resolve(id) {
-    if (typeof id !== "string" || !id) return;
-    this.answered.push(id);
-    if (this.answered.length > MOST_ANSWERED) this.answered.shift();
-    this.held = this.held.filter(entry => answeredBy(entry.notice) !== id);
-    this.settle();
-  }
-
-  // Sends what's due, and wakes again when the next is (or a lease ends with something waiting).
-  settle() {
-    const now = this.now();
-    for (const [client, until] of this.leases) if (until <= now) this.leases.delete(client);
-    const waiting = this.leases.size > 0;
-    // When an entry may go: its hold's end while a client's in use, else now; one that couldn't
-    // go waits for its next try.
-    const when = entry => Math.max(waiting ? entry.due : -Infinity, entry.retry ?? -Infinity);
-    const kept = [];
-    for (const entry of this.held) {
-      if (when(entry) > now) {
-        kept.push(entry);
-        continue;
-      }
-      // Seen: news needs telling no more; what's asked of you waits until it's answered, and goes
-      // once no one's at a client (you saw it, and left it unanswered).
-      if (entry.seen && !ASKED.has(entry.notice.category)) continue;
-      if (entry.seen && waiting) {
-        kept.push({ ...entry, due: Infinity });
-        continue;
-      }
-      if (this.send(entry.notice)) continue;
-      if (now - entry.at < TRY_FOR) kept.push({ ...entry, retry: now + RETRY_EVERY });
-    }
-    this.held = kept;
-    const text = NoticeHold.kept(kept);
-    if (text !== this.saved) {
-      this.saved = text;
-      this.save(JSON.parse(text));
-    }
-    if (this.timer !== null) this.clearTimer(this.timer);
-    this.timer = null;
-    const next = Math.min(...kept.map(when), ...(kept.length ? this.leases.values() : []));
-    if (Number.isFinite(next)) this.timer = this.setTimer(() => this.settle(), Math.max(0, next - now));
-  }
-}
-
-// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
-// quotes at a line's start, emphasis around words, code ticks, a link's address.
-const plain = text => String(text ?? "")
-  .replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "")
-  .replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1")
-  .replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "")
-  .replace(/`/g, "")
-  .replace(/\s+/g, " ").trim();
-
-// "Wants to run a command: npm test", as the Mac says it: every one it covers (a command line's
-// commands each, as Allow takes them all), up to four, then how many more.
-export function describePermission(request) {
-  const what = { edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" }[request.action] ?? request.action;
-  const shown = (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*");
-  if (!shown.length) return `Wants to ${what}.`;
-  const more = shown.length > 4 ? ` · and ${shown.length - 4} more` : "";
-  return `Wants to ${what}: ${shown.slice(0, 4).join(" · ")}${more}`;
-}
-
-// Whether a permission's notice shows all it covers: Allow there would allow what it leaves out.
-const showsAllCovered = request => (Array.isArray(request.resources) ? request.resources : []).filter(each => each !== "*").length <= 4;
-
-// A question's one field and its choices, as the Mac answers it from a notification.
-const singleQuestion = form => {
-  if (form.metadata?.kind !== "question") return null;
-  const fields = (form.fields ?? []).filter(field => !field.hidden && !field.when?.length);
-  return fields.length === 1 && fields[0].type === "string" ? fields[0] : null;
-};
-
-// What a form asks, as the Mac's notification says it.
-export function describeForm(form) {
-  const kind = form.metadata?.kind;
-  if (kind === "mcp-elicitation") return form.metadata?.message || "Needs your answer.";
-  if (kind !== "question") return "Needs your answer.";
-  const fields = (form.fields ?? []).filter(field => !field.hidden && !field.when?.length);
-  if (fields.length === 1 && fields[0].type === "string") return fields[0].description || fields[0].title || form.title || "Has a question for you.";
-  return "Has a question for you.";
-}
-
-const isBot = session => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
-
-
-// This box's chats, conversations of no project: a machine's in its folder, a Mac's beside its box.
-const chatsFolder = () => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
-
-// A project's name, as the Mac shows it: its own, or its folder's; a worktree's is its project's.
-export function projectNameOf(directory) {
-  if (!directory) return undefined;
-  if (directory === chatsFolder()) return "Chats";
-  const project = readWorktrees().find(each => (each.folder ?? each.root) === directory || each.root === directory)?.project
-    ?? readRemovedWorktrees()[directory] ?? directory;
-  return readProjects().find(each => each.directory === project)?.name || path.basename(project) || undefined;
-}
-
-// The notification for an engine event, or null for one that isn't news. `get(route)` asks the
-// engine.
-export async function noticeFor(event, get) {
-  const data = event.data ?? {};
-  const session = async id => (await get(`api/session/${encodeURIComponent(id)}`)).data;
-  // A subagent's request shows in the session that started it.
-  const shown = async id => {
-    let current = await session(id);
-    for (let step = 0; step < 5 && current.parentID; step++) current = await session(current.parentID);
-    return current;
-  };
-  // A form an MCP server asks for is filed under no session ("global"): it's the running session
-  // of its folder with a tool of that server under way, as the Mac finds it; null for none.
-  const waitingOn = async (server, folder) => {
-    if (!server) return null;
-    const active = (await get("api/session/active").catch(() => null))?.data ?? {};
-    const name = String(server).replace(/[^\p{L}\p{N}_-]/gu, "_");
-    for (const id of Array.isArray(active) ? active : Object.keys(active)) {
-      const candidate = await session(id).catch(() => null);
-      if (!candidate || (folder && candidate.location?.directory !== folder)) continue;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=8&order=desc`).catch(() => null);
-      const steps = (page?.data ?? []).filter(message => message.type === "assistant").flatMap(message => message.content ?? []);
-      if (steps.some(block => block.type === "tool" && block.state?.status === "running"
-        && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))) return id;
-    }
-    return null;
-  };
-  // `answerable` false: its buttons would answer what it can't show, so it has none, and you
-  // answer in the conversation. `untitled`: what one without a title is called.
-  const about = (shown, category, body, extra = {}, { answerable = true, untitled = "New Session" } = {}) => {
-    const bot = isBot(shown);
-    return {
-      title: shown.title || untitled,
-      subtitle: bot ? undefined : projectNameOf(shown.location?.directory ?? ""),
-      body,
-      category,
-      thread: shown.id,
-      data: { session: shown.id, ...extra, ...(answerable ? {} : { answerable: "0" }) },
-    };
-  };
-  switch (event.type) {
-    case "permission.asked": {
-      const where = await shown(data.sessionID);
-      if (isHiddenRun(where)) return null;
-      const body = describePermission(data);
-      return about(where, "permission", body, { request: data.id, ...(where.id !== data.sessionID ? { requestSession: data.sessionID } : {}) },
-        { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
-    }
-    case "form.created": {
-      // The form comes under `form`, with its session.
-      const form = data.form ?? data;
-      const asker = form.sessionID === "global" ? await waitingOn(form.metadata?.server, event.location?.directory) : form.sessionID;
-      if (!asker) return null;
-      const where = await shown(asker);
-      if (isHiddenRun(where)) return null;
-      const body = describeForm(form);
-      const choices = (singleQuestion(form)?.options ?? []).map(option => String(option?.label ?? ""));
-      return about(where, "question", body, { request: form.id, ...(where.id !== form.sessionID ? { requestSession: form.sessionID } : {}) },
-        { answerable: showsAll(body) && choices.every(showsAll), untitled: "Kuvo Code" });
-    }
-    case "session.execution.succeeded":
-    case "session.execution.failed": {
-      const id = data.sessionID;
-      const ended = await session(id);
-      // A subagent's run is part of its parent's.
-      if (ended.parentID || isHiddenRun(ended)) return null;
-      if (event.type === "session.execution.failed") return about(ended, "failed", "Stopped with an error.");
-      let reply = "";
-      try {
-        const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`);
-        for (const message of page.data ?? []) {
-          if (message.type !== "assistant") continue;
-          reply = plain((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" "));
-          if (reply) break;
-        }
-      } catch {}
-      // What it said last, as long as the Mac shows it.
-      return about(ended, isBot(ended) ? "report" : "finished", reply ? cut(reply, 220) : "Finished.");
-    }
-    default:
-      return null;
-  }
-}
-
-// What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any
-// more: answered while its events couldn't be heard, so it never goes. One it can't tell about
-// stays as it is.
-export async function settleHeld(engine, hold) {
-  for (const entry of [...hold.held]) {
-    const { request, requestSession, session } = entry.notice?.data ?? {};
-    const kind = { permission: "permission", question: "form" }[entry.notice?.category];
-    // A form an MCP server asks for is filed under no session ("global"), where the engine lists
-    // none without its folder: one it can't tell about.
-    if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string" || (requestSession ?? session) === "global") continue;
-    const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session)}/${kind}`).catch(() => null))?.data;
-    if (Array.isArray(asked) && !asked.some(each => each?.id === request)) hold.resolve(request);
-  }
-}
-
-// The events in a `text/event-stream` body, parsed.
-async function* serverEvents(body) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let data = [];
-  for await (const chunk of body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let end;
-    while ((end = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, end).replace(/\r$/, "");
-      buffer = buffer.slice(end + 1);
-      if (line === "") {
-        if (data.length) {
-          try { yield JSON.parse(data.join("\n")); } catch {}
-        }
-        data = [];
-      } else if (line.startsWith("data:")) {
-        data.push(line.slice(5).replace(/^ /, ""));
-      }
-    }
-  }
-}
-
-// The events that can be news: a session's (the engine's, or a coding agent's) and a group
-// chat's.
-const NEWS = new Set(["permission.asked", "form.created", "session.execution.succeeded", "session.execution.failed"]);
-const GROUP_NEWS = new Set(["kuvo.group.met", "kuvo.group.done"]);
-// A permission or a form answered (or cancelled): its notice, if it waits, never goes.
-const ANSWERED = new Set(["permission.replied", "form.replied", "form.cancelled"]);
-
-// A group chat's news, as the Mac tells it: its meeting held (who spoke last, or no one could take
-// part), or a bot done with the part it took on.
-export function groupNotice(event) {
-  const data = event.data ?? {};
-  if (typeof data.id !== "string") return null;
-  const about = { title: String(data.name ?? ""), category: "message", thread: data.id, data: { group: data.id } };
-  if (event.type === "kuvo.group.met") {
-    if (!data.last) return { ...about, body: "The meeting came, but no one could take part." };
-    const who = data.who ? (data.last.kind === "wrapUp" ? `${data.who}’s wrap-up` : String(data.who)) : undefined;
-    return { ...about, subtitle: who, body: cut(plain(data.last.text), 220) };
-  }
-  if (event.type === "kuvo.group.done") return { ...about, subtitle: `${data.who} finished its part`, body: cut(plain(data.text), 220) };
-  return null;
-}
-
-// A message that reaches an agent while it waits on a command or a subagent it started in the
-// foreground is read at once, as it would be at the agent's next step, rather than when the command
-// ends: what it waits on goes on in the background, and the agent is told when it ends (the engine's
-// own Ctrl+B in its terminal). Only messages sent to steer (yours, or another agent's letter), never
-// one queued for after the turn, a wake-up or the engine's own notes; and only once what it waits
-// on has run for `after` ms, so a quick command simply ends first. While one still waits behind it
-// (the call was asking you something first, say), it's tried again every `after` ms.
-// `background(session)` does it; each event from the engine goes to what this returns.
-export const STEER_AFTER = 3000;
-export function steering(background, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal } = {}) {
-  const sessions = new Map(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
-  const users = new Set(); // messages sent as a message (steered or queued) that wait
-  const timers = new Map();
-  const of = session => {
-    if (!sessions.has(session)) sessions.set(session, { names: new Map(), blocking: new Map(), steers: new Set() });
-    return sessions.get(session);
-  };
-  const forget = session => {
-    sessions.delete(session);
-    cancel(timers.get(session));
-    timers.delete(session);
-  };
-  signal?.addEventListener("abort", () => { for (const session of [...timers.keys()]) forget(session); }, { once: true });
-  const consider = session => {
-    const { blocking, steers } = of(session);
-    if (!blocking.size || !steers.size || timers.has(session) || signal?.aborted) return;
-    const due = Math.min(...blocking.values()) + after;
-    timers.set(session, schedule(() => {
-      timers.delete(session);
-      const { blocking, steers } = of(session);
-      if (!blocking.size || !steers.size) return;
-      // The call it was timed by ended meanwhile: the next one gets its moment too.
-      if (Math.min(...blocking.values()) + after > now()) return consider(session);
-      background(session);
-      timers.set(session, schedule(() => { timers.delete(session); consider(session); }, after));
-    }, Math.max(0, due - now())));
-  };
-  const steer = (session, inbox) => {
-    of(session).steers.add(inbox);
-    consider(session);
-  };
-  return event => {
-    const data = event?.data ?? {};
-    const session = data.sessionID;
-    if (typeof session !== "string") return;
-    switch (event.type) {
-      case "session.tool.input.started":
-        if (typeof data.id === "string") of(session).names.set(data.id, data.name);
-        break;
-      case "session.tool.called": {
-        const kept = of(session);
-        const name = data.name ?? kept.names.get(data.id);
-        kept.names.delete(data.id);
-        if (!["shell", "subagent"].includes(name) || data.input?.background === true) break;
-        kept.blocking.set(data.id, now());
-        consider(session);
-        break;
-      }
-      case "session.tool.success":
-      case "session.tool.failed":
-        sessions.get(session)?.names.delete(data.id);
-        sessions.get(session)?.blocking.delete(data.id);
-        break;
-      case "session.inbox.enqueued":
-        if (data.item?.type !== "user") break;
-        users.add(data.inboxID);
-        if (data.item.delivery === "steer") steer(session, data.inboxID);
-        break;
-      // Sent now, from the queue (Send Now): read at once too; put back in the queue: not.
-      case "session.inbox.delivery.changed":
-        if (data.delivery === "steer" && users.has(data.inboxID)) steer(session, data.inboxID);
-        else sessions.get(session)?.steers.delete(data.inboxID);
-        break;
-      case "session.inbox.delivered":
-      case "session.inbox.cancelled":
-        users.delete(data.inboxID);
-        sessions.get(session)?.steers.delete(data.inboxID);
-        break;
-      case "session.execution.succeeded":
-      case "session.execution.failed":
-      case "session.execution.interrupted":
-        forget(session);
-        break;
-    }
-  };
-}
-
-// Moves what a session waits on in the foreground (its commands, its subagents) to the background.
-function backgroundTools(engine, session) {
-  return fetch(`http://127.0.0.1:${engine.port}/api/session/${encodeURIComponent(session)}/background`, {
-    method: "POST",
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-}
-
-
-// Follows `source`'s events (the engine's, or the coding agents' bridge's: `read` gives its port
-// and password) for as long as the bridge runs (or until `signal` stops it, a test's), handing
-// each one's notification to `tell` and each request answered to `answered`, and doing what the
-// box does as they come.
-// `bots`: only its bots' part (this Mac's box, whose app does the rest of a machine's work);
-// `notices`: news for your phones too (a machine's, and this Mac's box while its phone link is
-// on); `signIns`: sign-ins its engine's runs were refused noted (`kuvo/accounts/ended`); `hold`:
-// where those notices wait, settled each time the events are heard again (`settleHeld`).
-// What a box watches its engine and its coding agents' bridge for, as a machine's link (`run`)
-// and a box's own work (`serve`) both start it: its bots kept told what they are, its sign-ins that
-// ended noted, and with `notices`, its news for your phones (`tell`, held in `hold`). `bots`: only
-// its bots' part of the box's work (this Mac's box, whose app does the rest).
-export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn } = {}) {
-  const answered = id => hold?.resolve(id);
-  watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices });
-}
-
-// `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
-// `steers`: your messages to an agent waiting on a command read at once (`steering`), the engine's.
-export async function watchEvents(read, tell, signal, answered = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter } = {}) {
-  let attempt = 0;
-  while (!signal?.aborted) {
-    // What this connection set going ends with it: what it heard of can't be settled once it's gone.
-    const connection = new AbortController();
-    const stop = () => connection.abort();
-    signal?.addEventListener("abort", stop, { once: true });
-    try {
-      const source = read();
-      const steer = steers ? steering(session => backgroundTools(source, session).catch(() => {}), { after: steerAfter, signal: connection.signal }) : null;
-      const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
-        headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
-        signal,
-      });
-      if (!response.ok || !response.body) throw new Error(`${response.status}`);
-      attempt = 0;
-      // What was answered while its events couldn't be heard (it restarted, the stream dropped).
-      if (notices && hold) settleHeld(source, hold).catch(() => {});
-      // Found it (it started, or this did): its bots told what they are now, before their next turn.
-      freshenBots(source).catch(() => {});
-      for await (const event of serverEvents(response.body)) {
-        // The box's own work, Mac connected or not: a session made in one of its worktrees told
-        // so; a worktree's branch named after its session; a bot's job read from its memory as
-        // its run ends.
-        // A bot's run starting: what it's told brought up to date first.
-        if (event.type === "session.execution.started") freshenBot(source, event.data?.sessionID).catch(() => {});
-        steer?.(event);
-        if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
-        if (!bots) {
-          if (event.type === "session.created") tellWorktree(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
-          if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
-        }
-        if (!notices) continue;
-        if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
-        if (!NEWS.has(event.type) && !GROUP_NEWS.has(event.type)) continue;
-        if (GROUP_NEWS.has(event.type)) {
-          const notice = groupNotice(event);
-          if (notice) tell(notice);
-          continue;
-        }
-        noticeFor(event, route => engineGet(source, route)).then(notice => notice && tell(notice)).catch(() => {});
-      }
-    } catch {}
-    stop();
-    signal?.removeEventListener("abort", stop);
-    attempt += 1;
-    await pause(Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5)), signal);
-  }
 }
 
 // MARK: Personalities, as their bots and your other computers hear of them
@@ -2257,6 +1513,22 @@ export function mailFor(peer, payload, link) {
   return relaySend(Buffer.from(peer.address, "base64url"), sealed);
 }
 const MAX_MAIL = 65_600 - 17;
+
+// Something to answer: a paired phone, a pairing code waiting, or other boxes of yours to talk to.
+const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));
+
+// What peers only `mac` named told this box, and what that Mac said over SSH, gone with it.
+function forgetMacsAgents(mac, link) {
+  const keep = new Set(peersOf(link).map(peer => peer.key));
+  locked(PEER_LOCK, () => {
+    let all = {};
+    try { all = JSON.parse(fs.readFileSync(PEER_AGENTS_FILE, "utf8")); } catch { return; }
+    for (const key of Object.keys(all)) if (!keep.has(key)) delete all[key];
+    writePrivate(PEER_AGENTS_FILE, JSON.stringify(all));
+  });
+  try { if (JSON.parse(fs.readFileSync(MAC_AGENTS_FILE, "utf8"))?.key === mac) fs.rmSync(MAC_AGENTS_FILE, { force: true }); } catch {}
+  writeAgents(link);
+}
 
 // ---- Agents and letters between boxes (PROTOCOL.md, "Peers") ----
 // Each box tells its peers who its agents are (its bots, its latest titled sessions), and keeps
@@ -3090,6 +2362,13 @@ export function docsChanged(host, { greet = false, tell = false } = {}) {
   }
 }
 
+// Something of this Mac's documents changed (a phone, a personality, your machines): what changed
+// goes to your machines now, if it's on the relay; they get it as they meet otherwise.
+export function macDocsChanged() {
+  const host = macLink.host;
+  if (host?.welcomed) try { docsChanged(host); } catch {}
+}
+
 // ---- The outbox: letters this box's agents leave for agents elsewhere ----
 // Each goes by mail to the box its agent is on, again each minute until that box says it has it
 // (or why not), for two days. A waiting tool reads its answer from `run/replies/<id>.json`.
@@ -3456,18 +2735,6 @@ function macLinkWait(ms) {
     }
     macLink.wake = done;
   });
-}
-
-// One of the app's host calls for the link, its JSON, once the app has proved it's this Mac's
-// (`askHost`); null when it isn't there or doesn't answer it.
-async function linkHost(call, body) {
-  const host = appHost();
-  if (!host) return null;
-  try {
-    return await askHost(host, call, body ?? {});
-  } catch {
-    return null;
-  }
 }
 
 const KEY_TEXT = /^[A-Za-z0-9_-]{43}$/;
@@ -3999,12 +3266,6 @@ export async function runMacLink() {
   setLinkStatus("off");
 }
 
-// Something of this Mac's documents changed (a phone, a personality, your machines): what changed
-// goes to your machines now, if it's on the relay; they get it as they meet otherwise.
-export function macDocsChanged() {
-  const host = macLink.host;
-  if (host?.welcomed) try { docsChanged(host); } catch {}
-}
 
 // This Mac in use, or not any more, as its app says (`kuvo/attention`): each of your machines hears
 // it by mail, with what of its own this Mac's notifications showed (`elsewhere`, by its id here), so
@@ -4020,12 +3281,6 @@ function macAttendPeers(body, given) {
     const bytes = mailFor(peer, { attention: { for: given.seconds, sessions: given.sessions, ...(theirs.length ? { shown: theirs } : {}) }, at }, link);
     if (bytes) try { host.send(bytes); } catch {}
   }
-}
-
-// Whether one of this Mac's conversations is moving to or from another computer now: its app runs
-// the move (`link/moving`). Not when the app can't say (it isn't answering).
-async function macMoving(session) {
-  return (await linkHost("link/moving", { session }))?.moving === true;
 }
 
 // This Mac's box's agents and their letters, as a machine's link keeps them (`run`): its own listed
@@ -4224,8 +3479,6 @@ export function keepKeeper() {
   } catch {}
 }
 
-// Something to answer: a paired phone, a pairing code waiting, or other boxes of yours to talk to.
-const needed = link => Boolean(link && ((link.phones ?? []).length || (link.pairing && Date.now() < link.pairing.expires) || peersOf(link).length));
 
 async function run() {
   // One bridge at a time: a newer one (the engine restarted) takes over.
@@ -4594,17 +3847,6 @@ async function serve() {
   process.stdin.resume();
 }
 
-// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
-function peerTargets() {
-  const targets = [];
-  try { targets.push(readEngineFile()); } catch {}
-  try {
-    const bridge = readBridgeFile();
-    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
-  } catch {}
-  return targets;
-}
-
 async function setup() {
   let input;
   try {
@@ -4710,18 +3952,6 @@ export function leave(mac) {
   return true;
 }
 
-// What peers only `mac` named told this box, and what that Mac said over SSH, gone with it.
-function forgetMacsAgents(mac, link) {
-  const keep = new Set(peersOf(link).map(peer => peer.key));
-  locked(PEER_LOCK, () => {
-    let all = {};
-    try { all = JSON.parse(fs.readFileSync(PEER_AGENTS_FILE, "utf8")); } catch { return; }
-    for (const key of Object.keys(all)) if (!keep.has(key)) delete all[key];
-    writePrivate(PEER_AGENTS_FILE, JSON.stringify(all));
-  });
-  try { if (JSON.parse(fs.readFileSync(MAC_AGENTS_FILE, "utf8"))?.key === mac) fs.rmSync(MAC_AGENTS_FILE, { force: true }); } catch {}
-  writeAgents(link);
-}
 
 // A pairing's token, good once, for `PAIRING_MINUTES`.
 const newPairingToken = () => ({ token: crypto.randomBytes(16).toString("base64url"), expires: Date.now() + PAIRING_MINUTES * 60_000 });

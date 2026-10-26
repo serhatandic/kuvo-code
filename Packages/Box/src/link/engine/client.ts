@@ -2,12 +2,24 @@
 // what their records say, with their passwords.
 
 import fs from "node:fs";
+import { processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import { BRIDGE_FILE, ENGINE_FILE } from "../home";
 
 export const readEngineFile = (): EngineRecord => JSON.parse(fs.readFileSync(ENGINE_FILE, "utf8"));
 // The coding agents' bridge beside the engine, when it runs: its port and password.
 export const readBridgeFile = (): BridgeRecord => JSON.parse(fs.readFileSync(BRIDGE_FILE, "utf8"));
+
+// Where a letter's agent can be here: the engine, and the coding agents' bridge while it runs.
+export function peerTargets(): Target[] {
+  const targets: Target[] = [];
+  try { targets.push(readEngineFile()); } catch {}
+  try {
+    const bridge = readBridgeFile();
+    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+  } catch {}
+  return targets;
+}
 
 // Asks the engine for `route` (a path under its API), as JSON.
 export function engineGet(engine: Target, route: string): Promise<any> {

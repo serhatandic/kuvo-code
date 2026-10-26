@@ -131,3 +131,21 @@ export async function siteSignIns() {
     return null;
   }
 }
+
+// One of the app's host calls for the link, its JSON, once the app has proved it's this Mac's
+// (`askHost`); null when it isn't there or doesn't answer it.
+export async function linkHost(call, body) {
+  const host = appHost();
+  if (!host) return null;
+  try {
+    return await askHost(host, call, body ?? {});
+  } catch {
+    return null;
+  }
+}
+
+// Whether one of this Mac's conversations is moving to or from another computer now: its app runs
+// the move (`link/moving`). Not when the app can't say (it isn't answering).
+export async function macMoving(session) {
+  return (await linkHost("link/moving", { session }))?.moving === true;
+}
