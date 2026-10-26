@@ -47,7 +47,7 @@ enum DemoPerf {
             app.tabs.cycle(by: by[step % by.count])
             await DemoWait.pause(.step(.milliseconds(1500)))
             if check, let id = app.tabs.selection?.text, let model = app.workspace.model(for: id),
-               let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) {
+               let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: { $0.isFieldEditor || $0 is MessageTextView }) {
                 if editor.string != model.draftText { wrong.append("step \(step): shows \"\(editor.string)\", draft \"\(model.draftText)\"") }
                 editor.insertText("+", replacementRange: NSRange(location: (editor.string as NSString).length, length: 0))
                 await DemoWait.pause(.step(.milliseconds(100)))
@@ -156,7 +156,7 @@ enum DemoPerf {
     /// thread kept up, and the longest a character took to be handled.
     private static func type(_ count: Int, _ environment: [String: String]) async {
         await DemoWait.pause(.launchSettles)
-        guard let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: \.isFieldEditor) else { return }
+        guard let editor = NSApp.windows.lazy.compactMap({ $0.firstResponder as? NSTextView }).first(where: { $0.isFieldEditor || $0 is MessageTextView }) else { return }
         let meter = PerfMeter()
         meter.start()
         var longest = 0.0

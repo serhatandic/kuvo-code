@@ -32,12 +32,15 @@ for Linux's tools).
 | The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Agents/test: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
 | B16 Find in a long conversation | ConversationFindTests | |
 | Scroll to the End, also while a flick of the trackpad still glides | | all of it: a trackpad's scrolling (its phases, a glide) can't be given to a window the tests make, so it's tried by hand |
-| B19 A subagent at work, in the background too | SubagentsAtWorkTests | |
+| B19 A subagent at work, in the background too | SubagentsAtWorkTests, AgentAsksTests (one moved to the background still asks) | |
+| A message to an agent waiting on a long command or a subagent is read at once: the box moves what it waits on to the background | the bridge's steering.test.js | the engine's own background route (checked by hand against a real engine) |
+| Read on one client, read on all: a session, bot or group chat read on the phone or another Mac stops showing unread here | SessionLifecycleTests, BoxGroupTests; Agents' sessions test (a coding agent's look told) | the phone's side (its own tests) |
 | B17 A folder that isn't a git repository | SessionEditsTests | |
 | B18 Rename, archive, restore, delete, search | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
-| C1–C3 Attach pictures, PDFs, files | AttachmentRoutesTests, AttachmentsTests, SentFilesTests | |
-| C4 Quote part of a reply and answer it | QuotingTests | |
+| C1–C3 Attach pictures, PDFs, files; a picture named where you write ("[Image 1]"), its name gone with it | AttachmentRoutesTests, AttachmentsTests, SentFilesTests, ComposerFieldTests | how the names and links look in the field and your bubble (a look before and after) |
+| C4 Quote part of a reply and answer it, the answer taking the keyboard | QuotingTests, ComposerFieldTests | |
+| The card you work in looks it: a click anywhere in it (a reply's words too), not clicks in Settings over it | WindowFocusTests | a session picked in the sidebar leaving you in its conversation (SwiftUI buttons take no queued clicks in the tests' window, which is never key) |
 | C5, C6 Files in the panel; the agent shows one; agents' tabs tidied | FileLinksTests, PanelTabsTests, ProjectFilesTests, BrowserHistoryTests, AgentTabsTests | |
 | D3 A reply with a widget shows as one | | how a reply's steps become rows is the transcript view's own (no seam outside it); the bridge naming coding agents' show_widget is in Agents/test |
 | Math in a reply: formulas drawn in a line or on their own; prices, the shell's `$$`, code and links kept as written; lists, quotes and tables keep their shape | ReplyMathTests | how a formula looks (a look before and after) |

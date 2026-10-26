@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The quotes you're answering, each with your answer under it: as tall as they are up to a
@@ -5,10 +6,17 @@ import SwiftUI
 /// one you're answering in view.
 struct QuoteList: View {
     @Binding var quotes: [Drafts.Quote]
-    var answering: FocusState<UUID?>.Binding
-    let focus: UUID?
-    let font: Font
-    let onSubmit: () -> Void
+    /// The quote whose answer is to take the keyboard.
+    let focus: (id: UUID, request: MessageField.FocusRequest)?
+    /// Each change lets go of the keyboard.
+    var blur = 0
+    let font: NSFont
+    /// Pictures attached to the message, which an answer can name.
+    var images = 0
+    var onKey: (MessageField.Key) -> Bool
+    /// An answer took the keyboard (true) or let it go.
+    var onFocus: (UUID, Bool) -> Void
+    var onPaste: (NSPasteboard) -> [String]? = { _ in nil }
     /// How tall they are together, measured as they lay out.
     @State private var height: CGFloat = 0
     @State private var position = ScrollPosition(idType: UUID.self)
@@ -48,19 +56,9 @@ struct QuoteList: View {
                                 let id = quote.id
                                 withAnimation(.ui) { quotes.removeAll { $0.id == id } }
                             }
-                            TextField("Your answer to this…", text: response(to: quote.id), axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .font(font)
-                                .lineLimit(1...10)
-                                .focused(answering, equals: quote.id)
-                                // As in the composer: Shift- or Option-Return starts a new line,
-                                // Return sends.
-                                .onKeyPress(.return, phases: .down) { press in
-                                    guard !Composer.isComposing, press.modifiers.contains(.shift) || press.modifiers.contains(.option) else { return .ignored }
-                                    Composer.newLine(in: response(to: quote.id))
-                                    return .handled
-                                }
-                                .onSubmit(onSubmit)
+                            MessageField(text: response(to: quote.id), placeholder: "Your answer to this…", font: font, maxLines: 10,
+                                         focus: focus?.id == quote.id ? focus?.request : nil, blur: blur, images: images,
+                                         onKey: onKey, onFocus: { onFocus(quote.id, $0) }, onPaste: onPaste, identifier: "quote-answer", label: "Your Answer")
                                 .padding(.leading, 12)
                                 .padding(.bottom, 4)
                         }
@@ -84,7 +82,7 @@ struct QuoteList: View {
             // Its own height until it's measured, so it doesn't take the window's first.
             .frame(height: height == 0 ? nil : min(height, Self.tallest))
             .fixedSize(horizontal: false, vertical: height == 0)
-            .onChange(of: focus, initial: true) { _, id in
+            .onChange(of: focus?.id, initial: true) { _, id in
                 guard let id else { return }
                 Task {
                     await Task.yield()

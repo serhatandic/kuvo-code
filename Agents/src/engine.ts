@@ -244,7 +244,9 @@ export class EngineLink {
     set.add(listener)
     return () => {
       set!.delete(listener)
-      if (!set!.size) this.listeners.delete(sessionID)
+      if (set!.size) return
+      // Its subagents' sessions too, once nothing follows it (another may still: a goal and a group chat both follow a bot's).
+      this.listeners.delete(sessionID)
       for (const [child, parent] of this.children) if (parent === sessionID) this.children.delete(child)
     }
   }

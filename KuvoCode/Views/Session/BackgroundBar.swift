@@ -81,6 +81,29 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
     }
 
     private var header: some View {
+        BarLine(mark: symbol.map { symbol in
+            AnyView(Image(systemName: symbol)
+                .font(.system(size: 13))
+                .foregroundStyle(.tint))
+        } ?? AnyView(Spinner(size: 14)), title: title, detail: detail, accessory: accessory, showHelp: showHelp, hideHelp: hideHelp, isHidden: $isHidden)
+    }
+}
+
+/// The line of a bar over the composer (`WorkBar`, the goal's): its mark, what it says, how far
+/// along it is, and while what's under it is hidden, what that is; clicking it shows or hides
+/// what's under it. A button or two of its own go at its end.
+struct BarLine: View {
+    let mark: AnyView
+    let title: String
+    /// How far along it is, after the title ("3 turns · 12 min").
+    var progress: String?
+    var detail: Text?
+    var accessory: AnyView?
+    let showHelp: String
+    let hideHelp: String
+    @Binding var isHidden: Bool
+
+    var body: some View {
         HStack(spacing: 0) {
             toggle
             if let accessory {
@@ -95,17 +118,19 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
             withAnimation(.ui) { isHidden.toggle() }
         } label: {
             HStack(spacing: 10) {
-                if let symbol {
-                    Image(systemName: symbol)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tint)
-                        .frame(width: 18)
-                } else {
-                    Spinner(size: 14)
-                        .frame(width: 18)
-                }
+                mark
+                    .frame(width: 18)
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .layoutPriority(2)
+                if let progress {
+                    Text(progress)
+                        .font(.system(size: 13).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
                 if isHidden, let detail {
                     detail
                         .foregroundStyle(.secondary)
@@ -127,7 +152,7 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
         .buttonStyle(.plain)
         .clickablePointer()
         .help(isHidden ? showHelp : hideHelp)
-        .accessibilityLabel(title)
+        .accessibilityLabel(progress.map { "\(title), \($0.replacingOccurrences(of: " · ", with: ", "))" } ?? title)
         .accessibilityValue(isHidden ? "Hidden" : "Shown")
     }
 }

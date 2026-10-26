@@ -613,6 +613,24 @@ host serves:
   done, it carries on), `POST api/session/<id>/interrupt` to stop it (the agent waiting on it
   hears it was cancelled, and carries on), and choose its model. Choose it without interrupting:
   an interrupt, even with `resume`, ends that agent's wait, and it gives up on the subagent.
+- **What's been read** is the box's, never a client's, so a conversation read on one client is
+  read on all of them, a machine's with the Mac closed too. A session (a bot's too) is unread
+  while `time.idle` is later than `time.viewed`. Read it with `POST api/session/<id>/view`
+  (`{"idle"}`, the `time.idle` it was read at; `kuvo/agents/api/…` for a coding agent's): the box
+  keeps the later of that and what it had, and tells every client of a later look with `session.viewed`
+  (`{"sessionID", "idle"}`) on `api/event` (an older coding agents' bridge keeps it without
+  telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
+  it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
+  changes in `kuvo/groups/events` (below).
+- **A message while a command runs** is read at once. A message sent to steer
+  (`delivery: "steer"`: yours, or another agent's letter) waits for the agent's next step, and an
+  agent waiting on a command or a subagent it started in the foreground takes none until that
+  ends. So each box, following its engine, moves what the agent waits on to the background once
+  it has run for 3 seconds (`POST api/session/<id>/background`, the engine's Ctrl+B), and again
+  every 3 seconds while the message still waits behind it: the agent reads the message now, and
+  is told when the command ends (bridge 0.9.67). A message queued for after the turn, a wake-up
+  (queued too) or the engine's own notes wait as before. The coding agents' sessions don't do
+  this yet.
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
@@ -1258,6 +1276,48 @@ host serves:
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   A Mac without the usage panel answers 404. Times are seconds since 1970.
 
+### Goals
+
+A conversation's goal ("/goal all tests in test/auth pass"): its agent works toward it on its own,
+turn after turn, until a check after each turn finds it met. Each box runs its own, in its agents
+bridge beside the engine, for the engine's sessions and the coding agents' alike, with no client
+there (a machine's with the Mac closed too). The check reads the conversation and runs nothing: on
+the engine, the session's model afresh, apart from the agent (OpenCode's free models answer only in
+the session's own context, so there it's asked there); with the coding agents, their one-off
+answer, another agent you're signed in to answering for one that has none (Antigravity, Cursor,
+Grok). With none to answer, the goal pauses and says so. A client reaches them as `kuvo/agents/api/kuvo/goals…`
+(the Mac app at `api/kuvo/goals…` on the bridge itself), on the box the conversation lives on, while
+`kuvo/info` has `agents: true` (503 otherwise), where `features` has `goals`.
+
+- `GET kuvo/agents/api/kuvo/goals` → `{data: [goal]}`: every goal on the box, a met one too until
+  it's put away. `GET …/goals/<session>` → `{data: goal}`, or 404 when it has none.
+- `PUT …/goals/<session>` with `{"condition"}` (at most 4,000 characters) sets it, in place of one
+  it had, and starts the agent on it at once: `{data: goal}`; 400 `{message}` for no condition or
+  one too long, 404 for a conversation that isn't there, 409 for a subagent's (the conversation it
+  works for has the goal), 503 when it can't be reached. A turn already under way counts only if
+  the agent read the goal in it.
+- `POST …/goals/<session>/pause` holds it (the turn under way ends as it would, and no other
+  starts; a note already on its way to the agent still is); `…/resume` lets it go: its last turn
+  is checked (however it ended), and it carries on unless that met it. Both `{data: goal}`, 404 when it has none, 409 for one that's over (set it
+  again instead).
+- `DELETE …/goals/<session>` puts it away, over or not: `{}`, or 404.
+- A goal: `{session, condition, state, note?, pausedBy?, started, ended?, turns, checking, last?}`.
+  `state` is `working`, `paused` (`pausedBy`: `you`, `error` (a turn failed, said in `note`),
+  `stalled` (three turns in a row doing nothing) or `limit` (a hundred turns since it was set or
+  resumed)), `met`, or `unmet` (it can't be met as asked: `note` says why). `turns`: the agent's
+  turns toward it, each checked; `checking`: a check is under way; `last`: `{verdict: "met" |
+  "not_met" | "impossible", reason, at}`, its reason what's left or what shows it's met. Times in
+  ms since 1970.
+- The bridge's events (`kuvo/agents/api/event`) carry `kuvo.goal.updated` `{sessionID, goal}` for
+  each change, `goal` null once it's put away (or its conversation deleted).
+- In the conversation, the goal's messages to the agent are notes (`synthetic`) whose text starts
+  with `[Goal] `: show their `description` ("Goal: …", "Not met yet: …") as the goal's. A turn
+  you stop pauses it ("The turn was stopped."); so does one that fails. A turn cut short as the box
+  stopped is checked once it's back, as any turn, and one is never checked twice.
+- "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
+  `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
+  (OpenCodeKit's `GoalCommand`, for every client alike).
+
 ### Features
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
@@ -1287,6 +1347,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `engine.restart` | `POST kuvo/engine/restart` |
 | `file` | `kuvo/file` |
+| `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
 | `groups.make` | `POST kuvo/groups` |
 | `groups.edit` | `PATCH kuvo/groups/<id>` |

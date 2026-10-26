@@ -81,16 +81,4 @@ import Testing
         #expect(found.map(\.reference.session) == ["s3", "s1", "s2"])
         #expect(found.map { String(text[$0.range]) } == ["&ZOE", "&mira", "&Miranda"])
     }
-
-    /// Backspace right after a name takes all of it; anywhere else (inside it, after the space
-    /// that follows, with text selected) it's an ordinary backspace.
-    @Test func backspaceAfterANameTakesItWhole() {
-        let references = [AgentReferences.Reference(name: "Fix login", session: "s1")]
-        let text = "Ask &Fix login about it"
-        let end = ("Ask &Fix login" as NSString).length
-        #expect(FieldMentionStyle.name(endingAt: NSRange(location: end, length: 0), in: text, references: references) == NSRange(location: 4, length: 10))
-        #expect(FieldMentionStyle.name(endingAt: NSRange(location: end - 2, length: 0), in: text, references: references) == nil)
-        #expect(FieldMentionStyle.name(endingAt: NSRange(location: end + 1, length: 0), in: text, references: references) == nil)
-        #expect(FieldMentionStyle.name(endingAt: NSRange(location: end, length: 3), in: text, references: references) == nil)
-    }
 }

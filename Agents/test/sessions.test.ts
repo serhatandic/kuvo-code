@@ -465,6 +465,21 @@ describe("permissions", () => {
   })
 })
 
+describe("read", () => {
+  test("a look is kept and told to every client, as the engine tells it; one at an earlier finish changes nothing", async () => {
+    const id = create()
+    send(id, "hello")
+    await settled(id, 1)
+    const idle = sessions.get(id).time.idle!
+    sessions.view(id, idle)
+    expect(sessions.get(id).time.viewed).toBe(idle)
+    expect(events.filter((event) => event.type === "session.viewed").map((event) => event.data)).toEqual([{ sessionID: id, idle }])
+    sessions.view(id, idle - 1)
+    expect(sessions.get(id).time.viewed).toBe(idle)
+    expect(events.filter((event) => event.type === "session.viewed")).toHaveLength(1)
+  })
+})
+
 describe("asks and conversations", () => {
   test("what the engine asks first (reading .env) is yours to answer, even with Approve All", async () => {
     let decided: string | undefined
@@ -790,6 +805,8 @@ describe("titles and one-off answers", () => {
     await until(() => sessions.get(third).title === "Something else entirely")
     expect(asked).toBeUndefined()
     await expect(sessions.generate(third, "a commit message")).rejects.toThrow()
+    // A goal's check may have another agent answer, as the title was.
+    expect(await sessions.generate(third, "is the goal met?", { orAnother: true })).toBe("Something else entirely")
     // Not if it's signed out: no title from the bridge (the app names it).
     b.signedIn = false
     const fourth = create()

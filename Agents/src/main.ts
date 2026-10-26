@@ -16,6 +16,8 @@ import { Accounts, parseProvider } from "./accounts"
 import { Auto } from "./auto"
 import { Deps } from "./deps"
 import { EngineAgent, EngineLink } from "./engine"
+import { subscribe } from "./events"
+import { Goals } from "./goals"
 import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
@@ -165,13 +167,34 @@ if (groupFolders) {
   }
 }
 
+// Goals conversations work toward, the engine's and the coding agents' here alike, kept in the
+// bridge's folder and run with no client there.
+const goals = new Goals(join(home, "goals.json"), {
+  engine: {
+    api: link,
+    listen: (session, told) => link.listen(session, { event: (event) => told.event(event.type, event.data), reconnected: told.reconnected }),
+  },
+  bridge: {
+    api: { request: (...args) => (self ? self.request(...args) : Promise.reject(new Error("The bridge isn't listening yet."))) },
+    listen: (session, told) => subscribe((event) => event.data?.sessionID === session && told.event(event.type, event.data)),
+  },
+  isBridge: (session) => {
+    try {
+      sessions.get(session)
+      return true
+    } catch {
+      return false
+    }
+  },
+})
+
 let server: ReturnType<typeof Bun.serve>
 try {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -183,6 +206,7 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
+  goals.start()
   try {
     groups?.runner.start()
     groups?.peers.server.start()
@@ -208,6 +232,8 @@ let stopping = false
 function stop() {
   if (stopping) return
   stopping = true
+  // Goals first: the turns cut short as it stops aren't theirs to read as yours.
+  goals.stopAll()
   cancelSignIns()
   // (Unless a newer bridge has put its own there.)
   try {

@@ -406,6 +406,9 @@ struct TranscriptView: View {
                             rows.append(.notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files"))
                         }
                     }
+                } else if notice.text.hasPrefix(Goal.marker) {
+                    // The box keeping the agent at its goal: given it, or told what's left.
+                    rows.append(.notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count))))
                 } else if notice.text.hasPrefix("Your last response hit the output token limit") {
                     // The engine asking the model to go on after a reply ran out of room.
                     rows.append(.notice(notice.id, "arrow.turn.down.right", "Hit the length limit for one reply, so it carried on"))
@@ -793,12 +796,16 @@ struct UserBubble: View {
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
 
-    /// A part of its words with its own styling, and what it names standing out.
+    /// A part of its words with its own styling, and what it names standing out: agents, files,
+    /// web addresses as links, and its pictures' names as the composer showed them.
     private func styled(_ part: String, agents: [MessageMentions.Agent]) -> AttributedString? {
         let own = style?(part)
-        guard part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@")) else { return own }
+        let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
+        let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
+        guard names || marks else { return own }
         var text = own ?? AttributedString(part)
-        MessageMentions.apply(to: &text, agents: agents, folders: folders)
+        if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
+        if marks { MessageMentions.applyLinksAndPictures(to: &text, pictures: attachments.count(where: \.isImage)) }
         return text
     }
 

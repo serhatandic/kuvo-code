@@ -1062,10 +1062,13 @@ export class Sessions {
     return false
   }
 
+  /** Looked at up to `idle`, on any client: kept, and told to the others, as the engine tells it. */
   view(id: string, idle: number) {
     const session = this.record(id).session
-    session.time.viewed = Math.max(idle, session.time.viewed ?? 0)
+    if (idle <= (session.time.viewed ?? 0)) return
+    session.time.viewed = idle
     this.store.save(id)
+    emit("session.viewed", { sessionID: id, idle }, session.location.directory)
   }
 
   active(): string[] {
@@ -1494,9 +1497,10 @@ export class Sessions {
 
   /**
    * One answer to a prompt from the session's model (Auto's first that can run), outside the
-   * conversation: a commit message, say. Coding agents that can't answer one so say why.
+   * conversation: a commit message, say. Coding agents that can't answer one so say why, or with
+   * `orAnother`, another agent you're signed in to answers (a goal's check).
    */
-  async generate(id: string, prompt: string): Promise<string> {
+  async generate(id: string, prompt: string, { orAnother = false } = {}): Promise<string> {
     const model = this.record(id).session.model
     if (!model) throw new BadRequest("This session has no model yet.")
     const candidates: ModelRef[] = []
@@ -1512,7 +1516,15 @@ export class Sessions {
       const agent = this.agent(candidate.providerID)
       if (agent?.generate) return agent.generate(prompt, candidate)
     }
-    throw new BadRequest(`${this.agent(candidates[0]?.providerID)?.name ?? "This session's agent"} can't write this outside the conversation.`)
+    // Its agent can't answer one so (Antigravity, Cursor, Grok): another you're signed in to, on a
+    // quick model of its own, as a session's title is written.
+    for (const agent of orAnother ? this.roster.all() : []) {
+      if (!agent.generate || candidates.some((candidate) => candidate.providerID === agent.providerID)) continue
+      if (!(await agent.account().catch(() => undefined))?.signedIn) continue
+      const answer = await agent.generate(prompt).catch(() => "")
+      if (answer.trim()) return answer
+    }
+    throw new BadRequest(`${this.agent(candidates[0]?.providerID)?.name ?? "This session's agent"} can't write this outside the conversation${orAnother ? ", and no other agent you're signed in to can" : ""}.`)
   }
 
   /** A title from your first message: from the model you picked for titles, or the session's. */
