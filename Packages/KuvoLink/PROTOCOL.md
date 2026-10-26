@@ -595,7 +595,8 @@ and a method is read in any case. Both are held to the same route scenarios (`Ve
 every answer of a box's own routes to its route's shape (`Vectors/routes/shapes`, from
 `Packages/Box/src/shared/routes`): an object has only the fields its shape names; a field that can
 be null is sent as `null`, never left out; and a refusal says why as JSON (`{"message"}`, or `{}`
-when there's nothing to say), never with an empty body. A host serves:
+when there's nothing to say), never with an empty body. A `kuvo/…` route a box doesn't have
+answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 
 - `api/…`: passed to its engine, all of its API. A paired phone is yours, with the reach the app
   has on that computer: sessions, files, terminals and commands, accounts and their keys, the
