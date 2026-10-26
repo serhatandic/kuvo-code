@@ -77,14 +77,42 @@ nonisolated enum MessageMentions {
         }
     }
 
+    /// In your own words (a bubble, the queue): each web address a link, in the replies' link
+    /// color, and each of the first `pictures` pictures' names ("[Image 2]") as the composer shows
+    /// it, its picture's mark and its name in bold, without the brackets.
+    static func applyLinksAndPictures(to text: inout AttributedString, pictures: Int) {
+        let plain = String(text.characters)
+        func span(_ range: Range<String.Index>) -> Range<AttributedString.Index> {
+            let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
+            return lower..<text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
+        }
+        for (range, url) in WebLinks.find(in: plain) {
+            let span = span(range)
+            guard !text[span].runs.contains(where: { $0.link != nil }) else { continue }
+            text[span].link = url
+            text[span].swiftUI.foregroundColor = Color(nsColor: ReplyDocument.Colors.link)
+        }
+        for (range, number) in ImageReferences.find(in: plain) where number <= pictures {
+            let span = span(range)
+            text[span].inlinePresentationIntent = .stronglyEmphasized
+            text[span].swiftUI.foregroundColor = .accentColor
+            text[span.lowerBound..<text.characters.index(after: span.lowerBound)][PictureMark.self] = .open
+            text[text.characters.index(before: span.upperBound)..<span.upperBound][PictureMark.self] = .close
+        }
+    }
+
     /// `attributed` as SwiftUI's Text, each marked "&" drawn as its face or mark, `size` points,
     /// and its links marked for `LinkPointer`.
     @MainActor static func text(_ attributed: AttributedString, size: CGFloat) -> Text {
-        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
+        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
         var pieces: [Text] = []
         for run in attributed.runs {
             var piece: Text
-            if let agent = run[AgentMark.self] {
+            if let mark = run[PictureMark.self] {
+                // A picture's mark in place of its "[", and its "]" left out.
+                guard mark == .open else { continue }
+                piece = Text("\(Image(systemName: "photo"))").font(.system(size: size * 0.82)).foregroundStyle(.secondary)
+            } else if let agent = run[AgentMark.self] {
                 if let look = agent.look, let face = face(look, size: size) {
                     piece = Text("\(Image(nsImage: face))").baselineOffset(-size * 0.2)
                 } else {
@@ -284,6 +312,12 @@ private final class LinkAreaView: NSView {
         guard let pressed, spot(at: convert(event.locationInWindow, from: nil))?.url == pressed.url else { return }
         open?(pressed.url)
     }
+}
+
+/// A picture's name in your words: its "[" is drawn as a picture's mark, its "]" left out.
+nonisolated enum PictureMark: AttributedStringKey {
+    enum Value: Hashable, Sendable { case open, close }
+    static let name = "kuvo.pictureMark"
 }
 
 /// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.

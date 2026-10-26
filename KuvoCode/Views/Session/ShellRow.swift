@@ -55,7 +55,7 @@ struct ShellRow: View {
                         .padding(.top, 3)
                         .padding(.leading, (Self.iconWidth - 1) / 2)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.fold)
             }
         }
         // Find on a place in what it printed: open to show it.

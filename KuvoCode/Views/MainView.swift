@@ -259,7 +259,8 @@ struct MainView: View {
         // Nor into the conversation the expanded panel covers (its composer, if it had the
         // keyboard; the panel's own terminal or page keeps it).
         .onChange(of: showsPanel && panelExpanded) { _, expanded in
-            guard expanded, let window = NSApp.mainWindow, let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return }
+            guard expanded, let window = NSApp.mainWindow, let editor = window.firstResponder as? NSTextView,
+                  editor.isFieldEditor || editor is MessageTextView else { return }
             window.makeFirstResponder(nil)
         }
         // The agent started browsing: show it.
@@ -579,7 +580,7 @@ struct MainView: View {
         .overlay(alignment: .top) {
             if !showsTabBar { WindowDragArea().frame(height: Metrics.windowControlsHeight) }
         }
-        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .sessions })
+        .onCardClick { tabs.focus = .sessions }
     }
 
     /// The session's title, renamed in its card's header, while it's the one being renamed.
@@ -621,7 +622,7 @@ struct MainView: View {
         .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
         .id("split-" + id)
-        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .split })
+        .onCardClick { tabs.focus = .split }
     }
 
     /// Open Beside, while a session can open beside the tab in view: it's a session's (not a
@@ -772,7 +773,7 @@ struct MainView: View {
                 }
             }
         }
-        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .conversation })
+        .onCardClick { tabs.focus = .conversation }
         // What you open last keeps its place when the window is short of room (a split, from
         // Open Beside: coming back to a tab that has one isn't opening it).
         .onChange(of: showsSidebar) { _, shows in if shows { tabs.keep(.sessions) } }
@@ -819,7 +820,7 @@ struct MainView: View {
             isFocused: focus == .changes
         )
         .environment(catalog(for: focusedDirectory))
-        .simultaneousGesture(TapGesture().onEnded { tabs.focus = .changes })
+        .onCardClick { tabs.focus = .changes }
     }
 
     /// Opens the panel on a tool.

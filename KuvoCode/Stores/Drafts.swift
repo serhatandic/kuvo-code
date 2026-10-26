@@ -44,6 +44,15 @@ final class Drafts {
         var response = ""
     }
 
+    /// A quote whose answer is to take the keyboard: each one asked is another, the same quote's
+    /// again too (quoted twice, its answer takes the keyboard again).
+    struct QuoteFocus: Equatable {
+        let id: UUID
+        private let asked = UUID()
+
+        init(_ id: UUID) { self.id = id }
+    }
+
     /// A draft on its way, taken out of its composer while its session is made.
     private struct Sending: Codable {
         /// The composer it came from.

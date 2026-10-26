@@ -6,6 +6,12 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Scroll to the End takes you to the newest message while the conversation still glides on from a flick of the trackpad, rather than the rest of the glide carrying it away again.
+- The bars over the composer (wake-ups, subagents, commands in the background) fold their rows up into the bar, rather than leaving them to fade out below it for a moment. A step's details, the thinking and messages between agents open and fold under their line, rather than fading or sliding over what's around them.
+- After you quote part of a reply (or reply to all of it), you can start typing your answer at once: it has the keyboard, with the cursor ready. Quoting the same part again takes you back to its answer.
+- A picture you paste, drop or attach is named in your message where you're writing, like Image 1, so you can say which one you mean; its chip shows the same name, and removing the picture takes its name out and renumbers the rest. Your message shows the names the same way once it's sent.
+- Web addresses you write show as links, in the composer and in your message once it's sent, where a click opens them.
+- The card you're working in now looks it as soon as you click anything in it, a reply's words too, rather than staying dimmed until you clicked the composer; opening a session from the sidebar leaves its conversation looking ready.
 - `/goal` gives the agent a goal to keep at until it's met, like `/goal all tests pass`: it works turn after turn on its own, a check after each turn tells it what's left, and a bar over the composer shows how it's going, with Pause, Resume and Stop. Goals run on the computer the session is on, your Mac or a machine, with the window closed too.
 - A message you send while the agent waits on a long command or a subagent is read at once, and so is another agent's: what it waits on carries on in the background, as the bar over the composer shows, and the agent answers you now rather than when the command ends.
 - A conversation, bot or group chat you read on your phone or another Mac stops showing as unread on this one at once, and its notifications go from Notification Center, on your machines too, with sessions from your coding agents as well.
