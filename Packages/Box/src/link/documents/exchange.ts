@@ -8,7 +8,6 @@ import { readPersonalities } from "../personalities/library";
 import { takePersonalities } from "../personalities/take";
 import { macLink, updateLink } from "../state";
 import { changedWork, docMails, docsWork, greetWork } from "./work";
-import type { Peer } from "../peers/known";
 import type { PersonalityLibrary } from "../personalities/library";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
@@ -26,10 +25,7 @@ function sendDocs(host: Pick<LinkHost, "send"> | null | undefined, link: LinkSta
   if (!host || !link?.key) return;
   for (const { to, docs } of sends ?? []) {
     for (const payload of docMails(docs)) {
-      // TODO(types): `to` can be the sender as it came (a `DocSender`), and a Mac this box doesn't
-      // count among its peers has no address: mailFor would throw on it, and the sends after it
-      // wouldn't go. Typed as the peer it's taken for.
-      const bytes = mailFor(to as Pick<Peer, "key" | "address">, { docs: payload, at: Date.now() }, link);
+      const bytes = mailFor(to, { docs: payload, at: Date.now() }, link);
       if (bytes) try { host.send(bytes); } catch {}
     }
   }

@@ -175,8 +175,11 @@ export function openMail(body: Buffer, link: LinkState | null | undefined): Open
   return null;
 }
 
-// Mail for a peer, as the relay takes it, sealed for its key alone; null for one too big to go.
-export function mailFor(peer: Pick<Peer, "key" | "address">, payload: unknown, link: LinkState): Buffer | null {
+// Mail for a peer, as the relay takes it, sealed for its key alone; null for one too big to go, or
+// for a box with no address this box knows (a Mac whose mail came before any peers document said
+// where it is: nothing can go back to it yet).
+export function mailFor(peer: Pick<Peer, "key"> & { address?: string }, payload: unknown, link: LinkState): Buffer | null {
+  if (!peer.address) return null;
   const sealed = frame(Frame.mail, 0, sealOneWay(Buffer.from(JSON.stringify(payload)), Buffer.from(link.key!, "base64url"), Buffer.from(peer.key, "base64url")).message);
   if (sealed.length > MAX_MAIL) return null;
   return relaySend(Buffer.from(peer.address, "base64url"), sealed);

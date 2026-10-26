@@ -377,6 +377,16 @@ const signer = () => {
   return { seed, key: link.signingKeyOf(seed), doc: (kind, body) => link.signDoc(seed, kind, (counts[kind] = (counts[kind] ?? 0) + 1), body) };
 };
 
+test("a Mac this box can't reach yet (no peers document names where it is) gets no answer, and taking its mail goes on", async () => {
+  const macSigner = signer();
+  fresh({ sign: link.newSigningSeed(), macSigns: { [mac.pub]: macSigner.key } });
+  const host = { sent: [], send(bytes) { this.sent.push(bytes); }, keepOnly() {} };
+  // Its digest names a peers document this box hasn't got, which it would ask for; but nothing can
+  // go to it, as it comes from no address this box knows.
+  await link.receiveDocs({ key: mac.pub, kind: "mac" }, { have: [[macSigner.key, "peers", 1, "h"]] }, host);
+  assert.deepEqual(host.sent, []);
+});
+
 test("your personalities go box to box with no Mac: a peer's view met with this box's, a removal winning, and bots here with one that changed told", async () => {
   const macSigner = signer(), secondSigner = signer();
   const signed = { ...second.peer, sign: secondSigner.key };

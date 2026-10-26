@@ -4227,6 +4227,8 @@ function openMail(body, link) {
   return null;
 }
 function mailFor(peer, payload, link) {
+  if (!peer.address)
+    return null;
   const sealed = frame(Frame.mail, 0, sealOneWay(Buffer.from(JSON.stringify(payload)), Buffer.from(link.key, "base64url"), Buffer.from(peer.key, "base64url")).message);
   if (sealed.length > MAX_MAIL)
     return null;

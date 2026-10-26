@@ -21,7 +21,7 @@ import type { Delivered } from "../letters/outbox";
 import type { LetterSender } from "../letters/take";
 import type { Attention } from "../notices/hold";
 import type { LinkHost } from "../relay/host";
-import type { MailSender, Peer } from "./known";
+import type { MailSender } from "./known";
 
 // An answer to a peer's ask for this box's agents, under way; when each last asked.
 let answeringAsk: Promise<void> | null = null;
@@ -29,12 +29,9 @@ const asksFrom = new Map<string, number>();
 
 // What peers tell each other: their agents, letters, and how letters went (PROTOCOL.md, "Peers").
 export function peerMail(sender: MailSender, payload: Record<string, unknown>, host: LinkHost | null | undefined, targets: () => Target[] = () => []): void {
-  // TODO(types): `peer` is who sent the mail, and a Mac this box doesn't count among its peers has
-  // no address: mailFor throws on it (the letter's or seat's taker lets that go). Typed as the peer
-  // it's taken for.
   const send = (peer: LetterSender, message: { delivered: Delivered }) => {
     const link = readLink();
-    const bytes = link && mailFor(peer as Pick<Peer, "key" | "address">, { ...message, at: Date.now() }, link);
+    const bytes = link && mailFor(peer, { ...message, at: Date.now() }, link);
     if (bytes) try { host?.send(bytes); } catch {}
   };
   if (isObject(payload.agents)) {
