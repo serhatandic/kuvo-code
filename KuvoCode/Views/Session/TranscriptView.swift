@@ -794,11 +794,15 @@ struct UserBubble: View {
     @Environment(AppModel.self) private var app
 
     /// A part of its words with its own styling, and what it names standing out.
+    /// Its web addresses as links, and the pictures it names as the composer showed them.
     private func styled(_ part: String, agents: [MessageMentions.Agent]) -> AttributedString? {
         let own = style?(part)
-        guard part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@")) else { return own }
+        let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
+        let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
+        guard names || marks else { return own }
         var text = own ?? AttributedString(part)
-        MessageMentions.apply(to: &text, agents: agents, folders: folders)
+        if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
+        if marks { MessageMentions.applyLinksAndPictures(to: &text, pictures: attachments.count(where: \.isImage)) }
         return text
     }
 
