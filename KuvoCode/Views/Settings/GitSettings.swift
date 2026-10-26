@@ -62,9 +62,16 @@ struct WorktreesSettings: View {
     @State private var sizes: [String: Int64] = [:]
     @State private var removing: Workspace.Worktree?
     @State private var failure: String?
+    /// Choosing a machine's folder for new worktrees, in the page's place.
+    @State private var choosingFolder = false
     /// A machine's: asked for them as they are now (`reading`), and whether it couldn't be.
     @State private var reading = false
     @State private var unreached = false
+
+    /// The folder new ones go in, where Choose a Folder opens on a machine: one named from `/` or `~/`.
+    private var worktreesFolder: String? {
+        app.config(for: box).value(at: ["worktree", "directory"])?.string.flatMap { $0.hasPrefix("/") || $0.hasPrefix("~/") ? $0 : nil }
+    }
 
     /// One row per worktree (several session folders can share one), this computer's.
     private var trees: [(folder: String, tree: Workspace.Worktree)] {
@@ -77,12 +84,7 @@ struct WorktreesSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
-            Section {
-                ConfigTextField(title: "Worktrees folder", path: ["worktree", "directory"], prompt: "Default")
-            } footer: {
-                Text("Where new worktrees go. A relative path starts at the project’s folder.")
-                    .foregroundStyle(.secondary)
-            }
+            WorktreesFolderSection(choosing: $choosingFolder)
 
             Section {
                 if trees.isEmpty && reading {
@@ -143,6 +145,18 @@ struct WorktreesSettings: View {
             unreached = read == nil
             sizes = read ?? [:]
         }
+        #if DEBUG
+        // KUVO_DEMO_WORKTREES_FOLDER=browse: Choose a Folder's browser open, as a machine's page opens it.
+        .task { if ProcessInfo.processInfo.environment["KUVO_DEMO_WORKTREES_FOLDER"] == "browse" { choosingFolder = true } }
+        #endif
+        .settingsDetail(isPresented: $choosingFolder, title: "Choose a Folder for Worktrees") {
+            BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: worktreesFolder, primary: "Choose") { path, home in
+                app.config(for: box).set(.string(BoxPaths.setting(path, home: home)), at: ["worktree", "directory"])
+                choosingFolder = false
+            } cancel: {
+                choosingFolder = false
+            }
+        }
         .confirmationDialog("Remove the worktree for \(removing?.branch ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { tree in
             Button("Remove", role: .destructive) {
                 guard let folder = workspace.worktrees.first(where: { $0.value.root == tree.root })?.key else { return }
@@ -153,5 +167,141 @@ struct WorktreesSettings: View {
         } message: { _ in
             Text("Its folder and anything in it that isn’t committed are deleted. Its sessions stay, without a folder to run in.")
         }
+    }
+}
+
+/// Where new worktrees go on this computer: Kuvo Code's own folder or one you choose, as a folder
+/// panel chooses it (on a machine, its own folders), and the real folder each project's go in,
+/// as its box works it out, with what's wrong with it, if anything.
+private struct WorktreesFolderSection: View {
+    /// Choosing a machine's folder, which the page opens in its place.
+    @Binding var choosing: Bool
+    @Environment(AppModel.self) private var app
+    @Environment(\.settingsBox) private var box
+    /// Where new ones go, for the folder chosen now, as the box answered.
+    @State private var preview: WorktreesWhere?
+
+    private var config: EngineConfig { app.config(for: box) }
+    private var boxID: String { box.machine ?? BoxClient.mac }
+    /// The folder chosen, as the settings name it; nil for Kuvo Code's own.
+    private var chosen: String? { config.value(at: ["worktree", "directory"])?.string.flatMap { $0.isEmpty ? nil : $0 } }
+
+    private enum Choice: Hashable { case own, chosen, choose }
+
+    var body: some View {
+        Section {
+            LabeledContent("Folder") {
+                Picker("Folder", selection: Binding(get: { chosen == nil ? Choice.own : .chosen }, set: pick)) {
+                    Label("Kuvo Code’s Folder", systemImage: "folder").tag(Choice.own)
+                    if let chosen {
+                        Label(title(of: chosen), systemImage: "folder").tag(Choice.chosen)
+                    }
+                    Divider()
+                    Text("Choose a Folder…").tag(Choice.choose)
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            if let preview, preview.projects.isEmpty {
+                // No project in a repository here yet: the folder itself.
+                LabeledContent("Each project’s go in") {
+                    Text(chosen ?? BoxPaths.display(preview.default, home: preview.home) + "/…")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+            ForEach(preview?.projects.prefix(3) ?? []) { project in
+                WorktreePlace(project: project, home: preview?.home, onThisMac: box.machine == nil)
+            }
+        } header: {
+            Text("New Worktrees")
+        }
+        .task(id: "\(boxID) \(chosen ?? "") \(app.isReady(box))") {
+            // Kept as it was while the new one's read, so the rows don't blink.
+            if preview?.directory != chosen { preview = nil }
+            preview = try? await app.box(boxID).worktreesWhere(chosen)
+        }
+    }
+
+    /// Where Choose a Folder… opens: the folder chosen now, else beside the first project.
+    private var startFolder: String? {
+        if let folder = preview?.projects.first?.folder, chosen != nil { return folder }
+        return preview?.projects.first.map { ($0.project as NSString).deletingLastPathComponent }
+    }
+
+    private func title(of setting: String) -> String {
+        setting.hasPrefix("/") || setting.hasPrefix("~/") ? (setting as NSString).lastPathComponent : setting
+    }
+
+    private func pick(_ choice: Choice) {
+        switch choice {
+        case .own: set(nil)
+        case .chosen: break
+        case .choose:
+            if box.machine == nil { chooseOnThisMac() } else { choosing = true }
+        }
+    }
+
+    private func chooseOnThisMac() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose where new worktrees go. Each one is a folder in it."
+        if let start = startFolder { panel.directoryURL = URL(filePath: start) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        set(BoxPaths.setting(url.path, home: NSHomeDirectory()))
+    }
+
+    private func set(_ folder: String?) {
+        config.set(folder.map(JSONValue.string), at: ["worktree", "directory"])
+    }
+}
+
+/// Where a project's new worktrees go: the folder, as a path you can find, and what's wrong with
+/// it, if anything.
+private struct WorktreePlace: View {
+    let project: WorktreesWhere.Project
+    let home: String?
+    let onThisMac: Bool
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 6) {
+                if let folder = project.folder {
+                    Text(BoxPaths.display(folder, home: home))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .help(folder)
+                    if onThisMac, project.exists == true {
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: folder)])
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(IconButtonStyle(width: 28, height: 24))
+                        .help("Show in Finder")
+                    }
+                } else {
+                    Text("Known once the engine runs")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } label: {
+            Text(project.name)
+            if project.cantBeMade {
+                Text("This folder can’t be made here.")
+                    .foregroundStyle(.red)
+            } else if project.isInRepository {
+                Text("Inside \(project.name)’s repository, so git lists each worktree as new files.")
+                    .foregroundStyle(.orange)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
