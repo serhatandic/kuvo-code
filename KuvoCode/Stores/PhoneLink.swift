@@ -1024,9 +1024,9 @@ final class PhoneLink {
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
-        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart",
-        "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "projects", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "accounts.credentials", "agents", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "btw", "config", "config.apply", "engine.restart",
+        "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog",
+        "named", "personalities", "phones", "phones.pair", "plugins.search", "projects", "reviews", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",

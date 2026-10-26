@@ -5,8 +5,7 @@
 //
 // After each of the agent's turns, a check reads the conversation (it runs nothing, it only
 // reads) and says whether the goal is met, not met yet (and what's left), or can't be met as
-// asked: the session's model afresh, apart from the agent, where it can answer so; otherwise the
-// session's own (OpenCode's free models answer only there, with the agent's context). Not met
+// asked: the session's model afresh, apart from the agent (oneoff.ts). Not met
 // yet: the agent is told what's left, and takes another turn. A turn you stop, one that fails, or
 // three in a row where the agent does nothing pause it, and so does a long run of turns, until
 // you resume it.
@@ -19,6 +18,7 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { emit } from "./events"
 import type { Requester } from "./groups/api"
+import { freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
 
 export type GoalState = "working" | "paused" | "met" | "unmet"
 export type Verdict = "met" | "not_met" | "impossible"
@@ -376,28 +376,10 @@ export class Goals {
     this.save()
   }
 
-  /**
-   * The check's verdict on a turn. On the engine: the session's model afresh, shown only the
-   * conversation, apart from the agent's own context; where the engine can't answer so (OpenCode's
-   * free models), the session's own context, which holds the conversation. With the coding agents:
-   * their bridge's one-off answer, which starts afresh.
-   */
+  /** The check's verdict on a turn: the session's model, apart from the agent (oneoff.ts). */
   private async check(session: string, place: GoalPlace, condition: string, messages: any[], since: number) {
-    const prompt = checkPrompt(condition, transcript(messages, since))
-    if (place === this.places.engine) {
-      const model = (await place.api.request<{ data?: any }>("GET", at(session)).catch(() => undefined))?.data?.model
-      if (typeof model?.providerID === "string" && typeof model?.id === "string") {
-        const fresh = await place.api
-          .request<{ data?: { text?: string } }>("POST", "/api/experimental/generate", { prompt, model: { providerID: model.providerID, id: model.id } }, 180_000)
-          .catch(() => undefined)
-        if (fresh?.data?.text?.trim()) return parseVerdict(fresh.data.text)
-      }
-      const own = await place.api.request<{ data?: { text?: string } }>("POST", at(session) + "/generate", { prompt: checkPrompt(condition) }, 180_000)
-      return parseVerdict(own?.data?.text ?? "")
-    }
-    // (Another agent you're signed in to, where this one can't answer so: Antigravity, Cursor, Grok.)
-    const answer = await place.api.request<{ data?: { text?: string } }>("POST", at(session) + "/generate", { prompt, orAnother: true }, 180_000)
-    return parseVerdict(answer?.data?.text ?? "")
+    const info = await sessionInfo(place.api, session).catch((): SessionInfo => ({ id: session }))
+    return parseVerdict(await freshAnswer(place.api, place === this.places.engine, info, checkPrompt(condition, transcript(messages, since))))
   }
 
   /** Whether the session is at work now (a turn started again after one was stopped). */
@@ -547,7 +529,12 @@ export function parseVerdict(text: string): { verdict: Verdict; reason: string }
 }
 
 /** The conversation since the goal was set, as the check reads it: who said and did what, the newest part if it's long. */
-export function transcript(messages: any[], since: number): string {
+/**
+ * What a conversation's messages say, for a model to read. Cut to its newest part when long, with
+ * `opening` (what you first asked, which may be older than `messages`) kept before it unless the
+ * part kept has it.
+ */
+export function transcript(messages: any[], since: number, opening?: any): string {
   const lines: string[] = []
   const cut = (text: string, limit: number) => (text.length > limit ? text.slice(0, limit) + " […]" : text)
   for (const message of messages) {
@@ -581,7 +568,15 @@ export function transcript(messages: any[], since: number): string {
     }
   }
   let text = lines.join("\n\n")
-  if (text.length > readLimit) text = "[…earlier turns left out]\n\n" + text.slice(text.length - readLimit)
+  const first = opening?.type === "user" ? `Person: ${cut(String(opening.text ?? ""), 4_000)}` : undefined
+  const firstShown = first !== undefined && messages.some((message) => message?.id === opening.id)
+  if (text.length > readLimit || (first && !firstShown)) {
+    // Cut to its newest part, but what you first asked for stays: it's what the work is for.
+    const head = first ?? lines.find((each) => each.startsWith("Person: ")) ?? ""
+    const tail = text.length > readLimit ? text.slice(text.length - (readLimit - head.length)) : text
+    if (!tail.includes(head)) text = (head ? head + "\n\n" : "") + "[…earlier turns left out]\n\n" + tail
+    else text = tail
+  }
   return text || "(Nothing yet.)"
 }
 

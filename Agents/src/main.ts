@@ -17,7 +17,10 @@ import { Auto } from "./auto"
 import { Deps } from "./deps"
 import { EngineAgent, EngineLink } from "./engine"
 import { subscribe } from "./events"
-import { Goals } from "./goals"
+import { Goals, type GoalPlaces } from "./goals"
+import { SideQuestions } from "./btw"
+import { Handoffs } from "./handoff"
+import { Reviews } from "./reviews"
 import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
@@ -172,7 +175,7 @@ if (groupFolders) {
 
 // Goals conversations work toward, the engine's and the coding agents' here alike, kept in the
 // bridge's folder and run with no client there.
-const goals = new Goals(join(home, "goals.json"), {
+const places: GoalPlaces = {
   engine: {
     api: link,
     listen: (session, told) => link.listen(session, { event: (event) => told.event(event.type, event.data), reconnected: told.reconnected }),
@@ -189,7 +192,12 @@ const goals = new Goals(join(home, "goals.json"), {
       return false
     }
   },
-})
+}
+const goals = new Goals(join(home, "goals.json"), places)
+// Its other keywords, for the same conversations: side questions, handoffs and reviews.
+const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
+const handoffs = new Handoffs(places)
+const reviews = new Reviews(join(home, "reviews.json"), places)
 
 let server: ReturnType<typeof Bun.serve>
 try {
@@ -197,7 +205,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -210,6 +218,7 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
   goals.start()
+  sideQuestions.start()
   try {
     groups?.runner.start()
     groups?.peers.server.start()
@@ -238,6 +247,8 @@ function stop() {
   stopping = true
   // Goals first: the turns cut short as it stops aren't theirs to read as yours.
   goals.stopAll()
+  sideQuestions.stopAll()
+  reviews.stopAll()
   cancelSignIns()
   // (Unless a newer bridge has put its own there.)
   try {

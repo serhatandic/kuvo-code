@@ -3495,7 +3495,7 @@ function botPersonalities(kit, library = readPersonalities()) {
 }
 
 // Packages/Box/src/link/main.ts
-var BRIDGE_VERSION = "0.9.71";
+var BRIDGE_VERSION = "0.9.72";
 var FEATURES = [
   "accounts.credentials",
   "accounts.ended",
@@ -3506,6 +3506,7 @@ var FEATURES = [
   "bots.edit",
   "bots.keys",
   "bots.make",
+  "btw",
   "config",
   "config.apply",
   "engine.restart",
@@ -3519,6 +3520,7 @@ var FEATURES = [
   "groups.joinable",
   "groups.make",
   "groups.seats",
+  "handoff",
   "integrations",
   "keys",
   "mcp.catalog",
@@ -3529,6 +3531,7 @@ var FEATURES = [
   "phones",
   "phones.pair",
   "projects",
+  "reviews",
   "sessions.agents",
   "shell.stop",
   "sign-in.return",

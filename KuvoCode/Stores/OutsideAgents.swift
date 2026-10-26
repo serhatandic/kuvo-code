@@ -89,6 +89,23 @@ final class OutsideAgents {
     /// False for one from before goals (a machine's not set up again); nil until it has said.
     private(set) var runsGoals: Bool?
 
+    /// Side questions ("/btw"), by conversation, oldest first: each conversation's read when it's
+    /// opened (`loadSideQuestions`), and how many each has for the sidebar, all kept current
+    /// from its events.
+    private(set) var sideQuestions: [String: [SideQuestion]] = [:]
+    private(set) var sideQuestionCounts: [String: Int] = [:]
+    /// Each conversation's latest review with fresh eyes ("/review"), until it's put away.
+    private(set) var reviews: [String: Review] = [:]
+    /// Each conversation's handoff ("/handoff") under way or just done, while this runs.
+    private(set) var handoffs: [String: Handoff] = [:]
+    /// False for one from before side questions, handoffs and reviews; nil until it has said.
+    private(set) var runsKeywords: Bool?
+    /// A handoff asked for from this Mac, done: its new conversation, to open (`kuvo.handoff`).
+    /// One asked for elsewhere (the phone) opens nothing here.
+    @ObservationIgnored var onHandoff: ((Handoff) -> Void)?
+    /// The conversations handed off from this Mac, until theirs is done or failed.
+    @ObservationIgnored private var opensWhenDone: Set<String> = []
+
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
     static let order = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"]
@@ -247,6 +264,14 @@ final class OutsideAgents {
         server = nil
         api = nil
         goals = [:]
+        forgetKeywords()
+    }
+
+    private func forgetKeywords() {
+        sideQuestions = [:]
+        sideQuestionCounts = [:]
+        reviews = [:]
+        handoffs = [:]
     }
 
     /// A machine's bridge, through its engine's tunnel (`endpoint`; nil when that engine started
@@ -277,6 +302,7 @@ final class OutsideAgents {
         isDown = false
         api = nil
         runsGoals = nil
+        runsKeywords = nil
     }
 
     /// A machine's bridge hasn't answered for a while (it stopped there, and didn't start again).
@@ -296,6 +322,7 @@ final class OutsideAgents {
                     onConnected?()
                     await loadAuto()
                     await loadGoals()
+                    await loadKeywords()
                 case .disconnected:
                     // A machine's: said once it stays away (it starts again by itself after a crash).
                     guard machine != nil, downSince == nil else { break }
@@ -307,6 +334,7 @@ final class OutsideAgents {
                 case .event(let event):
                     if event.type == "kuvo.auto.updated" { await loadAuto() }
                     if event.type == "kuvo.goal.updated", let update = try? event.payload(as: GoalUpdate.self) { goals[update.sessionID] = update.goal }
+                    keywordEvent(event)
                     onEvent?(event)
                 }
             }
@@ -367,6 +395,112 @@ final class OutsideAgents {
 
     /// A goal as a change to it answered, before its event comes.
     func took(_ goal: Goal) { goals[goal.session] = goal }
+
+    // MARK: Side questions, handoffs and reviews
+
+    /// Its reviews and how many side questions each conversation has (each change comes as an event after).
+    func loadKeywords() async {
+        guard let api else { return }
+        do {
+            let read = Dictionary(try await api.reviews().map { ($0.session, $0) }, uniquingKeysWith: { $1 })
+            runsKeywords = true
+            if read != reviews { reviews = read }
+            let counts = Dictionary(try await api.sideQuestionSummary().map { ($0.session, $0.count) }, uniquingKeysWith: { $1 })
+            if counts != sideQuestionCounts { sideQuestionCounts = counts }
+            // Each one's list, for the sidebar's Side Questions menu (which can't read as it opens).
+            for session in counts.keys.prefix(40) where sideQuestions[session] == nil { await loadSideQuestions(of: session) }
+            // A conversation's list read before is read again: some may have come meanwhile.
+            for session in sideQuestions.keys { await loadSideQuestions(of: session) }
+            // A handoff whose end came while this was away: as the box has it now (gone, after
+            // the box restarted).
+            for (session, handoff) in handoffs where handoff.state == .writing {
+                // Unchanged when it can't be read now; gone (nil) after the box restarted.
+                let now: Handoff?
+                do { now = try await api.handoff(session: session) } catch { continue }
+                handoffs[session] = now
+                if let now { ended(now) } else { opensWhenDone.remove(session) }
+            }
+        } catch let error as ServerError where error.status == 404 {
+            // From before them.
+            runsKeywords = false
+            forgetKeywords()
+        } catch {}
+    }
+
+    /// A conversation's side questions, as its box keeps them.
+    func loadSideQuestions(of session: String) async {
+        guard let api, runsKeywords != false, let read = try? await api.sideQuestions(of: session) else { return }
+        if read != sideQuestions[session] { sideQuestions[session] = read }
+        sideQuestionCounts[session] = read.isEmpty ? nil : read.count
+    }
+
+    /// One as its route answered, before its event comes.
+    func took(_ question: SideQuestion) {
+        guard var list = sideQuestions[question.session] else {
+            // A conversation whose list isn't read here (asked from the phone): its count, one more
+            // for a new one.
+            if question.state == .answering { sideQuestionCounts[question.session, default: 0] += 1 }
+            return
+        }
+        if let index = list.firstIndex(where: { $0.id == question.id }) {
+            // The ask's own answer can come after its answer's event (a quick model): what it
+            // says, still answering, doesn't take the answer away.
+            guard !(question.state == .answering && list[index].state != .answering) else { return }
+            list[index] = question
+        } else {
+            list.append(question)
+        }
+        sideQuestions[question.session] = list
+        sideQuestionCounts[question.session] = list.count
+    }
+
+    func dropSideQuestion(_ id: String?, of session: String) {
+        guard let id else {
+            sideQuestions[session] = sideQuestions[session].map { _ in [] }
+            sideQuestionCounts[session] = nil
+            return
+        }
+        guard let list = sideQuestions[session] else {
+            let left = (sideQuestionCounts[session] ?? 1) - 1
+            sideQuestionCounts[session] = left > 0 ? left : nil
+            return
+        }
+        let left = list.filter { $0.id != id }
+        sideQuestions[session] = left
+        sideQuestionCounts[session] = left.isEmpty ? nil : left.count
+    }
+
+    func took(_ review: Review) { reviews[review.session] = review }
+    func dropReview(_ session: String) { reviews[session] = nil }
+    /// One just asked for here: the box's answer, before its events.
+    func startedHandoff(_ handoff: Handoff) {
+        handoffs[handoff.from] = handoff
+        opensWhenDone.insert(handoff.from)
+        ended(handoff)
+    }
+
+    private func ended(_ handoff: Handoff) {
+        guard handoff.state != .writing, opensWhenDone.remove(handoff.from) != nil, handoff.state == .done else { return }
+        onHandoff?(handoff)
+    }
+
+    private func keywordEvent(_ event: ServerEvent) {
+        switch event.type {
+        case "kuvo.btw.updated":
+            if let update = try? event.payload(as: SideQuestionUpdate.self) { took(update.question) }
+        case "kuvo.btw.removed":
+            struct Removed: Decodable { var sessionID: String; var id: String? }
+            if let removed = try? event.payload(as: Removed.self) { dropSideQuestion(removed.id, of: removed.sessionID) }
+        case "kuvo.review.updated":
+            if let update = try? event.payload(as: ReviewUpdate.self) { reviews[update.sessionID] = update.review }
+        case "kuvo.handoff":
+            guard let update = try? event.payload(as: HandoffUpdate.self) else { return }
+            handoffs[update.sessionID] = update.handoff
+            ended(update.handoff)
+        default:
+            break
+        }
+    }
 
     /// A goal put away, as its route answered.
     func dropGoal(_ session: String) { goals[session] = nil }

@@ -26,6 +26,19 @@ struct MessageField: NSViewRepresentable {
     var marks = true
     /// How many pictures are attached: "[Image n]" up to that stands out.
     var images = 0
+    /// The keyword the message starts with ("/goal"), drawn as a token: its mark in place of the
+    /// "/", the rest in bold, in the accent (Plan's orange). The text stays as typed.
+    var token: Token?
+    /// In grey after what's written (a keyword's example, "what to do each time"), until more is.
+    var example: String?
+
+    /// A keyword at the start: how much of the text it is, in UTF-16 (/loop's takes in its
+    /// schedule, "/loop every morning at 9"), its mark, and whether it's Plan's orange.
+    struct Token: Equatable {
+        var length: Int
+        var symbol: String
+        var orange = false
+    }
     /// A key, before the field has it: true when it's taken.
     var onKey: (Key) -> Bool = { _ in false }
     /// It took the keyboard (true) or let it go.
@@ -140,6 +153,7 @@ struct MessageField: NSViewRepresentable {
         view.onFocus = onFocus
         view.onPaste = onPaste
         if view.placeholder != placeholder { view.placeholder = placeholder }
+        if view.example != example { view.example = example }
         var changed = false
         if view.font != font {
             view.font = font
@@ -156,9 +170,9 @@ struct MessageField: NSViewRepresentable {
         view.isAutomaticDashSubstitutionEnabled = !plain && checker.isAutomaticDashSubstitutionEnabled
         view.isAutomaticTextReplacementEnabled = !plain && checker.isAutomaticTextReplacementEnabled
         view.isAutomaticSpellingCorrectionEnabled = !plain && checker.isAutomaticSpellingCorrectionEnabled
-        if coordinator.styled != Styled(marks: marks, images: images) || changed {
-            coordinator.styled = Styled(marks: marks, images: images)
-            view.restyle(marks: marks, images: images)
+        if coordinator.styled != Styled(marks: marks, images: images, token: token) || changed {
+            coordinator.styled = Styled(marks: marks, images: images, token: token)
+            view.restyle(marks: marks, images: images, token: token)
         }
     }
 
@@ -177,6 +191,7 @@ struct MessageField: NSViewRepresentable {
     struct Styled: Equatable {
         var marks: Bool
         var images: Int
+        var token: Token?
     }
 
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
@@ -190,7 +205,10 @@ struct MessageField: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? MessageTextView else { return }
             if parent.text != view.string { parent.text = view.string }
-            view.restyle(marks: parent.marks, images: parent.images)
+            // The keyword as it was until its owner reads the new text: one that's no longer whole
+            // goes back to plain text.
+            let token = parent.token.flatMap { view.string.utf16.count >= $0.length && view.string.hasPrefix("/") ? $0 : nil }
+            view.restyle(marks: parent.marks, images: parent.images, token: token)
             view.scrollRangeToVisible(view.selectedRange())
         }
     }
@@ -215,6 +233,9 @@ final class MessageTextView: NSTextView {
             setAccessibilityPlaceholderValue(placeholder)
             needsDisplay = true
         }
+    }
+    var example: String? {
+        didSet { needsDisplay = true }
     }
     /// Asked for the keyboard before it was in a window.
     private var wantsKeyboard = false
@@ -360,7 +381,7 @@ final class MessageTextView: NSTextView {
 
     /// Styles what the text names, each time from the field's own look, so a mark no longer whole
     /// goes back to plain text.
-    func restyle(marks shown: Bool, images: Int) {
+    func restyle(marks shown: Bool, images: Int, token: MessageField.Token? = nil) {
         guard let storage = textStorage, !hasMarkedText() else { return }
         let font = font ?? .systemFont(ofSize: NSFont.systemFontSize)
         let text = string
@@ -370,23 +391,30 @@ final class MessageTextView: NSTextView {
         // quick as in any text. Addresses aren't looked for in one that long.
         let mayMark = shown && (text.contains(AgentReferences.trigger) || text.contains("[Image ")
             || (length < Self.longest && (text.contains("http") || text.contains("www."))))
-        guard mayMark || styled || font != styledFont else { return }
+        guard mayMark || token != nil || styled || font != styledFont else { return }
         styledFont = font
         var faces: [(at: Int, image: NSImage)] = []
         var marks: [NSRange] = []
         storage.beginEditing()
         storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: all)
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let size = (font.pointSize * 1.1).rounded()
+        /// The first character of a mark makes room for its face, unseen.
+        func face(_ image: NSImage?, at span: NSRange) {
+            guard let image else { return }
+            let first = (text as NSString).substring(with: NSRange(location: span.location, length: 1))
+            let width = (first as NSString).size(withAttributes: [.font: bold]).width
+            storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
+            faces.append((span.location, image))
+        }
+        if let token, token.length > 1, token.length <= length {
+            let span = NSRange(location: 0, length: token.length)
+            let ink: NSColor = token.orange ? .systemOrange : NSColor(Color.accentColor)
+            storage.addAttributes([.font: bold, .foregroundColor: ink], range: span)
+            // Not one piece for Backspace: what's typed stays text you can correct a letter at a time.
+            face(Self.symbol(token.symbol, size: size, ink: ink), at: span)
+        }
         if mayMark, length > 0 {
-            let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-            let size = (font.pointSize * 1.1).rounded()
-            /// The first character of a mark makes room for its face, unseen.
-            func face(_ image: NSImage?, at span: NSRange) {
-                guard let image else { return }
-                let first = (text as NSString).substring(with: NSRange(location: span.location, length: 1))
-                let width = (first as NSString).size(withAttributes: [.font: bold]).width
-                storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
-                faces.append((span.location, image))
-            }
             for (range, _) in length < Self.longest ? WebLinks.find(in: text) : [] {
                 storage.addAttribute(.foregroundColor, value: ReplyDocument.Colors.link, range: NSRange(range, in: text))
             }
@@ -416,7 +444,7 @@ final class MessageTextView: NSTextView {
         storage.endEditing()
         self.faces = faces
         self.marks = marks
-        styled = !faces.isEmpty || mayMark
+        styled = !faces.isEmpty || mayMark || token != nil
         // What you type next is plain, also right after a mark.
         typingAttributes = [.font: font, .foregroundColor: NSColor.textColor]
         needsDisplay = true
@@ -431,6 +459,16 @@ final class MessageTextView: NSTextView {
             let line = NSRect(x: origin.x, y: origin.y, width: bounds.width - origin.x, height: lineHeight)
             (placeholder as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
         }
+        if let example, !example.isEmpty, !string.isEmpty, let layoutManager, let textContainer {
+            // After the last thing written, on its line, as far as there's room.
+            let length = (string as NSString).length
+            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: length - 1, length: 1), actualCharacterRange: nil)
+            let last = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer).offsetBy(dx: origin.x, dy: origin.y)
+            let gap: CGFloat = string.last?.isWhitespace == true ? 0 : 4
+            let line = NSRect(x: last.maxX + gap, y: last.minY, width: max(0, bounds.width - last.maxX - gap - textContainerInset.width), height: lineHeight)
+            let attributes: [NSAttributedString.Key: Any] = [.font: font ?? .systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.placeholderTextColor]
+            if line.width > 40 { (example as NSString).draw(with: line, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes) }
+        }
         guard let layoutManager, let textContainer, !faces.isEmpty else { return }
         let size = ((font?.pointSize ?? 13) * 1.1).rounded()
         for (at, image) in faces where at < (string as NSString).length {
@@ -442,10 +480,10 @@ final class MessageTextView: NSTextView {
         }
     }
 
-    /// A symbol as a mark, drawn in secondary ink as in a sent message.
-    private static func symbol(_ name: String, size: CGFloat) -> NSImage? {
+    /// A symbol as a mark, drawn in secondary ink as in a sent message (a keyword's in its own).
+    private static func symbol(_ name: String, size: CGFloat, ink: NSColor = .secondaryLabelColor) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(pointSize: size * 0.82, weight: .regular)
-            .applying(.init(hierarchicalColor: .secondaryLabelColor))
+            .applying(.init(hierarchicalColor: ink))
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
     }
 }

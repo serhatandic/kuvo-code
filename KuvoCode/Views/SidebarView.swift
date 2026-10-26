@@ -816,11 +816,49 @@ struct SidebarView: View {
                             .foregroundStyle(.tertiary)
                             .help("Works in a worktree, on \(tree.branch)")
                     }
+                    if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: Keyword.btw.symbol)
+                            Text("\(count)")
+                                .monospacedDigit()
+                        }
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .help(count.counting("side question") + ", kept out of the conversation: Control-click to open one")
+                        .accessibilityLabel(count.counting("side question"))
+                    }
                     SessionStatus(session: session)
                 }
             }
         }
         .contextMenu { menu(for: session, in: place) }
+    }
+
+    /// A conversation's side questions ("/btw"), each opening it with its answer over the composer.
+    @ViewBuilder private func sideQuestionsMenu(for session: Session) -> some View {
+        let bridge = workspace.agents(forFolder: session.location.directory)
+        if let count = bridge?.sideQuestionCounts[session.id], count > 0 {
+            Menu("Side Questions") {
+                let questions = bridge?.sideQuestions[session.id] ?? []
+                if questions.isEmpty {
+                    Button("Open the Latest") { showSideQuestion(nil, of: session) }
+                }
+                ForEach(questions.reversed()) { question in
+                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session) }
+                }
+            }
+        }
+    }
+
+    private func showSideQuestion(_ id: String?, of session: Session) {
+        selection = session.id
+        Task {
+            let bridge = workspace.agents(forFolder: session.location.directory)
+            await bridge?.loadSideQuestions(of: session.id)
+            guard let model = workspace.model(for: session.id) else { return }
+            model.shownSideQuestion = id ?? bridge?.sideQuestions[session.id]?.last?.id
+            model.hidesSideQuestion = false
+        }
     }
 
     /// Saves the conversation as a Markdown file where you choose.
@@ -870,6 +908,7 @@ struct SidebarView: View {
         if let openBeside, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
+        sideQuestionsMenu(for: session)
         // Moving to another computer: what would change it waits until it's there.
         let moving = app.moves.isMoving(session.id)
         if let place {
@@ -1750,7 +1789,7 @@ private struct AccountsRow: View {
         submenu.addItem(ActionItem("Kuvo Code Help", image: Self.symbol("book")) { NSWorkspace.shared.open(AppInfo.docs) })
         submenu.addItem(ActionItem("Keyboard Shortcuts", image: Self.symbol("command")) { app.openSettings(.shortcuts) })
         submenu.addItem(ActionItem("What\u{2019}s New", image: Self.symbol("sparkles")) { NSWorkspace.shared.open(AppInfo.releases) })
-        submenu.addItem(ActionItem("Report an Issue…", image: Self.symbol("exclamationmark.bubble")) { NSWorkspace.shared.open(AppInfo.newIssue) })
+        submenu.addItem(ActionItem("Report a Problem…", image: Self.symbol("exclamationmark.bubble")) { app.reportProblem() })
         submenu.addItem(ActionItem("Contact Us…", image: Self.symbol("envelope")) { NSWorkspace.shared.open(AppInfo.contact) })
         if updates.isAvailable {
             submenu.addItem(.separator())
