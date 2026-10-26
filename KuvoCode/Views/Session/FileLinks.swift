@@ -145,8 +145,10 @@ struct SiteIconAttachment: Attachment {
         FontScaled<CGFloat>.fontScaled(-0.12).resolve(in: environment)
     }
 
+    /// Its square, and the room after it before the link's words (no space of its own, which
+    /// copying the reply would keep).
     func sizeThatFits(_ proposal: ProposedViewSize, in environment: TextEnvironmentValues) -> CGSize {
-        FontScaled<CGSize>.fontScaled(width: 0.92, height: 0.92).resolve(in: environment)
+        FontScaled<CGSize>.fontScaled(width: 1.2, height: 0.92).resolve(in: environment)
     }
 
     /// Puts the icon before each web link in `text` (once for a link in several runs), outside the
@@ -163,9 +165,7 @@ struct SiteIconAttachment: Attachment {
             var icon = AttributedString(FileLinks.icon, attributes: attributes)
             icon.link = nil
             icon.textual.attachment = AnyAttachment(SiteIconAttachment(url: url))
-            var gap = AttributedString(" ", attributes: attributes)
-            gap.link = nil
-            text.insert(icon + gap, at: start)
+            text.insert(icon, at: start)
         }
     }
 }
@@ -176,24 +176,23 @@ struct SiteIconView: View {
     @State private var icon: NSImage?
 
     var body: some View {
-        Group {
-            if let icon {
-                Image(nsImage: icon).resizable().clipShape(.rect(cornerRadius: 3))
-            } else {
-                Image(systemName: "globe").resizable().fontWeight(.light).foregroundStyle(.tint)
+        GeometryReader { room in
+            Group {
+                if let icon {
+                    Image(nsImage: icon).resizable().clipShape(.rect(cornerRadius: room.size.height * 0.2))
+                } else {
+                    Image(systemName: "globe").resizable().fontWeight(.light).foregroundStyle(.tint)
+                }
             }
+            .aspectRatio(contentMode: .fit)
+            .frame(width: room.size.height, height: room.size.height)
         }
-        .aspectRatio(contentMode: .fit)
         .task(id: url) {
-            let host = url.host()?.lowercased() ?? ""
-            icon = SiteIcons.shared.icon(for: host)
-            guard icon == nil else { return }
-            let asked = ContinuousClock.now
+            guard let site = SiteIcons.site(of: url) else { return }
+            if case .icon(let shown)? = SiteIcons.shared.shown(site) { return icon = shown }
             SiteIcons.shared.load(url)
-            for await note in NotificationCenter.default.notifications(named: SiteIcons.loaded) {
-                guard note.object as? String == host else { continue }
-                // Within a second, or the globe stays (the next time it shows, it's here at once).
-                if ContinuousClock.now - asked < SiteIcons.wait { icon = SiteIcons.shared.icon(for: host) }
+            for await note in NotificationCenter.default.notifications(named: SiteIcons.loaded) where note.object as? String == site {
+                if case .icon(let shown)? = SiteIcons.shared.shown(site) { icon = shown }
                 break
             }
         }

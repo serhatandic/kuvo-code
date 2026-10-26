@@ -202,6 +202,19 @@ final class ReplyTextView: NSTextView, NSTextViewDelegate {
         if let siteIcons { NotificationCenter.default.removeObserver(siteIcons) }
     }
 
+    /// Whether a link to `site` is in its text, with its icon.
+    private func shows(site: String?) -> Bool {
+        guard let storage = textStorage, let site else { return false }
+        var found = false
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, stop in
+            if ((value as? NSTextAttachment)?.attachmentCell as? SiteIconCell)?.site == site {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
     convenience init() {
         let storage = NSTextStorage()
         let layout = ReplyLayoutManager()
@@ -224,8 +237,12 @@ final class ReplyTextView: NSTextView, NSTextViewDelegate {
         linkTextAttributes = [.cursor: NSCursor.pointingHand]
         delegate = self
         // A site's icon that came: its links show it (`SiteIconCell`).
-        siteIcons = NotificationCenter.default.addObserver(forName: SiteIcons.loaded, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.needsDisplay = true }
+        siteIcons = NotificationCenter.default.addObserver(forName: SiteIcons.loaded, object: nil, queue: .main) { [weak self] note in
+            let site = note.object as? String
+            MainActor.assumeIsolated {
+                guard let self, self.shows(site: site) else { return }
+                self.needsDisplay = true
+            }
         }
     }
 
