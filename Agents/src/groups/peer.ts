@@ -384,7 +384,7 @@ export class SeatServer {
     if (!bot) return this.report(given.task, work, { ok: false, why: "the bot doesn’t live on this computer any more" })
     if (bot.moving) return this.report(given.task, work, { ok: false, why: "it was moving to another computer", moving: true })
     try {
-      const prompt = await this.seats.give(bot, given.text)
+      const prompt = await this.seats.give(bot, given.text, given.chat)
       store.keepPeerWork(given.task, { ...work, prompt })
       this.follow(given.task, { ...work, prompt })
     } catch (error: any) {

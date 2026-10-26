@@ -13,6 +13,9 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Accounts, parseProvider } from "./accounts"
+import { record as recordArtifacts } from "./artifacts/record"
+import type { Source } from "./artifacts/recorder"
+import { ArtifactStore } from "./artifacts/store"
 import { Auto } from "./auto"
 import { Deps } from "./deps"
 import { EngineAgent, EngineLink } from "./engine"
@@ -126,6 +129,8 @@ const sessions = new Sessions(
 // the Mac, where the app says (KUVO_GROUPS, with its bots in KUVO_BOTS and its trash in
 // KUVO_TRASH). One that fails to start leaves the rest of the bridge as it is.
 let self: ReturnType<typeof requester> | undefined
+// The record of what agents made, told of each chat's part given to a bot (set once it starts, below).
+let partGiven: ((prompt: string, chat: string) => void) | undefined
 let groups: { runner: GroupRunner; store: GroupStore; peers: PeerParts } | undefined
 const groupFolders = onMachine
   ? { root: join(machineHome!, "groups"), bots: process.env.KUVO_BOTS ?? join(machineHome!, "bots"), trash: join(machineHome!, "trash") }
@@ -133,10 +138,14 @@ const groupFolders = onMachine
     ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH }
     : undefined
 const groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined
+// The record of what agents made here: on a machine, in its Kuvo Code folder; on the Mac, where
+// the app says (its box's own folder). Its bots' folders, where their memory is.
+const artifactsFolder = onMachine ? join(machineHome!, "artifacts") : process.env.KUVO_ARTIFACTS || undefined
+const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots") : process.env.KUVO_BOTS || undefined)
 // Who there is to name with "&" in a chat: the agents the box's link lists (on the Mac, where the app says).
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
 // Nor do the agents get these.
-for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
+for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile)
@@ -159,6 +168,7 @@ if (groupFolders) {
         return { name: agent.name, signedOut: !account.signedIn && agent.methods().length > 0 }
       },
       peers: directory,
+      given: (prompt, part) => partGiven?.(prompt, part.chat),
     })
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) })
     groups = { store, runner, peers: { post, directory, server, runner } }
@@ -188,13 +198,54 @@ const goals = new Goals(join(home, "goals.json"), {
   },
 })
 
+// What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
+// One that fails to start leaves the rest of the bridge as it is.
+let artifacts: ArtifactStore | undefined
+if (artifactsFolder) {
+  try {
+    artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder })
+    const { recorder } = recordArtifacts(artifacts, { bots: botsFolder })
+    const engineSource: Source = {
+      name: "engine",
+      session: async (id) => {
+        const found = await link.request<any>("GET", `/api/session/${encodeURIComponent(id)}`)
+        return found?.data ?? found
+      },
+      agent: () => "engine",
+    }
+    const bridgeSource: Source = {
+      name: "bridge",
+      session: async (id) => {
+        try {
+          return sessions.get(id)
+        } catch {
+          return undefined
+        }
+      },
+      agent: (id) => {
+        try {
+          const provider = sessions.get(id).model?.providerID
+          return (provider && parseProvider(provider)?.kind) || "engine"
+        } catch {
+          return undefined
+        }
+      },
+    }
+    partGiven = (prompt, chat) => recorder.given(prompt, chat)
+    link.watch((event) => void recorder.heard(engineSource, event))
+    subscribe((event) => void recorder.heard(bridgeSource, event))
+  } catch (error) {
+    console.error("artifacts:", error)
+  }
+}
+
 let server: ReturnType<typeof Bun.serve>
 try {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, artifacts }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

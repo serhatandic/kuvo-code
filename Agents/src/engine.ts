@@ -28,6 +28,8 @@ export class EngineLink {
   private authorization?: string
   private generation = 0
   private listeners = new Map<string, Set<Listener>>()
+  /** Told of every event, whoever's session it's for (the record of what agents made). */
+  private watchers = new Set<(event: EngineEvent) => void>()
   /** Sessions the engine started under one of ours (a subagent's): asks from them are ours too. */
   private children = new Map<string, string>()
   private names = new Map<string, string>()
@@ -251,7 +253,14 @@ export class EngineLink {
     }
   }
 
+  /** Every event of the engine's, as it comes. */
+  watch(watcher: (event: EngineEvent) => void): () => void {
+    this.watchers.add(watcher)
+    return () => this.watchers.delete(watcher)
+  }
+
   private dispatch(event: EngineEvent) {
+    for (const watcher of this.watchers) watcher(event)
     const data = event.data ?? {}
     if (event.type === "session.created") {
       // The engine says it flat (`sessionID`, `parentID`); older ones, with the session.

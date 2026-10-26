@@ -75,6 +75,8 @@ export interface RunnerContext {
   agentAccount?: (provider: string) => Promise<{ name: string; signedOut: boolean } | undefined>
   /** Your other computers and their bots, which take their turns in chats here on their own computer. */
   peers?: PeerDirectory
+  /** A chat's part given to a bot's own conversation (see `SeatContext.given`). */
+  given?: (prompt: string, part: { chat: string; bot: string }) => void
 }
 
 /** A bot in a chat: one of this computer's, or another's (`box`). */
@@ -1003,7 +1005,7 @@ export class GroupRunner {
     const own = this.bot(task.bot)
     if (!own) return this.fail(taskID, wrapUpID, id, "the bot is gone")
     try {
-      const promptID = await this.seats.give(own, text)
+      const promptID = await this.seats.give(own, text, id)
       this.changeTask(taskID, wrapUpID, id, (part) => (part.prompt = promptID))
       await this.awaitReport(taskID, wrapUpID, id)
     } catch (error) {

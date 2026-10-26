@@ -3,13 +3,13 @@
 
 import type { FileDiff } from "./wire"
 
-type Op = { kind: " " | "-" | "+"; line: string }
+export type Op = { kind: " " | "-" | "+"; line: string }
 
 /** Past this many changed lines, what's between the unchanged start and end shows as rewritten. */
 const searchLimit = 2_000
 
-/** The shortest edit from `a` to `b` (Myers), as kept, removed and added lines. */
-function edits(a: string[], b: string[]): Op[] {
+/** The shortest edit from `a` to `b` (Myers), as kept, removed and added lines (or words). */
+export function edits(a: string[], b: string[]): Op[] {
   // What's the same at the start and at the end is kept as it is; only between is compared.
   let start = 0
   while (start < a.length && start < b.length && a[start] === b[start]) start++
@@ -79,7 +79,7 @@ function middle(a: string[], b: string[]): Op[] {
   return ops.reverse()
 }
 
-function lines(text: string): string[] {
+export function lines(text: string): string[] {
   if (text === "") return []
   const split = text.split("\n")
   if (split[split.length - 1] === "") split.pop()

@@ -111,6 +111,8 @@ export interface SeatContext {
   /** The computer, as what a bot can't do here names it ("this machine"); none on the Mac. */
   place?: string
   agentAccount?: (provider: string) => Promise<{ name: string; signedOut: boolean } | undefined>
+  /** A chat's part given to a bot's own conversation, by the message that starts it: what the bot makes there is the chat's too (the record of what agents made). */
+  given?: (prompt: string, part: { chat: string; bot: string }) => void
 }
 
 class Cancelled extends Error {}
@@ -483,10 +485,11 @@ export class Seats implements SeatHome {
   }
 
   /** A part of a chat's work, to its bot's own conversation: the message it went as. */
-  async give(bot: MachineBot, text: string): Promise<string> {
+  async give(bot: MachineBot, text: string, chat: string): Promise<string> {
     const api = this.ownAPI(bot)
     if (!api) throw new Error("the coding agents aren’t running")
     const promptID = newID("msg")
+    this.context.given?.(promptID, { chat, bot: bot.id })
     await api.prompt(bot.sessionID, promptID, text, "queue")
     return promptID
   }

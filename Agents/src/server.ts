@@ -14,6 +14,8 @@ import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { newID } from "./ids"
 import { BadRequest, NotFound, Sessions } from "./sessions"
+import { artifactRoutes } from "./artifacts/routes"
+import type { ArtifactStore } from "./artifacts/store"
 import { linkRoutes } from "./groups/link"
 import { peerRoutes, type PeerParts } from "./groups/post"
 import { groupRoutes } from "./groups/routes"
@@ -33,6 +35,8 @@ export interface Context {
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
   /** Goals that conversations here and on the engine work toward (goals.ts). */
   goals?: Goals
+  /** The record of what this computer's agents made (artifacts/store.ts); none where it couldn't start. */
+  artifacts?: ArtifactStore
 }
 
 const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created: number; expires: number }>()
@@ -449,6 +453,8 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)
+      // What this computer's agents made (`kuvo/artifacts`, which the box's link passes on).
+      if (area === "kuvo" && a === "link" && b === "artifacts") return await artifactRoutes(context.artifacts, method, parts.slice(4), url.searchParams, body, request.signal)
       // Group chats across your computers, as the box's link carries their mail (groups/post.ts).
       if (area === "kuvo" && a === "peers") return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal)
 
