@@ -143,11 +143,13 @@ struct SubscriptionsSection: View {
         } else {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
+                    // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
                     Text(engine.isStopped ? "\(engine.machine.name)’s engine is stopped" : "\(engine.machine.name) isn’t connected")
                     MachineStatus(engine: engine)
                 }
                 Spacer()
                 if !engine.connection.isUnderWay {
+                    // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                     Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
                         .buttonStyle(.glass)
                 }

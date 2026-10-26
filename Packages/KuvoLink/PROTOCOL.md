@@ -1057,7 +1057,7 @@ host serves:
     is its own to write as it likes. A job from before that is taken once from where it was: the
     Job section of its memory (left there as it is; its details without its line), or else what
     Edit Bot wrote before memories kept jobs. `?memory=1` adds `memoryJob` (`{line, section}`, the
-    same job), for a Mac of 0.8.0-beta.1 or earlier, which takes a machine's bots' jobs from it.
+    same job), which no released Kuvo Code asks for.
   - A box keeps each of its bots told what it is (its instructions, from its kit's words): at once
     when it's made or changed, and otherwise when what its conversation is told now isn't what it
     would be told (new words in an update or a personality's, or words an older Mac gave it): as
@@ -1817,6 +1817,7 @@ before connects (the box notes one: `run/attached`).
   A tool there that doesn't carry the box's own first or last line is such a Mac's, and gives way
   to the copy. Marking a box, a Mac puts its `kuvo-npx` there only with its own engine version
   there, which it runs.
+  <!-- compat: 0.7 files -->
 - **Its keeper**: such a Mac's `kuvo-start` only starts the engine after a restart, and its
   `kuvo-launch` knows neither Stop nor the box's settings. The keeper keeps a copy of both
   (`bin/.kuvo-start-keeper`, `bin/.kuvo-launch-keeper`), runs its starts from them, and puts them
@@ -1824,6 +1825,7 @@ before connects (the box notes one: `run/attached`).
   `.kuvo-boot` as that Mac wrote it. The bridge starts the keeper from the copy then too. The
   keeper stops the watchdogs such a Mac's start brings. On a machine without the keeper's script,
   a Mac starts the agents bridge and the engine as that Mac did.
+  <!-- compat: 0.7 keeper -->
 - **Its engine**: such a Mac has Stop, which leaves `run/stopped` and the engine down until
   `POST kuvo/engine/start` (`kuvo/info` says `stopped`; Settings › Machines offers Start). It
   doesn't know a stopped engine, so it starts one over `run/stopped`; running, it isn't stopped
@@ -1831,28 +1833,38 @@ before connects (the box notes one: `run/attached`).
   `notes.box` is such a Mac's, with that Mac's settings (and perhaps without the agents bridge):
   a Mac that marks boxes starts it over once nothing runs, so the box's settings apply again.
   Until then a Mac reading its group chats takes a 404 from that agents bridge as none.
+  <!-- compat: 0.7 engine-stop -->
 - **Its visits hold updates back**: `run/attached` from before the box was last marked doesn't
   count (most likely the same Mac before it updated). A Mac marking the box after such a visit
   notes it first (`run/older-mac`, with the visit's time), so the mark doesn't hide it. The box
   doesn't update itself for 30 days after one ("an older Mac" in `run/launchers.json`), nor
   while a Mac that started its engine in the last 30 days hasn't said it `tolerates` newer boxes,
   nor for 30 days after drift (its files put back over an update's).
+  <!-- compat: 0.7 visits -->
 - **Its settings**: its start leaves its settings in the global file and `keys/settings.json`,
   with keys in `keys/`. The first Mac with boxes makes them the box's own (`kuvo-link.js box
   adopt`): those go in `box`, key paths as the box names them, what they were made from kept in
   `box/adopted-from`, and the launch's settings lines taken out, so no start writes them back.
   Until then a machine's bridge answers `kuvo/config`, `kuvo/keys`, `kuvo/mcp/catalog` and
   `kuvo/integrations` with `409 {"message"}`.
+  <!-- compat: 0.7 settings -->
 - **Leaving the engine running**: such a Mac stops a machine's engine as it quits unless
   something waits there (a wake-up, a group chat at work), or, from 0.7.0, a phone used the
   machine in the last week (`run/link.seen`, which the bridge touches as a phone asks).
+  <!-- compat: 0.7 leave-running -->
+- **Its bots' descriptions**: it reads a machine's bots from their `bot.json`, and a bot's job from
+  its `job` there, so the box writes a job's line there too, beside its record (`job.json`).
+  <!-- compat: 0.7 bot-json-job -->
 - **Its worktrees**: it kept a machine's worktrees itself. A Mac that has such records gives them
   to the machine with `POST kuvo/worktrees/record`.
+  <!-- compat: 0.7 worktrees -->
 - **Its agents bridge** installed the agents' programs in `~/.kuvo-code/agents/runtime` on a
   machine, carried the Mac's sign-ins over (`<file>.from-mac`), and kept its downloads in its cache
   (`cache/install`): the agents bridge takes those away as it starts.
+  <!-- compat: 0.7 agents-runtime -->
 - **Updates**: the newest release on GitHub (0.7.2) has no `boxes.json`, which a box takes as
   "current", not a failure, until a release that has one is the newest.
+  <!-- compat: 0.7 no-boxes-json -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves
@@ -1870,6 +1882,20 @@ are, and what was taken is noted (`groups/imported.json`: the list's hash and ev
 that couldn't move is tried again at the next launch. A `groups.json` an older version writes later
 (after going back to it, where its chats are as it left them) is taken in by each chat's ID, and
 a chat deleted since it was taken stays deleted. It can go three months after 0.8.0 ships.
+<!-- compat: 0.7 mac-group-chats -->
+
+**What else an earlier Kuvo Code left on this Mac.** A Mac with this version takes it in once. It
+can go three months after 0.8.0 ships.
+- What it kept of machines' group chats (`machine-groups.json`, from 0.7.0), taken into the box's
+  own, and the old file deleted. <!-- compat: 0.7 machine-group-cache -->
+- Your personalities (`personalities.json`, `personalities-removed.json`), moved to the box's
+  library. A copy stays there, so going back to an earlier one finds them, and what it changed
+  there is taken in again as this one starts. <!-- compat: 0.7 mac-personalities -->
+- Machines' bots' keys of their own, which it kept in your Keychain: each given to its machine,
+  then gone from the Keychain. <!-- compat: 0.7 bot-keys-keychain -->
+- The letters it sent its agents' way and those it had delivered (`agent-letters.json`,
+  `agent-letters-seen.json`, 0.8.0-beta.1), handed to the box's outbox (`kuvo/link/letters/take`).
+  <!-- compat: beta.1 mac-letters -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
@@ -1878,6 +1904,7 @@ a chat deleted since it was taken stays deleted. It can go three months after 0.
   document, but never passes it on, nor gives that Mac documents. Once that Mac gives a signing key
   in setup, its documents take the list's place. Lists a 0.9.23 bridge passed on (`vouched`) and
   the personalities it sent (`{"personalities"}`) count for nothing.
+  <!-- compat: beta.1 peers-list -->
 - It meets a machine's personalities over SSH every minute (`kuvo-link.js box personalities`,
   the library in, the met library out), which still works; the bridge tells your other computers
   what changed. It still lets the newest change win over a removal, so a personality removed
@@ -1885,6 +1912,13 @@ a chat deleted since it was taken stays deleted. It can go three months after 0.
 - It notes it's connected in `run/connected/<its id>` each minute: the bridge clears `run/connected`
   (and `run/present`, which a 0.7 Mac with the phone link on wrote) as it starts. Nothing reads
   them.
+  <!-- compat: beta.1 connected -->
+- It lets go of a machine's bots deleted there by `~/.kuvo-code/bots/deleted.json`, which the box
+  keeps ("kuvo/bots").
+  <!-- compat: beta.1 deleted-bots -->
+- It reads and changes a machine's settings with `kuvo-link.js box read` and `box change` over SSH
+  ("Settings per box"), which `box route` does for later Macs.
+  <!-- compat: beta.1 box-read-change -->
 - It asks a machine to rename a worktree's branch (`POST kuvo/worktrees/rename`, through `box
   route`), which the box names itself now: it's refused, and that Mac reads the machine's records
   again.

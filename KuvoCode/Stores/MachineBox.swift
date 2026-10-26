@@ -150,6 +150,7 @@ enum MachineBox {
             """), input: file)
     }
 
+    // COMPAT(0.7 settings): adopting what an older Mac's start left (seeding a new machine stays). Goes 3 months after 0.8.0.
     /// Makes the machine's settings its own, once (the tool's `adoptBox`), from what it runs with
     /// now or, with none, `seed`; then, and every time after, its settings as they are, and
     /// whether it was given `seed` just now.

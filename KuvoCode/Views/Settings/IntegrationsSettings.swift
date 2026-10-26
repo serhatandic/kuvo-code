@@ -19,6 +19,8 @@ struct IntegrationsSettings: View {
     @State private var live: [MCPServer] = []
     /// Those being added, removed or connected again: a spinner in their place.
     @State private var busy: Set<String> = []
+    /// The keys being read again, from the note over the page.
+    @State private var readingKeys = false
     /// Those just turned on, until the box has the change: starting, not Off.
     @State private var turningOn: Set<String> = []
     @State private var signingIn: IntegrationRef?
@@ -52,7 +54,7 @@ struct IntegrationsSettings: View {
     var body: some View {
         Group {
             if let shown {
-                list(shown.integrations)
+                list(shown)
             } else if let failure {
                 unread(failure)
             } else {
@@ -111,8 +113,9 @@ struct IntegrationsSettings: View {
         }
     }
 
-    private func list(_ entries: [Integrations.Entry]) -> some View {
-        ScrollingSettingsForm {
+    private func list(_ listed: Integrations.Listed) -> some View {
+        let entries = listed.integrations
+        return ScrollingSettingsForm {
             // Integrations live in the settings file: one that can't be changed changes nothing here.
             ConfigProblem()
             if let failure {
@@ -126,6 +129,24 @@ struct IntegrationsSettings: View {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     }
                     Button("Try Again") { Task { await tryAgain() } }
+                }
+            } else if let note = listed.keysNote(on: name) {
+                // Once, for the page: the rows only dim what needs keys.
+                Section {
+                    Label {
+                        Text(note)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    if readingKeys {
+                        Spinner(size: 14)
+                            .frame(height: 22)
+                            .accessibilityLabel("Reading the keys again")
+                    } else {
+                        Button("Try Again") { readKeysAgain() }
+                            .help("Read the integrations’ keys on \(name) again")
+                    }
                 }
             }
             ForEach(Self.kinds(of: entries)) { kind in
@@ -212,10 +233,6 @@ struct IntegrationsSettings: View {
                         PlacesLine(places: places, waitsForCodeHelp: "Ask the agent to use \(entry.title): the first time, it gives you a code to enter on Microsoft's page.")
                             .padding(.top, 2)
                     }
-                    if let note = entry.keysNote(on: name) {
-                        KeysNote(text: note)
-                            .padding(.top, 2)
-                    }
                 }
             }
             .settingsText()
@@ -236,15 +253,17 @@ struct IntegrationsSettings: View {
                     case .app: Button("Add App…") { addingKey = entry }
                     case .key: Button("Add Key…") { addingKey = entry }
                     case .connect: Button("Connect") { add(entry) }
-                    case .keysUnreadable: readKeysAgainButton(entry)
+                    case .keysUnreadable:
+                        // Waits for its keys to be read (the page says so, once).
+                        Button(entry.isApp ? "Add App…" : "Add Key…") {}
+                            .disabled(true)
+                            .help("Its keys can’t be read on \(name) right now")
                     }
                 } else {
                     let health = health(of: entry)
                     let isOff = health == .disabled
-                    // What needs you, first: its keys read again, as its note asks.
-                    if entry.keysUnknown {
-                        readKeysAgainButton(entry)
-                    } else if health == .needsSignIn, let signIn = entry.signIn {
+                    // What needs you, first.
+                    if health == .needsSignIn, let signIn = entry.signIn {
                         Button("Sign In…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
                     } else if health == .failed {
                         Button("Try Again") { reconnect(entry) }
@@ -286,14 +305,6 @@ struct IntegrationsSettings: View {
                 }
             }
         }
-    }
-
-    /// Try Again for one whose keys can't be read now: not whether it has them, so they're read
-    /// again, rather than keys typed only to be turned away.
-    private func readKeysAgainButton(_ entry: Integrations.Entry) -> some View {
-        Button("Try Again") { readKeysAgain(entry) }
-            .help("Read \(entry.title)’s keys on \(name) again")
-            .accessibilityLabel("Read \(entry.title)’s keys again")
     }
 
     /// How it's doing, as its box says; one just turned on is starting until the box has it. Nil
@@ -368,15 +379,15 @@ struct IntegrationsSettings: View {
         await read(again: true)
     }
 
-    /// Its keys read again, as the whole page is: a spinner in its Try Again's place meanwhile, and
+    /// The keys read again, as the whole page is: a spinner in Try Again's place meanwhile, and
     /// said plainly when they still can't be (the page says so itself when it couldn't be read).
-    private func readKeysAgain(_ entry: Integrations.Entry) {
-        busy.insert(entry.id)
+    private func readKeysAgain() {
+        readingKeys = true
         Task {
             await tryAgain()
-            busy.remove(entry.id)
-            if failure == nil, shown?.integrations.first(where: { $0.id == entry.id })?.keysUnknown == true {
-                trouble = ("\(entry.title)’s keys still can’t be read", box.machine == nil
+            readingKeys = false
+            if failure == nil, shown?.keysNote(on: name) != nil {
+                trouble = ("The keys still can’t be read", box.machine == nil
                     ? "Kuvo Code still can’t reach your Keychain for them. Try again in a moment, and if it keeps happening, quit and reopen Kuvo Code."
                     : "\(name) still can’t reach them. Try again in a moment.")
             }
@@ -524,24 +535,6 @@ private struct PlacesLine: View {
     }
 }
 
-/// Why an integration's keys aren't asked for: they can't be read on its computer right now. In
-/// the row's small print, with the page's mark for what can't be read.
-private struct KeysNote: View {
-    let text: String
-
-    var body: some View {
-        Label {
-            Text(text)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-        }
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-    }
-}
 
 /// The keys an integration needs, typed or pasted, for this computer: kept where its box keeps
 /// keys (this Mac's Keychain, or a machine's own keys' folder): in the page's place. `done` has it

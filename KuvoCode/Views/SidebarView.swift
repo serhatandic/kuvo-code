@@ -593,6 +593,7 @@ struct SidebarView: View {
             if let engine = app.machines.engine(RemoteFolder.machine(of: project.directory)) {
                 if !engine.isReady {
                     Divider()
+                    // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                     Button(engine.isStopped ? "Start \(engine.machine.name)" : "Connect to \(engine.machine.name)") { app.connectOrStart(engine) }
                 }
             } else {
@@ -873,10 +874,12 @@ struct SidebarView: View {
         if let bot = bots.list.first(where: { $0.sessionID == session.id }) {
             Button("Edit Bot…") { editBot(bot) }
         } else if let engine = app.machines.engine(workspace.waitingMachine(for: session.id)) {
+            // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
             // On a machine that's away, the session is as last seen: what it does waits for it.
             Text(engine.isStopped ? "\(engine.machine.name)’s engine is stopped" : "\(engine.machine.name) isn’t connected")
             switch engine.state {
             case .starting, .downloading: Text("Connecting…")
+            // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
             default: Button(engine.isStopped ? "Start" : "Connect Now") { app.reconnectNow(engine) }
             }
         } else {

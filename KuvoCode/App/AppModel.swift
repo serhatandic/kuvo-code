@@ -41,6 +41,7 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
     /// Your group chats, wherever they live: each computer's coding agents' bridge runs its own,
     /// this Mac's too (what an older version kept here moves into it first, `GroupMigration`).
     let boxGroups: BoxGroups = {
@@ -227,6 +228,7 @@ final class AppModel {
         workspace.runsOnAgents(bots.agentSessionIDs)
         workspace.botSessions = bots.sessionIDs
         workspace.runsOnAgents(boxGroups.agentSeatIDs)
+        // COMPAT(0.7 mac-group-chats): seats `GroupMigration` took out of chats, kept out of the lists. Goes 3 months after 0.8.0.
         // Seats an older version left on machines too, until they're gone there.
         workspace.seats = boxGroups.seatIDs.union(GroupMigration.orphanSeats)
     }
@@ -247,6 +249,7 @@ final class AppModel {
         // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
         // this Mac's box before its link meets your other computers (it starts before the machines).
         AgentMail.shared.app = self
+        // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
@@ -454,6 +457,7 @@ final class AppModel {
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
+                        // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
                         await workspace.followProjects()

@@ -76,6 +76,7 @@ struct MachineWaitingView: View {
                 Button("Try Again") { app.connect(engine) }
                     .buttonStyle(.glass)
                     .controlSize(.large)
+            // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
             case .preparing where engine.isStopped:
                 Text("It stays stopped, through restarts too, until you start it.")
                     .foregroundStyle(.secondary)
@@ -167,6 +168,7 @@ struct MachineOfflineBar: View {
             Spacer(minLength: 8)
             // Not while it's trying already.
             if !isAttempting {
+                // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
                 if connection == .stopped {
                     Button("Start") { app.startEngine(engine) }
                         .buttonStyle(.glass)

@@ -218,6 +218,13 @@ quotes) is held to `Agents/test/box-vectors.json`: after changing one on either 
 This Mac's box carries its group chats' mail to your machines on its own relay connection, as a
 machine's bridge does (`kuvo-link.js`: `watchSeats`, `carrySeat`).
 
+Code that's there only for released Macs (PROTOCOL.md's "For released Macs": Kuvo Code 0.5 to
+0.7.2, and 0.8.0-beta.1) carries a marker where it is, on every side, `COMPAT(<version> <item>):
+what it does. Goes …` (`#` in a shell script), whose item that section names. `scripts/compat.sh
+[0.7 | beta.1]` lists them, so a version's paths go together, and `Tests/Bridge/compat.test.js`
+fails on an item without a marker or a marker without an item. Mark what you add for them the same
+way.
+
 It's off until the iPhone app is out: `defaults write run.kuvo.code phoneLink -bool true` (or
 `KUVO_DEMO_PHONE=1`) turns it on, with Settings › Phone, and `phoneLink.relay` points it at a
 relay other than one on this Mac (`ws://127.0.0.1:8790`).

@@ -60,11 +60,13 @@ final class MachineEngine {
     private(set) var isLive = false
     /// Waiting to try again by itself, after the connection dropped.
     var isRetrying = false
+    // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Its engine is stopped on purpose (Stop, here or from anywhere): it stays so until Start.
     private(set) var isStopped = false
     /// It started with this Mac's settings just now, having none of its own: your accounts go
     /// too, once (`AppModel.syncSignIns`).
     @ObservationIgnored var seededNow = false
+    // COMPAT(0.7 engine-stop): Start pressed, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Start was pressed here: the next connection starts it if it's stopped, until one does (one
     /// that fails, the machine away, carries it to Try Again), or it's stopped or disconnected.
     var startWanted = false
@@ -77,6 +79,7 @@ final class MachineEngine {
     let config: EngineConfig
     /// The coding agents there: the agents bridge beside its engine, through the same tunnel.
     let agents: OutsideAgents
+    // COMPAT(0.7 engine-stop): an older Mac's engine may run without the agents bridge. Goes 3 months after 0.8.0.
     /// Its engine started with the agents bridge beside it (an older one didn't).
     var hasAgentsBridge: Bool { server?.agentsEndpoint != nil }
     /// Its browser, which its agents browse with, shown live in the panel.
@@ -99,6 +102,7 @@ final class MachineEngine {
     @ObservationIgnored var onExit: () -> Void = {}
     /// Stopped, then started from elsewhere (a phone, another Mac): connect to it.
     @ObservationIgnored var onStartedElsewhere: () -> Void = {}
+    // COMPAT(0.7 engine-stop): watching an engine an older Mac stopped, for a start from elsewhere. Goes 3 months after 0.8.0.
     @ObservationIgnored private var stoppedWatch: Task<Void, Never>?
     private let log = Logger(subsystem: "run.kuvo.code", category: "machine")
 
@@ -176,6 +180,7 @@ final class MachineEngine {
 
     /// Where its connection is, as every view says it.
     enum Connection: String, Equatable {
+        // COMPAT(0.7 engine-stop): `stopped`. Goes 3 months after 0.8.0.
         case notConnected, connecting, reconnecting, installing, connected, failed, stopped
 
         /// It's getting there by itself (a spinner), nothing to do.
@@ -227,6 +232,7 @@ final class MachineEngine {
     /// What Settings › Machines offers to do with it now, and a phone with it.
     enum Offer: String {
         case disconnect
+        // COMPAT(0.7 engine-stop): Start, the offer for an engine an older Mac stopped. Goes 3 months after 0.8.0.
         /// Its engine was stopped by a Mac with an older Kuvo Code (there's no Stop any more).
         case start
         case connect, connectNow
@@ -235,6 +241,7 @@ final class MachineEngine {
     var offer: Offer? {
         switch state {
         case .ready: .disconnect
+        // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
         case .preparing where isStopped: .start
         case .failed, .preparing: isRetrying ? .connectNow : .connect
         default: nil
@@ -287,6 +294,7 @@ final class MachineEngine {
     /// Mac did, with its own.
     func isBehind(_ launch: Launch) -> Bool {
         guard let engine = server?.engine else { return false }
+        // COMPAT(0.7 engine-stop): an engine an older Mac started, with its settings. Goes 3 months after 0.8.0.
         if isOlderMacs(engine) { return !boxIsNewer }
         guard !isAnotherMacs(engine) else { return false }
         return engine.notes["settings"] != launch.fingerprint
@@ -301,6 +309,7 @@ final class MachineEngine {
         engine.notes["mac"].map { $0 != Self.macID } ?? false
     }
 
+    // COMPAT(0.7 engine-stop): an engine an older Mac started (no `notes.box`). Goes 3 months after 0.8.0.
     /// Started by a Kuvo Code from before boxes kept their own settings (0.7 and before, on this
     /// Mac or another), with that Mac's: replaced as this Mac's own older ones are, once nothing's
     /// running, so the box's run.
@@ -355,6 +364,7 @@ final class MachineEngine {
             // what's there runs as it is, and nothing of this app's goes over it.
             boxIsNewer = BoxVersion.isNewer(try await BoxVersion.read(on: connection))
             try check()
+            // COMPAT(0.7 files): `run/mac-installing` while this app puts its files there. Goes 3 months after 0.8.0.
             // What follows puts this app's files there: the box doesn't take them for an older Mac's.
             if !boxIsNewer { try? await BoxVersion.installing(on: connection) }
             // The box's own tool and keeper first, which what follows counts on.
@@ -362,6 +372,7 @@ final class MachineEngine {
             var found = try await RemoteServer.find(on: connection)
             try check()
             let starting = startWanted
+            // COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
             if found == .stopped, !starting {
                 if !boxIsNewer { try? await BoxVersion.notInstalling(on: connection) }
                 isStopped = true
@@ -372,6 +383,7 @@ final class MachineEngine {
             isStopped = false
             // A newer box's engine isn't running: its own keeper starts the one it has.
             if boxIsNewer, found.engine == nil {
+                // COMPAT(0.7 engine-stop): a newer box found stopped is started. Goes 3 months after 0.8.0.
                 if found == .stopped { try await RemoteServer.startEngine(on: connection) }
                 for _ in 0..<15 where found.engine == nil {
                     try await Task.sleep(for: .seconds(2))
@@ -413,6 +425,7 @@ final class MachineEngine {
             // Mac's on one with none), then read, for what its engine starts with.
             try await MachineBox.install(on: connection)
             var launch = launch
+            // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
             let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
             config.took(box.settings)
             // As Kuvo Code brings this Mac's up to date as its engine starts: its integrations as
@@ -438,6 +451,7 @@ final class MachineEngine {
             attached = server
             try check()
             let api = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
+            // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
             if !boxIsNewer, isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
                 // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
                 try check()
@@ -448,6 +462,7 @@ final class MachineEngine {
                 try check()
             }
             try check()
+            // COMPAT(0.7 files): the marks of this app's tools, for `bin/.own`. Goes 3 months after 0.8.0.
             // What this app put there runs: the box is this version's.
             if !boxIsNewer {
                 var marks = ["kuvo-browser.js": "// kuvo-browser \(launch.helper.hash)"]
@@ -459,6 +474,7 @@ final class MachineEngine {
             self.api = current
             catalog.api = current
             agents.connect(server.agentsEndpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
+            // COMPAT(0.7 engine-stop): an older Mac's engine without the agents bridge. Goes 3 months after 0.8.0.
             // An engine started without its agents bridge (an older one): none to wait for.
             if server.agentsEndpoint == nil { catalog.forgetAgents() }
             startWanted = false
@@ -478,6 +494,7 @@ final class MachineEngine {
         } catch where connections != attempt {
             // Failed after a newer attempt began: that one's state isn't this one's to change.
             if let attached, attached !== server { attached.disconnect() }
+        // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
         } catch RemoteEngineError.stopped {
             // Stopped from elsewhere as this connected.
             if let attached, attached !== server { attached.disconnect() }
@@ -586,6 +603,7 @@ final class MachineEngine {
         state = .preparing
     }
 
+    // COMPAT(0.7 engine-stop): an engine an older Mac stopped, watched for a start from elsewhere. Goes 3 months after 0.8.0.
     /// While it's stopped, each minute: started from elsewhere (a phone, another Mac), it connects.
     private func watchWhileStopped() {
         stoppedWatch?.cancel()
@@ -602,6 +620,7 @@ final class MachineEngine {
         }
     }
 
+    // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
     private var isWaitingStopped: Bool {
         guard isStopped, case .preparing = state else { return false }
         return true
@@ -907,6 +926,7 @@ final class Machines {
         } ?? ""
         return leave + """
         rm -rf "$K/keys" "$K/box/keys" "$K/box/bot-keys"
+        # COMPAT(0.7 keeper): the keeper copy goes with it. Goes 3 months after 0.8.0.
         rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-boot"
         \(RemoteServer.rebootCrontabRemoval)
         """

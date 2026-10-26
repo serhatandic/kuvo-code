@@ -369,6 +369,15 @@ final class WindowTabs {
         withAnimation(.ui) { selection = keys[(index + offset + keys.count) % keys.count] }
     }
 
+    /// A tab picked in the tab bar: in view, and you work in its conversation, wherever you were
+    /// working before (the sidebar, the panel): its composer has the keyboard, so what you type
+    /// goes where the window shows you working.
+    func pick(_ key: TabKey) {
+        selection = key
+        focusComposer(key.text)
+        focus = .conversation
+    }
+
     /// ⌘1 to ⌘8 show that tab, ⌘9 the last.
     func show(number: Int) {
         guard !keys.isEmpty else { return }

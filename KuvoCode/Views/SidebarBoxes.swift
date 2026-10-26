@@ -103,6 +103,7 @@ struct BoxHeading: View {
                 MachineStatus(engine: engine)
                 Spacer(minLength: 0)
                 if !engine.connection.isUnderWay {
+                    // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
                     Button(engine.isStopped ? "Start" : "Connect") { app.connectOrStart(engine) }
                         .buttonStyle(.glass)
                         .controlSize(.small)
