@@ -227,13 +227,16 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
 
     /// The row's view, telling of its height as it changes from within (a part opening).
     private func root(_ id: String, _ content: AnyView) -> AnyView {
+        // At its view's top, whatever height the view has: a part opening or folding changes the
+        // view's height at once, and centered in it, the row slid down and back as it animated.
         AnyView(
-            content
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { [weak self] height in
-                    self?.rowResized(id, to: height)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            TopLayout {
+                content
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { [weak self] height in
+                        self?.rowResized(id, to: height)
+                    }
+            }
         )
     }
 
@@ -370,10 +373,10 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         }
     }
 
+    /// A row moved by one above it opening or folding a part: with the app's spring, which the
+    /// part opens and folds with, so the row keeps to its edge rather than running over it.
     private func move(_ view: NSView, to frame: NSRect) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+        NSAnimationContext.animate(.ui) {
             view.animator().frame = frame
         }
     }
@@ -997,4 +1000,17 @@ private final class SelectionTint: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Its one child at its top left, at the child's own height; as big as it's offered itself, and
+/// never shorter than the child (measured, a row is offered no height at all).
+private struct TopLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let child = subviews.first?.sizeThatFits(.init(width: proposal.width, height: nil)) ?? .zero
+        return CGSize(width: proposal.width ?? child.width, height: max(proposal.height ?? 0, child.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: .init(width: bounds.width, height: nil))
+    }
 }

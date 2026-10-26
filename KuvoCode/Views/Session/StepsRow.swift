@@ -72,8 +72,9 @@ struct StepsRow: View {
         .task {
             guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
             for _ in 0..<8 {
+                // Not stopped when the task is: the conversation's rows make their views anew as
+                // they're laid out, which cancels it each time (eight toggles end where they began).
                 await DemoWait.pause(.asked(wait))
-                guard !Task.isCancelled else { return }
                 withAnimation(.ui) { isExpanded.toggle() }
             }
         }
