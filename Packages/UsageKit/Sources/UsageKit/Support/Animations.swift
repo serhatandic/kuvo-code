@@ -142,3 +142,40 @@ private struct DenyShakeModifier: ViewModifier {
         }
     }
 }
+
+/// Fork addition: what a fold opens and closes (a bar's detail): shown only as far down as its
+/// container has room for it yet, and fading as it goes, so it never shows past the panel's edge
+/// as the panel closes over it. The panel grows and shrinks by it on the same spring, and the space
+/// above it is a padding of its own, not its stack's spacing, so the two edges stay together. The
+/// same as Kuvo Code's own (`KuvoCode/Design/Theme.swift`).
+struct FoldTransition: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .clipShape(FoldClip(shown: phase.isIdentity ? 1 : 0))
+            .opacity(phase.isIdentity ? 1 : 0)
+    }
+}
+
+extension Transition where Self == FoldTransition {
+    static var fold: FoldTransition { FoldTransition() }
+}
+
+/// The part of a fold's content in its container: the top `shown` of its height. Wide open once
+/// it's all but all shown (the spring passes 1 and comes back), so nothing it draws past its
+/// bounds is cut, or comes and goes as it settles.
+nonisolated private struct FoldClip: Shape {
+    var shown: CGFloat
+
+    var animatableData: CGFloat {
+        get { shown }
+        set { shown = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let room: CGFloat = 10_000
+        let open = rect.insetBy(dx: -room, dy: -room)
+        guard shown < 0.995 else { return Path(open) }
+        // Only the bottom edge cuts.
+        return Path(CGRect(x: open.minX, y: open.minY, width: open.width, height: rect.minY - open.minY + rect.height * max(0, shown)))
+    }
+}

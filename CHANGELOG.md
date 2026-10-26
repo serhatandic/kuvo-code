@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- The usage panel's bars read in the system's own type, like the rest of Kuvo Code, sit snug in the panel's rounded corners, and a bar's details fold open and closed with the panel instead of sliding away before it.
 - See what your agents made: a tray button on a bot's or group chat's bar opens what was made there. A bot's Shelf shows what it marked final, its memory with the words that changed, its pages, documents and pictures, and every change on its Timeline; a group chat's Timeline shows each bot's face and when one took up another's work; a coding session shows what it made besides code. Open anything to step through its versions, see what each changed (the words in prose, the lines in code, the one before beside a picture), and put an older version back. It's kept on the computer the agents run on, your Mac or a machine, and reads the same from your phone.
 - Bots can mark something they made as final, so it's first on their Shelf.
 - Settings › Storage shows how much the older versions of what your agents made take on each computer, lets you choose how much they may take, and clears them. Likely secrets and files git ignores are never copied.

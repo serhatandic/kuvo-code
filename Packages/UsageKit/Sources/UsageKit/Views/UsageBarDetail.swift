@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Fork addition: what a bar in the Bars style opens into. The provider's plan, every one of its
-/// metrics and its links, drawn like the bars themselves: thin monospaced capitals, the provider's
-/// pastel on a quiet track, no cards. Values and reset times flip between used/left and
+/// metrics and its links, drawn like the bars themselves: the system's type, the provider's pastel
+/// on a quiet track, no cards. Values and reset times flip between used/left and
 /// countdown/exact on a click, as they do in the cards; spend and trend rows reveal the same
 /// breakdowns on hover.
 struct ProviderBarDetail: View {
@@ -83,11 +83,10 @@ struct BarDetailContent: View {
             if let notice {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 9))
                     Text(notice)
-                        .font(BarPalette.detailNote)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .font(.subheadline)
                 .foregroundStyle(.orange)
             }
             ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
@@ -105,8 +104,9 @@ struct BarDetailContent: View {
             }
             footer
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        // The words start where the bar's do.
+        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(scheme == .dark ? 0.08 : 0.2), in: .rect(cornerRadius: ProviderBar.radius))
     }
@@ -123,7 +123,7 @@ struct BarDetailContent: View {
                         HStack(spacing: 2) {
                             BarDetailText(link.label, style: .note)
                             Image(systemName: "arrow.up.right")
-                                .font(.system(size: 8))
+                                .font(.caption2)
                         }
                     }
                     .buttonStyle(BarDetailButtonStyle())
@@ -141,7 +141,7 @@ struct BarDetailContent: View {
                         .hoverTooltip("Customize \(provider.displayName)")
                 }
             }
-            .font(.system(size: 10))
+            .font(.subheadline)
             .padding(.top, 1)
         }
     }
@@ -346,7 +346,7 @@ private struct BarDetailMeter: View {
     }
 }
 
-/// The detail's type, in the bars' monospaced capitals.
+/// The detail's type: names and small print in the secondary shade, readings in lining digits.
 private struct BarDetailText: View {
     enum Style { case label, value, note }
 
@@ -362,10 +362,10 @@ private struct BarDetailText: View {
     }
 
     var body: some View {
-        Text(text.uppercased())
-            .font(style == .value ? BarPalette.detailValue : style == .label ? BarPalette.detailLabel : BarPalette.detailNote)
-            .tracking(style == .value ? 0 : 0.6)
-            .foregroundStyle(color ?? (style == .value ? AnyShapeStyle(.primary) : style == .label ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary)))
+        Text(text)
+            .font(style == .note ? .subheadline : .callout)
+            .monospacedDigit()
+            .foregroundStyle(color ?? (style == .value ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)))
             .lineLimit(1)
     }
 }

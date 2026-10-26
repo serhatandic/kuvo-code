@@ -23,23 +23,28 @@ struct DashboardContentView: View {
                 // empty-state line, which a fresh install can hit while nothing has data yet).
                 if container.onboarding.isCustomizeHintPending {
                     CustomizeHintCard()
+                        // At the footer's inset, also over the bars, which sit closer to the edges.
+                        .padding(.horizontal, showsBars ? horizontalPadding - ProviderBar.inset : 0)
                         .padding(.bottom, density.sectionSpacing)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
                 }
                 widgetContent
             }
             .animation(Motion.spring, value: container.onboarding.isCustomizeHintPending)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.top, density.contentTopPadding)
+            // Bars sit close to the panel's edges, their corners concentric with its own.
+            .padding(.horizontal, showsBars ? ProviderBar.inset : horizontalPadding)
+            .padding(.top, showsBars ? ProviderBar.inset : density.contentTopPadding)
             .padding(.bottom, bottomGap)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollPosition($scrollPosition)
     }
 
+    private var showsBars: Bool { style == .bars && !layout.displayGroups.isEmpty }
+
     @ViewBuilder
     private var widgetContent: some View {
-        if style == .bars, !layout.displayGroups.isEmpty {
+        if showsBars {
             UsageBarsView(reorderSpaceName: reorderSpaceName, reorderLift: $reorderLift)
         } else {
             cardContent

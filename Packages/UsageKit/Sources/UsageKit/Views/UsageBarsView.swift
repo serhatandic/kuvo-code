@@ -55,7 +55,7 @@ struct UsageBarsView: View {
                     .padding(.bottom, 4)
             }
             ForEach(layout.displayGroups) { group in
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
                     ProviderBar(
                         provider: group.provider,
                         reading: reading(for: group),
@@ -67,9 +67,11 @@ struct UsageBarsView: View {
                     }
                     .contextMenu { menu(for: group) }
                     if expanded == group.id {
+                        // Cut at the panel's edge as it closes, never sliding away ahead of it;
+                        // the space above it folds with it.
                         ProviderBarDetail(group: group)
-                            .padding(.bottom, 4)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .padding(.vertical, 4)
+                            .transition(.fold)
                     }
                 }
             }
@@ -109,9 +111,9 @@ struct UsageBarsView: View {
     }
 }
 
-/// One provider as a bar: a flat pastel fill on a quiet track, the mark and name in thin
-/// monospaced capitals, the number at the end. Text that crosses the fill's edge changes
-/// color with it, so it reads on both sides.
+/// One provider as a bar: a flat pastel fill on a quiet track, the mark and name, the number at
+/// the end, in the system's own type. Text that crosses the fill's edge changes color with it, so
+/// it reads on both sides. Its corners are the panel's less the space around it.
 struct ProviderBar: View {
     let provider: Provider
     let reading: WidgetData?
@@ -122,6 +124,10 @@ struct ProviderBar: View {
     @Environment(\.colorScheme) private var scheme
 
     static let height: CGFloat = 30
+    /// The space between the panel's edges and the bars, and their corners: together the panel's
+    /// own corners (`StatusItemController.cornerRadius`), so the bars sit concentric in it, as a
+    /// menu's items do.
+    static let inset: CGFloat = 6
     static let radius: CGFloat = 7
 
     private var fill: Color { BarPalette.pastel(provider.id, scheme: scheme) }
@@ -192,36 +198,32 @@ struct ProviderBar: View {
                         .foregroundStyle(color)
                 }
             }
-            .frame(width: 13, height: 13)
-            Text(provider.displayName.uppercased())
-                .font(BarPalette.label)
-                .tracking(0.8)
+            .frame(width: 14, height: 14)
+            Text(provider.displayName)
+                .fontWeight(.medium)
                 .lineLimit(1)
             Spacer(minLength: 6)
             if notice != nil {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 10))
+                    .font(.callout)
             }
+            // The number stays whole; a long name gives way.
             Text(value)
-                .font(BarPalette.value)
+                .monospacedDigit()
                 .lineLimit(1)
+                .layoutPriority(1)
         }
+        .font(.body)
         .foregroundStyle(color)
-        .padding(.horizontal, 10)
+        // The words start where the footer's do.
+        .padding(.horizontal, 8)
         .frame(maxHeight: .infinity)
     }
 }
 
-/// The Bars style's look: soft pastels of each provider's brand color, flat, and thin
-/// uppercase monospaced type.
+/// The Bars style's look: soft pastels of each provider's brand color, flat, with the system's
+/// own type at its text styles and numbers in lining digits, as Kuvo Code for iPhone shows them.
 enum BarPalette {
-    static let label = Font.system(size: 11, weight: .light, design: .monospaced)
-    static let value = Font.system(size: 12, weight: .regular, design: .monospaced)
-    /// A bar's detail (`BarDetailContent`): a metric's name, its reading, and the small print.
-    static let detailLabel = Font.system(size: 10, weight: .regular, design: .monospaced)
-    static let detailValue = Font.system(size: 11, weight: .regular, design: .monospaced)
-    static let detailNote = Font.system(size: 9.5, weight: .regular, design: .monospaced)
-
     /// The brand color, mostly white: pastel in light mode, a touch deeper in dark mode so
     /// it doesn't glare. Brands without a hue (black or white marks, like Cursor's) get a
     /// soft gray instead, which sits with the pastels in either mode.
@@ -272,15 +274,15 @@ struct SpendBarBody: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(period.rawValue.uppercased())
-                    .font(BarPalette.label)
-                    .tracking(0.8)
+                Text(period.rawValue)
+                    .fontWeight(.medium)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 6)
                 Text((projection.isEstimated ? "~" : "") + MetricFormatter.number(projection.centerValue, kind: .dollars, style: .full))
-                    .font(BarPalette.value)
+                    .monospacedDigit()
             }
-            .padding(.horizontal, 10)
+            .font(.body)
+            .padding(.horizontal, 8)
             .frame(maxHeight: .infinity)
             GeometryReader { proxy in
                 HStack(spacing: 0) {
