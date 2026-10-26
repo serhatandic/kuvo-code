@@ -1065,6 +1065,9 @@ final class SessionModel {
         let session = id
         Task {
             do {
+                // Its list read first if it isn't yet (the conversation just opened), so the answer's
+                // event, which can come at once, has it to go into.
+                if bridge.sideQuestions[session] == nil { await bridge.loadSideQuestions(of: session) }
                 let asked = try await api.askSideQuestion(question, about: session)
                 bridge.took(asked)
                 shownSideQuestion = asked.id

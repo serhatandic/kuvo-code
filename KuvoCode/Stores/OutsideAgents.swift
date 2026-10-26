@@ -415,7 +415,8 @@ final class OutsideAgents {
             // the box restarted).
             for (session, handoff) in handoffs where handoff.state == .writing {
                 // Unchanged when it can't be read now; gone (nil) after the box restarted.
-                guard let now = try? await api.handoff(session: session) else { continue }
+                let now: Handoff?
+                do { now = try await api.handoff(session: session) } catch { continue }
                 handoffs[session] = now
                 if let now { ended(now) } else { opensWhenDone.remove(session) }
             }
@@ -441,7 +442,14 @@ final class OutsideAgents {
             if question.state == .answering { sideQuestionCounts[question.session, default: 0] += 1 }
             return
         }
-        if let index = list.firstIndex(where: { $0.id == question.id }) { list[index] = question } else { list.append(question) }
+        if let index = list.firstIndex(where: { $0.id == question.id }) {
+            // The ask's own answer can come after its answer's event (a quick model): what it
+            // says, still answering, doesn't take the answer away.
+            guard !(question.state == .answering && list[index].state != .answering) else { return }
+            list[index] = question
+        } else {
+            list.append(question)
+        }
         sideQuestions[question.session] = list
         sideQuestionCounts[question.session] = list.count
     }
