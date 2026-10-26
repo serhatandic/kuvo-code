@@ -30,6 +30,15 @@ enum MadePlace: Equatable {
 
     var key: String { "\(box)|\(scope)" }
 
+    /// The button's words, and the popover's title.
+    var title: String {
+        switch self {
+        case .bot(let bot): "What \(bot.name) Made"
+        case .group: "What the Chat Made"
+        case .session: "What This Session Made"
+        }
+    }
+
     var isSession: Bool { if case .session = self { true } else { false } }
     var isGroup: Bool { if case .group = self { true } else { false } }
 
@@ -88,31 +97,26 @@ struct MadeButton: View {
             things = made
             await made.follow()
         }
-        // KUVO_DEMO_MADE: the popover open (`open`, `timeline`, or a thing's name to open it), for screenshots.
         .onChange(of: things?.state) { _, state in
-            guard state == .loaded, let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MADE"], !demo.isEmpty, !isOpen else { return }
-            if demo == "timeline" { things?.mode = .timeline }
-            // After the window has settled, so it points at the button.
-            Task {
-                try? await Task.sleep(for: .seconds(1.5))
-                isOpen = true
+            guard state == .loaded, let things else { return }
+            // The first time a bot's or a group chat's is read here, what it has is what you've
+            // seen. (A session's first output is news: it has no record until you look.)
+            if !place.isSession, seenTimes[place.key] == nil { store(newest(things)) }
+            #if DEBUG
+            // KUVO_DEMO_MADE: the popover open (`open`, `timeline`, or a thing's name to open it), for screenshots.
+            if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MADE"], !demo.isEmpty, !isOpen {
+                if demo == "timeline" { things.mode = .timeline }
+                // After the window has settled, so it points at the button.
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    isOpen = true
+                }
             }
-        }
-        // The first time a place is read here, what it has is what you've seen (a session's
-        // first output, though, is news).
-        .onChange(of: things?.state) { _, state in
-            guard state == .loaded, let things, seenTimes[place.key] == nil else { return }
-            store(place.isSession ? 0 : newest(things))
+            #endif
         }
     }
 
-    private var title: String {
-        switch place {
-        case .bot(let bot): "What \(bot.name) Made"
-        case .group: "What the Chat Made"
-        case .session: "What This Session Made"
-        }
-    }
+    private var title: String { place.title }
 
     private func isShown(_ things: MadeThings) -> Bool {
         !place.isSession || things.artifacts.contains(where: place.shows)
@@ -127,7 +131,7 @@ struct MadeButton: View {
     }
 
     private func hasNew(_ things: MadeThings) -> Bool {
-        guard let last = seenTimes[place.key] else { return false }
+        guard let last = seenTimes[place.key] ?? (place.isSession ? 0 : nil) else { return false }
         return newest(things) > last
     }
 
@@ -167,6 +171,7 @@ struct MadePopover: View {
             }
         }
         .frame(width: 400, height: height)
+        #if DEBUG
         .task {
             // KUVO_DEMO_MADE=<a thing's name>: it opened, for screenshots.
             guard let name = ProcessInfo.processInfo.environment["KUVO_DEMO_MADE"], !["open", "timeline"].contains(name) else { return }
@@ -174,6 +179,7 @@ struct MadePopover: View {
                 if let found = things.artifacts.first(where: { $0.name == name }) { opened = found.header } else { try? await Task.sleep(for: .milliseconds(200)) }
             }
         }
+        #endif
         // The Timeline, while it shows (the list is followed by the button, for its dot).
         .task(id: "\(showsTimeline)|\(things.only ?? "")") {
             if showsTimeline { await things.followTimeline() }
@@ -228,14 +234,7 @@ struct MadePopover: View {
         .frame(height: 40)
     }
 
-    /// The button's own words.
-    private var heading: String {
-        switch place {
-        case .bot(let bot): "What \(bot.name) Made"
-        case .group: "What the Chat Made"
-        case .session: "What This Session Made"
-        }
-    }
+    private var heading: String { place.title }
 
     /// A coding session's code changes are in the panel.
     private var changesNote: some View {
@@ -502,7 +501,7 @@ private struct ImageGrid: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
             ForEach(shown) { image in
                 Button { open(image.header) } label: {
-                    Thumbnail(things: things, id: image.id, version: image.latest.n, side: 90)
+                    Thumbnail(things: things, id: image.id, version: image.latest.kept && image.latest.status != .deleted ? image.latest.n : nil, side: 90)
                         .aspectRatio(1, contentMode: .fit)
                         .clipShape(.rect(cornerRadius: 8))
                         .specularRim(RoundedRectangle(cornerRadius: 8), strength: 0.7)
@@ -530,7 +529,8 @@ private struct ImageGrid: View {
 private struct Thumbnail: View {
     let things: MadeThings
     let id: String
-    let version: Int
+    /// Nil for one with no copy to show (cleared, or deleted): its symbol.
+    let version: Int?
     let side: CGFloat
     var symbol = "photo"
     @State private var image: NSImage?
@@ -552,7 +552,8 @@ private struct Thumbnail: View {
                 }
             }
             .clipped()
-        .task(id: "\(id)#\(version)") {
+        .task(id: "\(id)#\(version ?? -1)") {
+            guard let version else { return }
             image = await things.thumbnail(of: id, version: version, side: side)
         }
     }
@@ -915,7 +916,7 @@ struct ArtifactDetail: View {
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(CardActionStyle())
-            .keyboardShortcut(.cancelAction)
+            .keyboardShortcut(restoring == nil ? .cancelAction : nil)
             .help("Back to \(back)")
             Text(ArtifactWords.name(header, bot: owner))
                 .font(.system(size: 13, weight: .semibold))
@@ -984,7 +985,8 @@ struct ArtifactDetail: View {
     /// change), and it's text, a picture or a PDF.
     private func comparable(_ artifact: Artifact, _ version: ArtifactVersion) -> Bool {
         guard version.status != .deleted else { return false }
-        if version.patch != nil { return true }
+        // Code git keeps has only its change, which shows whichever way.
+        if version.patch != nil { return version.kept }
         guard version.kept, let previous = previous(artifact, version), previous.kept || previous.status == .deleted else { return false }
         return artifact.type.hasPrefix("text/") || artifact.type == "application/json" || artifact.kind == .image || artifact.type == "application/pdf"
     }
@@ -1113,7 +1115,7 @@ private struct VersionBody: View {
                 notice("Deleted", symbol: "trash", "It was deleted in this version. Step back to see what it was.")
             } else if !version.kept, version.patch == nil {
                 notice(version.reason == .secret || version.reason == .ignored ? "Not Kept" : "No Copy", symbol: version.reason == .secret ? "lock" : "clock.arrow.circlepath",
-                       (version.reason ?? .cleared).words)
+                       version.reason?.words ?? (version.before == true ? "What it was before couldn’t be read." : ArtifactVersion.NoCopy.cleared.words))
             } else if let failure {
                 notice("Can’t Show It", symbol: "exclamationmark.triangle", failure)
             } else {
@@ -1192,6 +1194,8 @@ private struct VersionBody: View {
                 let cut = text.utf8.count > Self.textLimit
                 loaded = .text(cut ? String(text.prefix(Self.textLimit)) : text, cut: cut)
             } else {
+                // Not written once it's no longer shown (nothing would delete it).
+                guard !Task.isCancelled else { return }
                 loaded = .quickLook(try Self.previewFile(data, name: artifact.name, id: artifact.id, version: version.n))
             }
         } catch {

@@ -15,6 +15,8 @@ struct StorageSettings: View {
     @State private var made: ArtifactStorage?
     @State private var madeFailure: String?
     @State private var confirmingOlder = false
+    /// A smaller budget than older versions take now, waiting for your yes: it clears some.
+    @State private var lowering: Double?
     /// Whose: this Mac's box, or a machine's (each keeps its own).
     @State private var madeBox = BoxClient.mac
 
@@ -113,7 +115,10 @@ struct StorageSettings: View {
                         Text("Copies of what agents made")
                         Text("Each version of the files agents write or change, so you can see what changed and put one back. Never what looks like a secret, and only the changes for code git keeps.")
                     }
-                    Picker(selection: Binding(get: { Self.budgetChoice(made.budget) }, set: { budget in Task { await setBudget(budget) } })) {
+                    Picker(selection: Binding(get: { Self.budgetChoice(made.budget) }, set: { budget in
+                        // Less than older versions take now clears some of them: asked first.
+                        if budget < made.older { lowering = budget } else { Task { await setBudget(budget) } }
+                    })) {
                         ForEach(Self.budgets, id: \.self) { Text(Self.format(Int64($0))).tag($0) }
                     } label: {
                         Text("Older versions keep up to")
@@ -169,6 +174,11 @@ struct StorageSettings: View {
         .settingsDetail(isPresented: $cleaningUp, title: "Clean Up Old Sessions", onDismiss: { Task { await load() } }) {
             OldSessions { cleaningUp = false }
         }
+        .confirmationDialog("Keep less of older versions?", isPresented: Binding(get: { lowering != nil }, set: { if !$0 { lowering = nil } }), presenting: lowering) { budget in
+            Button("Keep up to \(Self.format(Int64(budget)))", role: .destructive) { Task { await setBudget(budget) } }
+        } message: { _ in
+            Text("Older versions take \(Self.format(Int64(made?.older ?? 0))) now, so the oldest of their copies go until they fit. The newest version of each file, memory, skills and what’s pinned stay.")
+        }
         .confirmationDialog("Clear older versions?", isPresented: $confirmingOlder) {
             Button("Clear", role: .destructive) { Task { await clearOlder() } }
         } message: {
@@ -207,11 +217,17 @@ struct StorageSettings: View {
         budgets.min { abs($0 - budget) < abs($1 - budget) } ?? budget
     }
 
-    private func loadMade() async {
+    /// What `madeBox` keeps, unless another computer was picked meanwhile; a problem said so far
+    /// stays (`keepsFailure`), for a Clear that didn't work.
+    private func loadMade(keepsFailure: Bool = false) async {
+        let asked = madeBox
         do {
-            made = try await app.box(madeBox).value(ArtifactStorage.self, "GET", "kuvo/artifacts/storage")
-            madeFailure = nil
+            let storage = try await app.box(asked).value(ArtifactStorage.self, "GET", "kuvo/artifacts/storage")
+            guard asked == madeBox else { return }
+            made = storage
+            if !keepsFailure { madeFailure = nil }
         } catch {
+            guard asked == madeBox else { return }
             if made == nil { madeFailure = error.localizedDescription }
         }
     }
@@ -227,13 +243,14 @@ struct StorageSettings: View {
     }
 
     private func clearOlder() async {
+        madeFailure = nil
         do {
             let (status, data) = try await app.box(madeBox).send("POST", "kuvo/artifacts/storage/clear", body: Data("{}".utf8))
             if !(200..<300).contains(status) { madeFailure = BoxRefusal(status: status, data: data).message }
         } catch {
             madeFailure = error.localizedDescription
         }
-        await loadMade()
+        await loadMade(keepsFailure: true)
     }
 
     private func load() async {

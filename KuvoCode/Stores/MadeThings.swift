@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 import KuvoLink
 
 /// What agents made for one conversation, bot, group chat or project, as its box's record has it
@@ -33,9 +34,14 @@ final class MadeThings {
     /// How you were looking at it: kept while the conversation shows, so the popover opens there again.
     var mode: Mode = .shelf
     var only: String? {
-        didSet { if only != oldValue { entries = []; timelineState = .loading } }
+        didSet { if only != oldValue { entries = []; timelineNext = nil; timelinePagedOn = false; timelineState = .loading } }
     }
     @ObservationIgnored private var thumbnails = NSCache<NSString, NSImage>()
+    /// Pictures that couldn't be read, not asked for again.
+    @ObservationIgnored private var unreadable = Set<String>()
+    /// Older pages read with Show More: kept when the first page comes again.
+    @ObservationIgnored private var pagedOn = false
+    @ObservationIgnored private var timelinePagedOn = false
 
     /// Whether the box streams its changes: this Mac's does; a machine's, over SSH, answers once.
     private var streams: Bool { box.box == BoxClient.mac }
@@ -48,17 +54,41 @@ final class MadeThings {
     /// The list now, and as it changes, for as long as the caller's task runs.
     func follow() async {
         await follow(stream: ArtifactList.path(scope, events: true), once: ArtifactList.path(scope), state: \.state) { (list: ArtifactList) in
-            artifacts = list.artifacts
-            next = list.next
+            take(list)
         }
     }
 
     /// The Timeline now (one bot's, with `only`), and as it changes.
     func followTimeline() async {
         await follow(stream: ArtifactTimeline.path(scope, by: only, events: true), once: ArtifactTimeline.path(scope, by: only), state: \.timelineState) { (timeline: ArtifactTimeline) in
+            take(timeline)
+        }
+    }
+
+    /// The first page, as it is now: with the older ones Show More read kept after it.
+    private func take(_ list: ArtifactList) {
+        if pagedOn {
+            artifacts = list.keeping(artifacts)
+        } else {
+            artifacts = list.artifacts
+            next = list.next
+        }
+    }
+
+    private func take(_ timeline: ArtifactTimeline) {
+        if timelinePagedOn {
+            entries = timeline.keeping(entries)
+        } else {
             entries = timeline.entries
             timelineNext = timeline.next
         }
+    }
+
+    /// The list read again now, once: after a change made here (a pin, a version put back), which a
+    /// machine's box, read every half minute, would otherwise show late.
+    func reread() async {
+        if let list = try? await box.value(ArtifactList.self, "GET", ArtifactList.path(scope)) { take(list) }
+        if timelineState == .loaded, let timeline = try? await box.value(ArtifactTimeline.self, "GET", ArtifactTimeline.path(scope, by: only)) { take(timeline) }
     }
 
     /// Older ones, after those shown.
@@ -66,12 +96,14 @@ final class MadeThings {
         guard let next, let page = try? await box.value(ArtifactList.self, "GET", ArtifactList.path(scope) + "&before=" + Self.encoded(next)) else { return }
         artifacts += page.artifacts.filter { new in !artifacts.contains { $0.id == new.id } }
         self.next = page.next
+        pagedOn = true
     }
 
     func moreTimeline() async {
         guard let timelineNext, let page = try? await box.value(ArtifactTimeline.self, "GET", ArtifactTimeline.path(scope, by: only) + "&before=" + Self.encoded(timelineNext)) else { return }
         entries += page.entries.filter { new in !entries.contains { $0.id == new.id } }
         self.timelineNext = page.next
+        timelinePagedOn = true
     }
 
     private static func encoded(_ cursor: String) -> String {
@@ -93,15 +125,20 @@ final class MadeThings {
                     self[keyPath: state] = .loaded
                 }
             } catch let refusal as BoxRefusal {
-                // An older box, without the record: said plainly, and not asked again.
+                // Asked no more (the popover closed, another bot picked): nothing went wrong.
+                if Task.isCancelled { return }
+                // An older box, without the record: said plainly, and asked again now and then,
+                // for once it's updated.
                 if refusal.status == 404 {
                     self[keyPath: state] = .failed("This computer needs an update to show what its agents made.")
-                    return
+                    try? await Task.sleep(for: .seconds(60))
+                    continue
                 }
                 if self[keyPath: state] != .loaded { self[keyPath: state] = .failed(refusal.message) }
             } catch is CancellationError {
                 return
             } catch {
+                if Task.isCancelled { return }
                 if self[keyPath: state] != .loaded { self[keyPath: state] = .failed(error.localizedDescription) }
             }
             try? await Task.sleep(for: .seconds(streams ? 3 : 30))
@@ -120,25 +157,31 @@ final class MadeThings {
         return data
     }
 
-    /// A picture's version, small (`side` points at most), kept once read.
+    /// A picture's version, small (`side` points at most), kept once read; nil, and not asked for
+    /// again, when it can't be.
     func thumbnail(of id: String, version: Int, side: CGFloat) async -> NSImage? {
-        let key = "\(id)#\(version)" as NSString
-        if let kept = thumbnails.object(forKey: key) { return kept }
-        guard let data = try? await bytes(of: id, version: version), let image = NSImage(data: data) else { return nil }
-        let small = Self.downsampled(image, side: side * 2)
-        thumbnails.setObject(small, forKey: key)
-        return small
-    }
-
-    private static func downsampled(_ image: NSImage, side: CGFloat) -> NSImage {
-        let size = image.size
-        let scale = min(1, side / max(size.width, size.height, 1))
-        guard scale < 1 else { return image }
-        let target = NSSize(width: size.width * scale, height: size.height * scale)
-        return NSImage(size: target, flipped: false) { rect in
-            image.draw(in: rect)
-            return true
+        let key = "\(id)#\(version)"
+        if let kept = thumbnails.object(forKey: key as NSString) { return kept }
+        guard !unreadable.contains(key) else { return nil }
+        guard let data = try? await bytes(of: id, version: version) else {
+            if !Task.isCancelled { unreadable.insert(key) }
+            return nil
         }
+        // Made small as it's read, away from the main thread: only the pixels it shows are kept.
+        let pixels = side * 2
+        let image = await Task.detached(priority: .utility) { () -> CGImage? in
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+            return CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                                   kCGImageSourceCreateThumbnailWithTransform: true,
+                                                                   kCGImageSourceThumbnailMaxPixelSize: pixels] as CFDictionary)
+        }.value
+        guard let image else {
+            unreadable.insert(key)
+            return nil
+        }
+        let small = NSImage(cgImage: image, size: NSSize(width: CGFloat(image.width) / 2, height: CGFloat(image.height) / 2))
+        thumbnails.setObject(small, forKey: key as NSString)
+        return small
     }
 
     /// What changed in `version`, since the one before it.
@@ -150,11 +193,14 @@ final class MadeThings {
     func pin(_ id: String, _ pinned: Bool) async throws {
         struct Pin: Encodable { var pinned: Bool }
         _ = try await box.value(Artifact.self, "POST", "kuvo/artifacts/\(id)/pin", body: Pin(pinned: pinned))
+        if !streams { await reread() }
     }
 
     /// Version `version` written back to the file; what it replaces is kept as a version first.
     func restore(_ id: String, version: Int) async throws -> Artifact {
         struct Restore: Encodable { var version: Int }
-        return try await box.value(Artifact.self, "POST", "kuvo/artifacts/\(id)/restore", body: Restore(version: version))
+        let artifact = try await box.value(Artifact.self, "POST", "kuvo/artifacts/\(id)/restore", body: Restore(version: version))
+        if !streams { await reread() }
+        return artifact
     }
 }
