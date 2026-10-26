@@ -1,4 +1,3 @@
-// @ts-nocheck
 // What this Mac's app asks of its box's link (`kuvo/link/…`)
 // Whether it's wanted and how it's doing, the phones and documents an earlier Kuvo Code kept, your
 // machines, and the letters and agents of this Mac's conversations.
@@ -25,11 +24,46 @@ import { fits, MOST_KEPT, pairPhone, removedAlready, takeOff } from "../phones";
 import { macLink, readLink, updateLink } from "../state";
 import { macKeys, macLinkCheck, tellGone } from "./link";
 import { OFFLINE_LETTER, macLetterAnswer, macSendOutbox } from "./peers";
+import type { SignedDoc } from "../../shared/documents";
+import type { Peer } from "../peers/known";
+import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
+import type { LinkState, Phone } from "../state";
+
+/** What an earlier Kuvo Code kept of this Mac's phones and documents (`kuvo/link/phones/take`'s
+ * body, from `phone-link.json`): its phones, their removals, and its documents; each checked as
+ * it's taken. */
+export interface KeptPhones {
+  phones?: unknown;
+  removed?: unknown;
+  documents?: unknown;
+}
+
+/** The phones as this Mac's app keeps a copy of them (`kuvo/link/phones` and its events): each
+ * phone, each removal, whether Settings › Phone's pairing link is still waiting, and its documents
+ * as far as they've come. */
+export interface MacPhones {
+  phones: Phone[];
+  removed: { key: string; pairing: string }[];
+  pairing: boolean;
+  documents: {
+    own: NonNullable<LinkState["own"]>;
+    held: NonNullable<LinkState["docs"]>;
+    views: NonNullable<LinkState["views"]>;
+    left: string[];
+  };
+}
+
+/** Your machines as this Mac's app last said (`setMacPeers`): link.json to write, or null for what
+ * wasn't a list; and the peers it removed now (`gone`), to tell they're let go. */
+export interface MacPeersSet {
+  link: LinkState | null;
+  gone: Peer[];
+}
 
 // Phones from where an earlier Kuvo Code kept them (`phone-link.json`), met with this box's: each
 // paired one in, unless a removal of its pairing is known; each removal noted, and taking off what
 // it removes.
-export function takePhones(link, given) {
+export function takePhones(link: LinkState, given: KeptPhones | null | undefined): LinkState {
   const phones = Array.isArray(given?.phones) ? given.phones.slice(0, 64) : [];
   const removed = Array.isArray(given?.removed) ? given.removed.slice(0, MOST_KEPT) : [];
   for (const entry of removed) if (fits(entry, []) && typeof entry.pairing === "string") takeOff(link, entry.key, entry.pairing);
@@ -40,9 +74,11 @@ export function takePhones(link, given) {
     pairPhone(link, {
       key: phone.key,
       name: String(phone.name ?? "").slice(0, 100),
-      added: Number.isFinite(phone.added) ? Math.floor(phone.added) : Math.floor(Date.now() / 1000),
+      added: Number.isFinite(phone.added) ? Math.floor(phone.added as number) : Math.floor(Date.now() / 1000),
       from: "pair",
-      ...(ADDRESS.test(phone.address ?? "") ? { address: phone.address } : {}),
+      // TODO(types): the test reads what isn't a string as its text (an array of one address passes),
+      // and that's kept as it was given.
+      ...(ADDRESS.test((phone.address ?? "") as string) ? { address: phone.address as string } : {}),
       pairing: typeof phone.pairing === "string" ? phone.pairing : "",
     });
   }
@@ -52,7 +88,7 @@ export function takePhones(link, given) {
 // The phones as the app keeps a copy of them (all of each, with where it is, and every removal),
 // and whether Settings › Phone's pairing link is still waiting (a phone came in with it, or it ran
 // out: it's done).
-const macPhones = () => {
+const macPhones = (): MacPhones => {
   const link = readLink();
   return {
     phones: link?.phones ?? [],
@@ -67,17 +103,17 @@ const macPhones = () => {
 // own has come (never back: your machines would refuse what comes next), the phones documents its
 // machines signed, how far each machine's view of your personalities has come, and the machines it
 // removed. Its machines are this box's peers by then, so what they signed is checked as it's taken.
-export function takeMacDocuments(link, given) {
+export function takeMacDocuments(link: LinkState, given: unknown): LinkState {
   if (!isObject(given)) return link;
   for (const [kind, had] of Object.entries(isObject(given.own) ? given.own : {})) {
-    if (!DOC_KINDS.includes(kind) || !isObject(had) || !Number.isSafeInteger(had.n) || had.n < 1 || had.n > MOST_COUNT) continue;
+    if (!(DOC_KINDS as readonly string[]).includes(kind) || !isObject(had) || !Number.isSafeInteger(had.n) || (had.n as number) < 1 || (had.n as number) > MOST_COUNT) continue;
     const now = link.own?.[kind];
-    if (!now || had.n > now.n) link.own = { ...(link.own ?? {}), [kind]: { n: had.n, h: String(had.h ?? ""), b: String(had.b ?? "") } };
+    if (!now || (had.n as number) > now.n) link.own = { ...(link.own ?? {}), [kind]: { n: had.n as number, h: String(had.h ?? ""), b: String(had.b ?? "") } };
   }
   for (const envelope of Object.values(isObject(given.held) ? given.held : {}).slice(0, 256)) takeDoc(link, envelope);
   for (const [origin, seen] of Object.entries(isObject(given.views) ? given.views : {}).slice(0, 256)) {
-    if (!SIGN.test(origin) || !isObject(seen) || !Number.isSafeInteger(seen.n) || seen.n < 1) continue;
-    if (!link.views?.[origin] || seen.n > link.views[origin].n) link.views = { ...(link.views ?? {}), [origin]: { n: seen.n, h: String(seen.h ?? "") } };
+    if (!SIGN.test(origin) || !isObject(seen) || !Number.isSafeInteger(seen.n) || (seen.n as number) < 1) continue;
+    if (!link.views?.[origin] || (seen.n as number) > link.views[origin].n) link.views = { ...(link.views ?? {}), [origin]: { n: seen.n as number, h: String(seen.h ?? "") } };
   }
   const left = Array.isArray(given.left) ? given.left.filter(key => typeof key === "string" && KEY.test(key)) : [];
   if (left.length) link.left = [...new Set([...(Array.isArray(link.left) ? link.left : []), ...left])].slice(-64);
@@ -91,13 +127,13 @@ export function takeMacDocuments(link, given) {
 // isn't a peer now, and nothing more; one set up again is no longer removed. One that isn't a
 // machine's record is left out (a line in the box's log says so), never the rest with it. No link
 // for what isn't a list.
-export function setMacPeers(link, given) {
+export function setMacPeers(link: LinkState, given: unknown): MacPeersSet {
   if (!isObject(given) || !Array.isArray(given.peers)) return { link: null, gone: [] };
   const now = given.peers.slice(0, MOST_PEERS).map(peer => ({ ...peer, kind: "machine" }))
     .filter(peer => fitsPeer(peer) && typeof peer.sign === "string" && SIGN.test(peer.sign)).map(cleanPeer);
   const skipped = Math.min(given.peers.length, MOST_PEERS) - now.length;
   if (skipped) console.error(`${skipped} of this Mac's machines weren't records the box could take, and were left out.`);
-  const removed = (Array.isArray(given.removed) ? given.removed : []).filter(key => typeof key === "string" && KEY.test(key) && !now.some(peer => peer.key === key));
+  const removed = (Array.isArray(given.removed) ? given.removed : []).filter((key: unknown): key is string => typeof key === "string" && KEY.test(key) && !now.some(peer => peer.key === key));
   const gone = peersOf(link).filter(peer => removed.includes(peer.key));
   const kept = (Array.isArray(link.left) ? link.left : []).filter(key => !now.some(peer => peer.key === key) && !removed.includes(key));
   link.left = [...kept, ...removed].slice(-64);
@@ -109,8 +145,8 @@ export function setMacPeers(link, given) {
 
 
 // `kuvo/link/…`, for this Mac's app.
-export async function* macLinkRoute(route, request, signal) {
-  const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
+export async function* macLinkRoute(route: string, request: LinkRequest, signal: AbortSignal | undefined): AsyncGenerator<AnswerPiece> {
+  const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const method = request.method.toUpperCase();
   switch (route) {
     case "kuvo/link/config": {
@@ -163,7 +199,7 @@ export async function* macLinkRoute(route, request, signal) {
     }
     case "kuvo/link/peers": {
       if (method !== "PUT") return yield* json(405, {});
-      let gone = [];
+      let gone: Peer[] = [];
       const changed = updateLink(link => {
         const made = setMacPeers(link ?? { phones: [] }, parsed(request.body));
         gone = made.gone;
@@ -182,7 +218,7 @@ export async function* macLinkRoute(route, request, signal) {
       // `?key=`: a machine set up again, no longer one this Mac removed.
       const again = new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").get("key");
       const library = readPersonalities();
-      let docs = [];
+      let docs: SignedDoc[] = [];
       const link = updateLink(link => {
         if (!link?.sign) return null;
         if (again && Array.isArray(link.left)) link.left = link.left.filter(key => key !== again);
@@ -263,7 +299,7 @@ export async function* macLinkRoute(route, request, signal) {
       try {
         fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
         for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
-          if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string") continue;
+          if (!isObject(letter) || !LETTER_ID.test((letter.id ?? "") as string) || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string") continue;
           const kept = { from: typeof letter.from === "string" ? letter.from : null, to: letter.to, text: cutText(letter.text), wait: false,
             at: typeof letter.at === "number" ? letter.at : now, peer: letter.peer, ...(typeof letter.answers === "string" ? { answers: letter.answers } : {}) };
           writePrivate(path.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
@@ -271,7 +307,7 @@ export async function* macLinkRoute(route, request, signal) {
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
             const seen = lettersSeen(now);
-            for (const [id, at] of Object.entries(given.seen)) if (LETTER_ID.test(id) && typeof at === "number" && now - at < LETTER_MEMORY) seen[id] = Math.max(seen[id] ?? 0, at);
+            for (const [id, at] of Object.entries(given.seen as Record<string, unknown>)) if (LETTER_ID.test(id) && typeof at === "number" && now - at < LETTER_MEMORY) seen[id] = Math.max(seen[id] ?? 0, at);
             writePrivate(LETTERS_SEEN, JSON.stringify(seen));
           });
         }
@@ -302,7 +338,7 @@ export async function* macLinkRoute(route, request, signal) {
 }
 
 // This Mac's box's link, for its app alone (PROTOCOL.md, "This Mac's box: the relay").
-export async function* linkRoute(context) {
+export async function* linkRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, route, json } = context;
   if (!IS_MAC || !request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
   return yield* macLinkRoute(route, request, signal);
