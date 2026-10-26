@@ -36,11 +36,8 @@ struct ProjectEditor: View {
     /// The machine the project's folders are on; nil for this Mac.
     @State private var machine: String?
     @State private var showsAddMachine = false
-    /// A folder being typed, on a machine (there's no Finder there to choose one in).
-    @State private var typedFolder = ""
-    @State private var isCheckingFolder = false
-    @State private var folderFailure: String?
-    @FocusState private var isFolderFocused: Bool
+    /// Choosing a folder on the machine, from its own folders, in the form's place.
+    @State private var choosesMachineFolder = false
     /// How tall the form is: the popup grows with it, up to a point, then it scrolls.
     @State private var formHeight: CGFloat = 320
 
@@ -70,6 +67,31 @@ struct ProjectEditor: View {
                 }, cancel: { withAnimation(.ui) { showsAddMachine = false } })
             }
             .frame(width: Self.width, height: 480)
+            .transition(.opacity)
+        } else if choosesMachineFolder, let machine {
+            // A folder on the machine, from its own folders: the form is as it was on coming back.
+            VStack(alignment: .leading, spacing: 4) {
+                Button { withAnimation(.ui) { choosesMachineFolder = false } } label: {
+                    Label(isNew ? "New Project" : "Edit Project", systemImage: "chevron.backward")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .buttonStyle(TextButtonStyle(outset: true))
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                Text("Add a Folder on \(app.machines.engine(machine)?.machine.name ?? machine)")
+                    .font(.title2.weight(.bold))
+                    .padding(.horizontal, 28)
+                BoxFolderBrowser(box: machine, start: folders.first.flatMap { RemoteFolder.parse($0)?.path }.map { ($0 as NSString).deletingLastPathComponent }, primary: "Add Folder") { path, _ in
+                    let folder = RemoteFolder.folder(path, on: machine)
+                    withAnimation(.ui) {
+                        if !folders.contains(folder) { folders.append(folder) }
+                        choosesMachineFolder = false
+                    }
+                } cancel: {
+                    withAnimation(.ui) { choosesMachineFolder = false }
+                }
+            }
+            .frame(width: Self.width, height: 560)
             .transition(.opacity)
         } else {
             editor
@@ -129,7 +151,7 @@ struct ProjectEditor: View {
                 }
             }
 
-            section("Folders", note: folderFailure ?? "Sessions run in the primary folder; the agent can work in the others too.", isFailure: folderFailure != nil) {
+            section("Folders", note: "Sessions run in the primary folder; the agent can work in the others too.") {
                 folderList
             }
 
@@ -293,8 +315,6 @@ struct ProjectEditor: View {
         withAnimation(.ui) {
             self.machine = machine
             folders = []
-            typedFolder = ""
-            folderFailure = nil
         }
         if let engine = app.machines.engine(machine), case .failed = engine.state { app.connect(engine) }
     }
@@ -315,60 +335,18 @@ struct ProjectEditor: View {
                 )
                 WellDivider()
             }
-            if let machine {
-                WellRow(isActive: isFolderFocused) {
+            Button {
+                if machine == nil { addFolders() } else { withAnimation(.ui) { choosesMachineFolder = true } }
+            } label: {
+                WellRow {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .medium))
                 } content: {
-                    HStack(spacing: 10) {
-                        TextField("Folder on \(machine)", text: $typedFolder, prompt: Text(folders.isEmpty ? "Folder on \(machine), like ~/projects/app" : "Another folder on \(machine)"))
-                            .textFieldStyle(.plain)
-                            .autocorrectionDisabled()
-                            .focused($isFolderFocused)
-                            .onSubmit(addTypedFolder)
-                            .onChange(of: typedFolder) { folderFailure = nil }
-                        if isCheckingFolder {
-                            Spinner(size: 16)
-                        } else if !typedFolder.trimmingCharacters(in: .whitespaces).isEmpty {
-                            Button("Add", action: addTypedFolder)
-                                .font(.subheadline.weight(.medium))
-                                .buttonStyle(TextButtonStyle(outset: true))
-                        }
-                    }
+                    Text(folders.isEmpty ? "Add Folder…" : "Add Another Folder…")
                 }
-            } else {
-                Button(action: addFolders) {
-                    WellRow {
-                        Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .medium))
-                    } content: {
-                        Text(folders.isEmpty ? "Add Folder…" : "Add Another Folder…")
-                    }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(WellRowButtonStyle())
+                .contentShape(.rect)
             }
-        }
-    }
-
-    /// Checks a typed folder on the machine, and adds it as the full path it is there.
-    private func addTypedFolder() {
-        guard let machine, !isCheckingFolder else { return }
-        let typed = typedFolder.trimmingCharacters(in: .whitespaces)
-        guard !typed.isEmpty else { return }
-        isCheckingFolder = true
-        Task {
-            let path = await Task.detached { RemoteShell.resolve(typed, on: machine) }.value
-            isCheckingFolder = false
-            guard let path else {
-                folderFailure = "There’s no folder \(typed) on \(machine), or it can’t be reached."
-                return
-            }
-            let folder = RemoteFolder.folder(path, on: machine)
-            withAnimation(.ui) {
-                if !folders.contains(folder) { folders.append(folder) }
-                typedFolder = ""
-            }
+            .buttonStyle(WellRowButtonStyle())
         }
     }
 

@@ -127,3 +127,18 @@ test("a client makes a new folder to choose, as a folder panel's New Folder does
   assert.equal(fs.existsSync(path.join(code, "nowhere")), false);
   assert.equal(link.makeFolder({ path: "trees" }).status, 400);
 });
+
+test("an MCP server's program is found where the engine would run it from, or said to be missing", () => {
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "npx"), "#!/bin/sh\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "notes.txt"), "", { mode: 0o644 });
+  const PATH = ["/nowhere", bin].join(path.delimiter);
+  assert.deepEqual(link.findProgram("kuvo/programs?name=npx", PATH), { status: 200, value: { name: "npx", path: path.join(bin, "npx") } });
+  assert.equal(link.findProgram("kuvo/programs?name=uvx", PATH).value.path, null);
+  // Not a program: there, but it can't be run.
+  assert.equal(link.findProgram("kuvo/programs?name=notes.txt", PATH).value.path, null);
+  // A path, from the home folder too.
+  assert.equal(link.findProgram(`kuvo/programs?name=${encodeURIComponent("~/bin/npx")}`, "").value.path, path.join(home, "bin", "npx"));
+  assert.equal(link.findProgram("kuvo/programs?name=", PATH).status, 400);
+});

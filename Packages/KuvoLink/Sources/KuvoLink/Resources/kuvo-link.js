@@ -33,7 +33,7 @@ export const BRIDGE_VERSION = "0.9.70";
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "agents", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "config", "config.apply",
   "engine.restart", "engine.start", "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys",
-  "mcp.catalog", "named", "personalities", "plugins.search", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
+  "mcp.catalog", "named", "personalities", "plugins.search", "programs", "providers.models", "personalities.events", "phones", "phones.pair", "projects", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",
 ];
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
@@ -2015,6 +2015,62 @@ export function makeFolder(body) {
   return { status: 200, value: { path: at } };
 }
 
+/** `kuvo/programs?name=`: where this box runs a program from, as an MCP server's command names it
+ * (`npx`, `uvx`, `docker`, or a path), found the way its engine finds one, on its PATH:
+ * `{name, path}`, `path` null for one it doesn't have. */
+export function findProgram(requestPath, PATH = process.env.PATH ?? "") {
+  const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
+  if (!name) return { status: 400, value: { message: "Name the program (name)." } };
+  const runnable = file => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (name.includes("/")) {
+    const file = name.startsWith("~/") ? path.join(os.homedir(), name.slice(2)) : name;
+    return { status: 200, value: { name, path: path.isAbsolute(file) && runnable(file) ? file : null } };
+  }
+  const found = PATH.split(path.delimiter).filter(Boolean).map(folder => path.join(folder, name)).find(runnable);
+  return { status: 200, value: { name, path: found ?? null } };
+}
+
+/** `POST kuvo/providers/models {"url", "api"?, "headers"?}`: a provider of your own's models, as
+ * its service lists them, asked from this box (so `localhost` is this computer): `{"reached":
+ * true, "models": [id…]}`, `{"reached": true, "needsKey": true}` when it wants its key first, or
+ * `{"reached": false, "message"}`. `api` "anthropic" asks as Anthropic's API does. */
+export async function providerModels(body, signal) {
+  const given = typeof body?.url === "string" ? body.url.trim() : "";
+  let base;
+  try {
+    base = new URL(given);
+    if (!["http:", "https:"].includes(base.protocol)) throw new Error();
+  } catch {
+    return { status: 400, value: { message: "Send the provider's address, starting with http:// or https://." } };
+  }
+  // Headers written out in the settings (not ones that name an environment variable).
+  const headers = Object.fromEntries(Object.entries(body?.headers && typeof body.headers === "object" ? body.headers : {})
+    .filter(([name, value]) => typeof value === "string" && !value.includes("{env:") && !value.includes("{file:") && /^[!-~]+$/.test(name)));
+  if (body?.api === "anthropic") headers["anthropic-version"] ??= "2023-06-01";
+  const address = `${base.href.replace(/\/+$/, "")}/models`;
+  let answered;
+  try {
+    answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
+  } catch (error) {
+    const timedOut = error?.name === "TimeoutError";
+    return { status: 200, value: { reached: false, message: timedOut ? "It didn't answer in time." : "Nothing answers at this address." } };
+  }
+  if (answered.status === 401 || answered.status === 403) return { status: 200, value: { reached: true, needsKey: true } };
+  if (!answered.ok) return { status: 200, value: { reached: false, message: `It answered ${answered.status} for its list of models. Check the address, often ending in /v1.` } };
+  const listed = await answered.json().catch(() => null);
+  const entries = Array.isArray(listed?.data) ? listed.data : Array.isArray(listed?.models) ? listed.models : Array.isArray(listed) ? listed : null;
+  if (!entries) return { status: 200, value: { reached: false, message: "It answered, but not with a list of models. Check the address, often ending in /v1." } };
+  const models = [...new Set(entries.map(each => (typeof each === "string" ? each : each?.id ?? each?.name)).filter(id => typeof id === "string" && id))].sort();
+  return { status: 200, value: { reached: true, models } };
+}
+
 // MARK: Plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's packages its engine can load, found from this box.
 
 // npm's registry, or a test's stand-in for it, in a test's folder only (never a machine's own).
@@ -2509,6 +2565,18 @@ export function engineHandler(readEngine = readEngineFile, info = {}, readBridge
       const method = request.method.toUpperCase();
       if (method !== "GET" && method !== "POST") return yield* json(405, {});
       const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+      return yield* json(status, value);
+    }
+    // Whether this box has an MCP server's program (PROTOCOL.md, `kuvo/programs`).
+    if (route === "kuvo/programs") {
+      if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+      const { status, value } = findProgram(request.path);
+      return yield* json(status, value);
+    }
+    // A provider of your own's models, as its service lists them to this box.
+    if (route === "kuvo/providers/models") {
+      if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+      const { status, value } = await providerModels(parsed(request.body), signal);
       return yield* json(status, value);
     }
     // Settings › Engine's plugins (PROTOCOL.md, `kuvo/plugins/search`): npm's, found from this box.
@@ -8784,7 +8852,7 @@ export function startUpdate(options = {}) {
 
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`), and its phones. The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
+export const MAC_BOX_ROUTES = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
   "kuvo/accounts/credentials", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups"];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, and a command stopped,

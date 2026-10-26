@@ -6,6 +6,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Adding a project's folder on a machine, in New Project or Edit Project, shows the machine's own folders to pick from, as on your phone, rather than a box to type its path in.
+- In Settings › MCP Servers, paste a server's setup from its README (the JSON other apps use, or a `claude mcp add` line) into its name or command, and its command, URL and keys fill in. The editor shows how the server stands, says whether the computer has the program its command runs (and what it comes with when it hasn't), and chooses its working folder with a folder panel.
+- A rule's or block's pattern in Settings › Permissions has a menu beside it with what fits: the computer's subagents, skills, providers and MCP servers, a folder, or the commands and files people set rules for most.
+- A provider of your own checks its address as you type it, from the computer it runs on, and says whether it answers; pick its models from the list it gives, or fill the address in for Ollama, LM Studio, llama.cpp or vLLM from the menu beside it.
 - Settings › Worktrees has a folder menu in place of a text box: Kuvo Code's own folder, or **Choose a Folder…**, which on a machine shows that machine's folders. Under it, each project shows the real folder its new worktrees go in, and says so when that folder is inside the project's repository or can't be made.
 - Settings › Engine's **Add Plugin…** finds plugins on npm as you type, the most used first, or takes a folder of your own. Each plugin says whether it loaded, is installing, or why it didn't, like a name npm doesn't have.
 - Agents make a live chart, diagram or something to try in the conversation when it shows something better than words (how code fits together, numbers they measured, options side by side, a value to tune), and not for what a sentence says; a plain choice comes as a question card instead. On your phone, they keep it narrow and tappable.

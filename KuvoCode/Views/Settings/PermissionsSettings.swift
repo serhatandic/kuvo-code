@@ -1,3 +1,4 @@
+import AppKit
 import OpenCodeKit
 import SwiftUI
 
@@ -256,6 +257,9 @@ struct RulesEditor: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(\.editedConfig) private var edited
+    @Environment(Catalog.self) private var catalog
+    /// The computer's skills, by name, for a rule's pattern menu.
+    @State private var skills: [String] = []
     /// Rules being added, until each has a pattern: a half-made rule never changes what the
     /// agent may do.
     @State private var drafts: [Draft] = []
@@ -299,7 +303,7 @@ struct RulesEditor: View {
                 let index = row.index
                 if let rule = items[index].rule {
                     RuleRow(rule: rule, actions: actions, effects: effects, prompt: prompt ?? Self.example(for: rule.action),
-                            problem: { Self.problem(of: $0, hiding: hiding) }) { changed in
+                            suggestions: suggestions(for: rule.action), problem: { Self.problem(of: $0, hiding: hiding) }) { changed in
                         change(index, from: rule, to: changed)
                     } typed: { text in
                         // A draft keeps up with every key, for its Create; without spaces around
@@ -313,7 +317,7 @@ struct RulesEditor: View {
             // write what it shows as it goes, after it's out of the list.
             ForEach(drafts) { draft in
                 RuleRow(rule: draft.rule, actions: actions, effects: effects, prompt: prompt ?? Self.example(for: draft.rule.action),
-                        isNew: true, focusesOnAppear: focused == draft.id, problem: { Self.problem(of: $0, hiding: hiding) }) { changed in
+                        suggestions: suggestions(for: draft.rule.action), isNew: true, focusesOnAppear: focused == draft.id, problem: { Self.problem(of: $0, hiding: hiding) }) { changed in
                     guard let index = drafts.firstIndex(where: { $0.id == draft.id }) else { return }
                     if let changed { drafts[index].rule = changed } else { drafts.remove(at: index) }
                 } typed: { text in
@@ -330,6 +334,37 @@ struct RulesEditor: View {
         .onChange(of: drafts) {
             guard config.isDraft else { return }
             config.setItems(drafts.map(\.rule.json), at: [Self.pendingKey] + path)
+        }
+        .task(id: app.isReady(box)) {
+            skills = ((try? await app.api(for: box)?.skills()) ?? []).map(\.name).sorted()
+        }
+    }
+
+    /// What a rule for `action` can name, from what this computer has: its subagents, skills,
+    /// providers and servers, a folder, or the patterns people use most.
+    private func suggestions(for action: String) -> [PatternSuggestion] {
+        let servers = (config.value(at: MCPSettings.path)?.object?.keys.map { $0 } ?? []).filter { !MCPSettings.builtIn.contains($0) }.sorted()
+        switch action {
+        case "shell":
+            return [.init("Pushing with git", "git push *"), .init("Committing", "git commit *"), .init("Deleting files", "rm *"), .init("Installing packages", "npm install *")]
+        case "edit", "read":
+            return [.init("Environment files", "*.env"), .init("Keys and certificates", "*.pem"), .init("Lock files", "*.lock")]
+        case "external_directory":
+            return [.init("Downloads", "~/Downloads/*"), .init("Temporary files", "/tmp/*")] + (box.machine == nil ? [PatternSuggestion.folder] : [])
+        case "webfetch":
+            return [.init("GitHub", "https://github.com/*"), .init("Any http address", "http://*")]
+        case "subagent":
+            return catalog.agents.filter { !$0.isPrimary && !$0.hidden }.map { .init($0.name, $0.id) }
+        case "skill":
+            return skills.map { .init($0, $0) }
+        case "provider.use":
+            return catalog.providers.map { .init($0.name, $0.id) }
+        case "integration.use":
+            return servers.map { .init("\($0) (MCP server)", "mcp:\($0)") } + skills.map { .init("\($0) (skill)", "skill:\($0)") }
+        case "tool.use":
+            return [.init("Pushing with git", "shell:git push *"), .init("Deleting files", "shell:rm *"), .init("Opening web pages", "webfetch:*")]
+        default:
+            return []
         }
     }
 
@@ -398,6 +433,8 @@ private struct RuleRow: View {
     let actions: [(id: String, title: String)]
     let effects: [PermissionRule.Effect]
     let prompt: String
+    /// What its pattern can be, from what the computer has, in a menu beside it.
+    var suggestions: [PatternSuggestion] = []
     /// Not saved yet: it's kept as typed until it can be.
     var isNew = false
     /// Takes the cursor as it shows (one just added).
@@ -450,6 +487,30 @@ private struct RuleRow: View {
                         }
                     }
                     .onChange(of: resource) { typed(resource) }
+                if !suggestions.isEmpty {
+                    Menu {
+                        ForEach(suggestions) { suggestion in
+                            if suggestion.isFolder {
+                                Divider()
+                                Button("Choose a Folder…", action: chooseFolder)
+                            } else {
+                                Button {
+                                    pick(suggestion.pattern)
+                                } label: {
+                                    Text(suggestion.title)
+                                    Text(suggestion.pattern)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("What it can be")
+                    .accessibilityLabel("Choose a pattern")
+                }
                 Picker("Effect", selection: Binding(get: { rule.effect }, set: { change(PermissionRule(action: rule.action, resource: pattern, effect: $0)) })) {
                     ForEach(effects, id: \.self) { Text(Self.title(of: $0)).tag($0) }
                 }
@@ -489,6 +550,24 @@ private struct RuleRow: View {
         .onDisappear(perform: save)
     }
 
+    /// A pattern from the menu, in place of what's typed, saved as Return saves it.
+    private func pick(_ pattern: String) {
+        resource = pattern
+        typed(pattern)
+        save()
+    }
+
+    /// A folder on this Mac, and what's in it.
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder the rule is for."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        pick(BoxPaths.setting(url.path, home: NSHomeDirectory()) + "/*")
+    }
+
     private func save() {
         if isNew { return commit() }
         let value = resource.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -509,4 +588,24 @@ private struct RuleRow: View {
         case .deny: "Don't Allow"
         }
     }
+}
+
+/// Something a rule's pattern can be, as its menu offers it: a pattern with what it means, or a
+/// folder to choose.
+struct PatternSuggestion: Identifiable {
+    let title: String
+    let pattern: String
+    var isFolder = false
+    var id: String { isFolder ? "\u{1}folder" : pattern }
+
+    init(_ title: String, _ pattern: String) {
+        self.title = title
+        self.pattern = pattern
+    }
+
+    static let folder: PatternSuggestion = {
+        var folder = PatternSuggestion("Choose a Folder…", "")
+        folder.isFolder = true
+        return folder
+    }()
 }
