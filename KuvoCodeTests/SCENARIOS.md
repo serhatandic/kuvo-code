@@ -31,6 +31,7 @@ for Linux's tools).
 | B14 Switch model mid-conversation, or elsewhere, to a coding agent too | SessionsTests, MoveToAgentsTests | |
 | The coding agents (Claude Code, Codex, Cursor, Grok, Antigravity): a turn's replies and steps, Stop, permissions in each mode (Ask First, Approve All, Plan, your Blocks), its usage and how full its context is | Agents/test: claude, codex, cursor and acp tests, each with a stand-in for the agent's program | the agents' own programs and accounts (the end-to-end runs) |
 | B16 Find in a long conversation | ConversationFindTests | |
+| Scroll to the End, also while a flick of the trackpad still glides | | all of it: a trackpad's scrolling (its phases, a glide) can't be given to a window the tests make, so it's tried by hand |
 | B19 A subagent at work, in the background too | SubagentsAtWorkTests | |
 | B17 A folder that isn't a git repository | SessionEditsTests | |
 | B18 Rename, archive, restore, delete, search | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |

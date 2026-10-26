@@ -153,8 +153,17 @@ struct ConversationScroll<Rows: View>: View {
             ScrollAnchor.shownAnchor = anchor
         }
         #endif
-        .onScrollPhaseChange { _, phase in
+        .onScrollPhaseChange { _, phase, context in
             scrolling.isOn = phase != .idle
+            // Taken in hand on the way to the end: where it goes is yours again.
+            if phase == .tracking || phase == .interacting { scrolling.goesToEnd = false }
+            // Its button's way to the end is over, with the glide it stopped: at the end, wherever
+            // the rows measured on the way moved it.
+            if phase == .idle, scrolling.goesToEnd {
+                scrolling.goesToEnd = false
+                let geometry = context.geometry
+                if scroller.followsEnd, abs(geometry.contentSize.height - geometry.visibleRect.maxY) > 1 { toEnd(proxy) }
+            }
             #if DEBUG
             ScrollFrameMonitor.shared.scrolling(phase != .idle)
             #endif
@@ -179,7 +188,7 @@ struct ConversationScroll<Rows: View>: View {
             // the row's old room, and following "the bottom" lands below the rows, looking at
             // nothing, each time a little less. So first to the row's top, which is where it's
             // laid out, so the rows from there are measured, then to the end.
-            if anchor.stack == nil, let folded = fold.folded, folded.until > .now, !scrolling.isOn,
+            if anchor.stack == nil, let folded = fold.folded, folded.until > .now, !scrolling.isYours,
                new.isPastEnd || (scroller.followsEnd && old.height - new.height > new.visible) {
                 fold.folded = nil
                 endFollower.settle {
@@ -199,7 +208,7 @@ struct ConversationScroll<Rows: View>: View {
             let resizing = new.width != old.width && (anchor.scrollView?.window?.inLiveResize ?? false)
             if new.width != old.width, !resizing { makeSureOfRows(proxy) }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
-            if new.isPastEnd, !scrolling.isOn {
+            if new.isPastEnd, !scrolling.isYours {
                 if resizing {
                     anchor.scroll(to: nil)
                     endFollower.follow { settled in if settled { toEnd(proxy) } }
@@ -210,13 +219,14 @@ struct ConversationScroll<Rows: View>: View {
             }
             // Your scrolling decides; growth below the fold doesn't. Set only when it changes: each
             // setting draws the conversation again, and this runs on every frame of a scroll.
-            if scrolling.isOn { scroller.follow(new.atEnd) }
+            // (Not on its way to the end from its button: the rest of a glide doesn't decide.)
+            if scrolling.isYours { scroller.follow(new.atEnd) }
             // Shrinking too: the lazy stack's first guess at the height can be too big, and a
             // conversation would then open part of the way up.
-            guard scroller.followsEnd, !scrolling.isOn, new.height != old.height else { return }
+            guard scroller.followsEnd, !scrolling.isYours, new.height != old.height else { return }
             endFollower.follow { settled in
                 // Later, you may have started scrolling meanwhile.
-                guard scroller.followsEnd, !scrolling.isOn else { return }
+                guard scroller.followsEnd, !scrolling.isYours else { return }
                 if resizing, !settled { anchor.scroll(to: nil) } else { toEnd(proxy) }
             }
         }
@@ -234,6 +244,12 @@ struct ConversationScroll<Rows: View>: View {
             // Scrolled up: a way back to the newest, which also follows it again.
             if !scroller.followsEnd {
                 Button {
+                    // Gliding on from a flick too: the rest of the glide is let go, rather than
+                    // carrying it away from the end again.
+                    if scrolling.isOn {
+                        scrolling.goesToEnd = true
+                        anchor.dropGlide()
+                    }
                     scroller.toEnd(animated: true)
                 } label: {
                     Image(systemName: "arrow.down")
@@ -431,6 +447,10 @@ final class FoldWatch {
 /// Set while you scroll, read by the handlers only.
 final class ScrollingFlag {
     var isOn = false
+    /// Sent to the end by its button while it scrolled: the scroll that's left is its, not yours.
+    var goesToEnd = false
+    /// You're scrolling: not the end's button finishing a scroll you'd started.
+    var isYours: Bool { isOn && !goesToEnd }
 }
 
 /// Whether the end is in view, and how tall the conversation is.
@@ -737,6 +757,33 @@ final class ScrollAnchor {
     func scroll(by distance: CGFloat) {
         guard let scrollView else { return }
         scroll(to: max(0, scrollView.contentView.bounds.origin.y + distance))
+    }
+
+    /// What's left of a glide from a flick of the trackpad, let go: its steps aren't scrolled, its
+    /// end still is (so the scroll view knows it's over). Until the next scroll of yours.
+    func dropGlide() {
+        guard glideMonitor == nil, let window = scrollView?.window else { return }
+        glideMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self, weak window] event in
+            guard let self else { return event }
+            // A scroll of yours (anywhere), the glide's end, or the window gone: no more to drop.
+            let momentum = event.momentumPhase
+            if window == nil || momentum.isEmpty || momentum.contains(.ended) || momentum.contains(.cancelled) {
+                self.stopDroppingGlide()
+                return event
+            }
+            return event.window === window ? nil : event
+        }
+    }
+
+    private var glideMonitor: Any?
+
+    private func stopDroppingGlide() {
+        if let glideMonitor { NSEvent.removeMonitor(glideMonitor) }
+        glideMonitor = nil
+    }
+
+    isolated deinit {
+        stopDroppingGlide()
     }
 
     /// To `y` in the conversation (nil: its end).
