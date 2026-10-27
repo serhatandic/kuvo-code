@@ -51,7 +51,12 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
   }
   const agents = (() => { try { return bridge(); } catch { return null; } })();
   if (agents) places.push({ name: "agents", target: agents });
-  const listed = (await Promise.all(places.map(place => rootSessions(place.target).then(sessions => sessions.map(session => ({ session, place })), () => []))))
+  // Where a list can't be read now (an engine restarting), what was kept from it stays.
+  const read = new Set<string>();
+  const listed = (await Promise.all(places.map(place => rootSessions(place.target).then(sessions => {
+    read.add(place.name);
+    return sessions.map(session => ({ session, place }));
+  }, () => []))))
     .flat()
     // Not one a group chat or the coding agents run for a seat or a turn: they show where they run.
     .filter(({ session }) => !isHiddenRun(session))
@@ -68,7 +73,7 @@ export async function* searchRoute(context: RouteContext): AsyncGenerator<Answer
       results.push({ session: session.id, snippet: snippet(text.text, at, wanted.length), info: session });
     }
   }
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))));
+  forgetGone(read, new Set(listed.map(({ session, place }) => key(place.name, session.id))));
   return yield* json(200, { results } satisfies SearchFound);
 }
 
@@ -115,12 +120,14 @@ function toDisk(name: string, kept: Kept) {
   } catch {}
 }
 
-/** Sessions gone since (deleted, moved away) aren't kept, here or in the folder. */
-function forgetGone(known: Set<string>) {
-  for (const name of texts.keys()) if (!known.has(name)) texts.delete(name);
+/** Sessions gone since (deleted, moved away) from the places whose lists were `read` aren't kept,
+ * here or in the folder. */
+function forgetGone(read: Set<string>, known: Set<string>) {
+  const gone = (name: string) => read.has(name.slice(0, name.indexOf("."))) && !known.has(name);
+  for (const name of texts.keys()) if (gone(name)) texts.delete(name);
   try {
     for (const file of fs.readdirSync(SEARCH)) {
-      if (file.endsWith(".json") && !known.has(file.slice(0, -5))) fs.rmSync(path.join(SEARCH, file), { force: true });
+      if (file.endsWith(".json") && gone(file.slice(0, -5))) fs.rmSync(path.join(SEARCH, file), { force: true });
     }
   } catch {}
 }

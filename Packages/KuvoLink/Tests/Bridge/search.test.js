@@ -50,7 +50,10 @@ async function engine(t, sessions, conversations) {
       const data = all.slice(from, from + limit);
       return { data, cursor: from + limit < all.length ? { next: String(from + limit) } : null };
     };
-    if (url.pathname === "/api/session") return reply(paged(sessions.list.filter(each => !each.parentID), 100));
+    if (url.pathname === "/api/session") {
+      if (sessions.fails) return response.writeHead(500).end("{}");
+      return reply(paged(sessions.list.filter(each => !each.parentID), 100));
+    }
     const messages = /^\/api\/session\/([^/]+)\/message$/.exec(url.pathname);
     // Newest first, as the engine pages them.
     if (messages) return reply(paged([...(conversations[decodeURIComponent(messages[1])] ?? [])].reverse(), 200));
@@ -141,3 +144,28 @@ test("every session is searched and every page of a long conversation, and each 
   assert.equal(box.asked.filter(url => url.includes("ses_many129/message")).length, 3, "read once, page by page");
 });
 
+
+test("a list that can't be read keeps what was kept, and a session gone takes its words with it", async t => {
+  const sessions = { list: [session("ses_kept", "Login", 30), session("ses_gone", "Theme", 20)] };
+  const box = await engine(t, sessions, {
+    ses_kept: conversation("kept", "The sign-in form forgets the email", "Fixed."),
+    ses_gone: conversation("gone", "Add a dark theme", "Done."),
+  });
+  const folder = path.join(home, "search");
+  const kept = id => fs.readdirSync(folder).some(file => file.includes(id));
+  const reads = () => box.asked.filter(url => url.includes("/message")).length;
+  assert.deepEqual((await box.search("e")).found, ["ses_kept", "ses_gone"]);
+  assert.equal(reads(), 2);
+  // The engine can't list them for a moment (restarting): nothing is found, nothing forgotten.
+  sessions.fails = true;
+  assert.deepEqual((await box.search("email")).found, []);
+  assert.ok(kept("ses_kept") && kept("ses_gone"));
+  sessions.fails = false;
+  assert.deepEqual((await box.search("email")).found, ["ses_kept"]);
+  assert.equal(reads(), 2, "not read again");
+  // Deleted: its words go from the folder.
+  sessions.list = [session("ses_kept", "Login", 30)];
+  await box.search("email");
+  assert.ok(kept("ses_kept"));
+  assert.ok(!kept("ses_gone"));
+});

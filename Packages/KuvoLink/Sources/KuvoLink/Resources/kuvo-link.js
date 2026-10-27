@@ -8291,7 +8291,11 @@ async function* searchRoute(context) {
   })();
   if (agents)
     places.push({ name: "agents", target: agents });
-  const listed = (await Promise.all(places.map((place) => rootSessions(place.target).then((sessions) => sessions.map((session) => ({ session, place })), () => [])))).flat().filter(({ session }) => !isHiddenRun(session)).sort((one, other) => other.session.time.updated - one.session.time.updated);
+  const read = new Set;
+  const listed = (await Promise.all(places.map((place) => rootSessions(place.target).then((sessions) => {
+    read.add(place.name);
+    return sessions.map((session) => ({ session, place }));
+  }, () => [])))).flat().filter(({ session }) => !isHiddenRun(session)).sort((one, other) => other.session.time.updated - one.session.time.updated);
   const wanted = fold(words);
   const results = [];
   for (let start = 0;start < listed.length && results.length < limit; start += 4) {
@@ -8304,7 +8308,7 @@ async function* searchRoute(context) {
       results.push({ session: session.id, snippet: snippet(text.text, at, wanted.length), info: session });
     }
   }
-  forgetGone(new Set(listed.map(({ session, place }) => key(place.name, session.id))));
+  forgetGone(read, new Set(listed.map(({ session, place }) => key(place.name, session.id))));
   return yield* json(200, { results });
 }
 var key = (place, id) => `${place}.${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -8345,13 +8349,14 @@ function toDisk(name, kept) {
     fs40.writeFileSync(path40.join(SEARCH, name + ".json"), JSON.stringify(kept));
   } catch {}
 }
-function forgetGone(known) {
+function forgetGone(read, known) {
+  const gone = (name) => read.has(name.slice(0, name.indexOf("."))) && !known.has(name);
   for (const name of texts.keys())
-    if (!known.has(name))
+    if (gone(name))
       texts.delete(name);
   try {
     for (const file of fs40.readdirSync(SEARCH)) {
-      if (file.endsWith(".json") && !known.has(file.slice(0, -5)))
+      if (file.endsWith(".json") && gone(file.slice(0, -5)))
         fs40.rmSync(path40.join(SEARCH, file), { force: true });
     }
   } catch {}
@@ -8708,7 +8713,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.87";
+var BRIDGE_VERSION = "0.9.88";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -10510,7 +10515,7 @@ async function box(command) {
         }
       }
       const body = Buffer.concat(chunks);
-      const text = !type || type.startsWith("text/") || type.includes("json");
+      const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
     case "reconnect": {
@@ -10660,6 +10665,14 @@ async function setup() {
     sign: ownSign(link),
     docs: setupDocs(link)
   }));
+}
+function isUTF8(bytes) {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function setupDocs(link) {
   const state = { link, library: readPersonalities() };
