@@ -1,13 +1,14 @@
 import Foundation
 import Observation
 
-/// The welcome screen's model. Detection only looks at what's on this Mac. Connect turns on the
+/// Turning the panel on, the first time (fork change: the host's first launch does it, in place of
+/// OpenUsage's welcome window). Detection only looks at what's on this Mac. Connect turns on the
 /// chosen providers and refreshes them one at a time, so at most one macOS access popup is up.
 @MainActor @Observable
 final class FirstLaunchSetup {
     private static let pendingKey = "openusage.onboarding.welcomePending"
 
-    /// The welcome screen shows on every launch until the user finishes it. An install that already
+    /// Pending on every launch until the panel is turned on. An install that already
     /// saved a provider choice skips it: an unbundled `swift run` reports a fresh install every time.
     static func markPending(defaults: UserDefaults = .standard) {
         guard ProviderEnablementStore(defaults: defaults).enabledIDs == nil else { return }
@@ -39,18 +40,13 @@ final class FirstLaunchSetup {
     private let cards: [ProviderRuntime]
     private let enablement: ProviderEnablementStore
     private let dataStore: WidgetDataStore
-    /// Fork addition: whether the host has the provider's account connected; the welcome offers
-    /// only those.
+    /// Fork addition: whether the host has the provider's account connected; only those are chosen.
     private let isConnected: (String) -> Bool
     private(set) var choices: [Choice]
     var selectedIDs: Set<String> = []
-    var showAll = false
     private(set) var isDetecting = true
     private(set) var isConnecting = false
     private(set) var hasAttemptedConnection = false
-    var visibleChoices: [Choice] { choices.filter { isConnected($0.id) && (showAll || $0.detected) } }
-    /// Fork addition: no account in the host to follow at all.
-    var hasNothingConnected: Bool { !choices.contains { isConnected($0.id) } }
     var hasFailures: Bool {
         choices.contains { if case .failed = $0.connection { true } else { false } }
     }

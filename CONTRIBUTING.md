@@ -304,6 +304,10 @@ when you're there to answer.
 | `KUVO_DEMO_RAIL` | With the model picker open on its list: show this entry of its rail (`★`, `auto`, or a provider's ID such as `claude-code`) |
 | `KUVO_DEMO_PICK` | With the model picker open: pick this model (`provider/model`) a moment later, as a click would |
 | `KUVO_DEMO_USAGE` | Open the menu bar's usage panel on `dashboard`, `customize` or `settings`; `off` to leave the usage tracker out; `sample` to leave it out and give paired phones sample numbers |
+| `KUVO_DEMO_ONBOARDING` | Show the first launch from a step: `loader`, `subscriptions` or `screenAccess` |
+| `KUVO_DEMO_LOADER` | With `KUVO_DEMO_ONBOARDING=loader`: hold the bots' loader at a share of the way (`0.4`), or `failed` or `offline` |
+| `KUVO_DEMO_SCREEN_ACCESS` | What macOS says of Screen Recording and Accessibility, for the first launch's last step: the allowed ones (`screenRecording,accessibility`), or `none` |
+| `KUVO_DEMO_OPENCODE_AUTH` | An opencode `auth.json` of your own for the first launch to find, in place of `~/.local/share/opencode/auth.json` |
 | `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `passwords` and so on; `permissions@<machine>` for a machine's |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
 | `KUVO_DEMO_DISCONNECT` | Don't connect to this machine, as after Disconnect, so this copy reaches it only through the relay (set it up in an earlier launch) |
