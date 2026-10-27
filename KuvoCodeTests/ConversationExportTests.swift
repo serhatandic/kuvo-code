@@ -42,6 +42,7 @@ import Testing
             Self.reply("m2", [Self.tool("read", ["filePath": "/p/App.swift"]), Self.tool("bash", ["command": "swift test", "description": "Run tests"]), Self.text("All good.")]),
             Self.user("m3", AgentMail.compose(from: "Ada", session: "ses_ada", text: "Can you review?", waits: false)),
             Self.user("m4", Wakes.marker + "Check the build"),
+            Self.user("m5", SentWithKeyword.message("check CI", typed: "/loop every hour")),
         ])
         let markdown = ConversationExport.markdown(title: "Fix the app", messages: messages, directory: "/p")
         #expect(markdown.hasPrefix("# Fix the app\n"))
@@ -51,6 +52,9 @@ import Testing
         #expect(markdown[steps.upperBound...].contains("\n\nAll good."))
         #expect(markdown.contains("**Message from Ada**\n\nCan you review?"))
         #expect(markdown.contains("**Wake-up**\n\nCheck the build"))
+        // Sent with a keyword: as you typed it, without the note the agent reads.
+        #expect(markdown.contains("**You**\n\n/loop every hour check CI"))
+        #expect(!markdown.contains("<sent-with>"))
         #expect(!markdown.contains("<review-comments>") && !markdown.contains("<attached-files>"))
     }
 

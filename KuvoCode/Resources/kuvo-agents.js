@@ -1320,6 +1320,10 @@ var skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", "
 var clockSlack = 2000;
 var walkLimit = 20000;
 var fileLimit = 200;
+function ownFolders2() {
+  const agents = process.env.KUVO_AGENTS_HOME;
+  return [process.env.KUVO_HOME, agents ? dirname2(agents) : undefined].filter((folder) => !!folder);
+}
 function repositoryOf(folder) {
   for (let at = folder;; at = dirname2(at)) {
     if (existsSync3(join5(at, ".git")))
@@ -1330,13 +1334,14 @@ function repositoryOf(folder) {
 }
 function changedSince(folder, since, keep = () => true) {
   const top = repositoryOf(folder);
-  const candidates = top ? fromGit(top, folder) : walk(folder);
+  const own = ownFolders2().filter((inside) => inside.startsWith(folder + sep4));
+  const candidates = top ? fromGit(top, folder) : walk(folder, own);
   const found = [];
   for (const path of candidates) {
     if (found.length >= fileLimit)
       break;
     const relative2 = path.slice(folder.length + 1);
-    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)))
+    if (!keep(relative2) || relative2.split(sep4).some((part) => skipped.has(part)) || own.some((inside) => path.startsWith(inside + sep4)))
       continue;
     try {
       const stat = statSync3(path);
@@ -1368,7 +1373,7 @@ function fromGit(top, folder) {
   }
   return paths.filter((path) => path.startsWith(folder + sep4));
 }
-function walk(folder) {
+function walk(folder, own = []) {
   const files = [];
   let looked = 0;
   const visit = (at) => {
@@ -1390,9 +1395,10 @@ function walk(folder) {
       } catch {
         continue;
       }
-      if (stat.isDirectory())
-        visit(path);
-      else if (stat.isFile())
+      if (stat.isDirectory()) {
+        if (!own.includes(path))
+          visit(path);
+      } else if (stat.isFile())
         files.push(path);
     }
   };
@@ -8849,6 +8855,7 @@ import { homedir as homedir2 } from "os";
 import { join as join18 } from "path";
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join18(homedir2(), ".local/bin"), join18(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
+var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 
 class CodexAgent {
   context;
@@ -8953,7 +8960,7 @@ class CodexAgent {
       throw new Error(`Install Codex first: ${this.install}`);
     if (this.instance.home && !onMachine)
       shadowHome(this.instance.home);
-    const rpc = new RPC([executable, "app-server"], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined });
+    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined });
     rpc.onNotification = (method, params) => this.notification(method, params);
     rpc.onRequest = (method, params, id) => this.request(method, params, id);
     rpc.onExit = () => {
@@ -13903,7 +13910,7 @@ function promptFile(file) {
 function ownWords(message) {
   let text2 = message.trimEnd();
   for (;; ) {
-    const tag = ["attached-files", "review-comments", "named-agents"].find((name) => text2.endsWith(`
+    const tag = ["from-phone", "attached-files", "review-comments", "named-agents", "from-widget", "sent-with"].find((name) => text2.endsWith(`
 </${name}>`));
     if (!tag)
       return text2;
@@ -19002,4 +19009,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 34bc9d8c7fbc4829a6afb5fcea107d4febaec6664cb90fbc27233e66b7966593
+// Built from Packages/Box/src/agents c416aa40cbfefc43ad91fb670edb5d3a479b5209c53b78101b507573d2dd2e3b

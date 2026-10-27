@@ -172,3 +172,33 @@ import ClientText
         #expect(FileAddresses.route("/tmp/a&b.txt", max: 100) == "kuvo/file?uri=file:///tmp/a%26b.txt&max=100")
     }
 }
+
+/// The words in a message field changed by the app: the caret goes where you'd go on typing.
+@Suite struct TextChangeTests {
+    @Test func aDraftBroughtBackIntoAnEmptyFieldPutsTheCaretAfterIt() {
+        let change = TextChange(from: "", to: "Check the long break")
+        #expect(change.caret(movedFrom: 0) == 20)
+    }
+
+    @Test func aNamePickedFromTheListPutsTheCaretAfterItsSpace() {
+        let change = TextChange(from: "Ask &Fi", to: "Ask &Finance ")
+        #expect(change.range == NSRange(location: 7, length: 0))
+        #expect(change.replacement == "nance ")
+        #expect(change.caret(movedFrom: 7) == 13)
+    }
+
+    @Test func wordsPutBackInFrontKeepTheCaretWhereYouWereTyping() {
+        // Edit, Undo, a message that didn't go: it comes back ahead of what's written.
+        let change = TextChange(from: "and the docs", to: "Fix the build\n\nand the docs")
+        #expect(change.caret(movedFrom: 12) == 27)
+        #expect(change.caret(movedFrom: 4) == 19)
+    }
+
+    @Test func aCaretBeforeTheChangeStaysAndOneInItGoesAfterWhatCameIn() {
+        let change = TextChange(from: "one [Image 1] two", to: "one  two")
+        #expect(change.caret(movedFrom: 2) == 2)
+        #expect(change.caret(movedFrom: 8) == 4)
+        #expect(change.caret(movedFrom: 15) == 6)
+    }
+}
+

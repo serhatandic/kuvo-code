@@ -37,6 +37,11 @@ extension PhoneLink {
             default: app.startEngine(engine)
             }
             return (200, Self.json(["machine": Self.machineEntry(engine)]))
+        // Make This Mac Its Home: this Mac runs it from now on, in place of the Mac that does.
+        case ("POST", "home", 4):
+            guard !engine.isReady || engine.isAnotherMacsEngine else { return (409, Self.message("This Mac runs \(machine.name) already.")) }
+            if let why = await app.makeHome(engine) { return (409, Self.message(why)) }
+            return (200, Self.json(["machine": Self.machineEntry(engine)]))
         case ("POST", "same-as", 4):
             guard let other = (body["other"] as? String).flatMap({ app.machines.engine($0) }), other.machine.id != machine.id else { return (404, Data()) }
             guard app.machines.sameComputer(machine.id, as: other.machine.id) else {
@@ -92,6 +97,8 @@ extension PhoneLink {
         ]
         if let failure = engine.failure { entry["failure"] = failure }
         if let offer = engine.offer { entry["action"] = offer.rawValue }
+        // Another Mac runs it: that Mac (its name where its start noted one), as `kuvo/info`'s `home`.
+        if let other = engine.otherMac { entry["home"] = other.name.map { ["name": $0] } ?? [:] }
         return entry
     }
 

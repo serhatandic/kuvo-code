@@ -21,6 +21,18 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 `kuvo/accounts/found` (`Found`), and the rows offered from it, each with the one thing it needs
 (`Offers`). The Mac's first launch and the phone's sheet after pairing a computer offer the same.
 
+## ClientSessions
+
+What a client shows of a computer's sessions, the same in both apps. Rules only, on OpenCodeKit's
+`Session`: no views, no app state.
+
+- `HiddenSessions`: what's kept out of sight (a group chat's seat, the engine's run for a coding
+  agents' session).
+- `ReadState`: which sub-sessions are new (finished since you were last in them, or in the session
+  at the top of their chain), what reading a session reads with it (its finished sub-sessions, all
+  the way down), and a read elsewhere taken when it's later.
+- `UnsearchedReason`: why a computer's conversations weren't searched, in the words both apps show.
+
 ## ClientDesign
 
 The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the

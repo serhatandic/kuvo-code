@@ -95,6 +95,23 @@ import Testing
         try await until { engine.requests("POST", "/api/session/ses_tests/view").first?.body["idle"] as? Double == 22 }
     }
 
+    /// A sub-session finished since you read its session: its computer's name in the strip says
+    /// there's something new, as its folded row does.
+    @Test func aComputerWithANewSubSessionHasSomethingNew() async throws {
+        defer { engine.stop() }
+        let app = AppModel()
+        app.workspace.api = engine.api
+        engine.list([
+            session("ses_timer", "Timer cycle", created: 1, idle: 5, viewed: 5),
+            session("ses_find", "Find the timer", parent: "ses_timer", created: 10, idle: 12, viewed: 4),
+        ])
+        await app.workspace.refresh()
+        #expect(app.workspace.session("ses_timer")?.isUnread == false)
+        #expect(app.news(on: SidebarBox(directory: folder)) == .new)
+        app.workspace.markViewed("ses_timer")
+        #expect(app.news(on: SidebarBox(directory: folder)) == nil)
+    }
+
     /// A sub-session's tab, as the app opens again: it learns whose it is, so it opens as a
     /// sub-session with the way back.
     @Test func aSubSessionsTabKnowsWhoseItIs() async throws {

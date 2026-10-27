@@ -361,10 +361,13 @@ struct Composer: View {
             app.dictation.withdraw(voiceOwner)
         }
         .onChange(of: session) { old, _ in
-            // Listening for the session it showed: that stops, rather than going on unseen; and
-            // the shortcut is this one's now, where you type.
+            // Listening for the session it showed: that stops, rather than going on unseen, and
+            // what was said so far goes into that session's draft; and the shortcut is this one's
+            // now, where you type.
             let left = old ?? "new:" + (folders.first ?? "")
-            if app.dictation.isListening(for: left) { app.dictation.cancel() }
+            if app.dictation.isListening(for: left) {
+                if app.dictation.voice?.phase == .listening { app.dictation.finish() } else { app.dictation.cancel() }
+            }
             app.dictation.withdraw(left)
             if fieldHasKeyboard { offerVoice() }
             historyIndex = nil

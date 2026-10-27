@@ -92,9 +92,10 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// Runs `script` on the machine and returns what it printed. `input` is sent to it. It runs as
     /// long as it takes (an install, a copy), with no limit of its own: SSH notices a machine that
     /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
-    /// is never left half done.
+    /// is never left half done; one that only reads (`cancellable`) is, so nothing waits on what
+    /// nobody wants any more (a search typed over).
     @discardableResult
-    public func run(_ script: String, input: URL? = nil) async throws -> String {
+    public func run(_ script: String, input: URL? = nil, cancellable: Bool = false) async throws -> String {
         #if DEBUG
         if let standIn = Self.standIn {
             guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
@@ -102,7 +103,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
         }
         #endif
         let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
-                                                cancellable: false)
+                                                cancellable: cancellable)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
         return result.outputText
     }

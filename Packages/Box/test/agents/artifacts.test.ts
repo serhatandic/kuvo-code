@@ -305,6 +305,30 @@ describe("files a command made", () => {
     const names = (await route("GET", "kuvo/artifacts?session=ses_repo")).value.artifacts.map((artifact: any) => artifact.name)
     expect(names).toEqual(["summary.md"])
   })
+
+  test("in the home folder, what Kuvo Code keeps there (a file you sent with the message) isn't the agent's", async () => {
+    recorder = record(store, { bots }).recorder
+    const home = join(root, "home")
+    const box = join(home, ".kuvo-code")
+    mkdirSync(join(box, "agents"), { recursive: true })
+    const was = { home: process.env.KUVO_HOME, agents: process.env.KUVO_AGENTS_HOME }
+    process.env.KUVO_HOME = box
+    process.env.KUVO_AGENTS_HOME = join(box, "agents")
+    try {
+      session("ses_home", home)
+      await hear([{ type: "session.execution.started", data: { sessionID: "ses_home" } }])
+      mkdirSync(join(box, "attachments", "a1"), { recursive: true })
+      writeFileSync(join(box, "attachments", "a1", "photo.png"), "png")
+      writeFileSync(join(home, "notes.txt"), "made\n")
+      await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_home" } }])
+      expect((await route("GET", "kuvo/artifacts?session=ses_home")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["notes.txt"])
+    } finally {
+      for (const [name, value] of [["KUVO_HOME", was.home], ["KUVO_AGENTS_HOME", was.agents]] as const) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
 })
 
 describe("what the agent's browser downloads", () => {

@@ -162,6 +162,19 @@ struct LiveRemoteEngineTests {
         try #require(RemoteEngineInstaller.root == ".kuvo-code-test", "the live tests run in a folder of their own")
     }
 
+    /// A run that only reads, called off (a search typed over), stops being waited for at once,
+    /// rather than holding up the next one until it's done there.
+    @Test func aReadCalledOffIsLetGo() async throws {
+        let marker = "kuvo-let-go-\(UUID().uuidString.prefix(8))"
+        let file = "~/.kuvo-code-test/\(marker)"
+        let task = Task { try await connection.run("mkdir -p ~/.kuvo-code-test; echo started > \(file); exec sleep 600 # \(marker)", cancellable: true) }
+        // Once it's running there (each look a round trip of its own).
+        for _ in 0..<50 where !(try await connection.run("[ -f \(file) ] && echo yes || true")).contains("yes") {}
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        _ = try await connection.run("pkill -f '\(marker)' || true; rm -f \(file)")
+    }
+
     @Test func runsOnItsOwnAndIsFoundAgain() async throws {
         let cache = FileManager.default.temporaryDirectory.appending(path: "opencodekit-remote-cache")
         defer { try? FileManager.default.removeItem(at: cache) }

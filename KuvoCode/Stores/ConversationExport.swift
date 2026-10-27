@@ -41,7 +41,8 @@ enum ConversationExport {
                 }
                 let (text, comments, paths, _) = SentMessage.split(written)
                 var lines = comments.map { "> On \($0.location): \($0.text)" }
-                if !text.isEmpty { lines.append(text) }
+                // Sent with a keyword: as you typed it, the keyword in front of the words.
+                if !text.isEmpty { lines.append(SentMessage.keyword(of: written).map { "\($0) \(text)" } ?? text) }
                 let attached = (user.files ?? []).compactMap(\.name) + paths.map { ($0 as NSString).lastPathComponent }
                 if !attached.isEmpty { lines.append("Attached: " + attached.joined(separator: ", ")) }
                 if !lines.isEmpty { say(you, lines.joined(separator: "\n\n")) }

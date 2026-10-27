@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 import UsageKit
@@ -69,7 +70,13 @@ struct SidebarView: View {
     /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
     @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
-    @State private var conversationResults: [(session: Session, snippet: String)] = []
+    /// What each box found in its conversations, by the box: one's earlier finds stay until it
+    /// answers the newer search, as on the phone.
+    @State private var conversationFinds: [String: [(session: Session, snippet: String)]] = [:]
+    /// Everything found in conversations, the latest first.
+    private var conversationResults: [(session: Session, snippet: String)] {
+        Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
+    }
     @State private var isSearchingConversations = false
 
     /// A project lists this many sessions until you ask for the rest.
@@ -217,16 +224,23 @@ struct SidebarView: View {
         .task(id: "\(search)\n\(workspace.isLoaded)") {
             let query = search.trimmingCharacters(in: .whitespaces)
             guard query.count >= 3 else {
-                conversationResults = []
+                conversationFinds = [:]
                 isSearchingConversations = false
                 return
             }
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             isSearchingConversations = true
-            let found = await workspace.searchConversations(query)
+            // Each box's as it answers: one that's slow or far holds none of the others up.
+            var answered: Set<String> = []
+            let found = await workspace.searchConversations(query) { box, finds in
+                guard !Task.isCancelled else { return }
+                answered.insert(box)
+                conversationFinds[box] = finds
+            }
             guard !Task.isCancelled else { return }
-            conversationResults = found
+            // A box not asked this time (gone, not connected) keeps nothing from before.
+            conversationFinds = conversationFinds.filter { answered.contains($0.key) }
             isSearchingConversations = false
             Analytics.shared.track("conversations_searched", ["found": min(found.count, 20)])
         }
@@ -501,7 +515,7 @@ struct SidebarView: View {
                 }
             }
             ForEach(unsearched, id: \.key) { computer, why in
-                Text("\(computer) \(why), so its conversations weren’t searched.")
+                Text(why.line(for: computer))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)

@@ -2457,7 +2457,13 @@
         },
         "chats": "string",
         "running": "bool",
-        "stopped": "bool"
+        "stopped": "bool",
+        "home?": {
+         "object": {
+          "mac": "string",
+          "name?": "string"
+         }
+        }
        }
       }
      ]

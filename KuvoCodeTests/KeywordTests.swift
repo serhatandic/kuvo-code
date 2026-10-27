@@ -119,11 +119,15 @@ import Testing
         #expect(review.findings.first?.locations.map(\.text) == ["src/timer.ts:2", "src/stop.ts"])
         #expect(told == 0)
 
-        // Ask the Agent to Fix: the findings go as your message, and the review is put away.
+        // Ask the Agent to Fix: the findings go as your message, and the review is put away. The
+        // review comments you're writing in Changes stay for your own next message.
+        model.reviewComments = [ReviewComment(file: "src/timer.ts", line: 2, side: .new, snippet: "setInterval(tick)", text: "Name the interval")]
         model.fixReview()
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
         #expect(String(describing: sent.body).contains("The interval is never cleared (src/timer.ts:2, src/stop.ts). Clear it when the timer stops."))
+        #expect(!String(describing: sent.body).contains("Name the interval"))
+        #expect(model.reviewComments.map(\.text) == ["Name the interval"])
         try await until { model.review == nil }
         await model.dismissingReview?.value
         #expect(try await bridge.api?.reviews().isEmpty == true)

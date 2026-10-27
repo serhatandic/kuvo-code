@@ -1219,7 +1219,13 @@ final class SessionModel {
     func fixReview() {
         guard let fix = review?.fix else { return }
         dismissReview()
-        send(fix, files: [], for: nil, queue: false)
+        sendReviewFix(fix)
+    }
+
+    /// What the box wrote to fix a review's findings, sent here: the app's words, so the review
+    /// comments you're writing stay for your own message.
+    func sendReviewFix(_ text: String) {
+        send(text, files: [], for: nil, queue: false, withComments: false)
     }
 
     /// What to send an agent to fix the review's findings, all or those of `findings` (their ids),
