@@ -8,6 +8,7 @@ import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
 import { call, engineGet } from "../engine/client";
+import { conversationOf } from "../engine/conversations";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
 import { BOTS, HERE, SESSION_WAKES } from "../home";
@@ -15,6 +16,7 @@ import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
+import type { EngineMessage } from "../engine/conversations";
 import type { EngineSession } from "../engine/sessions";
 import type { Carried } from "../../shared/routes/sessions";
 import type { AnswerPiece, JSONAnswer, OtherStatus, RouteContext } from "../server/context";
@@ -28,17 +30,6 @@ interface AgentsIntegration {
   name?: string;
   metadata?: { installed?: boolean };
   connections?: unknown[];
-}
-
-/** A message of the conversation's, as the engine lists it: carried over whole. */
-interface EngineMessage {
-  id: string;
-}
-
-/** A page of the conversation's messages (`…/message`), and where the next one starts. */
-interface MessagePage {
-  data?: EngineMessage[];
-  cursor?: { next?: string; previous?: string };
 }
 
 /** What was sent and waits in the conversation's inbox (`…/inbox`), as the engine keeps it. */
@@ -117,16 +108,8 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
         await call(engine, "POST", `/${route}/interrupt`).catch(() => {});
         await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`).catch(() => {});
       }
-      // Its whole conversation, page by page (a great many messages at most).
-      let page: MessagePage | undefined = await engineGet(engine, `${route}/message?limit=200&order=desc`) as MessagePage;
-      messages = [...(page?.data ?? [])].reverse();
-      while ((page?.data?.length ?? 0) >= 200 && messages.length < 20_000) {
-        const cursor = page!.cursor?.next ?? page!.cursor?.previous;
-        if (!cursor) break;
-        page = await engineGet(engine, `${route}/message?limit=200&cursor=${encodeURIComponent(cursor)}`) as MessagePage;
-        if (!page?.data?.length) break;
-        messages = [...page.data].reverse().concat(messages);
-      }
+      // Its whole conversation, page by page (a great many messages at most); carried over whole.
+      messages = await conversationOf(engine, id);
       // An undo waiting to be kept: the conversation as it is now, without what it took back.
       const cut = session.revert?.messageID ? messages.findIndex(message => message.id === session.revert!.messageID) : -1;
       if (cut >= 0) messages = messages.slice(0, cut);

@@ -1002,7 +1002,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
     // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
     "groups.seats": ["GET", "kuvo/groups/joinable"],
-    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"],
+    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],

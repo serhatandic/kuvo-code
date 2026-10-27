@@ -479,48 +479,22 @@ final class Workspace {
         models[id]?.session.title
     }
 
-    /// Each session's conversation as text, for searching it, until the session changes.
-    @ObservationIgnored private var conversationTexts: [String: (updated: Double, text: String)] = [:]
-
     /// Sessions whose conversation has `query` (archived ones too), the latest first, with the
-    /// words around its first mention. Reads the conversations it hasn't yet, a few at a time.
+    /// words around its first mention: each box searches its own (`kuvo/search`), this Mac's and
+    /// each machine that's connected, and only what's listed here is shown.
     func searchConversations(_ query: String, limit: Int = 20) async -> [(session: Session, snippet: String)] {
-        let candidates = sessions.sorted { $0.time.updated > $1.time.updated }
-        // Each with its engine; a machine that isn't connected is skipped until it is.
-        let missing = candidates.filter { conversationTexts[$0.id]?.updated != $0.time.updated }
-            .compactMap { session in api(for: session).map { (session, $0) } }
-        await withTaskGroup(of: (Session, [Message])?.self) { group in
-            var queue = missing.makeIterator()
-            func next() {
-                guard let (session, api) = queue.next() else { return }
-                group.addTask { (try? await ConversationExport.messages(of: session, api: api)).map { (session, $0) } }
-            }
-            for _ in 0..<4 { next() }
-            for await result in group {
-                if let (session, messages) = result {
-                    // What was said, without the export's labels: "You" or "Agent" would find every one.
-                    let text = ConversationExport.markdown(title: session.title ?? "New Session", messages: messages, directory: session.location.directory, labels: false)
-                    conversationTexts[session.id] = (session.time.updated, text)
-                }
-                if Task.isCancelled { group.cancelAll() } else { next() }
-            }
+        nonisolated struct Found: Decodable, Sendable { var results: [Result]; struct Result: Decodable, Sendable { var session: String; var snippet: String } }
+        let path = "kuvo/search?q=\(Self.queryValue(query))&limit=\(limit)"
+        let clients = ([BoxClient.mac] + connectedMachines.sorted()).compactMap { boxes?($0) }
+        let found = await withTaskGroup(of: [Found.Result].self) { group in
+            for client in clients { group.addTask { (try? await client.value(Found.self, "GET", path))?.results ?? [] } }
+            var all: [Found.Result] = []
+            for await results in group { all += results }
+            return all
         }
-        var found: [(session: Session, snippet: String)] = []
-        for session in candidates where found.count < limit {
-            guard let text = conversationTexts[session.id]?.text,
-                  let range = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else { continue }
-            found.append((session, Self.snippet(around: range, in: text)))
-        }
-        return found
-    }
-
-    /// A line's worth of text from just before `range`, without Markdown's marks, so the match
-    /// shows in a narrow sidebar.
-    private static func snippet(around range: Range<String.Index>, in text: String) -> String {
-        let start = text.index(range.lowerBound, offsetBy: -16, limitedBy: text.startIndex) ?? text.startIndex
-        let end = text.index(range.upperBound, offsetBy: 80, limitedBy: text.endIndex) ?? text.endIndex
-        let words = text[start..<end].filter { !"*`#>".contains($0) }.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return (start > text.startIndex ? "…" : "") + words + (end < text.endIndex ? "…" : "")
+        return found.compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } }
+            .sorted { $0.session.time.updated > $1.session.time.updated }
+            .prefix(limit).map { $0 }
     }
 
     /// A session's conversation as Markdown, to share.

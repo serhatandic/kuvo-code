@@ -1204,6 +1204,17 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   answers it for the chats that live there; `kuvo/groups/events` leaves it out from then on.
 - A machine's box answers New Group Chat with the Mac closed too: a group chat of its own bots,
   which lives and runs there.
+- `GET kuvo/search?q=<words>&limit=<n>`: sessions whose conversation has the words, for a
+  client's sidebar search: `{"results": [{session, snippet}]}`, the latest first (at most `limit`,
+  20 unless asked, 50 at most), `snippet` a line's worth of the words around the first mention.
+  Every session of the box's engine and of its coding agents' bridge (archived ones too; not a
+  subagent's, a group chat seat's or a coding agent's turn), with no regard for case or accents.
+  Only what was said and worked on is searched: what you wrote (not what Kuvo Code adds to a
+  message's end), other agents' messages and wake-ups, the agent's replies, what each step worked
+  on, and the commands you ran with their output; not who's speaking, nor the app's words for a
+  step. The box keeps each conversation's text until its session changes. 400 `{"message"}`
+  without `q`; 503 `{"message"}` while its engine isn't running. Clients search each box they reach (feature `search`, from bridge 0.9.86) and
+  show only sessions they list.
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,
   `about` its job) then the latest sessions with a title (`kind: "session"`, `project` its
@@ -1470,6 +1481,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `groups.delete` | `DELETE kuvo/groups/<id>` |
 | `integrations` | `kuvo/integrations…` |
 | `named` | `kuvo/named` |
+| `search` | `kuvo/search` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
