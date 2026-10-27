@@ -245,6 +245,9 @@ private struct SubagentConversation: View {
                     .padding(.bottom, 12)
                 }
         }
+        // Its row under the card's title stays put: the conversation scrolls under that row, not
+        // under the card's header.
+        .preference(key: CardTopIsFixed.self, value: true)
     }
 
     private var header: some View {
