@@ -304,18 +304,11 @@ final class MessageTextView: NSTextView {
     /// remembers was in text that's gone.
     func replace(with text: String) {
         guard let storage = textStorage else { return }
-        let old = string as NSString, new = text as NSString
-        var prefix = 0
-        while prefix < old.length, prefix < new.length, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
-        var suffix = 0
-        while suffix < old.length - prefix, suffix < new.length - prefix,
-              old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
-        let changed = NSRange(location: prefix, length: old.length - prefix - suffix)
-        let added = new.length - prefix - suffix
+        // The rule both apps' fields follow (KuvoClient's TextChange).
+        let change = TextChange(from: string, to: text)
         let caret = selectedRange().location
-        storage.replaceCharacters(in: changed, with: new.substring(with: NSRange(location: prefix, length: added)))
-        let moved = caret < changed.location ? caret : caret >= NSMaxRange(changed) ? caret + added - changed.length : prefix + added
-        setSelectedRange(NSRange(location: min(moved, new.length), length: 0))
+        storage.replaceCharacters(in: change.range, with: change.replacement)
+        setSelectedRange(NSRange(location: min(change.caret(movedFrom: caret), (text as NSString).length), length: 0))
         forgetUndo()
     }
 
