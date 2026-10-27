@@ -151,6 +151,21 @@ import ClientText
         #expect(!uri.contains("%CC%A7"), "ş should not come apart into s and a combining mark")
     }
 
+    /// The routes the box reads back to each file (its own test reads the same vectors).
+    @Test func theRoutesTheBoxReads() throws {
+        struct Vectors: Decodable {
+            struct Address: Decodable { var name: String; var encoded: String }
+            var addresses: [Address]
+        }
+        let file = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../KuvoLink/Vectors/routes/file-addresses.json").standardized
+        let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: file))
+        #expect(!vectors.addresses.isEmpty)
+        for address in vectors.addresses {
+            #expect(FileAddresses.route("/folder/" + address.name) == "kuvo/file?uri=file:///folder/" + address.encoded, "\(address.name)")
+        }
+    }
+
     @Test func spacesAndQueryCharactersStayInsideTheRoute() {
         #expect(FileAddresses.uri("/tmp/a b#1.txt") == "file:///tmp/a%20b%231.txt")
         // "&" is a path's own letter, but would end the query's value.
