@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		4B0A00000000000000000010 /* OpenCodeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000011 /* OpenCodeKit */; };
 		4B0A00000000000000000015 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000016 /* Textual */; };
+		4B0A000000000000000000A0 /* KuvoVoice in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000A1 /* KuvoVoice */; };
 		4B0A0000000000000000007E /* ClientText in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000007F /* ClientText */; };
 		4B0A0000000000000000008E /* ClientAccounts in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000008F /* ClientAccounts */; };
 		4B0A000000000000000000F0 /* ClientNews in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F1 /* ClientNews */; };
@@ -54,6 +55,7 @@
 			files = (
 				4B0A00000000000000000010 /* OpenCodeKit in Frameworks */,
 				4B0A00000000000000000015 /* Textual in Frameworks */,
+				4B0A000000000000000000A0 /* KuvoVoice in Frameworks */,
 				4B0A00000000000000000060 /* SwiftUIMath in Frameworks */,
 				4B0A00000000000000000018 /* UsageKit in Frameworks */,
 				4B0A0000000000000000001B /* SwiftTerm in Frameworks */,
@@ -129,6 +131,7 @@
 			packageProductDependencies = (
 				4B0A00000000000000000011 /* OpenCodeKit */,
 				4B0A00000000000000000016 /* Textual */,
+				4B0A000000000000000000A1 /* KuvoVoice */,
 				4B0A00000000000000000061 /* SwiftUIMath */,
 				4B0A00000000000000000019 /* UsageKit */,
 				4B0A0000000000000000001C /* SwiftTerm */,
@@ -199,6 +202,7 @@
 				4B0A0000000000000000001A /* XCLocalSwiftPackageReference "Packages/UsageKit" */,
 				4B0A00000000000000000052 /* XCLocalSwiftPackageReference "Packages/KuvoLink" */,
 				4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Packages/Textual" */,
+				4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "Packages/KuvoVoice" */,
 				4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */,
 				4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */,
@@ -551,6 +555,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/Textual;
 		};
+		4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "Packages/KuvoVoice" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/KuvoVoice;
+		};
 		4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/KuvoClient;
@@ -592,6 +600,10 @@
 		4B0A00000000000000000016 /* Textual */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Textual;
+		};
+		4B0A000000000000000000A1 /* KuvoVoice */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KuvoVoice;
 		};
 		4B0A0000000000000000007F /* ClientText */ = {
 			isa = XCSwiftPackageProductDependency;

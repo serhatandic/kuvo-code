@@ -1,6 +1,7 @@
 import ClientNews
 import ClientDesign
 import ClientText
+import KuvoVoice
 import OpenCodeKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -205,51 +206,61 @@ struct Composer: View {
                               fieldFocused(focused)
                           }, onPaste: pasteAttachments)
             }
-            MessageField(
-                text: $text,
-                placeholder: placeholder,
-                font: isShell ? .monospacedSystemFont(ofSize: messageFont.size - 0.5, weight: .regular) : messageFont.field,
-                focus: fieldFocus,
-                blur: blurRequest,
-                marks: !isShell,
-                images: imageFiles.count,
-                token: token,
-                example: example,
-                onKey: key,
-                onFocus: { focused in
-                    if focused { fieldFocus = nil }
-                    fieldFocused(focused)
-                },
-                onPaste: pasteAttachments,
-                handle: field
-            )
-            // Editing a recalled message makes it a new one; the arrows move the cursor again.
-            .onChange(of: text) { _, new in
-                if let index = historyIndex {
-                    let history = history()
-                    if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
+            ZStack(alignment: .topLeading) {
+                MessageField(
+                    text: $text,
+                    placeholder: placeholder,
+                    font: isShell ? .monospacedSystemFont(ofSize: messageFont.size - 0.5, weight: .regular) : messageFont.field,
+                    focus: fieldFocus,
+                    blur: blurRequest,
+                    marks: !isShell,
+                    images: imageFiles.count,
+                    token: token,
+                    example: example,
+                    onKey: key,
+                    onFocus: { focused in
+                        if focused { fieldFocus = nil }
+                        fieldFocused(focused)
+                    },
+                    onPaste: pasteAttachments,
+                    handle: field,
+                    isEditable: !isDictating
+                )
+                // Editing a recalled message makes it a new one; the arrows move the cursor again.
+                .onChange(of: text) { _, new in
+                    if let index = historyIndex {
+                        let history = history()
+                        if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
+                    }
+                    mentionTyped(in: new)
+                    agents.textChanged(new)
+                    if SlashCommands.query(in: new) == nil {
+                        commandIndex = 0
+                        if new.isEmpty { dismissedCommands = false }
+                    }
+                    // Not /review any more, or "with" written after it: "Who reads it" can open again.
+                    if !new.hasPrefix(Keyword.review.typed) || new.lowercased().hasPrefix(Keyword.review.typed + " with") {
+                        reviewerIndex = 0
+                        dismissedReviewer = false
+                    }
+                    if !new.hasPrefix(Keyword.loop.typed) {
+                        loopIndex = 0
+                        dismissedLoop = false
+                        customLoop = false
+                    } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
+                        // Typed in the field meanwhile: Custom… has nothing left to ask.
+                        customLoop = false
+                    }
                 }
-                mentionTyped(in: new)
-                agents.textChanged(new)
-                if SlashCommands.query(in: new) == nil {
-                    commandIndex = 0
-                    if new.isEmpty { dismissedCommands = false }
-                }
-                // Not /review any more, or "with" written after it: "Who reads it" can open again.
-                if !new.hasPrefix(Keyword.review.typed) || new.lowercased().hasPrefix(Keyword.review.typed + " with") {
-                    reviewerIndex = 0
-                    dismissedReviewer = false
-                }
-                if !new.hasPrefix(Keyword.loop.typed) {
-                    loopIndex = 0
-                    dismissedLoop = false
-                    customLoop = false
-                } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
-                    // Typed in the field meanwhile: Custom… has nothing left to ask.
-                    customLoop = false
+                .onChange(of: session) { agents.reset() }
+                // Listening ("In the Composer"): what's written, then what you're saying, as it comes,
+                // in the field's place (it stays, unseen, as it was).
+                .opacity(listening == nil ? 1 : 0)
+                if let voice = listening {
+                    VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty ? "Listening…" : "", before: text)
+                        .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
                 }
             }
-            .onChange(of: session) { agents.reset() }
             if keywordHint != nil {
                 // Read again each minute: /loop's says when it first sends.
                 TimelineView(.everyMinute) { _ in
@@ -257,46 +268,63 @@ struct Composer: View {
                 }
             }
 
-            HStack(spacing: 4) {
-                if isShell {
-                    ShellModeLabel(folder: folders.first)
-                        .transition(.opacity)
-                } else {
-                    Group {
-                        Button(action: chooseFiles) {
-                            Image(systemName: "paperclip")
-                                .font(.system(size: 14, weight: .medium))
-                                .frame(width: 30, height: 28)
-                                .hoverHighlight(in: Capsule(), mutesInk: true)
-                        }
-                        .buttonStyle(.plain)
-                        .clickablePointer()
-                        .help("Attach Files… You can also drop files here, or paste them.")
-                        // Set on the engine: not while it's out of reach.
-                        if showsMode {
-                            ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
-                                .disabled(isOffline)
-                        }
-                        ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
-                            .disabled(isOffline)
-                        if let worktree {
-                            WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
-                        }
-                    }
+            if let voice = listening {
+                // The chips make way for the voice: how long, how loud, Cancel and Done.
+                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: Self.openPrivacySettings)
                     .transition(.opacity)
+            } else {
+                HStack(spacing: 4) {
+                    if isShell {
+                        ShellModeLabel(folder: folders.first)
+                            .transition(.opacity)
+                    } else {
+                        Group {
+                            Button(action: chooseFiles) {
+                                Image(systemName: "paperclip")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .frame(width: 30, height: 28)
+                                    .hoverHighlight(in: Capsule(), mutesInk: true)
+                            }
+                            .buttonStyle(.plain)
+                            .clickablePointer()
+                            .help("Attach Files… You can also drop files here, or paste them.")
+                            // Set on the engine: not while it's out of reach.
+                            if showsMode {
+                                ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
+                                    .disabled(isOffline)
+                            }
+                            ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
+                                .disabled(isOffline)
+                            if let worktree {
+                                WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
+                            }
+                        }
+                        .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                    if !isShell { voiceButton }
+                    actionButton
                 }
-                Spacer(minLength: 0)
-                actionButton
+                .animation(.easeOut(duration: 0.15), value: isShell)
+                // The pills are flat, so their text lines up with the message field above;
+                // their hover fill reaches past it.
+                .padding(.leading, -8)
             }
-            .animation(.easeOut(duration: 0.15), value: isShell)
-            // The pills are flat, so their text lines up with the message field above;
-            // their hover fill reaches past it.
-            .padding(.leading, -8)
         }
+        .animation(.ui, value: listening != nil)
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 7)
         .modifier(ComposerSurface(isOn: drawsSurface))
+        .overlay {
+            // Listening here: the card's edge in the accent.
+            if listening != nil {
+                RoundedRectangle(cornerRadius: drawsSurface ? Metrics.composerRadius : 12)
+                    .strokeBorder(.tint, lineWidth: 1.5)
+                    .padding(drawsSurface ? 0 : 4)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay {
             if isTargeted {
                 // Its own card's edge; inside the card it shares, a ring of its own in it.
@@ -352,7 +380,15 @@ struct Composer: View {
     /// The field or an answer took the keyboard, or let it go: where you type is where you work,
     /// so the window's commands follow.
     private func fieldFocused(_ focused: Bool) {
-        if focused { composerFocused?() }
+        if focused {
+            composerFocused?()
+            // The shortcut's voice input goes where you type.
+            let text = $text
+            app.dictation.offer(voiceOwner) { [focusAtEnd] words in
+                text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+                focusAtEnd()
+            }
+        }
     }
 
     /// An input method is composing in the field that has the keyboard (Japanese, Chinese,
@@ -367,6 +403,18 @@ struct Composer: View {
     /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
     /// through what was sent before.
     private func key(_ key: MessageField.Key) -> Bool {
+        // Listening (here, or in the voice field): Return is Done, Escape is Cancel, and nothing
+        // else goes to the field.
+        if isDictating {
+            switch key.name {
+            case .return: app.dictation.finish()
+            case .escape:
+                app.dictation.cancel()
+                focusAtEnd()
+            default: break
+            }
+            return true
+        }
         if agents.key(key, text: $text, excluding: session) { return true }
         if let loopChoices, loopKey(key, loopChoices) { return true }
         if let reviewerChoices, reviewerKey(key, reviewerChoices) { return true }
@@ -452,6 +500,46 @@ struct Composer: View {
         if let bot { return bot.job.isEmpty ? "Tell \(bot.name) its job…" : "Message \(bot.name)…" }
         if folders.first.map(Workspace.isChat) == true { return "Ask anything…" }
         return agent == "plan" ? "Ask the agent to plan something…" : "Ask the agent to build, fix or explain something…"
+    }
+
+    /// Where what's said goes: this composer's session, or a new session's draft.
+    private var voiceOwner: String { session ?? "new:" + (folders.first ?? "") }
+
+    /// Listening for this composer, here or in the voice field.
+    private var isDictating: Bool { app.dictation.isListening(for: voiceOwner) }
+
+    /// Listening here, in the composer ("In the Composer"); the voice field shows itself.
+    private var listening: VoiceInput? {
+        guard app.dictation.isListening(for: voiceOwner), app.dictation.style == .composer else { return nil }
+        return app.dictation.voice
+    }
+
+    /// Talk instead of typing: what you say goes after what's written, and nothing is sent.
+    private var voiceButton: some View {
+        Button(action: startVoice) {
+            Image(systemName: "mic")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 28)
+                .hoverHighlight(in: Capsule(), mutesInk: true)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .disabled(isOffline)
+        .help("Talk Instead of Typing (⌘⇧Space)")
+        .accessibilityLabel("Voice Input")
+    }
+
+    private func startVoice() {
+        let text = $text
+        app.dictation.start(for: voiceOwner) { [focusAtEnd] words in
+            text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+            focusAtEnd()
+        }
+    }
+
+    /// Privacy & Security, where the microphone and speech recognition are allowed.
+    static func openPrivacySettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
     }
 
     private var actionButton: some View {

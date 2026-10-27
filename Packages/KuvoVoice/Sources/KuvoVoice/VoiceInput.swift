@@ -120,6 +120,21 @@ public final class VoiceInput {
         phase = .idle
     }
 
+    #if DEBUG
+    /// Listening, with `confirmed` heard and `guess` its newest guess, without the microphone: for
+    /// a demo copy's screenshots, which mustn't ask for it.
+    public func showSample(confirmed: String, guess: String, level: Double = 0.5) {
+        run += 1
+        transcript = VoiceTranscript()
+        transcript.take(confirmed, start: 0, isFinal: true)
+        if !guess.isEmpty { transcript.take(guess, start: 1, isFinal: false) }
+        self.level = level
+        recentLevels = (0..<Self.recentCount).map { index in 0.15 + 0.8 * abs(sin(Double(index) / 4.3)) * (0.6 + 0.4 * abs(cos(Double(index) / 1.7))) }
+        listeningSince = Date().addingTimeInterval(-7)
+        phase = .listening
+    }
+    #endif
+
     private var isPreparing: Bool {
         if case .preparing = phase { true } else { false }
     }

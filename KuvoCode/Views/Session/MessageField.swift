@@ -51,6 +51,9 @@ struct MessageField: NSViewRepresentable {
     /// For its owner to write where the caret is.
     var handle: Handle?
     var identifier = "composer"
+    /// False while voice input listens in its place: keys still come to `onKey`, and nothing
+    /// typed changes what's written.
+    var isEditable = true
     /// What VoiceOver calls it.
     var label = "Message"
 
@@ -138,6 +141,7 @@ struct MessageField: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? MessageTextView else { return }
         handle?.view = view
+        if view.isEditable != isEditable { view.isEditable = isEditable }
         update(view, coordinator: context.coordinator)
         if focus != context.coordinator.focus {
             context.coordinator.focus = focus
