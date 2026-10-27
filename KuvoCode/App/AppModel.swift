@@ -111,17 +111,27 @@ final class AppModel {
     /// What's New: the highlights over the main window, once after an update or from Help.
     var whatsNew: WhatsNew.Release?
     /// What this copy carries of what's new, and its "New" marks (kept by this app).
-    let newMarks = NewMarks(news: WhatsNew.bundled(), memory: NewsMemory())
+    let newMarks: NewMarks
+    /// This release's highlights to show once the window is up, as the app opened.
+    @ObservationIgnored private var newAfterLaunch: WhatsNew.Release?
     @ObservationIgnored private var lookedForWhatsNew = false
+
+    /// As the app opens, before a first launch's steps: one quit partway through them (macOS's
+    /// Quit & Reopen for Screen Recording) was still the first, and the next isn't an update.
+    /// `ranBefore`: the app had opened before.
+    func lookForWhatsNew(ranBefore: Bool, version: String = AppInfo.version) {
+        newAfterLaunch = newMarks.memory.afterLaunch(newMarks.news, version: version, ranBefore: ranBefore)
+    }
 
     /// As the window first shows: this release's highlights, after an update to it.
     func whatsNewAfterLaunch() {
-        guard !lookedForWhatsNew, !AppInfo.isHostingTests else { return }
+        guard !lookedForWhatsNew else { return }
         lookedForWhatsNew = true
-        // Not over a demo, a test or a measurement, which never ask to be shown it.
+        // Not over a demo, a test or a measurement, which never ask to be shown it; nor in place
+        // of Help › What's New, picked while the first launch's steps showed.
         let scripted = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }
-        let shown = newMarks.memory.afterLaunch(newMarks.news, version: AppInfo.version, ranBefore: !Analytics.shared.isFirstLaunch)
-        if !scripted { whatsNew = shown }
+        if !scripted, let shown = newAfterLaunch { whatsNew = shown }
+        newAfterLaunch = nil
         #if DEBUG
         // KUVO_DEMO_WHATS_NEW: the sheet, for a look at it.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_WHATS_NEW"] != nil { whatsNew = newMarks.news?.latestHighlights }
@@ -192,7 +202,9 @@ final class AppModel {
         case bot(BotRecipe)
     }
 
-    init() {
+    init(newMarks: NewMarks = NewMarks(news: WhatsNew.bundled(), memory: NewsMemory())) {
+        self.newMarks = newMarks
+        if !AppInfo.isHostingTests { lookForWhatsNew(ranBefore: !Analytics.shared.isFirstLaunch) }
         // The window's own: where a fork or a move opens, and where the panel adds to a message.
         workspace.tabs = tabs
         utilities.addToMessage = { [weak self] in self?.tabs.addToMessage($0) }
