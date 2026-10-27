@@ -22,12 +22,13 @@ After changing anything in `src/link` or `src/shared`, run `scripts/build-box.sh
 `kuvo-link.js` with it. It builds with the Bun CI has (1.4.2), so every computer builds the same
 file, and CI fails when the file isn't what the sources build, byte for byte (`build-box.sh
 --check`). After changing `src/agents` (or `src/shared`), run `scripts/build-agents.sh` and commit
-`kuvo-agents.js`; its last line names what it was built from, which CI checks (`build-agents.sh
---check`). `bun run build` runs both.
+`kuvo-agents.js`; its last line names what it was built from (those folders and this package's
+`package.json` and lockfile, so a change to either needs it rebuilt too), which CI checks
+(`build-agents.sh --check`). `bun run build` runs both.
 
 `bun install --frozen-lockfile` here, then `bun run check` type-checks the link with Node's types
-(it must run on Node too) and the agents bridge with Bun's (`tsconfig.agents.json`: it runs only on
-Bun), and `bun test` runs the tests of both (`test/agents` for the agents bridge's). The lockfile is Bun 1.4.2's too, which
+(it must run on Node too) and the agents bridge with Bun's (`src/agents/tsconfig.json`, and
+`test/agents`'s beside its tests: it runs only on Bun), and `bun test` runs the tests of both (`test/agents` for the agents bridge's). The lockfile is Bun 1.4.2's too, which
 an older Bun refuses (`lockfile had changes`): install with that Bun, or with the engine of a demo,
 perf or e2e copy, which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/opencode> install
 --frozen-lockfile`), never the real Kuvo Code's.

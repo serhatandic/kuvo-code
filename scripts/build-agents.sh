@@ -11,7 +11,8 @@ set -eu
 cd "$(dirname "$0")/.."
 
 sources() {
-  { find Packages/Box/src/agents Packages/Box/src/shared -type f; echo Packages/Box/package.json; echo Packages/Box/bun.lock; } | LC_ALL=C sort | while read -r file; do
+  # (The files git keeps or would: never a stray one, like Finder's .DS_Store, CI hasn't.)
+  { git ls-files -co --exclude-standard Packages/Box/src/agents Packages/Box/src/shared; echo Packages/Box/package.json; echo Packages/Box/bun.lock; } | LC_ALL=C sort | while read -r file; do
     printf '%s %s\n' "$file" "$(shasum -a 256 <"$file" | cut -d' ' -f1)"
   done | shasum -a 256 | cut -d' ' -f1
 }

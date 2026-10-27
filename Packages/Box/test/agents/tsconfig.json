@@ -1,0 +1,4 @@
+{
+  "extends": "../../src/agents/tsconfig.json",
+  "include": [".", "../../src/agents"]
+}
