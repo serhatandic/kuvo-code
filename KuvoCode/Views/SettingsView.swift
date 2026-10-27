@@ -1,3 +1,4 @@
+import ClientNews
 import AppKit
 import ClientDesign
 import OpenCodeKit
@@ -502,6 +503,8 @@ private struct SettingsSidebar: View {
                 Text(page.title)
                     .font(.system(size: 14))
                     .lineLimit(1)
+                // A page a recent release brought, until it's opened.
+                if app.newMarks.isNew("settings/" + page.rawValue) { NewMark() }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
@@ -569,6 +572,8 @@ private struct SettingsPageHeader: View {
         .padding(.horizontal, inset)
         .padding(.top, 26)
         .padding(.bottom, 4)
+        // Opened: its "New" goes.
+        .task(id: page) { app.newMarks.use("settings/" + page.rawValue) }
     }
 }
 

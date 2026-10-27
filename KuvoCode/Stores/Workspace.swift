@@ -1396,8 +1396,11 @@ final class Workspace {
     func refresh() async {
         guard let api else { return }
         do {
-            let all = try await api.allSessions()
+            // Sub-sessions too, for under their sessions' rows.
+            let everything = try await api.allSessions(roots: false)
+            let all = everything.filter { $0.parentID == nil }
             Self.dropLeftScratch(all, api: api)
+            keepSubSessions(everything.filter { movedAway[$0.id] != .some(nil) }, box: "mac")
             let local = all.filter { !isHidden($0) && movedAway[$0.id] != .some(nil) }
             // (This Mac's: a machine's agents' are its own, with its engine's.)
             let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) }
@@ -1446,8 +1449,10 @@ final class Workspace {
         // (A machine's come with its engine's: `refresh(_ engine:)`.)
         let isMacs = { (session: Session) in OutsideAgents.isAgentSession(session) && !RemoteFolder.isRemote(session.location.directory) }
         do {
-            let all = try await api.allSessions()
+            let everything = try await api.allSessions(roots: false)
+            let all = everything.filter { $0.parentID == nil }
             Self.dropLeftScratch(all, api: api)
+            keepSubSessions(everything, box: "mac-agents")
             let listed = all.filter { !isHidden($0) }
             let before = sessions
             sessions = sessions.filter { !isMacs($0) } + listed
@@ -1648,12 +1653,18 @@ final class Workspace {
         }
         do {
             // (Not one that moved away from it: it lives elsewhere now.)
-            let listed = try await api.allSessions().filter { movedAway[$0.id] != .some(machine) }
+            // Sub-sessions too, for under their sessions' rows.
+            let everything = try await api.allSessions(roots: false).filter { movedAway[$0.id] != .some(machine) }
+            let listed = everything.filter { $0.parentID == nil }
             // Its coding agents' too, from the agents bridge beside its engine; not read (it's
             // starting), those known stay as they were.
             let bridge = engine.agents.api
-            let bridgeListed: [Session]? = if let bridge { try? await bridge.allSessions() } else { [] }
+            let bridgeEverything: [Session]? = if let bridge { try? await bridge.allSessions(roots: false) } else { [] }
+            let bridgeListed = bridgeEverything?.filter { $0.parentID == nil }
             guard isCurrent() else { return true }
+            keepSubSessions(everything, box: machine, machine: machine)
+            // Its agents' as they were, when they couldn't be read.
+            if let bridgeEverything { keepSubSessions(bridgeEverything, box: machine + "-agents", machine: machine) }
             // Its open conversations take this connection first, so nothing sent from them goes
             // to the old one.
             for model in models.values where RemoteFolder.machine(of: model.session.location.directory) == machine {
@@ -2063,7 +2074,7 @@ final class Workspace {
         case "session.deleted":
             // Its original, left where it was as it moved to another computer (`Moves`): the
             // conversation lives on there, as it is.
-            if let found = session(id), RemoteFolder.machine(of: found.location.directory) != machine { break }
+            if let found = session(id) ?? subSession(id), RemoteFolder.machine(of: found.location.directory) != machine { break }
             // Deleted elsewhere (another Mac, the phone): its panel's tabs go too, a terminal's
             // connection with them.
             onDeleted?(id)
@@ -2078,6 +2089,8 @@ final class Workspace {
             if running.contains(id) { running.remove(id) }
             shellJobs[id] = nil
             Notifier.shared.clear(session: id)
+            if let parent = parents[id] { subSessions[parent]?.removeAll { $0.id == id } }
+            subSessions[id] = nil
         case "session.execution.started":
             running.insert(id)
             // A session with no row may be a subagent's: whose it is, so the one that started it
@@ -2422,16 +2435,42 @@ final class Workspace {
 
     func markViewed(_ id: String) {
         clearNews(of: id)
-        guard let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].isUnread, let idle = sessions[index].time.idle else { return }
-        sessions[index].time.viewed = idle
-        // Its engine away (a machine out of reach): told once it's back (see `refresh`).
-        guard let api = api(forSession: id) else { return unsentViews[id] = idle }
-        Task { try? await api.markViewed(id, idle: idle) }
+        var read: [(id: String, idle: Milliseconds)] = []
+        if let index = sessions.firstIndex(where: { $0.id == id }), sessions[index].isUnread, let idle = sessions[index].time.idle {
+            sessions[index].time.viewed = idle
+            read.append((id, idle))
+        } else if let (parent, index) = subSessionIndex(id), let child = subSessions[parent]?[index], child.isUnread, let idle = child.time.idle {
+            subSessions[parent]?[index].time.viewed = idle
+            read.append((id, idle))
+        }
+        // What its sub-sessions found, once they're done, shows in its conversation (and theirs
+        // in theirs): read too.
+        func readSubSessions(of id: String) {
+            for (index, child) in (subSessions[id] ?? []).enumerated() {
+                if child.isUnread, let idle = child.time.idle {
+                    subSessions[id]?[index].time.viewed = idle
+                    read.append((child.id, idle))
+                }
+                readSubSessions(of: child.id)
+            }
+        }
+        readSubSessions(of: id)
+        for (id, idle) in read {
+            // Its engine away (a machine out of reach): told once it's back (see `refresh`).
+            guard let api = api(forSession: id) else {
+                unsentViews[id] = idle
+                continue
+            }
+            Task { try? await api.markViewed(id, idle: idle) }
+        }
     }
 
     /// Read elsewhere, as its box says: the same as `markViewed`, without telling the box again.
     private func sawViewed(_ id: String, idle: Milliseconds) {
         readElsewhere[id] = max(idle, readElsewhere[id] ?? 0)
+        if let (parent, index) = subSessionIndex(id), idle > (subSessions[parent]?[index].time.viewed ?? 0) {
+            subSessions[parent]?[index].time.viewed = idle
+        }
         guard let index = sessions.firstIndex(where: { $0.id == id }), idle > (sessions[index].time.viewed ?? 0) else { return }
         sessions[index].time.viewed = idle
         if !sessions[index].isUnread { clearNews(of: id) }
@@ -2454,9 +2493,10 @@ final class Workspace {
 
     private func reload(_ id: String, depth: Int = 0) async {
         guard let session = try? await api(forSession: id)?.session(id) else { return }
-        // Only root sessions get a row; subagent sessions show inside their parent.
+        // Only root sessions get a row; subagent sessions show inside their parent, and under it.
         if let parent = session.parentID {
             parents[session.id] = parent
+            if !isHidden(session) { keepSubSession(session, of: parent) }
             // A subagent's subagent: whose that one is, up to the session with a row.
             if self.session(parent) == nil, parents[parent] == nil, depth < 8 { await reload(parent, depth: depth + 1) }
             return
@@ -2466,6 +2506,92 @@ final class Workspace {
 
     /// Each subagent's session, by the session that started it.
     private var parents: [String: String] = [:]
+
+    /// The sessions each session's agent started (its subagents'), newest first, by the session
+    /// that started them, as each box listed them with its sessions and since: what shows under
+    /// its row.
+    private(set) var subSessions: [String: [Session]] = [:]
+    /// Which box's list each session's sub-sessions came from: a list read again replaces its own.
+    @ObservationIgnored private var subSessionBoxes: [String: String] = [:]
+
+    /// A box's sub-sessions, from its list read with them (`allSessions(roots: false)`), in place
+    /// of what was known of that box's: by the session that started each, with where to reach
+    /// each (its machine, the coding agents' bridge).
+    private func keepSubSessions(_ all: [Session], box: String, machine: String? = nil) {
+        let children = all.filter { $0.parentID != nil && !isHidden($0) }
+        for child in children {
+            if parents[child.id] != child.parentID { parents[child.id] = child.parentID }
+            if let machine { sessionMachines[child.id] = machine }
+            if OutsideAgents.isAgentSession(child) { bridgeSessions.insert(child.id) }
+        }
+        let grouped = Dictionary(grouping: children) { $0.parentID ?? "" }.mapValues { $0.sorted { $0.time.created > $1.time.created } }
+        var kept = subSessions.filter { subSessionBoxes[$0.key] != box }
+        kept.merge(grouped) { _, listed in listed }
+        // Only a change redraws the rows.
+        if kept != subSessions { subSessions = kept }
+        subSessionBoxes = subSessionBoxes.filter { $0.value != box }
+        for parent in grouped.keys { subSessionBoxes[parent] = box }
+    }
+
+    /// The box a session's list comes from: its machine's, or this Mac's engine or bridge.
+    private func subSessionBox(of session: Session) -> String {
+        (RemoteFolder.machine(of: session.location.directory) ?? "mac") + (OutsideAgents.isAgentSession(session) ? "-agents" : "")
+    }
+
+    /// The session whose agent started `id`, once known (or remembered from when you opened it):
+    /// a sub-session opens with the way back to it.
+    func parent(of id: String) -> String? { parents[id] ?? openedSubSessions[id] }
+
+    /// Whose each sub-session you opened is, kept for its tab as Kuvo Code opens again, before
+    /// its list is read (a machine's, or the coding agents' bridge's, come later).
+    @ObservationIgnored private var openedSubSessions: [String: String] = UserDefaults.standard.dictionary(forKey: "openedSubSessions") as? [String: String] ?? [:]
+
+    /// Remembers whose sub-session `id` is, for its tab.
+    func rememberOpened(_ id: String) {
+        guard let parent = parents[id], openedSubSessions[id] != parent else { return }
+        openedSubSessions[id] = parent
+        // The latest ones are enough: tabs come and go.
+        if openedSubSessions.count > 200 { openedSubSessions = Dictionary(uniqueKeysWithValues: openedSubSessions.shuffled().prefix(150).map { ($0.key, $0.value) }) }
+        UserDefaults.standard.set(openedSubSessions, forKey: "openedSubSessions")
+    }
+
+    /// Learns whose sub-session `id` is, when it has no row and that isn't known yet.
+    func findParent(of id: String) async {
+        guard session(id) == nil, parents[id] == nil else { return }
+        await reload(id)
+    }
+
+    /// A sub-session as last read.
+    func subSession(_ id: String) -> Session? {
+        subSessions.values.lazy.flatMap { $0 }.first { $0.id == id }
+    }
+
+    private func keepSubSession(_ session: Session, of parent: String) {
+        var list = subSessions[parent] ?? []
+        list.removeAll { $0.id == session.id }
+        list.append(session)
+        subSessions[parent] = list.sorted { $0.time.created > $1.time.created }
+        subSessionBoxes[parent] = subSessionBox(of: session)
+    }
+
+    /// A sub-session finished since you were last in it, or in the session at the top of its
+    /// chain, which shows what it found (one from before sub-sessions were marked read has
+    /// that only).
+    func isNew(_ sub: Session) -> Bool {
+        guard sub.isUnread, let idle = sub.time.idle else { return false }
+        return (session(root(of: sub.id))?.time.viewed ?? 0) < idle
+    }
+
+    /// One of its sub-sessions, or theirs, is new.
+    func hasNewSubSessions(_ id: String) -> Bool {
+        (subSessions[id] ?? []).contains { isNew($0) || hasNewSubSessions($0.id) }
+    }
+
+    /// Where a sub-session is in its session's list.
+    private func subSessionIndex(_ id: String) -> (parent: String, index: Int)? {
+        guard let parent = parents[id], let index = subSessions[parent]?.firstIndex(where: { $0.id == id }) else { return nil }
+        return (parent, index)
+    }
 
     /// Sessions found at work without a row (a subagent, maybe one sent off in the background,
     /// whose start came while the app wasn't there to hear it): whose they are, so the session

@@ -34,6 +34,7 @@ for Linux's tools).
 | B16 Find in a long conversation | ConversationFindTests | |
 | Scroll to the End, also while a flick of the trackpad still glides | | all of it: a trackpad's scrolling (its phases, a glide) can't be given to a window the tests make, so it's tried by hand |
 | B19 A subagent at work, in the background too | SubagentsAtWorkTests, AgentAsksTests (one moved to the background still asks) | |
+| B21 A session's sub-sessions under it in the sidebar, each with its status; one opened as the app opens again knows whose it is | SubSessionsTests | the fold toggle and the line: a look in a demo copy (`KUVO_DEMO_UNFOLD`) |
 | A message to an agent waiting on a long command or a subagent is read at once: the box moves what it waits on to the background | the bridge's steering.test.js | the engine's own background route (checked by hand against a real engine) |
 | Read on one client, read on all: a session, bot or group chat read on the phone or another Mac stops showing unread here | SessionLifecycleTests, BoxGroupTests; Agents' sessions test (a coding agent's look told) | the phone's side (its own tests) |
 | B17 A folder that isn't a git repository | SessionEditsTests | |

@@ -173,8 +173,8 @@ session working on the phone), so the two stay one app. The same goes for the ap
 What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
 against from this checkout as it does OpenCodeKit: `ClientText`, the rules for what a message says
 (picture names, web links, the site a link is on, a field's own typing), `ClientAccounts`, and
-`ClientDesign`, the look both draw with, moving there from the copies above a piece at a time. Its
-README says what belongs there.
+`ClientDesign`, the look both draw with (surfaces, sizes, the loader, the bots, code colors, math
+and more). Its README says what belongs there.
 A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
 
 ## Upstreams stay up to date
@@ -225,7 +225,7 @@ Its own commit, never mixed into the user's task. Build, run both packages' test
 
 ## The changelog
 
-If people using Kuvo Code would notice a change, add a line to `CHANGELOG.md` under Unreleased, in plain words about what they'll see. The release workflow publishes that section as the release notes, and the app's update window shows it.
+If people using Kuvo Code would notice a change, add a line to `CHANGELOG.md` under Unreleased, in plain words about what they'll see. The release workflow publishes that section as the release notes, and the app's update window shows it. A new keyword or Settings page gets a "New" mark (`<!-- new: … -->` after its line), and a release with headline features a short `### Highlights` list for What's New, the sheet after an update; run `scripts/whats-new.py` after changing either (CONTRIBUTING.md, Workflow). The phone's own `CHANGELOG.md` works the same way.
 
 ## Brand decisions
 

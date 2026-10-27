@@ -28,7 +28,7 @@ public struct ShimmerText: View {
                     // Its letters, as they're set here (cut short the same way), are where the
                     // light shows: drawn again when they change, as their width, font or text
                     // size does.
-                    ShimmerSweep(key: "\(width)|\(text)|\(String(describing: environment.font))|\(environment.dynamicTypeSize)",
+                    ShimmerSweep(key: "\(width)|\(text)|\(environment.font?.hashValue ?? 0)|\(environment.dynamicTypeSize)",
                                  letters: Text(text).environment(\.self, environment).frame(width: width, alignment: .leading))
                 }
             }

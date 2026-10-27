@@ -3,8 +3,9 @@ import OpenCodeKit
 import SwiftUI
 
 // Subagents, where you can keep up with them: a bar over the conversation's composer while
-// they work, and a tab of the side panel for each one you open, with what it does as it does
-// it and a composer of its own to talk to it, stop it, or give it another model.
+// they work, and each one's own conversation, opened from there, its row in the conversation or
+// in the sidebar under its session, with what it does as it does it and a composer of its own
+// to talk to it, stop it, or give it another model.
 
 /// The task a subagent's session starts with: the agent's words, after the engine's line
 /// saying it's a subagent.
@@ -64,7 +65,7 @@ extension Workspace {
 // MARK: - The bar over the composer
 
 /// The conversation's subagents at work, in a bar over the composer like the one for commands
-/// left running: each with what it's doing, Open (to watch and talk to it beside the conversation)
+/// left running: each with what it's doing, Open (its own conversation, to watch and talk to it)
 /// and Stop.
 struct SubagentsBar: View {
     let subagents: [SessionModel.Subagent]
@@ -112,14 +113,14 @@ private struct SubagentsBarRow: View {
             .font(.system(size: 12))
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Open", systemImage: "sidebar.right") {
-                app.utilities.showSubagent(subagent.id, folder: folder)
+            Button("Open", systemImage: "arrow.turn.down.right") {
+                app.tabs.open(.session(subagent.id))
             }
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
             // Whole, in a narrow conversation too: the step gives way first.
             .fixedSize()
-            .help("Watch it beside the conversation, and talk to it")
+            .help("Open its conversation, to watch it and talk to it")
             // A coding agent's subagent stops with the conversation it works for.
             if !(model.map { OutsideAgents.isAgentSession($0.session) } ?? false) {
                 Button("Stop", systemImage: "stop.circle") { model?.stop() }
@@ -138,15 +139,20 @@ private struct SubagentsBarRow: View {
     }
 }
 
-// MARK: - The panel's tab
+// MARK: - Its conversation
 
-/// A subagent in a tab of the side panel: what it was asked and everything it does as it does
-/// it, its model and Stop, and a composer to talk to it. While it works, what you send reaches it
-/// at its next step; once it's done, it carries on from where it left off.
+/// A subagent's conversation, in its own tab: the way back to the session that started it, what
+/// it was asked and everything it does as it does it, its model and Stop, and a composer to talk
+/// to it. While it works, what you send reaches it at its next step; once it's done, it carries
+/// on from where it left off.
 struct SubagentPane: View {
     let id: String
     /// The folder of the conversation it works for.
     let folder: String
+    /// The session whose agent started it.
+    let parent: String
+    /// Opens a session: the one that started it.
+    let open: (String) -> Void
     @Environment(Workspace.self) private var workspace
     @State private var model: SessionModel?
     @State private var isMissing = false
@@ -154,7 +160,7 @@ struct SubagentPane: View {
     var body: some View {
         Group {
             if let model {
-                SubagentConversation(model: model)
+                SubagentConversation(model: model, parent: parent, open: open)
             } else if isMissing {
                 ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
                     .frame(maxHeight: .infinity)
@@ -182,6 +188,8 @@ struct SubagentPane: View {
 
 private struct SubagentConversation: View {
     @Bindable var model: SessionModel
+    let parent: String
+    let open: (String) -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Catalog.self) private var catalog
     @Environment(AppModel.self) private var app
@@ -252,10 +260,19 @@ private struct SubagentConversation: View {
             }
             .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(model.session.title ?? "Subagent")
-                    .font(.system(size: 13, weight: .semibold))
+                // Its task is the card's title: here, whose it is, and the way back there.
+                Button { open(parent) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("From ") + Text(parentTitle).fontWeight(.semibold)
+                    }
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                }
+                .buttonStyle(TextButtonStyle(outset: true))
+                .help("Open the session that started it")
                 Group {
                     if isWorking {
                         ShimmerText(text: [agentName, model.currentStep].compactMap { $0 }.joined(separator: " · "))
@@ -273,6 +290,11 @@ private struct SubagentConversation: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+    }
+
+    private var parentTitle: String {
+        if let bot = workspace.botName?(parent) { return bot }
+        return (workspace.session(parent) ?? workspace.subSession(parent)).map { $0.parentID == nil ? $0.title ?? "New Session" : SubagentTask.title($0.title ?? "") } ?? "its session"
     }
 
     /// How it ended, with what it used.

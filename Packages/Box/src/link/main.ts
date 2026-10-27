@@ -44,7 +44,7 @@ import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { watchBox } from "./engine/watch";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE } from "./home";
+import { IS_MAC, K, NEEDED_FILE, PID_FILE, RUN, scriptIs, VERSION_FILE, homeFolder } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
 import { macLinkCheck } from "./mac/link";
@@ -673,7 +673,7 @@ if (main) {
     // it's updated, the running bridge goes, for the keeper to start the new one.
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
-    const test = option("--url") && option("--key") && path.resolve(K) !== path.join(os.homedir(), ".kuvo-code");
+    const test = option("--url") && option("--key") && path.resolve(K) !== path.join(homeFolder(), ".kuvo-code");
     const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
     noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome.result === "updated") {

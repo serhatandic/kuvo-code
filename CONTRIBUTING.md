@@ -294,6 +294,7 @@ when you're there to answer.
 | `KUVO_DEMO_OFFSCREEN` | With `KUVO_DEMO_WINDOW`: the window past the screen's right edge, so the pointer can't hover over what you capture (`screencapture -l` still gets all of it) |
 | `KUVO_DEMO_BOX` | The sidebar's box in view, `mac` or a machine's name, a few seconds after launch |
 | `KUVO_DEMO_BOXES` | Stand-in machines in the sidebar by name, comma-separated (`lokum,staging,gpu-01`): how the name strip looks with many and with long names; their pages are empty |
+| `KUVO_DEMO_UNFOLD` | Every session's sub-sessions (its subagents') shown under it in the sidebar, for a look at the branches |
 | `KUVO_DEMO_SEARCH` | Type this in the sidebar's search field |
 | `KUVO_DEMO_BOX_FAILED` | This Mac's box as if it had stopped for good, with this reason: how the sidebar shows it |
 | `KUVO_DEMO_KEYS_UNREAD` | The app's host interface not started as this Mac's box starts, so the box can't reach its keys: how Settings › Integrations shows it, until its Try Again starts it |
@@ -328,6 +329,7 @@ when you're there to answer.
 | `KUVO_DEMO_OPEN_STEPS` | Every step in the conversation shows its details, opened, and so does the thinking |
 | `KUVO_DEMO_FOLDS` | Seconds: the conversation's lines of steps, and the bars over its composer and the usage panel's first bar, open and fold a few times, that far apart, to look at how they move (with `KUVO_DEMO_SLOW`) |
 | `KUVO_DEMO_BARS` | Sample bars in the card over the composer of the session in view: `all` a goal, a handoff, a review that found three things and an answered side question (a full card); `two` the review and the side question |
+| `KUVO_DEMO_UNDO` | Undo's lines in the card, held so they don't go: the goal put away and a message removed (with `KUVO_DEMO_BARS` and `KUVO_DEMO_WAITING`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
@@ -385,6 +387,7 @@ when you're there to answer.
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |
 | `KUVO_DEMO_WIDGET_SNAPSHOTS` | A folder: each widget an agent made, once drawn, saved there as a picture (a background copy's window draws no web pages) |
+| `KUVO_DEMO_WHATS_NEW` | What's New's sheet over the window, with the newest highlights |
 | `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
@@ -493,7 +496,14 @@ Every change starts from an issue and lands on `main` through a pull request.
    - **If people using Kuvo Code would notice the change, add a line to
      `CHANGELOG.md`** under Unreleased, saying what they'll see. It becomes
      part of the next release's notes, on GitHub and in the app's update
-     window.
+     window. Something new people use (a keyword, a Settings page) can carry a
+     "New" mark until it's used: add `<!-- new: keyword/goal -->` (or
+     `settings/<page>`) after its line. A release with headline features lists
+     a few under `### Highlights` at the top of its section, each
+     `- **Title**: one line. <!-- symbol: <SF Symbol>; open: settings/<page> -->`,
+     which What's New shows once after an update; then run
+     `python3 scripts/whats-new.py` and commit `KuvoCode/Resources/whats-new.json`
+     (CI checks it, and the release workflow writes it again).
 4. **CI must pass**, and a maintainer reviews and approves the pull request.
    It's then squash-merged and the branch is deleted.
 

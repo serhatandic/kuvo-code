@@ -10,12 +10,13 @@ public enum EngineRoutes {
         canonical(path)?.prefixMatch(of: #/api(/|\?|$)/#) != nil
     }
 
-    /// The same of a coding agents' bridge, but for the two routes only the app wires things with:
-    /// where the engine is, and its group chats' own steps (moves), which a phone does through
-    /// `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part by part.
+    /// The same of a coding agents' bridge, but for the routes only the box and the app wire things
+    /// with: where the engine is, its group chats' own steps (moves), which a phone does through
+    /// `kuvo/groups`, and what its browser downloaded (`api/kuvo/artifacts/noted`; a client reads
+    /// the record through `kuvo/artifacts`). Checked on the path as it's sent, which the bridge reads part by part.
     public static func allowsAgents(_ path: String, method: String = "GET") -> Bool {
         guard let sent = canonical(path) else { return false }
-        return sent.prefixMatch(of: #/api(/|\?|$)/#) != nil && sent.prefixMatch(of: #/api/kuvo/(engine|groups)(/|\?|$)/#) == nil
+        return sent.prefixMatch(of: #/api(/|\?|$)/#) != nil && sent.prefixMatch(of: #/api/kuvo/(engine|groups|artifacts)(/|\?|$)/#) == nil
     }
 
     /// `path` written one way only, which is both what's checked and what's sent, or nil when it

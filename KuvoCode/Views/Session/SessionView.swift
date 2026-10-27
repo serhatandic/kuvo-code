@@ -260,7 +260,12 @@ private struct BottomStack: View {
                 }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
-                    if let goal = model.goal {
+                    if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
+                        let item = PutAway.goal(started: goal.started)
+                        UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
+                            .modifier(CardRow())
+                            .transition(.fold)
+                    } else if let goal = model.goal {
                         GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
                             model.changeGoal(.pause)
                         } resume: {
@@ -268,7 +273,7 @@ private struct BottomStack: View {
                         } stop: {
                             model.stopGoal()
                         } done: {
-                            model.changeGoal(.clear)
+                            model.putAwayGoal()
                         }
                         .modifier(CardRow())
                         .transition(.fold)
@@ -291,8 +296,8 @@ private struct BottomStack: View {
                             .modifier(CardRow())
                             .transition(.fold)
                     }
-                    // What's waiting for the agent.
-                    if !model.waiting.isEmpty {
+                    // What's waiting for the agent (and the message just removed, for Undo).
+                    if !model.waiting.isEmpty || model.putAways.isPutAway(.message) {
                         QueueDock(model: model, inCard: true, isOpen: $queueOpen)
                             .modifier(CardRow())
                             .transition(.fold)
@@ -401,6 +406,11 @@ private struct BottomStack: View {
                 if let which = ProcessInfo.processInfo.environment["KUVO_DEMO_BARS"], let bridge = model.goalBridge() {
                     bridge.showDemoBars(which, for: model.id)
                     model.shownSideQuestion = "btw_demo"
+                }
+                // Undo's lines, held: the goal put away and a message removed (KUVO_DEMO_UNDO=1).
+                if ProcessInfo.processInfo.environment["KUVO_DEMO_UNDO"] != nil {
+                    if let goal = model.goal { model.putAways.put(.goal(started: goal.started), text: "Goal put away", lingers: true) }
+                    model.putAways.put(.message, text: "Message removed")
                 }
                 #endif
             }

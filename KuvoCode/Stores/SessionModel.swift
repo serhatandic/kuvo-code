@@ -64,6 +64,18 @@ final class SessionModel {
     var hidesWakes = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
+    /// What the card's ✕ put away, with Undo for a moment (`PutAways`).
+    let putAways = PutAways<PutAway> { await SessionModel.undoMoment($0) }
+
+    /// Undo's moment; with KUVO_DEMO_UNDO it never passes, to look at its lines.
+    private nonisolated static func undoMoment(_ moment: Duration) async {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_UNDO"] != nil {
+            await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+        }
+        #endif
+        try? await Task.sleep(for: moment)
+    }
     /// The side question's and the review's bars show only their lines.
     var hidesSideQuestion = false
     var hidesReview = false
@@ -856,13 +868,8 @@ final class SessionModel {
         let text = ReviewComments.text(named, adding: comments)
         guard !text.isEmpty || !files.isEmpty else { return }
         if withComments { reviewComments = [] }
-        let id = Identifier.message()
-        // With nothing running (or about to) and nothing queued, there's nothing to wait for.
-        let delivery: InboxItem.Delivery = queue && (isBusy || hasQueue) ? .queue : .steer
-        if delivery == .steer { isQueuePaused = false }
-        outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
         commitUndo()
-        editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
+        let delivery = post(text, files: files, for: model, queue: queue, written: written, comments: comments)
         var props = Analytics.model(provider: model?.providerID ?? session.model?.providerID, model: model?.id ?? session.model?.id)
         props["mode"] = Analytics.mode(agent)
         props["queued"] = delivery == .queue
@@ -871,6 +878,47 @@ final class SessionModel {
         Analytics.shared.track("message_sent", props)
         Analytics.shared.noteMessage(in: session.id, chars: text.count)
         Analytics.shared.messageSent(path: Self.place(of: session.location.directory))
+    }
+
+    /// Undo for a removed message: back in the queue, at its end, as it went (its words, what it
+    /// names and its files, attached again); paused as the queue was, after a Stop.
+    func requeue(_ item: Transcript.Pending, for model: Model?, paused: Bool) {
+        // The agent took it before the removal reached it: it went, and doesn't go twice.
+        guard !transcript.messages.contains(where: { $0.id == item.id }) else { return }
+        guard canReach else {
+            failure = "The message couldn't come back: its computer can't be reached."
+            return
+        }
+        let (text, paths) = Attachments.split(item.text)
+        if paused { isQueuePaused = true }
+        post(text, files: Attachments.restored(item.files, noting: paths), for: model, queue: true, holds: paused, written: text, comments: [])
+    }
+
+    /// The goal's ✕ once it's over: cleared once Undo's moment passes, unless another goal took
+    /// its place meanwhile.
+    func putAwayGoal() {
+        guard let goal, goal.isOver else { return }
+        let item = PutAway.goal(started: goal.started)
+        putAways.put(item, text: "Goal put away", lingers: true, done: { [weak self] in
+            guard let self, self.goal?.started == goal.started else { return }
+            changeGoal(.clear) { [weak self] in
+                self?.putAways.gone(item)
+                if self?.failure == nil { self?.failure = "The goal couldn't be put away. Try again." }
+            }
+        })
+    }
+
+    /// Sends `text` as it is, with `files` attached: what's shown waiting at once, and what goes
+    /// back to the composer if it can't go. Says how it was sent. `holds`: queued, whatever the
+    /// agent is doing, to wait for Resume.
+    @discardableResult
+    private func post(_ text: String, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
+        let id = Identifier.message()
+        // With nothing running (or about to) and nothing queued, there's nothing to wait for.
+        let delivery: InboxItem.Delivery = holds || queue && (isBusy || hasQueue) ? .queue : .steer
+        if delivery == .steer { isQueuePaused = false }
+        outgoing[id] = Outgoing(state: .sending, isOurs: true, startsRun: delivery == .steer && !isBusy)
+        editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
         let previous = sending
         sending = Task {
             await previous?.value
@@ -904,6 +952,7 @@ final class SessionModel {
                 fail(error)
             }
         }
+        return delivery
     }
 
     /// A message's request went: the engine has it. Moved to the queue if Stop held it as it went,

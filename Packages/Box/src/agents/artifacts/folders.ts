@@ -153,7 +153,7 @@ export class BotFolders {
     this.flush(bot)
     if (this.watching) return
     const folder = join(this.bots, bot)
-    for (const path of changedSince(folder, since, (inside) => recordable(join(bot, inside)))) this.store.change(path, made("shell"))
+    void this.store.changeAll(changedSince(folder, since, (inside) => recordable(join(bot, inside))), made("shell"))
   }
 
   /** What's waiting to settle in `bot`'s folder (all bots' without one), recorded now. */
@@ -169,7 +169,7 @@ export class BotFolders {
     this.pending.delete(path)
     const bot = relative(this.bots, path).split(sep)[0]
     const running = this.recorder.madeInFolder(bot)
-    this.store.change(path, running ? running("shell") : { by: { kind: "outside" }, via: "outside", where: { bot } })
+    void this.store.change(path, running ? running("shell") : { by: { kind: "outside" }, via: "outside", where: { bot } })
   }
 
   private list(): string[] {
@@ -189,7 +189,7 @@ export class BotFolders {
       try {
         const stat = statSync(file)
         if (!stat.isFile() || stat.size > copyLimit) continue
-        this.store.before(file, readFileSync(file), { bot })
+        void this.store.before(file, readFileSync(file), { bot })
       } catch {}
     }
   }

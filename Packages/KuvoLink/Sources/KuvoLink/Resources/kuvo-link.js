@@ -4,7 +4,7 @@
 import { spawn as spawn4 } from "node:child_process";
 import crypto19 from "node:crypto";
 import fs47 from "node:fs";
-import os12 from "node:os";
+import os7 from "node:os";
 import path47 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -76,7 +76,10 @@ import fs2 from "node:fs";
 // Packages/Box/src/link/home.ts
 import os from "node:os";
 import path from "node:path";
-var K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
+function homeFolder() {
+  return process.env.HOME || os.homedir();
+}
+var K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
 var RUN = path.join(K, "run");
 var LINK_FILE = path.join(RUN, "link.json");
 var ENGINE_FILE = path.join(RUN, "engine.json");
@@ -85,7 +88,7 @@ var PID_FILE = path.join(RUN, "link.pid");
 var NEEDED_FILE = path.join(RUN, "link.needed");
 var VERSION_FILE = path.join(RUN, "link.version");
 var BOX = path.join(K, "box");
-var home = os.homedir();
+var home = homeFolder();
 var shownRoot = K.startsWith(home + "/") ? "~" + K.slice(home.length) : K;
 var BOX_KEYS = path.join(BOX, "keys");
 var BOT_KEYS = path.join(K, "box", "bot-keys");
@@ -95,7 +98,7 @@ var ENGINE_DATA = process.env.KUVO_ENGINE_DATA || path.join(K, "data", "opencode
 var SESSION_WAKES = process.env.KUVO_WAKES || path.join(K, "wakes");
 var WAKE_COMMAND = process.env.KUVO_WAKE_COMMAND || path.join(K, "bin", "kuvo-wake");
 var APP_KEY_FILES = process.env.KUVO_KEYS ? process.env.KUVO_KEYS.replace(/\/+$/, "") : null;
-var IN_TEST_FOLDER = path.resolve(K) !== path.join(os.homedir(), ".kuvo-code");
+var IN_TEST_FOLDER = path.resolve(K) !== path.join(homeFolder(), ".kuvo-code");
 var CONFIG_LOCK = path.join(RUN, ".config.lock");
 var BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
 var IS_MAC = process.env.KUVO_BOX === "mac";
@@ -1355,7 +1358,7 @@ var allowed = (path, method = "GET") => /^api(\/|\?|$)/.test(canonicalPath(path)
 var socketAllowed = (path) => SOCKETS.some((pattern) => pattern.test(canonicalPath(path) ?? ""));
 var agentsAllowed = (path, method = "GET") => {
   const sent = canonicalPath(path) ?? "";
-  return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(sent);
+  return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups|artifacts)(\/|\?|$)/.test(sent);
 };
 var RETURN = /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):([1-9][0-9]{0,4})(?:\/(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*)?\?(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})+)(?:#.*)?$/;
 var signInReturn = (url) => {
@@ -1566,7 +1569,6 @@ async function* signInReturnRoute(context) {
 // Packages/Box/src/link/areas/skills.ts
 import crypto3 from "node:crypto";
 import fs13 from "node:fs";
-import os3 from "node:os";
 import path13 from "node:path";
 var SKILLS = path13.join(ENGINE_CONFIG || path13.join(K, "config"), "opencode", "skills");
 var SKILL_SOURCE = ".kuvo-source.json";
@@ -1713,7 +1715,7 @@ function skillPlace(file) {
   if (file.startsWith("/builtin/"))
     return "built in";
   const folder = path13.dirname(path13.dirname(file));
-  const home = os3.homedir();
+  const home = homeFolder();
   return `in ${folder === home || folder.startsWith(home + path13.sep) ? "~" + folder.slice(home.length) : folder}`;
 }
 async function skillsIn(repository) {
@@ -2446,7 +2448,7 @@ import path23 from "node:path";
 
 // Packages/Box/src/link/bots/kit.ts
 import fs20 from "node:fs";
-import os4 from "node:os";
+import os3 from "node:os";
 import path19 from "node:path";
 
 // Packages/Box/src/link/areas/projects.ts
@@ -2880,7 +2882,7 @@ function readKit() {
   if (!words || IS_MAC && !mac)
     return null;
   const timeZone = zoneOf(mac);
-  const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os4.hostname();
+  const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os3.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
   const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
@@ -3372,7 +3374,6 @@ async function repairRules(target, here, sessionID) {
 
 // Packages/Box/src/link/areas/worktrees.ts
 import fs23 from "node:fs";
-import os5 from "node:os";
 import path22 from "node:path";
 
 // Packages/Box/src/link/git.ts
@@ -3602,7 +3603,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal) {
 }
 async function worktreesWhere(directory, engine, signal, projects = readProjects().filter((each) => !each.removed).map((each) => each.directory)) {
   const value = typeof directory === "string" && directory !== "" ? directory : null;
-  const answer = { directory: value, default: path22.join(ENGINE_DATA, "worktree"), home: os5.homedir(), projects: [] };
+  const answer = { directory: value, default: path22.join(ENGINE_DATA, "worktree"), home: homeFolder(), projects: [] };
   const ids = new Map;
   if (engine?.port) {
     try {
@@ -7409,7 +7410,7 @@ function macLetterAnswer(id, signal, most = LETTER_WAIT) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import os10 from "node:os";
+import os5 from "node:os";
 
 // Packages/Box/src/link/letters/take.ts
 import fs38 from "node:fs";
@@ -8007,9 +8008,8 @@ async function* engineRoute(context) {
 
 // Packages/Box/src/link/areas/found.ts
 import { readFileSync } from "node:fs";
-import os6 from "node:os";
 import path38 from "node:path";
-function opencodeAuthFile(home = os6.homedir(), env = process.env) {
+function opencodeAuthFile(home = homeFolder(), env = process.env) {
   const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path38.resolve(env.XDG_DATA_HOME).startsWith(path38.resolve(K)) ? env.XDG_DATA_HOME : undefined;
   return path38.join(own || path38.join(home, ".local", "share"), "opencode", "auth.json");
 }
@@ -8271,11 +8271,10 @@ async function* fileAt(requestPath, json) {
 
 // Packages/Box/src/link/areas/folders.ts
 import fs40 from "node:fs";
-import os7 from "node:os";
 import path40 from "node:path";
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
-  const home = os7.homedir();
+  const home = homeFolder();
   const given = (query.get("path") ?? "").trim();
   const folder = !given || given === "~" ? home : given.startsWith("~/") ? path40.join(home, given.slice(2)) : given;
   if (!path40.isAbsolute(folder))
@@ -8303,7 +8302,7 @@ function listFolders(requestPath) {
 }
 function makeFolder(body) {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
-  const home = os7.homedir();
+  const home = homeFolder();
   const folder = given.startsWith("~/") ? path40.join(home, given.slice(2)) : given;
   if (!path40.isAbsolute(folder))
     return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
@@ -8375,7 +8374,7 @@ import fs41 from "node:fs";
 import path41 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.83";
+var BRIDGE_VERSION = "0.9.85";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -8552,7 +8551,6 @@ async function* pluginSearchRoute(context) {
 
 // Packages/Box/src/link/areas/programs.ts
 import fs42 from "node:fs";
-import os8 from "node:os";
 import path43 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
@@ -8569,7 +8567,7 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name))
     return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
-    const file = name.startsWith("~/") ? path43.join(os8.homedir(), name.slice(2)) : name;
+    const file = name.startsWith("~/") ? path43.join(homeFolder(), name.slice(2)) : name;
     return { status: 200, value: { name, path: path43.isAbsolute(file) && runnable(file) ? file : null } };
   }
   const found = PATH.split(path43.delimiter).filter(Boolean).map((folder) => path43.join(folder, name)).find(runnable);
@@ -9109,7 +9107,7 @@ async function* linkRoute(context) {
 import { spawnSync as spawnSync2 } from "node:child_process";
 import crypto17 from "node:crypto";
 import fs46 from "node:fs";
-import os9 from "node:os";
+import os4 from "node:os";
 import path46 from "node:path";
 var UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 var UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
@@ -9203,7 +9201,7 @@ function noteLauncher(readEngine = readEngineFile, now = Date.now()) {
   } catch {}
 }
 function updatesBlocked(link = readLink(), now = Date.now(), root = K) {
-  if (path46.resolve(root) !== path46.join(os9.homedir(), ".kuvo-code"))
+  if (path46.resolve(root) !== path46.join(homeFolder(), ".kuvo-code"))
     return "Only a machine's own Kuvo Code folder updates itself.";
   let launchers = {};
   try {
@@ -9408,7 +9406,7 @@ async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, block
     const engineFolder = path46.join(K, "engine", manifest.engine);
     let staged = null;
     if (!fs46.existsSync(path46.join(engineFolder, "opencode"))) {
-      const kind = { x64: "x86_64", arm64: "aarch64" }[os9.arch()];
+      const kind = { x64: "x86_64", arm64: "aarch64" }[os4.arch()];
       const build = manifest.linux?.[kind];
       if (!build?.url || !/^sha512-/.test(build.integrity ?? ""))
         throw new Error("The release has no engine for this machine.");
@@ -9790,7 +9788,7 @@ async function* toApp(request, phone, signal) {
     yield { body: Buffer.from(chunk) };
   }
 }
-function macFront(handle = engineHandler(readEngineFile, { name: os10.hostname() })) {
+function macFront(handle = engineHandler(readEngineFile, { name: os5.hostname() })) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
     if (macAnswers(route) || /^api(\/|$)/.test(route) || route.startsWith(AGENTS))
@@ -9873,8 +9871,8 @@ async function runMacLink() {
 // Packages/Box/src/link/server/serve.ts
 import crypto18 from "node:crypto";
 import http from "node:http";
-import os11 from "node:os";
-function serveBox(password, handle = engineHandler(readEngineFile, { name: os11.hostname() })) {
+import os6 from "node:os";
+function serveBox(password, handle = engineHandler(readEngineFile, { name: os6.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
@@ -10092,11 +10090,11 @@ async function run() {
     } catch {}
     const host = new LinkHost({
       key: Buffer.from(link.key, "base64url"),
-      hello: { v: 1, kind: "machine", name: link.name || os12.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
+      hello: { v: 1, kind: "machine", name: link.name || os7.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
       mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerTargets), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
-      handle: engineHandler(readEngineFile, { name: link.name || os12.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
+      handle: engineHandler(readEngineFile, { name: link.name || os7.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {}
     });
@@ -10157,7 +10155,7 @@ async function box(command) {
       try {
         given = JSON.parse(await input());
       } catch {}
-      const handle = engineHandler(readEngineFile, { name: os12.hostname() });
+      const handle = engineHandler(readEngineFile, { name: os7.hostname() });
       const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)) };
       let status = 502;
       let type = "";
@@ -10223,7 +10221,7 @@ async function serve() {
     addMacDefaults();
   if (IS_MAC)
     macLink.hold = macNoticeHold();
-  const server = serveBox(password, engineHandler(readEngineFile, { name: os12.hostname() }, readBridgeFile, () => {}, macLink.hold));
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os7.hostname() }, readBridgeFile, () => {}, macLink.hold));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -10295,7 +10293,7 @@ async function setup() {
     if (!next.phones.length && !peersOf(next).length)
       return current ? next : null;
     next.relay = String(input.relay);
-    next.name = String(input.name || next.name || os12.hostname()).slice(0, 100);
+    next.name = String(input.name || next.name || os7.hostname()).slice(0, 100);
     link = next;
     return next;
   });
@@ -10352,7 +10350,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto19.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os12.hostname(), phones: [] };
+    const next = current ?? { secret: crypto19.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os7.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;
@@ -10400,7 +10398,7 @@ if (main) {
   else if (mode === "update") {
     const args = process.argv.slice(3);
     const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
-    const test = option("--url") && option("--key") && path47.resolve(K) !== path47.join(os12.homedir(), ".kuvo-code");
+    const test = option("--url") && option("--key") && path47.resolve(K) !== path47.join(homeFolder(), ".kuvo-code");
     const outcome = await update({ now: args.includes("--now"), step: (running) => noteUpdate({ running }), ...test ? { url: option("--url"), keys: [option("--key")], blocked: null } : {} });
     noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
     if (outcome.result === "updated") {

@@ -127,6 +127,13 @@ extension AppModel {
             if let machine { machines.engine(machine)?.browser.expectAsk() }
         }
         utilities.machineBrowser = { [weak self] machine in self?.machines.engine(machine)?.browser }
+        // What an agent downloads in this Mac's browser goes in this Mac's record of what agents
+        // made, as that conversation's (the browser is in the app, so the app tells its box).
+        utilities.agentDownloaded = { [weak self] file, session in
+            guard let api = self?.agents.api else { return }
+            let body = JSONValue.object(["path": .string(file.path), "session": .string(session), "via": .string("download")])
+            Task { _ = try? await api.client.send(try api.client.request("POST", "api/kuvo/artifacts/noted", body: body), as: JSONValue.self) }
+        }
         // A subagent shows in the session that started it, a group chat's seat in its chat.
         utilities.shownIn = { [weak self] session in
             guard let self else { return session }

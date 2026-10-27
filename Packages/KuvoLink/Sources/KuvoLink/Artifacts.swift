@@ -365,7 +365,7 @@ public enum ArtifactWords {
         return bot.map { "\($0)’s memory" } ?? "Its memory"
     }
 
-    /// "Wrote it", "Ada changed it", "Made it with a command", "You put back version 3"…
+    /// "Wrote it", "Ada changed it", "Made it with a command", "Pixel took it" (a screenshot), "You put back version 3"…
     public static func what(_ version: ArtifactVersion, bot: String? = nil) -> String {
         if version.before == true { return "Before it was changed" }
         if let restored = version.restored { return "You put back version \(restored)" }
@@ -376,6 +376,7 @@ public enum ArtifactWords {
         case .deleted: verb = "deleted it"
         case .added:
             verb = version.via.contains("generate_image") ? "made it"
+                : version.via.contains("browser_screenshot") ? "took it"
                 : version.via.contains("download") ? "downloaded it"
                 : version.via.contains("shell") ? "made it with a command"
                 : "wrote it"

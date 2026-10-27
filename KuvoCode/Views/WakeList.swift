@@ -340,6 +340,28 @@ struct WakeBar: View {
     }
 
     @ViewBuilder private func row(_ item: Item) -> some View {
+        if let putAways, let text = putAways.text(.wake(item.id)) {
+            UndoLine(text: text, undo: putAways.canUndo(.wake(item.id)) ? { putAways.undo(.wake(item.id)) } : nil, isRow: true)
+        } else {
+            line(item)
+        }
+    }
+
+    /// The conversation's: a wake-up canceled here waits for Undo's moment.
+    private var putAways: PutAways<PutAway>? { app.workspace.model(for: owner.session)?.putAways }
+
+    /// Canceled once Undo's moment is over; its row says so until it's gone.
+    private func cancel(_ item: Item, saying text: String, _ change: @escaping @MainActor () async throws -> Void) {
+        guard let putAways else { return attempt(change) }
+        putAways.put(.wake(item.id), text: text, lingers: true, done: {
+            attempt {
+                defer { putAways.gone(.wake(item.id)) }
+                try await change()
+            }
+        })
+    }
+
+    @ViewBuilder private func line(_ item: Item) -> some View {
         HStack(spacing: 10) {
             switch item {
             case .wake(let wake):
@@ -356,7 +378,7 @@ struct WakeBar: View {
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help(wake.every == nil ? "Wake it up now with this note, rather than at its time" : "Wake it up now with this note; it still comes back at its time")
-                Button("Cancel", systemImage: "xmark.circle") { attempt { try await app.wakeUps.cancel(wake, of: owner) } }
+                Button("Cancel", systemImage: "xmark.circle") { cancel(item, saying: "Wake-up canceled") { try await app.wakeUps.cancel(wake, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help("Cancel this wake-up")
@@ -370,7 +392,7 @@ struct WakeBar: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(watch.check + "\n\n" + watch.note)
-                Button("Stop", systemImage: "xmark.circle") { attempt { try await app.wakeUps.cancel(watch, of: owner) } }
+                Button("Stop", systemImage: "xmark.circle") { cancel(item, saying: "Watch stopped") { try await app.wakeUps.cancel(watch, of: owner) } }
                     .buttonStyle(TextButtonStyle())
                     .font(.system(size: 13))
                     .help("Stop this watch")

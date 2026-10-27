@@ -1151,6 +1151,22 @@
       "method": "POST"
     },
     {
+      "path": "api/kuvo/artifacts/noted",
+      "allowed": false,
+      "method": "POST"
+    },
+    {
+      "path": "api/kuvo/%61rtifacts/noted",
+      "allowed": false,
+      "method": "POST"
+    },
+    {
+      "path": "api/kuvo/link/artifacts?bot=bot_x",
+      "allowed": true,
+      "method": "GET",
+      "forwarded": "api/kuvo/link/artifacts?bot=bot_x"
+    },
+    {
       "path": "api/kuvo/%67roups",
       "allowed": false,
       "method": "GET"
