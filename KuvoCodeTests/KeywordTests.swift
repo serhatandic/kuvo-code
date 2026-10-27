@@ -155,11 +155,12 @@ import Testing
         let bridge = try await start(model)
         defer { bridge.stop() }
 
-        // A name that's none of them comes back, saying so.
-        model.draftText = "/review with Gemini 9"
+        // A name half typed comes back, saying so; nothing is read.
+        model.draftText = "/review with deep"
         model.submitDraft(for: nil, queue: false, commands: [])
-        #expect(model.draftText == "/review with Gemini 9")
-        #expect(model.failure == "There’s no model called “Gemini 9” here. Pick one from the list.")
+        #expect(model.draftText == "/review with deep")
+        #expect(model.failure == "Finish the model’s name, or pick it from the list.")
+        #expect(model.review == nil)
 
         model.draftText = "/review with deepseek v4.1 flash the pause handling"
         model.submitDraft(for: nil, queue: false, commands: [])

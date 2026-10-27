@@ -223,12 +223,14 @@ struct ChangesPanel: View {
         .frame(height: 40)
     }
 
-    /// The engine's /review on what the tab shows: the uncommitted changes, or the branch.
+    /// A review of what the tab shows: the uncommitted changes with fresh eyes (/review), or the
+    /// branch, which the engine's own review reads (/review-quick, where the keyword has the name).
     private func review(in model: SessionModel) {
         let branch = changes.scope == .branch ? workspace.branches[changes.directory] : nil
         Analytics.shared.track("review_requested", ["scope": changes.scope.rawValue])
-        model.submit("/review" + (branch.map { " " + $0 } ?? ""), files: [], for: catalog.model(model.session.model), queue: false,
-                     commands: catalog.commands(in: model.session.location.directory))
+        let commands = Keyword.commands(catalog.commands(in: model.session.location.directory), keywords: model.keywords)
+        let engines = model.keywords.contains(.review) ? "/" + Keyword.quickReview : "/review"
+        model.submit(branch.map { engines + " " + $0 } ?? "/review", files: [], for: catalog.model(model.session.model), queue: false, commands: commands)
     }
 
     // MARK: Files

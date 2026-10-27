@@ -1019,7 +1019,9 @@ final class SessionModel {
         case .handoff:
             startHandoff(next: rest, written: written)
         case .review:
-            startReview(ReviewCommand(rest, readers: catalog()?.reviewReaders ?? [], preferring: Catalog.lastReviewer), written: written)
+            // A coding agent's conversation is read by its own agent: "with" names no other.
+            let readers = OutsideAgents.isAgentSession(session) ? [] : catalog()?.reviewReaders ?? []
+            startReview(ReviewCommand(rest, readers: readers, preferring: Catalog.lastReviewer), written: written)
         }
         Analytics.shared.track("keyword_run", ["keyword": keyword.rawValue])
     }
@@ -1132,7 +1134,7 @@ final class SessionModel {
     private func startReview(_ command: ReviewCommand, written: String) {
         if let searching = command.searching {
             restore(text: written)
-            failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "There’s no model called “\(searching)” here. Pick one from the list."
+            failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "Finish the model’s name, or pick it from the list."
             return
         }
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }

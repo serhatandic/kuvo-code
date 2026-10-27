@@ -6,10 +6,10 @@ import Testing
 // models whose name it starts with, the one picked before of two named alike, and the rest is what
 // to look at; words naming none yet are what "Who reads it" looks for.
 
-private let flash = ReviewCommand.Reader(name: "DeepSeek V4.1 Flash", ref: ModelRef(id: "v4.1-flash", providerID: "deepseek"))
-private let claude = ReviewCommand.Reader(name: "Claude", ref: ModelRef(id: "claude", providerID: "x"))
-private let sonnet = ReviewCommand.Reader(name: "Claude Sonnet 4.5", ref: ModelRef(id: "sonnet-4.5", providerID: "anthropic"))
-private let copilotSonnet = ReviewCommand.Reader(name: "Claude Sonnet 4.5", ref: ModelRef(id: "claude-sonnet-4.5", providerID: "github-copilot"))
+private let flash = ReviewCommand.Reader(name: "DeepSeek V4.1 Flash", ref: ModelRef(id: "v4.1-flash", providerID: "deepseek"), provider: "DeepSeek")
+private let claude = ReviewCommand.Reader(name: "Claude", ref: ModelRef(id: "claude", providerID: "x"), provider: "X")
+private let sonnet = ReviewCommand.Reader(name: "Claude Sonnet 4.5", ref: ModelRef(id: "sonnet-4.5", providerID: "anthropic"), provider: "Anthropic")
+private let copilotSonnet = ReviewCommand.Reader(name: "Claude Sonnet 4.5", ref: ModelRef(id: "claude-sonnet-4.5", providerID: "github-copilot"), provider: "GitHub Copilot")
 private let readers = [flash, claude, sonnet, copilotSonnet]
 
 @Test func whoReadsItAndWhatToLookAtAreReadApart() {
@@ -27,6 +27,9 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand(" with Claude Sonnet 4.5", readers: readers, preferring: copilotSonnet.ref).reader == copilotSonnet)
     // A name is a whole word: "Claudette" isn't Claude.
     #expect(ReviewCommand(" with Claudette", readers: readers).reader == nil)
+    // Still being typed, the longer names it starts are offered.
+    #expect(ReviewCommand.longer(than: " with Claude", readers: readers) == [sonnet, copilotSonnet])
+    #expect(ReviewCommand.longer(than: " with Claude ", readers: readers).isEmpty)
 }
 
 @Test func withoutWithItsTheConversationsOwnModelAndAllOfItIsWhatToLookAt() {
@@ -36,6 +39,19 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(command.searching == nil)
     // "without" isn't "with".
     #expect(ReviewCommand(" without the tests", readers: readers).focus == "without the tests")
+}
+
+@Test func withAndWordsThatCanBeNoModelAreWhatToLookAt() {
+    let command = ReviewCommand(" with an eye on error handling", readers: readers)
+    #expect(command.reader == nil)
+    #expect(command.searching == nil)
+    #expect(command.focus == "with an eye on error handling")
+}
+
+@Test func aSearchFindsAModelByItsNameOrWhoServesIt() {
+    #expect(ReviewCommand.search("copilot sonnet", in: readers) == [copilotSonnet])
+    #expect(ReviewCommand.search("sonnet", in: readers) == [sonnet, copilotSonnet])
+    #expect(ReviewCommand(" with copilot son", readers: readers).searching == "copilot son")
 }
 
 @Test func withAndWordsNamingNoneYetAreLookedFor() {

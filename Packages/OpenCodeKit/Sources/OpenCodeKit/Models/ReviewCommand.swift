@@ -8,10 +8,13 @@ public struct ReviewCommand: Equatable, Sendable {
     public struct Reader: Equatable, Sendable {
         public var name: String
         public var ref: ModelRef
+        /// Who serves it ("GitHub Copilot"), which a search finds it by too.
+        public var provider: String
 
-        public init(name: String, ref: ModelRef) {
+        public init(name: String, ref: ModelRef, provider: String = "") {
             self.name = name
             self.ref = ref
+            self.provider = provider
         }
     }
 
@@ -22,7 +25,8 @@ public struct ReviewCommand: Equatable, Sendable {
     /// How much of what follows "/review" names who reads it, in UTF-16, spaces before it
     /// included (0 without): the composer draws it as part of the keyword.
     public var readerLength = 0
-    /// "with" and words that name none of them yet: those words, which "Who reads it" looks for.
+    /// "with" and words that name none of them yet, but could: those words, which "Who reads it"
+    /// looks for. Words that can be no model's are what to look at ("with an eye on the tests").
     public var searching: String?
 
     /// What follows "/review", read against `readers`; of two with the same name, `preferred`.
@@ -42,8 +46,13 @@ public struct ReviewCommand: Equatable, Sendable {
             return name.dropFirst(length).first?.isWhitespace != false
         }
         guard let longest = named.map(\.name.count).max() else {
-            focus = ""
-            searching = String(name)
+            let query = String(name).trimmingCharacters(in: .whitespacesAndNewlines)
+            if query.isEmpty || !Self.search(query, in: readers).isEmpty {
+                focus = ""
+                searching = query
+            } else {
+                focus = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             return
         }
         let candidates = named.filter { $0.name.count == longest }
@@ -52,6 +61,25 @@ public struct ReviewCommand: Equatable, Sendable {
         let end = name.index(name.startIndex, offsetBy: longest)
         readerLength = rest[..<end].utf16.count
         focus = name[end...].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Those whose name, or who serves them, has each of the words of `query`.
+    public static func search(_ query: String, in readers: [Reader]) -> [Reader] {
+        let words = query.lowercased().split(whereSeparator: \.isWhitespace)
+        return readers.filter { reader in
+            let said = (reader.name + " " + reader.provider).lowercased()
+            return words.allSatisfy { said.contains($0) }
+        }
+    }
+
+    /// While a name is still being typed after "/review with " (nothing after it yet): the
+    /// longer names it's the start of ("Claude" of "Claude Sonnet 4.5"), still to be offered.
+    public static func longer(than rest: String, readers: [Reader]) -> [Reader] {
+        guard rest.last?.isWhitespace == false else { return [] }
+        let words = rest.drop { $0.isWhitespace }
+        guard words.lowercased().hasPrefix("with"), words.dropFirst(4).first?.isWhitespace == true else { return [] }
+        let typed = words.dropFirst(4).drop { $0.isWhitespace }.lowercased()
+        return readers.filter { $0.name.count > typed.count && $0.name.lowercased().hasPrefix(typed) }
     }
 
     /// What "Who reads it" writes after "/review ", for `reader`.

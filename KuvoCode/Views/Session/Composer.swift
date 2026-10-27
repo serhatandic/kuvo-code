@@ -231,7 +231,8 @@ struct Composer: View {
                     commandIndex = 0
                     if new.isEmpty { dismissedCommands = false }
                 }
-                if !new.hasPrefix(Keyword.review.typed) {
+                // Not /review any more, or "with" written after it: "Who reads it" can open again.
+                if !new.hasPrefix(Keyword.review.typed) || new.lowercased().hasPrefix(Keyword.review.typed + " with") {
                     reviewerIndex = 0
                     dismissedReviewer = false
                 }
@@ -317,6 +318,8 @@ struct Composer: View {
             loopIndex = 0
             dismissedLoop = false
             customLoop = false
+            reviewerIndex = 0
+            dismissedReviewer = false
             isTargeted = false
             // The keyboard goes to this session's message, not a quote it was answering before.
             answerFocus = nil
@@ -540,10 +543,10 @@ struct Composer: View {
             let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
             return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)\(attached)", false)
         case .review:
-            if reviewerChoices != nil { return ("Pick who reads the changes, then add what to look at if you like. Return starts it.", false) }
+            if reviewerChoices != nil { return ("Pick who reads the changes, then add what to look at if you like.", false) }
             let command = reviewCommand(rest)
             if let searching = command.searching {
-                return (searching.isEmpty ? "Write a model’s name after “with”." : "There’s no model called “\(searching)” here.", !searching.isEmpty)
+                return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
             }
             let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
             let looking = command.focus.isEmpty ? "" : ", looking especially at what you wrote"
@@ -560,7 +563,8 @@ struct Composer: View {
 
     /// A coding agent's conversation: its own agent reads a review, no other model.
     private var isAgentConversation: Bool {
-        currentModel.map { OutsideAgents.runsInBridge($0.providerID) } ?? false
+        if let session, let known = workspace.session(session) { return OutsideAgents.isAgentSession(known) }
+        return currentModel.map { OutsideAgents.runsInBridge($0.providerID) } ?? false
     }
 
     /// "/review "'s "Who reads it": before anything follows it, the conversation's own model, the
@@ -571,12 +575,14 @@ struct Composer: View {
               rest.first?.isWhitespace == true else { return nil }
         let readers = catalog.reviewReaders
         let command = reviewCommand(rest)
-        guard command.reader == nil else { return nil }
-        let note = { (reader: ReviewCommand.Reader) in catalog.providerName(reader.ref.providerID) }
+        if let reader = command.reader {
+            // A name that starts longer ones ("GPT-5" of "GPT-5 Mini"), while it's being typed.
+            let longer = command.focus.isEmpty ? ReviewCommand.longer(than: rest, readers: readers) : []
+            return longer.isEmpty ? nil : ([reader] + longer.filter { $0 != reader }).prefix(6).map { .reader($0, note: $0.provider) }
+        }
         if let searching = command.searching {
-            let words = searching.lowercased().split(separator: " ")
-            let matches = readers.filter { reader in words.allSatisfy { reader.name.lowercased().contains($0) } }.prefix(6)
-            return matches.isEmpty ? nil : matches.map { .reader($0, note: note($0)) }
+            let matches = ReviewCommand.search(searching, in: readers).prefix(6)
+            return matches.isEmpty ? nil : matches.map { .reader($0, note: $0.provider) }
         }
         guard rest.allSatisfy(\.isWhitespace) else { return nil }
         let own = currentModel?.key
@@ -585,17 +591,19 @@ struct Composer: View {
             readers.first { $0.ref.providerID + "/" + $0.ref.id == key && key != own && key != lastReviewer }
         }
         return [.same(currentModel?.name)] + (last.map { [.reader($0, note: "picked last time")] } ?? [])
-            + starred.prefix(last == nil ? 3 : 2).map { .reader($0, note: note($0)) } + [.other]
+            + starred.prefix(last == nil ? 3 : 2).map { .reader($0, note: $0.provider) } + [.other]
     }
 
     /// Picked from "Who reads it": its name written after "/review with ", or "with " to look
-    /// for one, or the list put away for the conversation's own.
+    /// for one; the conversation's own model starts it, as Return did before there was a list.
     private func pickReviewer(_ choice: ReviewerChoice) {
         reviewerIndex = 0
         switch choice {
         case .same:
             dismissedReviewer = true
-            text = Keyword.review.typed + " "
+            text = Keyword.review.typed
+            onSend()
+            return
         case .reader(let reader, _):
             lastReviewer = reader.ref.providerID + "/" + reader.ref.id
             text = Keyword.review.typed + " " + ReviewCommand.phrase(reader) + " "
