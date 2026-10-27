@@ -25,6 +25,12 @@ import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from 
 
 const places = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local/bin"), join(homedir(), ".codex/bin")]
 const outputLimit = 30_000
+/**
+ * Codex's plugins that drive your computer (ChatGPT's Computer Use), off for every thread here
+ * even where your Codex settings turn them on: they click around your Mac with no card to allow it.
+ * (Written without quotes: `-c` takes a key's dots as its path. Harmless where they aren't.)
+ */
+const noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"]
 
 export class CodexAgent implements Agent {
   id = "codex"
@@ -156,7 +162,7 @@ export class CodexAgent implements Agent {
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
     // own. (On a machine, nothing of the machine's own Codex.)
     if (this.instance.home && !onMachine) shadowHome(this.instance.home)
-    const rpc = new RPC([executable, "app-server"], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined })
+    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined })
     rpc.onNotification = (method, params) => this.notification(method, params)
     rpc.onRequest = (method, params, id) => this.request(method, params, id)
     rpc.onExit = () => {

@@ -8507,6 +8507,7 @@ import { homedir as homedir2 } from "os";
 import { join as join18 } from "path";
 var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join18(homedir2(), ".local/bin"), join18(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
+var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 
 class CodexAgent {
   context;
@@ -8611,7 +8612,7 @@ class CodexAgent {
       throw new Error(`Install Codex first: ${this.install}`);
     if (this.instance.home && !onMachine)
       shadowHome(this.instance.home);
-    const rpc = new RPC([executable, "app-server"], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined });
+    const rpc = new RPC([executable, "app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])], { cwd: this.context.temporary, env: this.instance.home ? { CODEX_HOME: this.instance.home } : undefined });
     rpc.onNotification = (method, params) => this.notification(method, params);
     rpc.onRequest = (method, params, id) => this.request(method, params, id);
     rpc.onExit = () => {
@@ -18660,4 +18661,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0dcc07b01a11a353bd5d7dfde29be8335f70fe2a7bf1992bffc81e23d89c2076
+// Built from Packages/Box/src/agents b610fd0d1f724f9a8e689b9edf1120823308b6c9cfb68ddc7f973a3af7d17f2e

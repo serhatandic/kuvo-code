@@ -73,10 +73,13 @@ process.stdin.on("data", (chunk) => {
 `,
   )
   const launcher = join(folder, "codex")
-  writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(folder, "argv.txt")}"\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(launcher, 0o755)
   return launcher
 }
+
+/** What the fake Codex was started with. */
+const argv = () => readFileSync(join(root, "argv.txt"), "utf8").trim().split("\n")
 
 /** What Kuvo Code sent the fake Codex, in order. */
 const sent = (): any[] =>
@@ -369,6 +372,17 @@ describe("Codex in the session's modes", () => {
     expect(turnStart()).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" }, collaborationMode: { mode: "plan" } })
     expect(answers()).toEqual([{ decision: "decline" }])
     expect(tools(id)[0].state.status).toBe("error")
+  })
+})
+
+describe("Codex's tools", () => {
+  test("ChatGPT's Computer Use is off even when your Codex settings turn it on: it can't click around your Mac without a card", async () => {
+    await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+    // As Codex 0.163 takes it: a plugin turned off for the whole app-server (its MCP server
+    // never starts), the plugin's id unquoted.
+    const overrides = argv().flatMap((arg, at, all) => (all[at - 1] === "-c" ? [arg] : []))
+    expect(overrides).toContain("plugins.unified-computer-use@openai-bundled.enabled=false")
+    expect(overrides).toContain("plugins.computer-use@openai-bundled.enabled=false")
   })
 })
 
