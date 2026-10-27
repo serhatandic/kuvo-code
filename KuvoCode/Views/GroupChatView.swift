@@ -68,12 +68,12 @@ struct GroupChatView: View {
                 case .away(let machine):
                     if let engine = app.machines.engine(machine) {
                         MachineOfflineBar(engine: engine)
-                            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                            .modifier(ComposerSurface())
                             .transition(.opacity.combined(with: .offset(y: 6)))
                     }
                 case .starting, .stopped:
                     MacGroupsBar()
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                        .modifier(ComposerSurface())
                         .transition(.opacity.combined(with: .offset(y: 6)))
                 case .ready:
                     EmptyView()
@@ -548,7 +548,7 @@ private struct PausedBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+        .modifier(ComposerSurface())
     }
 }
 

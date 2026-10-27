@@ -413,14 +413,7 @@ struct SidebarView: View {
                 .help("A teammate with one job, that keeps working while you're away")
             }
             ForEach(botsHere) { bot in
-                BotRow(bot: bot, isSelected: selection == bot.sessionID, animates: !stagedBots.contains(bot.id)) {
-                    selection = bot.sessionID
-                }
-                .contextMenu {
-                    Button("Edit Bot…") { editBot(bot) }
-                        .disabled(app.moves.isMoving(bot.id))
-                    MoveToComputerMenu(thing: .bot(bot))
-                }
+                botRow(bot)
             }
             // This Mac's bridge runs its group chats: stopped, they show as last seen until it's back.
             if box.machine == nil, !groupsHere.isEmpty, case .stopped(let failure) = groups.macReach {
@@ -459,31 +452,54 @@ struct SidebarView: View {
     /// Sessions, and conversations' words, that have the search, on every box.
     @ViewBuilder private var searchResults: some View {
         // Not those already found by name, nor one deleted since the search.
-        let inConversations = conversationResults.filter { found in !results.contains { $0.id == found.session.id } && workspace.session(found.session.id) != nil }
+        let results = results
+        let inConversations = SidebarSearch.inConversations(conversationResults, besides: results, in: workspace, bots: bots)
         if !results.isEmpty || inConversations.isEmpty {
             SectionHeader(title: "Results") { EmptyView() }
         }
         if results.isEmpty && inConversations.isEmpty && !isSearchingConversations {
-            Text("No sessions match.")
+            Text("Nothing matches.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
         }
-        ForEach(results) { session in
-            sessionRow(session, in: .recents)
+        ForEach(results) { found in
+            switch found {
+            case .session(let session): sessionRow(session, in: .recents)
+            case .bot(let bot): botRow(bot)
+            }
         }
         if !inConversations.isEmpty || isSearchingConversations {
             SectionHeader(title: "In Conversations") {
                 if isSearchingConversations { Spinner(size: 11).padding(.trailing, 6) }
             }
-            ForEach(inConversations, id: \.session.id) { found in
-                ConversationResultRow(title: found.session.title ?? "New Session", snippet: found.snippet, isSelected: selection == found.session.id) {
-                    selection = found.session.id
-                    workspace.model(for: found.session.id)?.showFind(search.trimmingCharacters(in: .whitespaces))
+            ForEach(inConversations, id: \.found.id) { result in
+                let show = {
+                    selection = result.found.id
+                    workspace.model(for: result.found.id)?.showFind(search.trimmingCharacters(in: .whitespaces))
                 }
-                .contextMenu { menu(for: found.session) }
+                switch result.found {
+                case .bot(let bot):
+                    botRow(bot, snippet: result.snippet, action: show)
+                case .session(let session):
+                    ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
+                        .contextMenu { menu(for: session) }
+                }
             }
+        }
+    }
+
+    /// A bot's row, in its box's page or found by the search, which stands in for the page: its
+    /// face moves unless it's staged. `snippet`: the words a search found in its conversation.
+    private func botRow(_ bot: Bot, snippet: String? = nil, action: (() -> Void)? = nil) -> some View {
+        BotRow(bot: bot, isSelected: selection == bot.sessionID, animates: !stagedBots.contains(bot.id), snippet: snippet) {
+            if let action { action() } else { selection = bot.sessionID }
+        }
+        .contextMenu {
+            Button("Edit Bot…") { editBot(bot) }
+                .disabled(app.moves.isMoving(bot.id))
+            MoveToComputerMenu(thing: .bot(bot))
         }
     }
 
@@ -746,14 +762,8 @@ struct SidebarView: View {
 
     // MARK: Sessions
 
-    /// Sessions whose title or project name has the search, newest first; archived ones too.
-    private var results: [Session] {
-        let query = search.trimmingCharacters(in: .whitespaces)
-        return workspace.sessions.filter { session in
-            workspace.projectName(session.location.directory).localizedStandardContains(query)
-                || (session.title ?? "New Session").localizedStandardContains(query)
-        }
-        .sorted { $0.time.updated > $1.time.updated }
+    private var results: [SidebarSearch.Found] {
+        SidebarSearch.byName(search, in: workspace, bots: bots)
     }
 
     /// `box`'s latest; pinned ones are already at the top.
@@ -1338,6 +1348,8 @@ private struct BotRow: View {
     let bot: Bot
     let isSelected: Bool
     var animates = true
+    /// Words found in its conversation by a search: shown in place of what it's doing.
+    var snippet: String?
     let action: () -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Bots.self) private var bots
@@ -1354,7 +1366,7 @@ private struct BotRow: View {
                     if let machine = bot.machine, marksMachines { MachineBadge(machine: machine).offset(x: 4, y: 3) }
                 }
         } subtitle: {
-            status
+            if let snippet { Text(snippet) } else { status }
         } trailing: {
             if let session {
                 SessionStatus(session: session)

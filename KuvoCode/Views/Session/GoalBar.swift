@@ -5,7 +5,7 @@ import SwiftUI
 /// A conversation's goal ("/goal …"), in a bar over the composer like the others that say what
 /// goes on out of sight: one line with where it stands (working, being checked, paused, met), and
 /// under it the goal and what the last check found. Pause and Stop are on the line (Resume once
-/// paused); a goal that's over is put away with Done. The box runs it, so it goes on with the
+/// paused); a goal that's over is put away with ✕. The box runs it, so it goes on with the
 /// window closed.
 struct GoalBar: View {
     let goal: Goal
@@ -24,7 +24,8 @@ struct GoalBar: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             VStack(alignment: .leading, spacing: 0) {
                 BarLine(mark: AnyView(mark), title: title, progress: progress(now: context.date), detail: detail.map { Text($0.replacingOccurrences(of: "\n", with: " ")) },
-                        accessory: AnyView(actions), showHelp: "Show the goal, and what the last check found", hideHelp: "Hide them: this line stays", isHidden: $isHidden)
+                        accessory: AnyView(actions), showHelp: "Show the goal, and what the last check found", hideHelp: "Hide them: this line stays", isHidden: $isHidden,
+                        close: goal.state == .met || goal.state == .unmet ? done : nil, closeHelp: "Put the goal away")
                 if !isHidden {
                     details
                         .padding(.leading, 42)
@@ -116,8 +117,7 @@ struct GoalBar: View {
                 Button("Stop", systemImage: "stop.circle", action: stop)
                     .help("Take the goal away")
             case .met, .unmet:
-                Button("Done", systemImage: "checkmark", action: done)
-                    .help("Put the goal away")
+                EmptyView()
             }
         }
         .buttonStyle(TextButtonStyle())

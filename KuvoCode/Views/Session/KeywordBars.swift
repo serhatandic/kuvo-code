@@ -6,11 +6,12 @@ import SwiftUI
 // ("/btw"), a review's findings ("/review") and a handoff under way ("/handoff"). Each box runs
 // them, so they go on with the window closed.
 
-/// What the keywords started, in bars over the composer: a handoff under way, a review's
+/// What the keywords started, in the card over the composer: a handoff under way, a review's
 /// findings and a side question's answer (below).
 struct KeywordBars: View {
     @Bindable var model: SessionModel
-    let glass: Namespace.ID
+    /// Whether a bar is folded, as the card has it (`BarFolds`), from how it was left.
+    let hidden: (ComposerBar, Binding<Bool>) -> Binding<Bool>
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
 
@@ -43,33 +44,30 @@ struct KeywordBars: View {
             } done: {
                 model.putAwayHandoff = handoff
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-            .glassEffectID("handoff", in: glass)
-            .transition(.opacity)
+            .modifier(CardRow())
+            .transition(.fold)
         }
         if let review = model.review {
-            ReviewBar(review: review, isHidden: $model.hidesReview) {
+            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview)) {
                 model.fixReview()
             } done: {
                 model.dismissReview()
             } open: { place in
                 if let url = Self.file(place.file, in: model.session.location.directory) { app.utilities.show(url) }
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-            .glassEffectID("review", in: glass)
-            .transition(.opacity)
+            .modifier(CardRow())
+            .transition(.fold)
         }
         if let question = shownSideQuestion {
-            SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: $model.hidesSideQuestion) {
+            SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion)) {
                 model.askAnotherSideQuestion()
             } remove: {
                 model.removeSideQuestion(question.id)
             } done: {
                 model.shownSideQuestion = nil
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-            .glassEffectID("btw", in: glass)
-            .transition(.opacity)
+            .modifier(CardRow())
+            .transition(.fold)
         }
     }
 }
@@ -91,7 +89,8 @@ struct SideQuestionBar: View {
         VStack(alignment: .leading, spacing: 0) {
             BarLine(mark: AnyView(mark), title: question.state == .answering ? "Answering on the side…" : "Side question",
                     progress: all.count > 1 ? "\(all.count) asked" : nil, detail: Text(question.question),
-                    accessory: AnyView(actions), showHelp: "Show the question and its answer", hideHelp: "Hide them: this line stays", isHidden: $isHidden)
+                    accessory: AnyView(actions), showHelp: "Show the question and its answer", hideHelp: "Hide them: this line stays", isHidden: $isHidden,
+                    close: done, closeHelp: "Put this away: it stays with this conversation’s side questions in the sidebar")
             if !isHidden {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(question.question)
@@ -161,8 +160,6 @@ struct SideQuestionBar: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("More")
-            Button("Done", systemImage: "checkmark", action: done)
-                .help("Put this away: it stays with this conversation’s side questions in the sidebar")
         }
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
@@ -187,7 +184,8 @@ struct ReviewBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             BarLine(mark: AnyView(mark), title: title, progress: count, detail: review.summary.map { Text($0) },
-                    accessory: AnyView(actions), showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden)
+                    accessory: AnyView(actions), showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
+                    close: review.state == .reviewing ? nil : done, closeHelp: "Put the review away")
             if !isHidden {
                 details
                     .padding(.leading, 42)
@@ -237,10 +235,6 @@ struct ReviewBar: View {
             if review.state == .done, review.fix != nil {
                 Button("Ask the Agent to Fix", systemImage: "wrench.and.screwdriver", action: fix)
                     .help("Send these findings to the agent as your message, to fix the real problems")
-            }
-            if review.state != .reviewing {
-                Button("Done", systemImage: "checkmark", action: done)
-                    .help("Put the review away")
             }
         }
         .buttonStyle(TextButtonStyle())
@@ -343,43 +337,29 @@ struct HandoffBar: View {
     let done: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Group {
-                switch handoff.state {
-                case .writing: Spinner(size: 14)
-                case .failed: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                case .done: Image(systemName: Keyword.handoff.symbol).foregroundStyle(.tint)
-                }
+        BarLine(mark: AnyView(mark), title: title, detail: detail.map { Text($0) },
+                accessory: handoff.state == .done ? AnyView(openButton) : nil, showHelp: "", hideHelp: "",
+                isHidden: .constant(true), opens: false,
+                close: handoff.state == .writing ? nil : done, closeHelp: "Put this away")
+            .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private var mark: some View {
+        Group {
+            switch handoff.state {
+            case .writing: Spinner(size: 14)
+            case .failed: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+            case .done: Image(systemName: Keyword.handoff.symbol).foregroundStyle(.tint)
             }
-            .font(.system(size: 13))
-            .frame(width: 18)
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            if let detail {
-                Text(detail)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 2) {
-                if handoff.state == .done {
-                    Button("Open", action: open)
-                        .help("Open the conversation the work carries on in")
-                }
-                if handoff.state != .writing {
-                    Button("Done", action: done)
-                }
-            }
+        }
+        .font(.system(size: 13))
+    }
+
+    private var openButton: some View {
+        Button("Open", action: open)
+            .help("Open the conversation the work carries on in")
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 12)
-        .frame(minHeight: 36)
-        .accessibilityElement(children: .contain)
     }
 
     private var title: String {
