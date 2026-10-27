@@ -104,6 +104,9 @@ struct ToolCallView: View {
             Text(summary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if isWorking, let since = call.time?.created?.date {
+                StepActivity.Elapsed(since: since)
+            }
             if let stat = diffStat {
                 DiffStat(additions: stat.additions, deletions: stat.deletions)
             }
@@ -129,19 +132,19 @@ struct ToolCallView: View {
 
     @ViewBuilder private var icon: some View {
         switch call.state {
-        case .streaming, .running:
-            Spinner(size: 11)
-        case .completed where isAtWork:
-            Spinner(size: 11)
-                .help("Working in the background")
         case .failed(_, let error, _, _) where error.isInterruption:
             Image(systemName: "stop.circle")
         case .failed:
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-        case .completed:
-            Image(systemName: symbol)
+        default:
+            // One view running and done, so its ring closes as the step ends.
+            StepActivity(symbol: symbol, running: isWorking, size: Self.iconWidth)
+                .help(isAtWork ? "Working in the background" : "")
         }
     }
+
+    /// At work: running, or a subagent it sent off still at it.
+    private var isWorking: Bool { isActive || isAtWork }
 
     // MARK: Describing the call
 
@@ -512,7 +515,7 @@ struct SubagentSteps: View {
                 .environment(model.writing)
                 if model.isRunning {
                     HStack(spacing: 8) {
-                        Spinner(size: 11)
+                        StepActivity(symbol: nil, running: true)
                         Text("Working…")
                     }
                     .font(.callout)
