@@ -625,8 +625,9 @@ final class Workspace {
     @discardableResult
     func addFolder(_ directory: String) -> String {
         let directory = folderPath(directory)
-        // Chats aren't a project, nor is a bot's own folder.
-        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory) else { return directory }
+        // Chats aren't a project, nor is a bot's own folder, nor a project's worktree (a session
+        // started in one stays its project's).
+        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), projectDirectory(directory) == directory else { return directory }
         Analytics.shared.track("project_added", ["projects": folders.count + 1])
         folders.insert(directory, at: 0)
         UserDefaults.standard.set(folders, forKey: "projectFolders")

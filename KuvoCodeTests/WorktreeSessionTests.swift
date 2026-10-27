@@ -175,6 +175,19 @@ import Testing
 
     /// The project's folder switched to another branch since: Merge says so rather than merging
     /// into that one.
+    /// A session started in a worktree's own folder (a review's Fix in a New Session) works there,
+    /// where the changes are, and stays its project's: the worktree never shows as a project.
+    @Test func aSessionStartedInAWorktreesFolderStaysItsProjects() async throws {
+        defer { done() }
+        let first = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = first.location.directory
+        let projects = workspace.folders
+        let second = try await workspace.createSession(in: folder, model: nil, agent: "build")
+        #expect(second.location.directory == folder)
+        #expect(workspace.folders == projects)
+        #expect(workspace.projectDirectory(of: second) == workspace.folderPath(repository.path))
+    }
+
     @Test func mergeOnlyIntoTheBranchItCameFrom() async throws {
         defer { done() }
         let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)

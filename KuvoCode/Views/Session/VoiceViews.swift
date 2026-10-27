@@ -2,52 +2,6 @@ import ClientDesign
 import KuvoVoice
 import SwiftUI
 
-/// What's been said so far: the words it's sure of, then its newest guess, lighter.
-struct VoiceWords: View {
-    let transcript: VoiceTranscript
-    var font: Font = .body
-    var placeholder = "Listening…"
-    var alignment: TextAlignment = .leading
-    /// What's written already, before what's said (in the composer).
-    var before = ""
-
-    var body: some View {
-        Group {
-            if transcript.isEmpty, before.isEmpty {
-                Text(placeholder).foregroundStyle(.secondary)
-            } else {
-                let lead = before.isEmpty ? "" : before + (transcript.isEmpty ? "" : " ")
-                Text("\(Text(lead))\(Text(transcript.confirmed))\(Text(transcript.confirmed.isEmpty || transcript.guess.isEmpty ? "" : " "))\(Text(transcript.guess).foregroundStyle(.secondary))")
-            }
-        }
-        .font(font)
-        .multilineTextAlignment(alignment)
-        .accessibilityLabel(transcript.isEmpty ? "Listening" : "Heard: \(transcript.text)")
-    }
-}
-
-/// How loud you've been, as bars across, the newest at the end.
-struct VoiceTrace: View {
-    let levels: [Double]
-    var bars = VoiceInput.recentCount
-
-    var body: some View {
-        Canvas { context, size in
-            let gap: CGFloat = 2
-            let width = max(1, (size.width - gap * CGFloat(bars - 1)) / CGFloat(bars))
-            let shown = Array(levels.suffix(bars))
-            let start = bars - shown.count
-            for index in 0..<bars {
-                let level = index >= start ? shown[index - start] : 0
-                let height = max(2, CGFloat(level) * size.height)
-                let rect = CGRect(x: CGFloat(index) * (width + gap), y: (size.height - height) / 2, width: width, height: height)
-                context.fill(Path(roundedRect: rect, cornerRadius: width / 2), with: .style(.tint.opacity(index >= start ? 1 : 0.25)))
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 /// A key's name, beside the button it presses.
 struct KeyHint: View {
     let key: String
@@ -112,6 +66,8 @@ struct VoiceComposerRow: View {
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
+            // Escape anywhere in the window (the composer's field handles it first).
+            .keyboardShortcut(.cancelAction)
             .help("Stop listening, without keeping what you said (Escape)")
             if voice.phase == .listening || voice.phase == .finishing {
                 Button(action: done) {
@@ -188,9 +144,11 @@ struct VoiceField: View {
                             .buttonBorderShape(.capsule)
                     }
                 } else {
-                    Text("A pause finishes it")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                    if voice.phase == .listening {
+                        Text("A pause finishes it")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
                     Button(action: done) {
                         HStack(spacing: 6) {
                             Text("Done")
@@ -210,6 +168,8 @@ struct VoiceField: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Voice input")
+        // Over everything: VoiceOver stays in it, as it would in a sheet.
+        .accessibilityAddTraits(.isModal)
     }
 
     private var status: String {
@@ -219,34 +179,6 @@ struct VoiceField: View {
         case .failed: "Voice input stopped"
         default: "Listening"
         }
-    }
-}
-
-/// Lines across the window moving with your voice: still when you're quiet, soft waves as you
-/// speak, a fainter two behind the first.
-struct VoiceWave: View {
-    let level: Double
-
-    var body: some View {
-        Canvas { context, size in
-            for (amplitude, phase, opacity, width) in [(0.42, 0.0, 1.0, 2.4), (0.28, 1.7, 0.35, 1.6), (0.18, 3.1, 0.2, 1.4)] {
-                var path = Path()
-                let middle = size.height / 2
-                let height = CGFloat(max(0.04, level)) * size.height * amplitude
-                let steps = 160
-                for step in 0...steps {
-                    let t = Double(step) / Double(steps)
-                    let x = size.width * t
-                    // Fades at the ends, so the lines rest on them.
-                    let envelope = sin(t * .pi)
-                    let y = middle + height * CGFloat(envelope * (sin(t * 9 + phase) * 0.6 + sin(t * 23 + phase * 2) * 0.4))
-                    if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-                }
-                context.stroke(path, with: .style(.tint.opacity(opacity)), style: StrokeStyle(lineWidth: width, lineCap: .round))
-            }
-        }
-        .animation(.easeOut(duration: 0.1), value: level)
-        .accessibilityHidden(true)
     }
 }
 
