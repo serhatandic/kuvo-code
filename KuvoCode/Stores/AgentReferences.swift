@@ -170,12 +170,12 @@ nonisolated enum AgentReferences {
 }
 
 /// A message you sent, as the app wrote it for the agent: your words, then the blocks it adds
-/// (the widget it came from, the agents you named with "&", your comments on the changes, the note
-/// of attached files, and last that it came from your phone), taken apart again for wherever it
-/// shows: its bubble, a draft, the export, a title.
+/// (the keyword it was sent with, the widget it came from, the agents you named with "&", your
+/// comments on the changes, the note of attached files, and last that it came from your phone),
+/// taken apart again for wherever it shows: its bubble, a draft, the export, a title.
 nonisolated enum SentMessage {
     static func split(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference]) {
-        let (text, comments, paths, references, _) = parts(message)
+        let (text, comments, paths, references, _, _) = parts(message)
         return (text, comments, paths, references)
     }
 
@@ -184,12 +184,19 @@ nonisolated enum SentMessage {
         parts(message).widget
     }
 
-    private static func parts(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference], widget: String?) {
+    /// The keyword it was sent with, as typed ("/loop every hour"), which its bubble draws in front
+    /// of its words (`SentWithKeyword`); nil for one sent without.
+    static func keyword(of message: String) -> String? {
+        parts(message).keyword
+    }
+
+    private static func parts(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference], widget: String?, keyword: String?) {
         let (withComments, paths) = Attachments.split(FromPhone.split(message).text)
         let (withReferences, comments) = ReviewComments.split(withComments)
         let (withWidget, references) = AgentReferences.split(withReferences)
-        let (text, widget) = WidgetAnswer.split(withWidget)
-        return (text, comments, paths, references, widget)
+        let (withKeyword, widget) = WidgetAnswer.split(withWidget)
+        let (text, keyword) = SentWithKeyword.split(withKeyword)
+        return (text, comments, paths, references, widget, keyword)
     }
 
     /// The message as written: its words, without the blocks.

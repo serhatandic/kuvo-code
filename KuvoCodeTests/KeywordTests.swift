@@ -1,3 +1,4 @@
+import ClientDesign
 import Foundation
 import OpenCodeKit
 import Testing
@@ -124,7 +125,89 @@ import Testing
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
         #expect(String(describing: sent.body).contains("The interval is never cleared (src/timer.ts:2, src/stop.ts). Clear it when the timer stops."))
         try await until { model.review == nil }
+        await model.dismissingReview?.value
         #expect(try await bridge.api?.reviews().isEmpty == true)
+    }
+
+    @Test func aReviewPutAwayCanBeBroughtBackAndOneFindingCanBeFixedAlone() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        try repository.write("src/timer.ts", "export const tick = 1000\nsetInterval(tick)\n")
+        serve(directory: repository.path, answers: [#"{"summary": "Two.", "findings": [{"title": "The interval is never cleared", "explanation": "Clear it on stop.", "severity": "bug", "locations": [{"file": "src/timer.ts", "line": 2}]}, {"title": "No test covers stopping", "explanation": "", "severity": "risk", "locations": []}]}"#])
+        let model = try session(directory: repository.path)
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        model.draftText = "/review"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        let review = try #require(model.review)
+
+        // One of them alone: only it, for the agent.
+        let one = try #require(await model.reviewFixText([review.findings[1].id]))
+        #expect(one.contains("No test covers stopping"))
+        #expect(!one.contains("The interval is never cleared"))
+
+        // ✕ puts it away at once, its line saying so; Undo brings it back, still on its computer.
+        let item = PutAway.review(review.id)
+        model.putAwayReview()
+        #expect(model.shownReview == nil)
+        #expect(model.putAways.text(item) == "Review put away")
+        model.putAways.undo(item)
+        #expect(model.shownReview?.id == review.id)
+        #expect(try await bridge.api?.reviews().map(\.id) == [review.id])
+
+        // Its moment over: gone from its computer too, and its line with it.
+        model.putAwayReview()
+        model.putAways.expire(item)
+        try await until { model.review == nil }
+        #expect(model.putAways.text(item) == nil)
+        await model.dismissingReview?.value
+        #expect(try await bridge.api?.reviews().isEmpty == true)
+    }
+
+    @Test func aReviewIsReadByTheModelNamedAfterWithLookingWhereYouSay() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        try repository.write("src/timer.ts", "export const tick = 1000\nsetInterval(tick)\n")
+        serve(directory: repository.path, answers: [#"{"summary": "Fine.", "findings": []}"#])
+        // The engine's models, as the composer's "Who reads it" lists them.
+        let location = ["directory": "/"]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_deepseek", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [[
+            "id": "v4.1-flash", "modelID": "v4.1-flash", "providerID": "deepseek", "name": "DeepSeek V4.1 Flash",
+            "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+            "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": NSNull()])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        let catalog = Catalog(isMac: true)
+        catalog.api = engine.api
+        await catalog.refresh()
+        #expect(catalog.reviewReaders.map(\.name) == ["DeepSeek V4.1 Flash"])
+        let model = try session(directory: repository.path)
+        model.reviewCatalog = { catalog }
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        // A name half typed comes back, saying so; nothing is read.
+        model.draftText = "/review with deep"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText == "/review with deep")
+        #expect(model.failure == "Finish the model’s name, or pick it from the list.")
+        #expect(model.review == nil)
+
+        model.draftText = "/review with deepseek v4.1 flash the pause handling"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        #expect(model.review?.model == ModelRef(id: "v4.1-flash", providerID: "deepseek"))
+        #expect(model.review?.focus == "the pause handling")
     }
 
     @Test func theEnginesOwnReviewStaysReachableAsReviewQuick() async throws {
@@ -189,7 +272,12 @@ import Testing
         let asked = engine.asked.filter { $0.hasSuffix("/agent") || $0.hasSuffix("/prompt") }
         #expect(asked == ["POST /api/session/\(id)/agent", "POST /api/session/\(id)/prompt"], "Plan first, then the message")
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
-        #expect(String(describing: sent.body).contains("how to test the blur pause"))
+        let text = try #require(sent.body["text"] as? String)
+        #expect(text.hasPrefix("how to test the blur pause"))
+        // Its bubble, read from what the agent got (on any client), draws the keyword as typed in
+        // front of the words; taken back (Undo, a draft), it's the words alone.
+        #expect(SentMessage.keyword(of: text) == "/plan")
+        #expect(SentMessage.split(text).text == "how to test the blur pause")
     }
 
     @Test func aLoopWhoseHowOftenCantBeReadComesBackAndSaysSo() async throws {

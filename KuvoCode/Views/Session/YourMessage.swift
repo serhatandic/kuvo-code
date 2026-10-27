@@ -22,6 +22,8 @@ struct YourMessage: View {
     var comments: [ReviewComment] = []
     /// The title of the widget it was sent from (`WidgetAnswer`).
     var widget: String?
+    /// The keyword it was sent with, as typed (`SentWithKeyword`), drawn in front of its words.
+    var keyword: String?
     let sent: Date
     /// Sent from your iPhone.
     var fromPhone = false
@@ -52,7 +54,7 @@ struct YourMessage: View {
     private var spoken: String {
         let parts = (widget.map { ["From \(WidgetAnswer.name($0))"] } ?? [])
             + comments.map { "Comment on \($0.location): \($0.text)" }
-            + [text].filter { !$0.isEmpty }
+            + [keyword.map { $0 + " " + text } ?? text].filter { !$0.isEmpty }
             + (attachments.isEmpty ? [] : [attachments.count == 1 ? "1 attachment" : "\(attachments.count) attachments"])
         return "You: " + parts.joined(separator: ". ")
     }
@@ -86,7 +88,7 @@ struct YourMessage: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments, widget: widget)
+            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments, widget: widget, keyword: keyword)
             // Always laid out, shown under the pointer: nothing moves when they appear.
             HStack(spacing: 0) {
                 Text(MessageTime.sentAt(sent) + (fromPhone ? " · from iPhone" : ""))

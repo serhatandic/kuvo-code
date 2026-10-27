@@ -206,6 +206,8 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var state: State
     public var model: ModelRef?
     public var summary: String?
+    /// What it was asked to look at especially.
+    public var focus: String?
     public var findings: [Finding]
     public var error: String?
     /// What to send the agent, as your message, to fix them.
@@ -258,9 +260,19 @@ extension OpenCodeAPI {
     }
 
     @discardableResult
-    public func startReview(session: String, model: ModelRef? = nil) async throws -> Review {
-        struct Body: Encodable { var model: ModelRef? }
-        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model)), as: DataEnvelope<Review>.self).data
+    /// Starts a review of `session`'s changes, read by `model` (its own when left out), looking
+    /// especially at `focus`.
+    public func startReview(session: String, model: ModelRef? = nil, focus: String? = nil) async throws -> Review {
+        struct Body: Encodable { var model: ModelRef?; var focus: String? }
+        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 })), as: DataEnvelope<Review>.self).data
+    }
+
+    /// What to send an agent, as your message, to fix a review's findings: all of them, or those
+    /// of `findings` (their ids).
+    public func reviewFix(session: String, findings: [String]? = nil) async throws -> String {
+        struct Body: Encodable { var findings: [String]? }
+        struct Fix: Decodable { var text: String }
+        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/fix", body: Body(findings: findings)), as: DataEnvelope<Fix>.self).data.text
     }
 
     public func reviews() async throws -> [Review] {

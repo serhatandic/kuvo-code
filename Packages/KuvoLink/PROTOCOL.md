@@ -1225,6 +1225,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
   `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
   (a bot's in its color), opening that session.
+- A message a keyword sends (/plan's words, /loop's when it sends now) carries the keyword as
+  typed, right after its words and before every other block: a line `<sent-with>`, the heading in
+  `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`), and a line
+  `</sent-with>`. The client sending it writes it. Show the keyword in front of the message's
+  words, drawn as the composer draws it (its mark for the "/", the rest in bold, in the accent;
+  Plan's in orange). Taken back (Undo, a failed send, editing a queued one), it's the words
+  alone, so sending them again sets no second loop.
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
@@ -1419,15 +1426,21 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   out), read by a model with none of the
   conversation's context: on the engine, its own model afresh, or `model` when given; with the
   coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
-  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
-    `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
-    "failed", model?, summary?, findings: [finding], error?, fix?, started, ended?}`, its findings
+  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?}` → `{data: review}`,
+    `state` `reviewing`; `409` while one is under way. `focus` is what to look at especially, as
+    the user wrote it ("/review with <model> <focus>"). A review: `{id, session, state: "reviewing"
+    | "done" | "failed", model?, focus?, summary?, findings: [finding], error?, fix?, started,
+    ended?}`, its findings
     bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
     [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
     says it all), and every place it's in, none when it's about the change as a whole (a missing
     test). `fix` is what to send the agent, as your message, to fix them all.
+  - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
+    an agent, as your message, to fix them all or those it names, wherever you send it (this
+    conversation, a new one, another); `404` when the review found nothing, or none of them is
+    in it any more.
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
-    conversation's; `DELETE …/kuvo/reviews/<session>` puts it away.
+    conversation's; `DELETE …/kuvo/reviews/<session>` puts it away (one under way is let go: its answer isn't kept).
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
 
 ### Features
