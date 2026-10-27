@@ -37,13 +37,13 @@ struct KeywordBars: View {
         return FileManager.default.fileExists(atPath: full) ? URL(filePath: full) : nil
     }
 
-    /// Where Fix… › Send To sends: the project's other conversations (its worktrees' too),
-    /// newest first, then the bots on its computer, which can reach its files.
+    /// Where Fix… › Send To sends: the other conversations in its folder, where the changes are,
+    /// newest first, then the bots on its computer.
     private var sendTargets: [ReviewSendTarget] {
-        let project = workspace.projectDirectory(of: model.session)
-        let machine = RemoteFolder.machine(of: model.session.location.directory)
+        let folder = model.session.location.directory
+        let machine = RemoteFolder.machine(of: folder)
         let sessions = workspace.sessions
-            .filter { workspace.projectDirectory(of: $0) == project && $0.id != model.id && $0.parentID == nil && !app.bots.sessionIDs.contains($0.id) }
+            .filter { $0.location.directory == folder && $0.id != model.id && $0.parentID == nil && !app.bots.sessionIDs.contains($0.id) }
             .sorted { $0.time.updated > $1.time.updated }
             .prefix(6)
             .map { ReviewSendTarget(id: $0.id, name: $0.title?.isEmpty == false ? $0.title! : "New Session", isBot: false) }
@@ -58,7 +58,9 @@ struct KeywordBars: View {
         return picked.map { finding in
             let kind = finding.severity == .bug ? "Bug" : finding.severity == .risk ? "Risk" : "Small thing"
             let places = finding.locations.isEmpty ? "" : " (" + finding.locations.map(\.text).joined(separator: ", ") + ")"
-            return "- \(kind): \(finding.title)\(places)" + (finding.explanation.isEmpty ? "" : ". " + finding.explanation)
+            // Its own full stop not doubled before the explanation.
+            let title = finding.explanation.isEmpty ? finding.title : finding.title.replacingOccurrences(of: "\\.+$", with: "", options: .regularExpression)
+            return "- \(kind): \(title)\(places)" + (finding.explanation.isEmpty ? "" : ". " + finding.explanation)
         }.joined(separator: "\n")
     }
 
@@ -76,9 +78,9 @@ struct KeywordBars: View {
                 model.send(text, files: [], for: nil, queue: false)
             case .newSession:
                 do {
-                    // As this conversation: its model and permissions, in its project's folder.
-                    let session = try await workspace.createSession(in: workspace.projectDirectory(of: model.session), model: model.session.model, agent: nil,
-                                                                    approval: ToolApproval(rules: model.session.permissions))
+                    // As this conversation: its model and permissions, in its folder (a worktree's
+                    // too, where the changes are).
+                    let session = try await workspace.createSession(in: model.session.location.directory, model: model.session.model, agent: nil, approval: model.approval)
                     app.open(.session(session.id))
                     workspace.model(for: session.id)?.send(text, files: [], for: nil, queue: false)
                 } catch {
@@ -485,12 +487,16 @@ private struct FindingRow: View {
                 fixMenu()
                     .opacity(hovering ? 1 : 0)
             }
+            // Its line opens and closes it; what opens can be selected.
+            .contentShape(.rect)
+            .onTapGesture { withAnimation(.ui) { isOpen.toggle() } }
             if isOpen {
                 VStack(alignment: .leading, spacing: 3) {
                     if !finding.explanation.isEmpty {
                         Text(finding.explanation)
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     PlacesLine(places: finding.locations, open: open)
@@ -504,13 +510,13 @@ private struct FindingRow: View {
         .background(hovering ? AnyShapeStyle(Pressable.hoverFill) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .onTapGesture { withAnimation(.ui) { isOpen.toggle() } }
         .clickablePointer()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(finding.severity.name): \(finding.title)")
         .accessibilityValue(isOpen ? finding.explanation : "")
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { withAnimation(.ui) { isOpen.toggle() } }
         .accessibilityActions {
             Button("Fix in a New Session") { fix(.newSession) }
             Button("Fix Here") { fix(.here) }
