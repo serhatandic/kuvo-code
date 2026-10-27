@@ -73,6 +73,9 @@ public final class VoiceInput {
     @ObservationIgnored private var listening: Task<Void, Never>?
     @ObservationIgnored private var results: Task<Void, Never>?
     @ObservationIgnored private var meter = VoiceLevel()
+    #if os(iOS)
+    @ObservationIgnored private var interruption: (any NSObjectProtocol)?
+    #endif
     @ObservationIgnored private var pause = SpeechPause()
     /// Counts each start: what comes from an earlier one (a cancel, then a start) is dropped.
     @ObservationIgnored private var run = 0
@@ -169,8 +172,15 @@ public final class VoiceInput {
             }
             guard self.run == run else { return }
             #if os(iOS)
-            try AVAudioSession.sharedInstance().setCategory(.record, mode: .spokenAudio, options: [.duckOthers])
+            // AirPods' microphone too, when they're in.
+            try AVAudioSession.sharedInstance().setCategory(.record, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
             try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+            // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
+            // than listening on to nothing.
+            interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+                guard (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init(rawValue:)) == .began else { return }
+                MainActor.assumeIsolated { self?.finish() }
+            }
             #endif
             let engine = AVAudioEngine()
             let input = engine.inputNode
@@ -245,6 +255,8 @@ public final class VoiceInput {
         inputs = nil
         level = 0
         #if os(iOS)
+        if let interruption { NotificationCenter.default.removeObserver(interruption) }
+        interruption = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
     }

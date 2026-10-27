@@ -187,10 +187,13 @@ enum MachineBox {
 
     /// A client's request to the machine's box, answered as its bridge answers a phone's (`box
     /// route`), over SSH: the status and body. Only for routes that answer once, never a stream.
-    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, on connection: SSHConnection) async throws -> (status: Int, body: Data) {
+    static func route(_ method: String, _ path: String, body: [String: Any]? = nil, folder: String? = nil, on connection: SSHConnection) async throws -> (status: Int, body: Data) {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = body }
-        let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), on: connection)
+        // The folder it's about, on the machine, as a phone's request names it.
+        if let folder { request["headers"] = ["x-opencode-directory": folder] }
+        // One that only reads (a search, a list) is let go when nothing waits for it any more.
+        let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), cancellable: method == "GET", on: connection)
         /// Text as it came, or bytes that aren't text (a picture) in base64.
         struct Routed: Decodable { var status: Int; var body: String?; var bodyBase64: String? }
         guard let routed = try? JSONDecoder().decode(Routed.self, from: Data(output.utf8)) else { throw Failure.refused("The machine didn't answer: \(output.prefix(200))") }
@@ -201,15 +204,15 @@ enum MachineBox {
     /// box keeps the files there for the agent and gives the model as files what it reads, saying
     /// where they are in a note at the message's end (the box's `attachedIn`).
     /// A session the coding agents run (`withAgents`) gets it through the machine's agents bridge.
-    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, withAgents: Bool, on connection: SSHConnection) async throws {
-        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], withAgents: withAgents, on: connection)
+    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
+        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], withAgents: withAgents, folder: folder, on: connection)
     }
 
     /// A command with files, the same way.
-    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, withAgents: Bool, on connection: SSHConnection) async throws {
+    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
         var body: [String: Any] = ["name": name, "text": text, "files": files.map(described)]
         if let delivery { body["delivery"] = delivery.rawValue }
-        try await send(session: session, kind: "command", body: body, withAgents: withAgents, on: connection)
+        try await send(session: session, kind: "command", body: body, withAgents: withAgents, folder: folder, on: connection)
     }
 
     private static func described(_ file: OpenCodeAPI.PromptFile) -> [String: Any] {
@@ -218,9 +221,9 @@ enum MachineBox {
         return described
     }
 
-    private static func send(session: String, kind: String, body: [String: Any], withAgents: Bool, on connection: SSHConnection) async throws {
+    private static func send(session: String, kind: String, body: [String: Any], withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
         let escaped = session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? session
-        let (status, data) = try await route("POST", (withAgents ? "kuvo/agents/" : "") + "api/session/\(escaped)/\(kind)", body: body, on: connection)
+        let (status, data) = try await route("POST", (withAgents ? "kuvo/agents/" : "") + "api/session/\(escaped)/\(kind)", body: body, folder: folder, on: connection)
         guard (200..<300).contains(status) else {
             struct Said: Decodable { var message: String? }
             throw Failure.refused((try? JSONDecoder().decode(Said.self, from: data))?.message ?? "The machine didn't take it (\(status)).")
@@ -238,14 +241,14 @@ enum MachineBox {
 
     /// The last line `kuvo-link.js box <arguments>` printed, with whichever engine runtime the
     /// machine has.
-    private static func lastLine(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> String {
+    private static func lastLine(_ arguments: String, input: Data?, cancellable: Bool = false, on connection: SSHConnection) async throws -> String {
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-box-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: file.path, contents: input ?? Data(), attributes: [.posixPermissions: 0o600])
         defer { try? FileManager.default.removeItem(at: file) }
         let output = try await connection.run(RemoteEngineInstaller.script("""
             [ -x "$E" ] || E=$(for d in "$K"/engine/*/; do [ -x "${d}opencode" ] && printf '%s\\n' "${d}opencode"; done | tail -n 1)
             KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" box \(arguments)
-            """), input: file)
+            """), input: file, cancellable: cancellable)
         return output.split(separator: "\n").last.map(String.init) ?? ""
     }
 }

@@ -306,6 +306,36 @@ extension AppModel {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
     }
 
+    /// This Mac runs `engine`'s machine from now on (Make This Mac Its Home): the engine another Mac
+    /// started there starts again as this Mac's, with this Mac's accounts, and that Mac steps back
+    /// the next time it connects. Its sessions, bots and settings stay there. Not while its agents
+    /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
+    func makeHome(_ engine: MachineEngine) async -> String? {
+        let name = engine.machine.name
+        guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
+        guard engine.isAnotherMacsEngine else { return nil }
+        guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
+        if engine.boxIsNewer || engine.engineIsNewer { return "A newer Kuvo Code runs \(name). Update Kuvo Code on this Mac first." }
+        let atWork = { [self] () async -> Bool in
+            if workspace.isRunning(on: engine.machine.id) { return true }
+            return (try? await engine.api?.activeSessions())?.isEmpty == false
+        }
+        if await atWork() { return "\(name)’s agents are at work. Try again once they’re done." }
+        // Asked twice meanwhile (here and from a phone): the first goes on.
+        guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
+        engine.movingHomeFrom = engine.otherMac ?? .init()
+        defer { engine.movingHomeFrom = nil }
+        engine.disconnect()
+        workspace.forget(engine.machine.id)
+        engine.takingHome = true
+        await connect(engine).value
+        engine.takingHome = false
+        // Connected again: as this Mac's, or still the other one's (its agents began meanwhile).
+        guard engine.isReady else { return engine.failure.map { "\(name) couldn’t be reached: \($0)" } ?? "\(name) couldn’t be reached. Try again in a moment." }
+        guard engine.isAnotherMacsEngine else { return nil }
+        return await atWork() ? "\(name)’s agents are at work. Try again once they’re done." : "\(name) couldn’t be started from this Mac. Try again in a moment."
+    }
+
     /// Connects to `engine`'s machine: the start, and what follows it there, which a test waits for.
     @discardableResult
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {

@@ -3,36 +3,6 @@ import Foundation
 import KuvoVoice
 import Observation
 
-/// How voice input shows itself (Settings › General › Voice Input): in the composer, which
-/// listens where you type (the default), or the voice field, which takes the window's place while
-/// you speak. Both are the same voice input (`VoiceInput`), and hand the words to the composer
-/// the same way.
-enum VoiceStyle: String, CaseIterable, Identifiable {
-    case composer, field
-
-    static let key = "voiceStyle"
-    var id: String { rawValue }
-
-    static var current: VoiceStyle {
-        UserDefaults.standard.string(forKey: key).flatMap(VoiceStyle.init(rawValue:)) ?? .composer
-    }
-
-    var title: String {
-        switch self {
-        case .composer: "In the Composer"
-        case .field: "Voice Field"
-        }
-    }
-
-    /// What it's for, beside its name.
-    var purpose: String {
-        switch self {
-        case .composer: "for quick notes"
-        case .field: "for longer thoughts"
-        }
-    }
-}
-
 /// Voice input, for every composer: one listens at a time, and what it heard goes into the
 /// composer that started it, after what's written there. Nothing is sent until you send it.
 @MainActor @Observable
@@ -125,7 +95,8 @@ final class Dictation {
     func installShortcut() {
         guard shortcutMonitor == nil else { return }
         shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
-            guard event.keyCode == 49 else { return event }
+            // Not in a sheet over the window, nor another window: where you type in a composer.
+            guard event.keyCode == 49, event.window?.attachedSheet == nil, event.window?.isKeyWindow == true else { return event }
             let isDown = event.type == .keyDown, isRepeat = isDown && event.isARepeat
             let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
             // Local monitors are called on the main thread.
@@ -155,12 +126,5 @@ final class Dictation {
         voice = nil
         owner = nil
         deliver = nil
-    }
-
-    /// What's written, with what was said after it, a space or a new line between as it reads.
-    static func adding(_ words: String, to text: String) -> String {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return words }
-        let separator = text.hasSuffix("\n") || text.hasSuffix(" ") ? "" : " "
-        return text + separator + words
     }
 }

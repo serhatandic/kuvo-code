@@ -389,10 +389,12 @@ async function box(command: string): Promise<void> {
       // A client's request, answered as the bridge answers a phone's: one that answers once,
       // never a stream that follows.
       answerOnce();
-      let given: { method?: unknown; path?: unknown; body?: unknown } | null = {};
+      let given: { method?: unknown; path?: unknown; body?: unknown; headers?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       const handle = engineHandler(readEngineFile, { name: os.hostname() });
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      // With the folder it's asked about (`x-opencode-directory`), as a phone's request has it.
+      const folder = (given?.headers as Record<string, unknown> | undefined)?.["x-opencode-directory"];
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...(typeof folder === "string" ? { "x-opencode-directory": folder } : {}) }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
       let status = 502;
       let type = "";
       const chunks: Buffer[] = [];

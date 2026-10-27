@@ -485,17 +485,28 @@ final class Workspace {
     func searchConversations(_ query: String, limit: Int = 20) async -> [(session: Session, snippet: String)] {
         nonisolated struct Found: Decodable, Sendable { var results: [Result]; struct Result: Decodable, Sendable { var session: String; var snippet: String } }
         let path = "kuvo/search?q=\(Self.queryValue(query))&limit=\(limit)"
-        let clients = ([BoxClient.mac] + connectedMachines.sorted()).compactMap { boxes?($0) }
-        let found = await withTaskGroup(of: [Found.Result].self) { group in
-            for client in clients { group.addTask { (try? await client.value(Found.self, "GET", path))?.results ?? [] } }
-            var all: [Found.Result] = []
-            for await results in group { all += results }
-            return all
+        let boxes = [BoxClient.mac] + connectedMachines.sorted()
+        let clients = boxes.compactMap { box in self.boxes?(box).map { (box, $0) } }
+        let answers = await withTaskGroup(of: (String, [Found.Result]?).self) { group in
+            for (box, client) in clients { group.addTask { (box, (try? await client.value(Found.self, "GET", path))?.results) } }
+            var answers: [String: [Found.Result]?] = [:]
+            for await answer in group { answers[answer.0] = answer.1 }
+            return answers
         }
-        return found.compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } }
+        // Who couldn't search, said: machines that aren't connected, and boxes that didn't answer.
+        var unsearched: [String: String] = [:]
+        for machine in machines.subtracting(connectedMachines).subtracting(removedMachines) { unsearched[machine] = "isn’t connected" }
+        for (box, results) in answers where results == nil { unsearched[box == BoxClient.mac ? "This Mac" : box] = "didn’t answer" }
+        if unsearched != self.unsearched { self.unsearched = unsearched }
+        return answers.values.compactMap(\.self).flatMap(\.self)
+            .compactMap { result in session(result.session).map { (session: $0, snippet: result.snippet) } }
             .sorted { $0.session.time.updated > $1.session.time.updated }
             .prefix(limit).map { $0 }
     }
+
+    /// The computers the last search of conversations couldn't search, each with why ("isn’t
+    /// connected", "didn’t answer"), by name.
+    private(set) var unsearched: [String: String] = [:]
 
     /// A session's conversation as Markdown, to share.
     func markdown(of id: String) async throws -> String? {
@@ -625,8 +636,9 @@ final class Workspace {
     @discardableResult
     func addFolder(_ directory: String) -> String {
         let directory = folderPath(directory)
-        // Chats aren't a project, nor is a bot's own folder.
-        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory) else { return directory }
+        // Chats aren't a project, nor is a bot's own folder, nor a project's worktree (a session
+        // started in one stays its project's).
+        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), projectDirectory(directory) == directory else { return directory }
         Analytics.shared.track("project_added", ["projects": folders.count + 1])
         folders.insert(directory, at: 0)
         UserDefaults.standard.set(folders, forKey: "projectFolders")

@@ -650,8 +650,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
-  or a phone); a Mac also names `integrations`, each integration's name by its MCP server's
-  (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
+  or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
+  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
@@ -995,6 +996,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine another Mac runs has `home` (`{"name"?}`, that Mac's name where its start noted
+    one, as `kuvo/info`'s `home` says it); one this Mac runs has none. `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
+    the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
+    settings stay. `200 {"machine"}`, or `409 {"message"}` when this Mac runs it already, its
+    agents are at work, or its box was set up by a newer Kuvo Code.
   - `DELETE kuvo/machines/<id>/addresses/<address>` stops using one of its other addresses (`404`
     for its name, or one it doesn't have); `POST kuvo/machines/<id>/same-as {"other"}` makes it one
     of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when
@@ -1207,14 +1213,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `GET kuvo/search?q=<words>&limit=<n>`: sessions whose conversation has the words, for a
   client's sidebar search: `{"results": [{session, snippet, info}]}`, the latest first (at most
   `limit`, 20 unless asked, 50 at most), `snippet` a line's worth of the words around the first
-  mention, `info` the session as the box lists it (for a client that doesn't list it).
+  mention, `info` the session as the engine lists it (for a client that doesn't list it: an older
+  one, archived).
   Every session of the box's engine and of its coding agents' bridge (archived ones too; not a
   subagent's, a group chat seat's or a coding agent's turn), with no regard for case or accents.
   Only what was said and worked on is searched: what you wrote (not what Kuvo Code adds to a
   message's end), other agents' messages and wake-ups, the agent's replies, what each step worked
   on, and the commands you ran with their output; not who's speaking, nor the app's words for a
   step. The box keeps each conversation's text until its session changes. 400 `{"message"}`
-  without `q`; 503 `{"message"}` while its engine isn't running. Clients search each box they reach (feature `search`, from bridge 0.9.87).
+  without `q`; 503 `{"message"}` while its engine isn't running or doesn't answer. Clients search each box they reach (feature `search`, from bridge 0.9.87) and
+  say which computers they couldn't search.
 - `kuvo/named`: who you can name with `&` in a message, as the Mac's composer offers them:
   `{"agents": [{session, name, kind, machine, project, about}]}`, every bot (`kind: "bot"`,
   `about` its job) then the latest sessions with a title (`kind: "session"`, `project` its

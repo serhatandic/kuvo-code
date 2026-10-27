@@ -39,6 +39,7 @@ for Linux's tools).
 | Read on one client, read on all: a session, bot or group chat read on the phone or another Mac stops showing unread here | SessionLifecycleTests, BoxGroupTests; Agents' sessions test (a coding agent's look told) | the phone's side (its own tests) |
 | B17 A folder that isn't a git repository | SessionEditsTests | |
 | B18 Rename, archive, restore, delete, search (a bot found as itself) | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
+| B22 Searching what was said, by each box (`kuvo/search`): every session and page of it, the app's own words not found, a conversation read again only once it changed | SessionSearchTests (this Mac's real box) | the route itself: `search.test.js` in Packages/KuvoLink/Tests/Bridge (on Linux too, with a machine's Bun); the phone's side: kuvo-code-ios SearchTests |
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
 | C1–C3 Attach pictures, PDFs, files; a picture named where you write ("[Image 1]"), its name gone with it | AttachmentRoutesTests, AttachmentsTests, SentFilesTests, ComposerFieldTests | how the names and links look in the field and your bubble (a look before and after) |
 | C4 Quote part of a reply and answer it, the answer taking the keyboard | QuotingTests, ComposerFieldTests | |

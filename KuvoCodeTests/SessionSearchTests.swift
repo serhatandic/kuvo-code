@@ -70,6 +70,11 @@ import Testing
         await start()
         #expect(await found("email") == ["ses_login", "ses_logs"])
         #expect(await found("THEME") == ["ses_dark"])
+        #expect(workspace.unsearched.isEmpty)
+        // A machine that isn't connected: its conversations aren't searched, and that's said.
+        workspace.machines = ["lokum"]
+        #expect(await found("email") == ["ses_login", "ses_logs"])
+        #expect(workspace.unsearched == ["lokum": "isn’t connected"])
         let snippet = try #require(await workspace.searchConversations("forgets").first?.snippet)
         #expect(snippet.contains("forgets the email"), "the words around it: \(snippet)")
     }

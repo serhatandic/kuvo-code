@@ -151,9 +151,54 @@ import ClientText
         #expect(!uri.contains("%CC%A7"), "ş should not come apart into s and a combining mark")
     }
 
+    /// The routes the box reads back to each file (its own test reads the same vectors).
+    @Test func theRoutesTheBoxReads() throws {
+        struct Vectors: Decodable {
+            struct Address: Decodable { var name: String; var encoded: String }
+            var addresses: [Address]
+        }
+        let file = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../KuvoLink/Vectors/file-addresses/addresses.json").standardized
+        let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: file))
+        #expect(!vectors.addresses.isEmpty)
+        for address in vectors.addresses {
+            #expect(FileAddresses.route("/folder/" + address.name) == "kuvo/file?uri=file:///folder/" + address.encoded, "\(address.name)")
+        }
+    }
+
     @Test func spacesAndQueryCharactersStayInsideTheRoute() {
         #expect(FileAddresses.uri("/tmp/a b#1.txt") == "file:///tmp/a%20b%231.txt")
         // "&" is a path's own letter, but would end the query's value.
         #expect(FileAddresses.route("/tmp/a&b.txt", max: 100) == "kuvo/file?uri=file:///tmp/a%26b.txt&max=100")
     }
 }
+
+/// The words in a message field changed by the app: the caret goes where you'd go on typing.
+@Suite struct TextChangeTests {
+    @Test func aDraftBroughtBackIntoAnEmptyFieldPutsTheCaretAfterIt() {
+        let change = TextChange(from: "", to: "Check the long break")
+        #expect(change.caret(movedFrom: 0) == 20)
+    }
+
+    @Test func aNamePickedFromTheListPutsTheCaretAfterItsSpace() {
+        let change = TextChange(from: "Ask &Fi", to: "Ask &Finance ")
+        #expect(change.range == NSRange(location: 7, length: 0))
+        #expect(change.replacement == "nance ")
+        #expect(change.caret(movedFrom: 7) == 13)
+    }
+
+    @Test func wordsPutBackInFrontKeepTheCaretWhereYouWereTyping() {
+        // Edit, Undo, a message that didn't go: it comes back ahead of what's written.
+        let change = TextChange(from: "and the docs", to: "Fix the build\n\nand the docs")
+        #expect(change.caret(movedFrom: 12) == 27)
+        #expect(change.caret(movedFrom: 4) == 19)
+    }
+
+    @Test func aCaretBeforeTheChangeStaysAndOneInItGoesAfterWhatCameIn() {
+        let change = TextChange(from: "one [Image 1] two", to: "one  two")
+        #expect(change.caret(movedFrom: 2) == 2)
+        #expect(change.caret(movedFrom: 8) == 4)
+        #expect(change.caret(movedFrom: 15) == 6)
+    }
+}
+
