@@ -1,4 +1,5 @@
 import AppKit
+import ClientNews
 import OpenCodeKit
 import os
 
@@ -105,6 +106,37 @@ final class AppModel {
     var showsSettings = false
     /// Help › Report a Problem…'s sheet, over the main window.
     var showsProblemReport = false
+    /// What's New: the highlights over the main window, once after an update or from Help.
+    var whatsNew: WhatsNew.Release?
+    /// What this copy carries of what's new, and its "New" marks (kept by this app).
+    let newMarks = NewMarks(news: WhatsNew.bundled(), memory: NewsMemory())
+    @ObservationIgnored private var lookedForWhatsNew = false
+
+    /// As the window first shows: this release's highlights, after an update to it.
+    func whatsNewAfterLaunch() {
+        guard !lookedForWhatsNew, !AppInfo.isHostingTests else { return }
+        lookedForWhatsNew = true
+        // Not over a demo, a test or a measurement, which never ask to be shown it.
+        let scripted = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }
+        let shown = newMarks.memory.afterLaunch(newMarks.news, version: AppInfo.version, ranBefore: !Analytics.shared.isFirstLaunch)
+        if !scripted { whatsNew = shown }
+        #if DEBUG
+        // KUVO_DEMO_WHATS_NEW: the sheet, for a look at it.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_WHATS_NEW"] != nil { whatsNew = newMarks.news?.latestHighlights }
+        #endif
+    }
+
+    /// Help › What's New: this release's highlights, or the last ones a release had; every
+    /// release's notes, for a copy that carries none.
+    func showWhatsNew() {
+        guard let news = newMarks.news, let release = news.release(of: AppInfo.version).flatMap({ $0.highlights.isEmpty ? nil : $0 }) ?? news.latestHighlights else {
+            NSWorkspace.shared.open(AppInfo.releases)
+            return
+        }
+        openMainWindow?()
+        NSApp.activate()
+        whatsNew = release
+    }
     /// Help › Report a Problem…: its sheet, over the main window, opened if it was closed.
     func reportProblem() {
         openMainWindow?()

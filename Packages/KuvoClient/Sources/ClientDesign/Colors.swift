@@ -5,6 +5,8 @@ import AppKit
 
 /// The platform's own color: NSColor on the Mac, UIColor on the phone.
 public typealias PlatformColor = NSColor
+/// The platform's own view: NSView on the Mac, UIView on the phone.
+public typealias PlatformView = NSView
 
 extension NSColor {
     static func srgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
@@ -16,6 +18,8 @@ import UIKit
 
 /// The platform's own color: NSColor on the Mac, UIColor on the phone.
 public typealias PlatformColor = UIColor
+/// The platform's own view: NSView on the Mac, UIView on the phone.
+public typealias PlatformView = UIView
 
 extension UIColor {
     static func srgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> UIColor {

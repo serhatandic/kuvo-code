@@ -33,6 +33,13 @@ phone's copies of the Mac's design files, a piece at a time.
   cost and tokens.
 - `Spinner`: the app's loader, played by Core Animation on each platform's own view.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
+- `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
+- `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and
+  moving (`BotMotion`, played by Core Animation on each platform's own view).
+- `DiffStat` and `Color.additions`/`deletions`: "+12 −3" in the system's green and red.
+- `MathText`, `MathBlockView`, `InlineMath`, `MathMarkdownParser`: formulas in replies and files,
+  at the size of the text they're in (handed in, as each app sets its own).
+- `CodeLanguage` and `CodeLine`: a code block's language name, and how wide a line of it is set.
 - `FolderIcon`: a project's folder, open or closed.
 - `Color(hex:)`: a color written as 0xRRGGBB, and `PlatformColor` (NSColor or UIColor).
 - `CodeColors`: the colors of code everywhere (diffs, files, replies), and Textual's theme of them.

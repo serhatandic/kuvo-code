@@ -1,3 +1,5 @@
+import ClientNews
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
@@ -33,6 +35,7 @@ struct SlashList: View {
     /// The project's name, over its own commands.
     let project: String?
     let choose: (SlashItem) -> Void
+    @Environment(AppModel.self) private var app
 
     var body: some View {
         // The project's commands under its name, after the keywords.
@@ -63,6 +66,8 @@ struct SlashList: View {
                 KeywordMark(keyword: keyword)
                 Text(keyword.typed)
                     .font(.system(size: 13, weight: .medium))
+                // One a recent release brought, until it's used.
+                if app.newMarks.isNew("keyword/" + keyword.rawValue) { NewMark() }
                 Text(keyword.summary)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)

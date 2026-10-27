@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientNews
 import OpenCodeKit
 import SwiftUI
 
@@ -361,6 +362,11 @@ struct MainView: View {
         .sheet(isPresented: Binding { app.showsProblemReport } set: { app.showsProblemReport = $0 }) {
             ReportProblemSheet { app.showsProblemReport = false }
         }
+        // What's New: once after an update (not while the first launch is under way), and from Help.
+        .sheet(item: Binding { app.onboarding.isActive ? nil : app.whatsNew } set: { app.whatsNew = $0 }) { release in
+            WhatsNewSheet(release: release) { app.whatsNew = nil }
+        }
+        .task { app.whatsNewAfterLaunch() }
     }
 
     private func projectSheet(_ request: ProjectEditorRequest) -> some View {
