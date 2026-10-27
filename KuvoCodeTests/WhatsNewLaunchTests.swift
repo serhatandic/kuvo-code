@@ -14,9 +14,7 @@ import Testing
     let suite = "whats-new-launch-\(UUID().uuidString)"
 
     private func launch(ranBefore: Bool) -> AppModel {
-        let app = AppModel(newMarks: NewMarks(news: news, memory: NewsMemory(defaults: UserDefaults(suiteName: suite)!)))
-        app.lookForWhatsNew(ranBefore: ranBefore, version: "0.9.0")
-        return app
+        AppModel(newMarks: NewMarks(news: news, memory: NewsMemory(defaults: UserDefaults(suiteName: suite)!)), launch: (ranBefore, "0.9.0"))
     }
 
     @Test func aFirstLaunchQuitBeforeTheWindowShowedIsStillTheFirst() {

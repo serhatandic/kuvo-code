@@ -138,15 +138,21 @@ private struct BottomStack: View {
     @Environment(AppModel.self) private var app
     @AppStorage(ToolApproval.key) private var defaultApproval = ToolApproval.approveAll
     @Environment(\.takesCardKeys) private var takesCardKeys
-    /// Which bar is open once the card is full (`BarFolds`), each conversation's own: this stack
-    /// stays as you switch conversations.
-    @State private var foldsOf: [String: BarFolds<ComposerBar>] = [:]
+    /// Each conversation's card as it was last seen here: which bar is open once it's full
+    /// (`BarFolds`), and the bars and news it had, so coming back to it reads what changed
+    /// meanwhile. This stack stays as you switch conversations.
+    private struct Card {
+        var folds = BarFolds<ComposerBar>()
+        var bars: [ComposerBar]?
+        var news: [ComposerBar: Bool]?
+    }
+    @State private var cards: [String: Card] = [:]
     /// The waiting messages, open under their line once there are more than two.
     @State private var queueOpen = false
 
     private var folds: BarFolds<ComposerBar> {
-        get { foldsOf[model.id] ?? BarFolds() }
-        nonmutating set { foldsOf[model.id] = newValue }
+        get { cards[model.id]?.folds ?? BarFolds() }
+        nonmutating set { cards[model.id, default: Card()].folds = newValue }
     }
 
     /// What changed in the card, and in which conversation: another conversation's bars, news or
@@ -370,21 +376,24 @@ private struct BottomStack: View {
             .animation(.ui, value: model.waiting.count > 2)
             // The newest change opens, where the card is full; shown again, what has something to see.
             .onChange(of: Seen(conversation: model.id, value: bars), initial: true) { was, now in
-                let (old, new) = (was.value, now.value)
-                if old == new || was.conversation != now.conversation {
-                    // Shown again, or another conversation shown: its own folds, as it left them.
-                    if was.conversation != now.conversation { queueOpen = false }
-                    return folds.start(new) { news[$0] == true }
-                }
+                let new = now.value
+                if was.conversation != now.conversation { queueOpen = false }
+                // Another conversation shown: what came and went since it was last here.
+                let last = was.conversation == now.conversation ? was.value : cards[now.conversation]?.bars
+                cards[now.conversation, default: Card()].bars = new
+                // Shown again as it was, or for the first time: what has something to see.
+                guard let old = last, old != new else { return folds.start(new) { news[$0] == true } }
                 // No longer full: each keeps what the card showed, rather than springing open.
                 if old.count >= BarFolds<ComposerBar>.full, new.count < BarFolds<ComposerBar>.full {
                     for bar in new { own(bar).wrappedValue = folds.isHidden(bar, among: old, asking: isAsking, own: own(bar).wrappedValue) }
                 }
                 folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
             }
-            .onChange(of: Seen(conversation: model.id, value: news)) { old, new in
-                guard old.conversation == new.conversation else { return }
-                if let now = new.value.first(where: { $0.value && old.value[$0.key] != true })?.key { folds.changed(now) }
+            .onChange(of: Seen(conversation: model.id, value: news), initial: true) { was, now in
+                // Another conversation shown: what it had last time here (none yet: nothing came).
+                let old = was.conversation == now.conversation ? was.value : cards[now.conversation]?.news ?? now.value
+                cards[now.conversation, default: Card()].news = now.value
+                if let came = now.value.first(where: { $0.value && old[$0.key] != true })?.key { folds.changed(came) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
             .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in

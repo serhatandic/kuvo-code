@@ -116,12 +116,6 @@ final class AppModel {
     @ObservationIgnored private var newAfterLaunch: WhatsNew.Release?
     @ObservationIgnored private var lookedForWhatsNew = false
 
-    /// As the app opens, before a first launch's steps: one quit partway through them (macOS's
-    /// Quit & Reopen for Screen Recording) was still the first, and the next isn't an update.
-    /// `ranBefore`: the app had opened before.
-    func lookForWhatsNew(ranBefore: Bool, version: String = AppInfo.version) {
-        newAfterLaunch = newMarks.memory.afterLaunch(newMarks.news, version: version, ranBefore: ranBefore)
-    }
 
     /// As the window first shows: this release's highlights, after an update to it.
     func whatsNewAfterLaunch() {
@@ -202,9 +196,13 @@ final class AppModel {
         case bot(BotRecipe)
     }
 
-    init(newMarks: NewMarks = NewMarks(news: WhatsNew.bundled(), memory: NewsMemory())) {
+    /// `launch`: how the app opened (it had opened before; its version), for What's New, looked for
+    /// at once, before a first launch's steps: one quit partway through them (macOS's Quit & Reopen
+    /// for Screen Recording) was still the first, and the next isn't an update. None in tests.
+    init(newMarks: NewMarks = NewMarks(news: WhatsNew.bundled(), memory: NewsMemory()),
+         launch: (ranBefore: Bool, version: String)? = AppInfo.isHostingTests ? nil : (!Analytics.shared.isFirstLaunch, AppInfo.version)) {
         self.newMarks = newMarks
-        if !AppInfo.isHostingTests { lookForWhatsNew(ranBefore: !Analytics.shared.isFirstLaunch) }
+        if let launch { newAfterLaunch = newMarks.memory.afterLaunch(newMarks.news, version: launch.version, ranBefore: launch.ranBefore) }
         // The window's own: where a fork or a move opens, and where the panel adds to a message.
         workspace.tabs = tabs
         utilities.addToMessage = { [weak self] in self?.tabs.addToMessage($0) }
