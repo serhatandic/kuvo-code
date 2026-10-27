@@ -1,6 +1,7 @@
 import ClientDesign
 import ClientNews
 import OpenCodeKit
+import KuvoVoice
 import SwiftUI
 
 /// The workspace, laid out like Rex: open sessions as tabs in the title bar, and
