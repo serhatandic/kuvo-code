@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -200,7 +200,7 @@ describe("a bot's memory", () => {
     const memory = join(folder, "MEMORY.md")
     await hear(turn("ses_bot_ada", "msg_1", edit("ses_bot_ada", "c1", memory, "one\ntwo\n")))
     writeFileSync(memory, "one\ntwo\nmine\n")
-    store.change(memory, { by: { kind: "outside" }, via: "outside", where: { bot: "bot_ada" } })
+    await store.change(memory, { by: { kind: "outside" }, via: "outside", where: { bot: "bot_ada" } })
     const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(memory)}`)
     expect(value.versions.at(-1)).toMatchObject({ n: 2, by: { kind: "outside" }, lines: { added: 1, removed: 0 } })
   })
@@ -501,6 +501,23 @@ describe("what the record keeps a copy of", () => {
     const { value: ignored } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(built)}`)
     expect(ignored.versions[0]).toMatchObject({ kept: false, reason: "ignored" })
     expect((await route("GET", `kuvo/artifacts/${ignored.id}/versions/1`)).status).toBe(410)
+  })
+
+  test("what git ignores keeps no copy even when git won't look at another file of the same turn (one beyond a symbolic link)", async () => {
+    spawnSync("git", ["init", "-q", project])
+    writeFileSync(join(project, ".gitignore"), "*.log\n")
+    mkdirSync(join(root, "elsewhere"))
+    symlinkSync(join(root, "elsewhere"), join(project, "linked"))
+    const log = join(project, "run.log")
+    const linked = join(project, "linked", "notes.md")
+    const plain = join(project, "notes.md")
+    for (const file of [log, linked, plain]) writeFileSync(file, "SECRET-ish\n")
+    await store.changeAll([log, linked, plain], { by: { kind: "agent" }, via: "shell", where: { project } })
+    const version = async (path: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(path)}`)).value.versions[0]
+    expect(await version(log)).toMatchObject({ kept: false, reason: "ignored" })
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(log)}/versions/1`)).status).toBe(410)
+    expect(await version(linked)).toMatchObject({ kept: true })
+    expect(await version(plain)).toMatchObject({ kept: true })
   })
 
   test("with the disk down to its floor, what a new version replaces keeps no copy, but the newest, memory and what's pinned keep theirs", async () => {

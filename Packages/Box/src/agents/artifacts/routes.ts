@@ -65,6 +65,8 @@ function scopeOf(query: URLSearchParams): Scope | string {
 export async function artifactRoutes(store: ArtifactStore | undefined, method: string, parts: string[], query: URLSearchParams, body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
   if (!store) return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.")
   const [first, second, third, fourth] = parts
+  // What's being recorded now first, so a turn that just ended reads as it ended.
+  await store.settled()
 
   if (!first) {
     if (method !== "GET") return message(405, "Read them with GET.")
@@ -113,7 +115,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     if (method !== "POST") return message(405, "Pin it with POST.")
     const { pinned, note } = (await body()) ?? {}
     if (typeof pinned !== "boolean") return message(400, "Say whether it's pinned (pinned).")
-    const changed = store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
+    const changed = await store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
     return json(clientArtifact(changed!, store))
   }
 
@@ -121,7 +123,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     if (method !== "POST") return message(405, "Restore it with POST.")
     const { version } = (await body()) ?? {}
     if (!Number.isInteger(version)) return message(400, "Say which version to put back (version).")
-    const restored = store.restore(artifact.id, version)
+    const restored = await store.restore(artifact.id, version)
     return typeof restored === "string" ? message(409, restored) : json(clientArtifact(restored, store))
   }
 

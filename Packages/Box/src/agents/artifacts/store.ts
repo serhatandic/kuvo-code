@@ -202,12 +202,64 @@ export class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path))
   }
 
+  /** What's being recorded: one at a time, in the order asked, each once git has said what it ignores. */
+  private queue: Promise<unknown> = Promise.resolve()
+
+  private inTurn<T>(paths: string[], work: () => T): Promise<T | undefined> {
+    const next = this.queue.then(async () => {
+      await this.policy.learn(paths)
+      return work()
+    }).catch((error) => {
+      console.error("artifacts:", error?.message ?? error)
+      return undefined
+    })
+    this.queue = next
+    return next
+  }
+
+  /** Once all that's been asked so far is recorded. */
+  async settled(): Promise<void> {
+    await this.queue
+  }
+
+  /** The file at `path` as it is now, recorded as `made` it (`changeNow`). */
+  change(path: string, made: Made): Promise<Artifact | undefined> {
+    return this.inTurn([path], () => this.changeNow(path, made))
+  }
+
+  /** Each of `paths` as it is now, recorded as `made` it, git asked about them all at once. */
+  changeAll(paths: string[], made: Made): Promise<unknown> {
+    return this.inTurn(paths, () => paths.forEach((path) => this.changeNow(path, made)))
+  }
+
+  /** What a file was before the record first saw it change (`beforeNow`). */
+  before(path: string, bytes: Buffer, where: { bot?: string } = {}, at = this.now()): Promise<void> {
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at))
+  }
+
+  /** Pinned (marked final) or not (`pinNow`). */
+  pin(id: string, pinned: { by: "bot" | "you"; note?: string } | null): Promise<Artifact | undefined> {
+    const path = this.artifacts.get(id)?.path
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned))
+  }
+
+  /** Version `n` put back on disk (`restoreNow`): the artifact, or why not. */
+  async restore(id: string, n: number, at = this.now()): Promise<Artifact | string> {
+    const path = this.artifacts.get(id)?.path
+    return (await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at))) ?? "It couldn't be put back."
+  }
+
+  /** Shown in a panel just now (`shownNow`). */
+  shown(path: string, made: Made): Promise<Artifact | undefined> {
+    return this.inTurn([path], () => this.shownNow(path, made))
+  }
+
   /**
    * The file at `path` as it is now, recorded as `made` it: a new version, or this turn's version
    * brought up to date, or (unchanged since its newest version) only who touched it noted. Returns
    * the artifact when anything changed.
    */
-  change(path: string, made: Made): Artifact | undefined {
+  private changeNow(path: string, made: Made): Artifact | undefined {
     const now = made.at ?? this.now()
     const read = this.read(path)
     let artifact = this.at(path)
@@ -269,7 +321,7 @@ export class ArtifactStore {
    * What a file was before the record first saw it change, worked out from that change: kept as
    * its version 0, so its first change has a before. Only for a file the record doesn't know yet.
    */
-  before(path: string, bytes: Buffer, where: { bot?: string } = {}, at = this.now()) {
+  private beforeNow(path: string, bytes: Buffer, where: { bot?: string } = {}, at = this.now()) {
     if (this.at(path) || bytes.length > copyLimit || this.policy.privacy(path)) return
     const kind = this.refine(kindOf(path, { bots: this.options.bots }), bytes)
     // Code git keeps, and anything but what's always kept while the disk is low: no before.
@@ -289,7 +341,7 @@ export class ArtifactStore {
   }
 
   /** Pinned (marked final) or not. */
-  pin(id: string, pinned: { by: "bot" | "you"; note?: string } | null): Artifact | undefined {
+  private pinNow(id: string, pinned: { by: "bot" | "you"; note?: string } | null): Artifact | undefined {
     const artifact = this.artifacts.get(id)
     if (!artifact) return undefined
     artifact.pinned = pinned ? { by: pinned.by, at: stamp(this.now()), ...(pinned.note ? { note: pinned.note } : {}) } : null
@@ -320,7 +372,7 @@ export class ArtifactStore {
     return inBots || inProject
   }
 
-  restore(id: string, n: number, at = this.now()): Artifact | string {
+  private restoreNow(id: string, n: number, at: Date): Artifact | string {
     const artifact = this.artifacts.get(id)
     const version = artifact?.versions.find((each) => each.n === n)
     if (!artifact || !version) return "There's no such version."
@@ -329,7 +381,7 @@ export class ArtifactStore {
     const bytes = this.bytes(id, n)
     if (!bytes) return version.status === "deleted" ? "That version is a deletion: there's nothing to put back." : "That version's copy isn't kept, so it can't be put back."
     // What's there now, kept first.
-    this.change(artifact.path, { by: { kind: "you" }, via: "replaced", separate: true, keep: true, at })
+    this.changeNow(artifact.path, { by: { kind: "you" }, via: "replaced", separate: true, keep: true, at })
     const latest = artifact.versions.at(-1)
     if (latest && latest.status !== "deleted" && !latest.kept) return "What's there now can't be kept, so putting this back couldn't be undone."
     try {
@@ -345,7 +397,7 @@ export class ArtifactStore {
       rmSync(artifact.path + ".kuvo-restore", { force: true })
       return `It couldn't be written: ${error?.message ?? error}`
     }
-    this.change(artifact.path, { by: { kind: "you" }, via: "restore", separate: true, keep: true, at })
+    this.changeNow(artifact.path, { by: { kind: "you" }, via: "restore", separate: true, keep: true, at })
     const restored = artifact.versions.at(-1)
     if (restored && restored.n !== latest?.n) {
       restored.restored = n
@@ -355,8 +407,8 @@ export class ArtifactStore {
   }
 
   /** Shown in a panel just now. */
-  shown(path: string, made: Made): Artifact | undefined {
-    const artifact = this.change(path, made) ?? this.at(path)
+  private shownNow(path: string, made: Made): Artifact | undefined {
+    const artifact = this.changeNow(path, made) ?? this.at(path)
     if (!artifact) return undefined
     artifact.shown = stamp(made.at ?? this.now())
     this.write(artifact)

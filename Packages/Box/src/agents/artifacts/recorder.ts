@@ -237,12 +237,12 @@ export class Recorder {
     for (const file of files) {
       if (typeof file?.file !== "string") continue
       const path = absolute(file.file)
-      if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string") this.seedBefore(path, file.patch)
-      this.store.change(path, { ...made(name), ...(typeof file.patch === "string" ? { patch: file.patch } : {}) })
+      if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string") await this.seedBefore(path, file.patch)
+      await this.store.change(path, { ...made(name), ...(typeof file.patch === "string" ? { patch: file.patch } : {}) })
     }
     // A write's file, when it didn't say so in its metadata.
     const written = input.path ?? input.filePath ?? input.file_path
-    if (!files.length && writes.has(name) && typeof written === "string") this.store.change(absolute(written), made(name))
+    if (!files.length && writes.has(name) && typeof written === "string") await this.store.change(absolute(written), made(name))
     // What a tool that makes pictures made, in its output (not what a read looked at).
     if (makers.has(name) && (name !== "browser_screenshot" || input.show)) {
       for (const part of Array.isArray(content) ? content : []) {
@@ -253,14 +253,14 @@ export class Recorder {
         } catch {
           continue
         }
-        this.store.change(path, made(name))
+        await this.store.change(path, made(name))
       }
     }
     // Kuvo Code's own tools.
-    if ((name === "show_file" || name === "show_in_panel") && typeof input.path === "string") this.store.shown(absolute(input.path), made(name))
+    if ((name === "show_file" || name === "show_in_panel") && typeof input.path === "string") await this.store.shown(absolute(input.path), made(name))
     if (name === "mark_final" && typeof input.path === "string") {
-      const artifact = this.store.change(absolute(input.path), made(name)) ?? this.store.at(absolute(input.path))
-      if (artifact) this.store.pin(artifact.id, { by: "bot", ...(typeof input.note === "string" && input.note ? { note: input.note } : {}) })
+      const artifact = (await this.store.change(absolute(input.path), made(name))) ?? this.store.at(absolute(input.path))
+      if (artifact) await this.store.pin(artifact.id, { by: "bot", ...(typeof input.note === "string" && input.note ? { note: input.note } : {}) })
     }
   }
 
@@ -269,7 +269,7 @@ export class Recorder {
    * only when the patch fits the file as it is now exactly (it hasn't changed again since), never
    * a state made up from a later one.
    */
-  private seedBefore(path: string, patch: string) {
+  private async seedBefore(path: string, patch: string) {
     let now: string
     try {
       now = readFileSync(path, "utf8")
@@ -277,7 +277,7 @@ export class Recorder {
       return
     }
     const before = unapplyExactly(patch, now)
-    if (before !== undefined && before !== now) this.store.before(path, Buffer.from(before))
+    if (before !== undefined && before !== now) await this.store.before(path, Buffer.from(before))
   }
 
   /** The conversation at the top of `id`'s subagents, and its details. */
