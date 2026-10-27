@@ -171,13 +171,13 @@ export function searchText(messages: EngineMessage[], directory: string): string
 }
 
 /** A message as you wrote it: what Kuvo Code adds to its end comes off (who's named, a keyword it
- * was sent with, that it's from your phone), but for your review comments, and the names of the
+ * was sent with, the widget it answers, that it's from your phone), but for your review comments, and the names of the
  * files it brought. */
 function ownWords(written: string): string {
   let words = written.trim();
   const kept: string[] = [];
   for (;;) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-phone>", "</from-phone>"]]
+    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-widget>", "</from-widget>"], ["<from-phone>", "</from-phone>"]]
       .find(([, end]) => words.endsWith("\n" + end));
     const open = block ? words.lastIndexOf(block[0] + "\n") : -1;
     if (!block || open < 0 || (open > 0 && words[open - 1] !== "\n")) break;

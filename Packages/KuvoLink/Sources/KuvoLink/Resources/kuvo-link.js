@@ -8408,7 +8408,7 @@ function ownWords(written) {
   let words = written.trim();
   const kept = [];
   for (;; ) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-phone>", "</from-phone>"]].find(([, end]) => words.endsWith(`
+    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-widget>", "</from-widget>"], ["<from-phone>", "</from-phone>"]].find(([, end]) => words.endsWith(`
 ` + end));
     const open = block ? words.lastIndexOf(block[0] + `
 `) : -1;
