@@ -330,7 +330,8 @@ private struct WorktreePlace: View {
                 Text("Kuvo Code can’t create this folder. Choose another one.")
                     .foregroundStyle(.red)
             } else if project.isInRepository {
-                Text("It’s inside \(project.name)’s repository, so git would list each worktree as new files there. Choose a folder outside it.")
+                // Under its own name, "this project"; under the one row for every project, its name.
+                Text("It’s inside \(title == nil ? "this project’s" : "\(project.name)’s") repository, so git would list each worktree as new files there. Choose a folder outside it.")
                     .foregroundStyle(.orange)
             }
         }

@@ -1033,10 +1033,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings shows real folders before and after you choose one → `{"directory", "default", "home",
     "projects": [{project, name, folder, exists?, canMake?, inside?, ignored?}]}`, one for each of
     the box's projects in a git repository with a commit. `name`: its folder's name, with the
-    folders it's in when another project has the same one ("sums — scratchpad"). `default`: the engine's own folder, where each project
-    has one of its own (`folder` is null until the engine runs and says which). A relative value
-    starts at the repository's own checkout, not the project's folder in it; `~/` at the home
-    folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
+    folders it's in when another project has the same one ("sums — scratchpad", "api — ~").
+    `default`: the engine's own folder, where each project has one of its own (`folder` is null
+    until the engine runs and says which). A relative value starts at the repository's own
+    checkout, not the project's folder in it; `~/` at the home folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
     checkout, and `ignored` whether git ignores it there (if not, git lists each worktree as new
     files).
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,

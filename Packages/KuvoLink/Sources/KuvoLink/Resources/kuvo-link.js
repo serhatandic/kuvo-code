@@ -3618,7 +3618,7 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
       continue;
     const checkout = realOr(path22.dirname(gitFolder));
     const id = ids.get(checkout);
-    if (id === null || await gitLater(project, ["rev-parse", "-q", "--verify", "HEAD"]) === null)
+    if (id === null || id === undefined && !await gitLater(project, ["rev-list", "-n", "1", "--all"]))
       continue;
     const folder = value === null ? id ? path22.join(answer.default, id.slice(0, 6)) : null : value.startsWith("~/") ? path22.join(answer.home, value.slice(2)) : path22.resolve(checkout, value);
     const entry = { project, name: path22.basename(project), folder };
@@ -3639,11 +3639,16 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
     }
     answer.projects.push(entry);
   }
-  apart(answer.projects);
+  apart(answer.projects, answer.home);
   return answer;
 }
-function apart(projects) {
-  const parents = (project) => path22.dirname(project).split(path22.sep).filter(Boolean).reverse();
+function apart(projects, home) {
+  const parents = (project) => {
+    const folder = path22.dirname(project);
+    const inHome = folder === home || folder.startsWith(home + path22.sep);
+    const names = (inHome ? folder.slice(home.length) : folder).split(path22.sep).filter(Boolean);
+    return (inHome ? ["~", ...names] : names).reverse();
+  };
   for (const name of new Set(projects.map((each) => each.name))) {
     const same = projects.filter((each) => each.name === name);
     if (same.length < 2)

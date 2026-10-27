@@ -307,9 +307,9 @@ export async function worktreesWhere(directory: unknown, engine: Target | null, 
     if (path.basename(gitFolder) !== ".git") continue;
     const checkout = realOr(path.dirname(gitFolder));
     // One the engine doesn't take for a repository has no worktrees: a repository with no commit
-    // yet is its "global" project (left out with the engine stopped too).
+    // yet is its "global" project (asked of git when the engine hasn't said).
     const id = ids.get(checkout);
-    if (id === null || (await gitLater(project, ["rev-parse", "-q", "--verify", "HEAD"])) === null) continue;
+    if (id === null || (id === undefined && !(await gitLater(project, ["rev-list", "-n", "1", "--all"])))) continue;
     // The engine's own: a folder for each project, named by the start of its id.
     const folder = value === null ? (id ? path.join(answer.default, id.slice(0, 6)) : null)
       : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
@@ -325,14 +325,19 @@ export async function worktreesWhere(directory: unknown, engine: Target | null, 
     }
     answer.projects.push(entry);
   }
-  apart(answer.projects);
+  apart(answer.projects, answer.home);
   return answer;
 }
 
 /** Projects that share a name, told apart by the folders they're in, as few as it takes:
- * "sums — scratchpad" and "sums — code". */
-function apart(projects: WhereProject[]): void {
-  const parents = (project: string) => path.dirname(project).split(path.sep).filter(Boolean).reverse();
+ * "sums — scratchpad" and "sums — code" (the home folder as "~"). */
+function apart(projects: WhereProject[], home: string): void {
+  const parents = (project: string) => {
+    const folder = path.dirname(project);
+    const inHome = folder === home || folder.startsWith(home + path.sep);
+    const names = (inHome ? folder.slice(home.length) : folder).split(path.sep).filter(Boolean);
+    return (inHome ? ["~", ...names] : names).reverse();
+  };
   for (const name of new Set(projects.map(each => each.name))) {
     const same = projects.filter(each => each.name === name);
     if (same.length < 2) continue;
