@@ -96,12 +96,13 @@ const ATTACHED_HEADINGS = [
 const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [...ATTACHED_HEADINGS]);
 
 // A message's text with the note the Mac ends one that has files with (Attachments.swift): where
-// the files it sent with their contents are, and the ones the agent opens with its tools. One the
-// message ends with already (the files that stayed on a Mac) takes these lines after its own.
-export function withAttachedNote(text: string, included: string[], paths: string[]): string {
+// the files it sent with their contents are, and the ones the agent opens with its tools. The Mac's
+// own note the message ends with already (the files that stayed on it) takes these lines after its
+// own (`joins`); anything else that looks like one is the message's words, escaped.
+export function withAttachedNote(text: string, included: string[], paths: string[], joins = false): string {
   const lines = [...(included.length ? [ATTACHED_HEADINGS[0], ...included] : []), ...(paths.length ? [ATTACHED_HEADINGS[1], ...paths] : [])];
   if (!lines.length) return text;
-  const found = ATTACHED_BLOCK.split(text);
+  const found = joins ? ATTACHED_BLOCK.split(text) : null;
   const words = found ? found.before : ATTACHED_BLOCK.escaping(text);
   return (words ? `${words}\n\n` : "") + ["<attached-files>", ...(found?.lines ?? []), ...lines, "</attached-files>"].join("\n");
 }

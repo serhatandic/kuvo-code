@@ -125,14 +125,19 @@ nonisolated enum Attachments {
     /// can't be read, or is too big to send, stays here, and the note says so.
     static func prepareForMachine(_ urls: [URL]) -> Prepared {
         var prepared = Prepared()
+        var total = 0
         for url in urls {
             var file = target(of: url)
-            if kind(of: url) == .image {
+            let kind = kind(of: url)
+            if kind == .image {
                 let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                 if let image = engineImage(from: file, named: url.lastPathComponent, size: size), let converted = URL(string: image.uri) { file = converted }
             }
-            if let inline = inlined(file) {
-                prepared.files.append(.init(uri: inline, name: url.lastPathComponent))
+            // A folder goes as the list of what's in it, named so.
+            let name = kind == .folder ? "\(url.lastPathComponent) (list of its files).txt" : url.lastPathComponent
+            if let inline = inlined(file), total + inline.utf8.count <= maxMessageBytes {
+                total += inline.utf8.count
+                prepared.files.append(.init(uri: inline, name: name))
             } else {
                 prepared.unsent.append(url.path)
             }
@@ -140,8 +145,9 @@ nonisolated enum Attachments {
         return prepared
     }
 
-    /// What a file sent to a machine can weigh: it goes over SSH with the message.
-    static let maxMachineBytes = 50 * 1024 * 1024
+    /// What a message's files can weigh together, sent to a machine (with their contents, as text):
+    /// each at most `maxBytes`, as the model takes one.
+    static let maxMessageBytes = 60 * 1024 * 1024
 
     /// Where on a machine, in its box's folder there, the files sent to it are kept.
     private static let machineFolder = "attachments"
@@ -157,7 +163,7 @@ nonisolated enum Attachments {
             .sorted { $0.isFolder != $1.isFolder ? $0.isFolder : $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return "data:text/plain;base64," + Data(entries.map(\.name).joined(separator: "\n").utf8).base64EncodedString()
         }
-        guard ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxMachineBytes, let data = try? Data(contentsOf: url) else { return nil }
+        guard ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxBytes, let data = try? Data(contentsOf: url) else { return nil }
         let type = UTType(filenameExtension: url.pathExtension)
         let mime = kind(of: url) == .text ? "text/plain" : (type?.preferredMIMEType ?? "application/octet-stream")
         return "data:\(mime);base64," + data.base64EncodedString()

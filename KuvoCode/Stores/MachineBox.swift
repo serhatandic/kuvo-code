@@ -200,15 +200,16 @@ enum MachineBox {
     /// A message with files for a session on a machine, through its box, as a phone's goes: the
     /// box keeps the files there for the agent and gives the model as files what it reads, saying
     /// where they are in a note at the message's end (the box's `attachedIn`).
-    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, on connection: SSHConnection) async throws {
-        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], on: connection)
+    /// A session the coding agents run (`withAgents`) gets it through the machine's agents bridge.
+    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, withAgents: Bool, on connection: SSHConnection) async throws {
+        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], withAgents: withAgents, on: connection)
     }
 
     /// A command with files, the same way.
-    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, on connection: SSHConnection) async throws {
+    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, withAgents: Bool, on connection: SSHConnection) async throws {
         var body: [String: Any] = ["name": name, "text": text, "files": files.map(described)]
         if let delivery { body["delivery"] = delivery.rawValue }
-        try await send(session: session, kind: "command", body: body, on: connection)
+        try await send(session: session, kind: "command", body: body, withAgents: withAgents, on: connection)
     }
 
     private static func described(_ file: OpenCodeAPI.PromptFile) -> [String: Any] {
@@ -217,9 +218,9 @@ enum MachineBox {
         return described
     }
 
-    private static func send(session: String, kind: String, body: [String: Any], on connection: SSHConnection) async throws {
+    private static func send(session: String, kind: String, body: [String: Any], withAgents: Bool, on connection: SSHConnection) async throws {
         let escaped = session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? session
-        let (status, data) = try await route("POST", "api/session/\(escaped)/\(kind)", body: body, on: connection)
+        let (status, data) = try await route("POST", (withAgents ? "kuvo/agents/" : "") + "api/session/\(escaped)/\(kind)", body: body, on: connection)
         guard (200..<300).contains(status) else {
             struct Said: Decodable { var message: String? }
             throw Failure.refused((try? JSONDecoder().decode(Said.self, from: data))?.message ?? "The machine didn't take it (\(status)).")
