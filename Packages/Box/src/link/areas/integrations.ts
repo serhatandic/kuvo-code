@@ -240,7 +240,10 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
     }
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn: string | undefined;
-    if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []) as EngineServer[]).find?.((each: EngineServer) => each?.name === entry.id)?.integrationID;
+    if (engine) {
+      const servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+      signIn = (Array.isArray(servers) ? servers as EngineServer[] : []).find(each => each?.name === entry.id)?.integrationID;
+    }
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
     if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     if (engine && signIn) {

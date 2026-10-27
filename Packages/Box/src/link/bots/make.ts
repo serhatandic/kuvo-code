@@ -8,7 +8,6 @@ import type { Fields } from "../../shared/json";
 import { newID, plainName, stamp } from "../../shared/text";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
-import type { EngineSession } from "../engine/sessions";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
 import { botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
@@ -106,15 +105,16 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
   // (A project is one of its projects' folders, checked above.)
   const directory = (project as string | undefined) ?? path.join(folder, "workspace");
   const discard = () => fs.rmSync(folder, { recursive: true, force: true });
-  let session: { id?: string } | undefined;
+  let session: { id: string } | undefined;
   try {
     fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
     fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
-    // (As the engine answers it: the session it made, whole.)
-    session = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as EngineSession;
-    if (!session?.id) throw new Error("No conversation was made.");
+    // The session it made, as far as its id.
+    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as Fields<"id"> | null;
+    if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
+    session = { id: made.id };
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);

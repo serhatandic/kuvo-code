@@ -36,7 +36,7 @@ export interface Translated {
 
 /** What `applySettings` answers: what was made (or would be, with `dry`), with the keys those name,
  * whether something was, and the settings now; or why nothing was. */
-export type SettingsApplied = ({ status: 200 } & ConfigApplied) | { status: number; message: string; problem?: string } | SettingsChanged;
+export type SettingsApplied = ({ status: 200 } & ConfigApplied) | SettingsChanged;
 
 // The engine's own agents, on every computer whether its settings name them or not.
 const BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];

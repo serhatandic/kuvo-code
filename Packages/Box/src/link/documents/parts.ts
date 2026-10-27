@@ -26,25 +26,28 @@ export interface AssembledDoc {
   s: string;
 }
 
+// Whatever a mail brings as a part, checked as one (`DocPart`, as it's sent).
+const fitsPart = (part: unknown): part is DocPart => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of)
+  && (part.of as number) >= 2 && (part.of as number) <= MOST_PARTS && (part.i as number) >= 0 && (part.i as number) < (part.of as number)
+  && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
+
 // A document too big for one mail comes in parts (`{whole, i, of, d, s}`: `whole`, its `d`'s hash),
 // put together here, at most four on their way from one box at a time. The document once all are
-// here, or null. Whatever a mail brings (a `DocPart` as it's sent), checked as one here: its `i`
-// and `of` are numbers once `Number.isInteger` says so, which TypeScript doesn't see.
+// here, or null.
 export function assemble(parts: Map<string, PendingParts>, from: string, part: unknown): AssembledDoc | null {
-  if (!isObject(part) || typeof part.whole !== "string" || !Number.isInteger(part.i) || !Number.isInteger(part.of) || (part.of as number) < 2 || (part.of as number) > MOST_PARTS
-    || (part.i as number) < 0 || (part.i as number) >= (part.of as number) || typeof part.d !== "string" || part.d.length > DOC_PART || typeof part.s !== "string") return null;
+  if (!fitsPart(part)) return null;
   const key = `${from} ${part.whole}`;
   let pending = parts.get(key);
   if (!pending || pending.of !== part.of) {
     const theirs = [...parts.keys()].filter(each => each.startsWith(`${from} `));
     if (theirs.length >= 4) parts.delete(theirs[0]);
-    pending = { of: part.of as number, s: part.s, pieces: new Map() };
+    pending = { of: part.of, s: part.s, pieces: new Map() };
     parts.set(key, pending);
   }
-  pending.pieces.set(part.i as number, part.d);
-  if (pending.pieces.size < (part.of as number)) return null;
+  pending.pieces.set(part.i, part.d);
+  if (pending.pieces.size < part.of) return null;
   parts.delete(key);
-  const d = Array.from({ length: part.of as number }, (_, i) => pending!.pieces.get(i)).join("");
+  const d = Array.from({ length: part.of }, (_, i) => pending!.pieces.get(i)).join("");
   if (crypto.createHash("sha256").update(d).digest("base64url") !== part.whole) return null;
   return { d, s: pending.s };
 }

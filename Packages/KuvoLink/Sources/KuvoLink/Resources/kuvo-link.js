@@ -154,7 +154,7 @@ async function call(target, method, route, body, signal, folder) {
   });
   const value = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new Error(value?.message || `It answered ${response.status}.`);
+    throw new Error(typeof value?.message === "string" && value.message || `It answered ${response.status}.`);
   return value?.data ?? value;
 }
 async function fetched(url, most, timeout) {
@@ -994,8 +994,10 @@ async function integrationsAnswer(method, requestPath, body, engine, signal, fil
       return { status: 503, value: { message: `${entry.title} wasn't removed: its bots' own keys for it couldn't be taken away. ${error.message}` } };
     }
     let signIn;
-    if (engine)
-      signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.((each) => each?.name === entry.id)?.integrationID;
+    if (engine) {
+      const servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+      signIn = (Array.isArray(servers) ? servers : []).find((each) => each?.name === entry.id)?.integrationID;
+    }
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
     if (changed.status !== 200)
       return { status: changed.status, value: { message: changed.message } };
@@ -4411,8 +4413,9 @@ var phoneDocs = (link) => Object.values(link?.docs ?? {}).map(held).filter((doc)
 
 // Packages/Box/src/link/documents/parts.ts
 import crypto10 from "node:crypto";
+var fitsPart = (part) => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of) && part.of >= 2 && part.of <= MOST_PARTS && part.i >= 0 && part.i < part.of && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
 function assemble(parts, from, part) {
-  if (!isObject(part) || typeof part.whole !== "string" || !Number.isInteger(part.i) || !Number.isInteger(part.of) || part.of < 2 || part.of > MOST_PARTS || part.i < 0 || part.i >= part.of || typeof part.d !== "string" || part.d.length > DOC_PART || typeof part.s !== "string")
+  if (!fitsPart(part))
     return null;
   const key = `${from} ${part.whole}`;
   let pending = parts.get(key);
@@ -5568,9 +5571,10 @@ async function makeBot(given, readEngine, readBridge, machine, signal) {
     fs30.mkdirSync(path29.join(folder, "wakes"), { recursive: true });
     fs30.writeFileSync(path29.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...kit.rules ?? [], { action: "external_directory", resource: path29.join(folder, "*"), effect: "allow" }];
-    session = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal);
-    if (!session?.id)
+    const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal);
+    if (typeof made?.id !== "string" || !made.id)
       throw new Error("No conversation was made.");
+    session = { id: made.id };
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
@@ -8240,7 +8244,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.77";
+var BRIDGE_VERSION = "0.9.78";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
