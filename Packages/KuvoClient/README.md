@@ -26,8 +26,10 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
 phone's copies of the Mac's design files, a piece at a time.
 
+- `Surface`: the window's materials (canvas, card fills, lit rims, accent glass, recessed wells),
+  and the `accent` and `cardIsFocused` they read.
 - `FolderIcon`: a project's folder, open or closed.
-- `Color(hex:)`: a color written as 0xRRGGBB.
+- `Color(hex:)`: a color written as 0xRRGGBB, and `PlatformColor` (NSColor or UIColor).
 - `CodeColors`: the colors of code everywhere (diffs, files, replies), and Textual's theme of them.
 - `TerminalColors`: a command's output colored as a terminal shows it.
 

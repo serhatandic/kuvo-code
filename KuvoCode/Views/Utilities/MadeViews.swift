@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import KuvoLink
 import OpenCodeKit
 import PDFKit

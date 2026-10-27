@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// The window's building block: a rounded pane floating on the window's glass,

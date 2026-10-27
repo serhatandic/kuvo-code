@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import WebKit
 
 /// A Mermaid diagram in a document (a Markdown file's preview): drawn by Mermaid, which the app

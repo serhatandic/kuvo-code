@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Settings › Appearance, beyond light and dark: the accent color, the window's background, and
@@ -83,8 +84,6 @@ struct MessageFont: Equatable {
 }
 
 extension EnvironmentValues {
-    /// The accent the app is set to, for drawing that needs a color rather than the tint.
-    @Entry var accent: Color = .accentColor
     @Entry var messageFont = MessageFont()
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Asks Kuvo Code can't show in a conversation: from a bot in a group chat, or from an agent it

@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 import WebKit
