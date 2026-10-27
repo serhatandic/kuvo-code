@@ -1,5 +1,6 @@
 import AppKit
 import ClientText
+import OpenCodeKit
 import os
 import SwiftUI
 import Textual
@@ -104,12 +105,29 @@ nonisolated enum MessageMentions {
 
     /// `attributed` as SwiftUI's Text, each marked "&" drawn as its face or mark, `size` points,
     /// and its links marked for `LinkPointer`.
+    /// `text` with its first `length` characters the keyword it was sent with, drawn as the
+    /// composer draws it: its mark for the "/", the rest in bold, in the accent (Plan's orange).
+    static func keyword(_ length: Int, in text: AttributedString) -> AttributedString {
+        var text = text
+        let plain = String(text.characters)
+        guard length > 1, length <= plain.count, let keyword = Keyword.parse(String(plain.prefix(length)))?.keyword else { return text }
+        let end = text.characters.index(text.startIndex, offsetBy: length)
+        text[text.startIndex..<end].inlinePresentationIntent = .stronglyEmphasized
+        text[text.startIndex..<end].swiftUI.foregroundColor = keyword.isPlan ? .orange : .accentColor
+        text[text.startIndex..<text.characters.index(after: text.startIndex)][KeywordTokenMark.self] = keyword.symbol
+        return text
+    }
+
     @MainActor static func text(_ attributed: AttributedString, size: CGFloat) -> Text {
-        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
+        guard attributed.runs.contains(where: { $0[AgentMark.self] != nil || $0[PictureMark.self] != nil || $0[KeywordTokenMark.self] != nil || $0.link != nil }) else { return Text(attributed) }
         var pieces: [Text] = []
         for run in attributed.runs {
             var piece: Text
-            if let mark = run[PictureMark.self] {
+            if let symbol = run[KeywordTokenMark.self] {
+                // A keyword's mark in place of its "/", in its colour.
+                piece = Text("\(Image(systemName: symbol))\u{2009}").font(.system(size: size * 0.82, weight: .semibold))
+                    .foregroundStyle(run.swiftUI.foregroundColor ?? .accentColor)
+            } else if let mark = run[PictureMark.self] {
                 // A picture's mark in place of its "[", and its "]" left out.
                 guard mark == .open else { continue }
                 piece = Text("\(Image(systemName: "photo"))").font(.system(size: size * 0.82)).foregroundStyle(.secondary)
@@ -319,6 +337,13 @@ private final class LinkAreaView: NSView {
 nonisolated enum PictureMark: AttributedStringKey {
     enum Value: Hashable, Sendable { case open, close }
     static let name = "kuvo.pictureMark"
+}
+
+/// A keyword's "/" in a bubble, which `MessageMentions.text(_:size:)` draws as its mark (the
+/// keyword's symbol).
+nonisolated enum KeywordTokenMark: AttributedStringKey {
+    typealias Value = String
+    static let name = "kuvo.keywordTokenMark"
 }
 
 /// An agent's "&" in a bubble, which `MessageMentions.text(_:size:)` draws as its face or mark.

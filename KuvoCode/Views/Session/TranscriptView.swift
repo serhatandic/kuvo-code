@@ -712,7 +712,7 @@ private struct RowView: View, Equatable {
             let (text, comments, paths, references) = SentMessage.split(written)
             let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
             YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
-                        widget: SentMessage.widget(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
+                        widget: SentMessage.widget(of: written), keyword: SentMessage.keyword(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
                         // Not in a bot's conversation, which is the bot's one: a session made from
                         // it would be no bot's, in no list you'd look in.
@@ -722,7 +722,7 @@ private struct RowView: View, Equatable {
         case .pending(let item):
             let (text, comments, paths, references) = SentMessage.split(item.text)
             UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
-                       widget: SentMessage.widget(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
+                       widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
                 .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
@@ -797,6 +797,10 @@ struct UserBubble: View {
     var comments: [ReviewComment] = []
     /// The title of the widget it was sent from (`WidgetAnswer`), which shows over it.
     var widget: String?
+    /// How many of its first characters are the keyword it was sent with (`SentWithKeyword`),
+    /// drawn as the composer drew it: its mark for the "/", the rest in bold, in the accent
+    /// (Plan's orange).
+    var keyword: Int?
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
@@ -862,6 +866,9 @@ struct UserBubble: View {
                         QuoteBlock(text: parts[index].text)
                             .frame(maxWidth: 420, alignment: .trailing)
                             .padding(.top, index == 0 ? 0 : 6)
+                    } else if index == 0, let keyword, keyword <= parts[index].text.count {
+                        let part = parts[index].text
+                        MessageText(text: part, styled: MessageMentions.keyword(keyword, in: styled(part, agents: agents) ?? AttributedString(part)))
                     } else {
                         MessageText(text: parts[index].text, styled: styled(parts[index].text, agents: agents))
                     }

@@ -189,7 +189,12 @@ import Testing
         let asked = engine.asked.filter { $0.hasSuffix("/agent") || $0.hasSuffix("/prompt") }
         #expect(asked == ["POST /api/session/\(id)/agent", "POST /api/session/\(id)/prompt"], "Plan first, then the message")
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
-        #expect(String(describing: sent.body).contains("how to test the blur pause"))
+        let text = try #require(sent.body["text"] as? String)
+        #expect(text.hasPrefix("how to test the blur pause"))
+        // Its bubble, read from what the agent got (on any client), says it as you typed it, the
+        // keyword drawn as a token.
+        #expect(SentMessage.split(text).text == "/plan how to test the blur pause")
+        #expect(SentMessage.keyword(of: text) == 5)
     }
 
     @Test func aLoopWhoseHowOftenCantBeReadComesBackAndSaysSo() async throws {

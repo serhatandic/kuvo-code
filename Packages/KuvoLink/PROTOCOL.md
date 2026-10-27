@@ -1209,6 +1209,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
   `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
   (a bot's in its color), opening that session.
+- A message a keyword sends (/plan's words, /loop's when it sends now) carries the keyword as
+  typed, right after its words and before every other block: a line `<sent-with>`, the heading in
+  `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`), and a line
+  `</sent-with>`. The client sending it writes it. Show the message as typed, the keyword in front
+  of its words, drawn as the composer draws it (its mark for the "/", the rest in bold, in the
+  accent; Plan's in orange).
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same

@@ -22,6 +22,8 @@ struct YourMessage: View {
     var comments: [ReviewComment] = []
     /// The title of the widget it was sent from (`WidgetAnswer`).
     var widget: String?
+    /// How many of its first characters are the keyword it was sent with (`SentWithKeyword`).
+    var keyword: Int?
     let sent: Date
     /// Sent from your iPhone.
     var fromPhone = false
@@ -86,7 +88,7 @@ struct YourMessage: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments, widget: widget)
+            UserBubble(text: text, style: style, references: references, folders: folders, attachments: attachments, comments: comments, widget: widget, keyword: keyword)
             // Always laid out, shown under the pointer: nothing moves when they appear.
             HStack(spacing: 0) {
                 Text(MessageTime.sentAt(sent) + (fromPhone ? " · from iPhone" : ""))

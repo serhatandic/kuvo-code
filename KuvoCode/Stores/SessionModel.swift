@@ -845,11 +845,13 @@ final class SessionModel {
 
     /// `withComments`: your review comments go with it; a message the app writes for you leaves
     /// them for yours.
-    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true) {
+    /// `typed`: the keyword it's sent with, as typed ("/plan"), which its bubble shows.
+    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true, typed: String? = nil) {
         let written = text
         let comments = withComments ? reviewComments : []
-        // The agents named with "&" said who they are, then the comments.
-        let named = AgentReferences.text(text.trimmingCharacters(in: .whitespacesAndNewlines), excluding: session.id, here: RemoteFolder.machine(of: session.location.directory))
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The keyword it came with, the agents named with "&" said who they are, then the comments.
+        let named = AgentReferences.text(typed.map { SentWithKeyword.message(words, typed: $0) } ?? words, excluding: session.id, here: RemoteFolder.machine(of: session.location.directory))
         let text = ReviewComments.text(named, adding: comments)
         guard !text.isEmpty || !files.isEmpty else { return }
         if withComments { reviewComments = [] }
@@ -1006,7 +1008,7 @@ final class SessionModel {
             break
         case .plan:
             selectAgent("plan")
-            if !rest.isEmpty { send(rest, files: files, for: model, queue: queue) } else if !files.isEmpty { restore(text: "", files: files) }
+            if !rest.isEmpty { send(rest, files: files, for: model, queue: queue, typed: Keyword.plan.typed) } else if !files.isEmpty { restore(text: "", files: files) }
         case .compact:
             compact()
         case .loop:
@@ -1047,7 +1049,7 @@ final class SessionModel {
         Task {
             do {
                 try await wakeUps.add(to: owner, at: schedule.firstWake(now: now), every: schedule.every, note: command.message)
-                if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false) }
+                if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false, typed: Keyword.loop.typed + " " + command.scheduleText) }
             } catch {
                 restore(text: written, files: files)
                 fail(error)
