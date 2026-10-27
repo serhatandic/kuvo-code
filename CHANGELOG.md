@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Click the side questions count on a conversation in the sidebar to open the latest one, on the Mac and the iPhone.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
@@ -121,6 +122,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - No more lighter band across a conversation behind the composer, as when you hovered a bar's button or opened the / list: the conversation fades out under the composer in the card's own color.
 - A widget opened larger shows its title clearly, rather than faded out like the conversation under a card's header.
 - A subagent's conversation shows the line under its title (whose it is, the way back, what it's doing) clearly, rather than faded like the conversation under a card's header.
+- What an agent draws for you (a chart, a small app) is part of its reply, with no frame or caption: Open Larger and Copy show at its corner when you point at it, and one that can't show says so, with Try Again.
+- Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 
 ## 0.7.2
 
