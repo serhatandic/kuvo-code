@@ -985,7 +985,8 @@ extension View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bar()
                     .frame(maxWidth: .infinity)
-                    .background { ConversationBarFade() }
+                    // From just above it, below the scroll-to-end button (`ConversationScroll`).
+                    .background { ConversationBarFade().padding(.top, -12) }
             }
     }
 }
@@ -999,7 +1000,7 @@ private struct ConversationBarFade: View {
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 16)
+                        .frame(height: 12)
                     Color.black
                 }
             }

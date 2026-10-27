@@ -71,7 +71,7 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .safeAreaPadding(.top, Metrics.cardHeaderHeight)
                 .overlay(alignment: .top) {
-                    header.background(alignment: .top) { if !isCovered { headerFade } }
+                    header.background(alignment: .top) { headerFade.opacity(isCovered ? 0 : 1).animation(.ui, value: isCovered) }
                 }
                 .onPreferenceChange(CardContentCovered.self) { isCovered = $0 }
         } else {
