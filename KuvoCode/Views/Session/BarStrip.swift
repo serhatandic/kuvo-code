@@ -41,11 +41,10 @@ struct BarStrip: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help("Show them")
+        .help("Show the bars")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(items.map(\.words).joined(separator: ", "))
+        .accessibilityLabel("Bars: " + items.map(\.words).joined(separator: ", "))
         .accessibilityValue(marked.isEmpty ? "" : "New: " + items.filter { marked.contains($0.bar) }.map(\.words).joined(separator: ", "))
-        .accessibilityHint("Shows them")
         .accessibilityAddTraits(.isButton)
     }
 

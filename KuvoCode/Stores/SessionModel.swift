@@ -64,6 +64,8 @@ final class SessionModel {
     var hidesWakes = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
+    /// The bars over the composer tucked into one line (`BarStrip`), as you left them here.
+    var tuck = BarTuck<ComposerBar>()
     /// What the card's ✕ put away, with Undo for a moment (`PutAways`).
     let putAways = PutAways<PutAway> { await SessionModel.undoMoment($0) }
 

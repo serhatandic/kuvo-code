@@ -334,7 +334,7 @@ struct WakeBar: View {
     static func headline(paused: Bool, wakes: [Wakes.Pending], watches: [Wakes.Watch], now: Date) -> String {
         if paused { return "Wake-ups paused" }
         guard !wakes.isEmpty else { return "Watching" }
-        return wakes.first { $0.due > now }.map { "Wakes " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? "Waking up…"
+        return wakes.filter { $0.due > now }.min { $0.due < $1.due }.map { "Wakes " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? "Waking up…"
     }
 
     private func title(wakes: [Wakes.Pending], watches: [Wakes.Watch], now: Date) -> String {
