@@ -95,7 +95,7 @@ for Linux's tools).
 | K4 The menu bar's usage panel: which accounts count there | UsageAccountsTests, UsageKit's own tests | the panel asking the providers' services (UsageKit's own tests, against a fake of each) |
 | K5 Storage: what takes room | StorageReportTests | |
 | L50 Quit mid-job, open again | InterruptedRunTests | |
-| The panel's terminal | TerminalColorsTests | |
+| The panel's terminal | TerminalColorsTests (in KuvoClient's ClientDesign) | |
 | The context ring: how full, of what the model takes | ContextRingTests | the coding agents' windows, as each says (Packages/Box/test/agents) |
 | Export a conversation | ConversationExportTests | |
 | Your things after an update: backed up first, then brought up to date once (bots' descriptions in their folders); a list that won't read set aside | CalibrationTests | the window's Updating screen (UI); a machine's bots' descriptions (written over SSH as it connects) |

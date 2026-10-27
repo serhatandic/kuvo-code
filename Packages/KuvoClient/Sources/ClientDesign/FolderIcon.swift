@@ -3,11 +3,16 @@ import SwiftUI
 /// A folder outline that opens when its project is open. SF Symbols has no open folder,
 /// so both states are drawn here, with the same stroke over a faint fill of the same ink,
 /// so the folder has a body instead of being only a wire outline.
-struct FolderIcon: View {
+public struct FolderIcon: View {
     let isOpen: Bool
     var size: CGFloat = 16
 
-    var body: some View {
+    public init(isOpen: Bool, size: CGFloat = 16) {
+        self.isOpen = isOpen
+        self.size = size
+    }
+
+    public var body: some View {
         let shape = FolderShape(open: isOpen)
         ZStack {
             shape.fill(.foreground.opacity(0.2))

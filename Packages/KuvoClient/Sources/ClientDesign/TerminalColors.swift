@@ -3,8 +3,9 @@ import SwiftUI
 /// A command's output colored as a terminal shows it, in the code palette: a search's files, line
 /// numbers and what it found; a diff's added and removed lines; errors and warnings. Everything
 /// else stays as it was printed.
-enum TerminalColors {
-    static func colored(_ text: String, command: String, dark: Bool) -> AttributedString {
+@MainActor
+public enum TerminalColors {
+    public static func colored(_ text: String, command: String, dark: Bool) -> AttributedString {
         var hasher = Hasher()
         hasher.combine(text)
         hasher.combine(command)

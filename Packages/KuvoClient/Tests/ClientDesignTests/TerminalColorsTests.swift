@@ -1,6 +1,6 @@
+import ClientDesign
 import SwiftUI
 import Testing
-@testable import KuvoCode
 
 /// A command's output in a conversation, colored as a terminal shows it: a search's files, line
 /// numbers and what it found; a diff's lines; errors and warnings. Read back here as which words
