@@ -535,7 +535,7 @@ describe("what the record keeps a copy of", () => {
     expect((await route("GET", `kuvo/artifacts/${ignored.id}/versions/1`)).status).toBe(410)
   })
 
-  test("what git ignores keeps no copy even when git won't look at another file of the same turn (one beyond a symbolic link)", async () => {
+  test("what git ignores, or won't say of (a file beyond a symbolic link), keeps no copy; the rest of the same turn's files do", async () => {
     spawnSync("git", ["init", "-q", project])
     writeFileSync(join(project, ".gitignore"), "*.log\n")
     mkdirSync(join(root, "elsewhere"))
@@ -548,8 +548,16 @@ describe("what the record keeps a copy of", () => {
     const version = async (path: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(path)}`)).value.versions[0]
     expect(await version(log)).toMatchObject({ kept: false, reason: "ignored" })
     expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(log)}/versions/1`)).status).toBe(410)
-    expect(await version(linked)).toMatchObject({ kept: true })
+    expect(await version(linked)).toMatchObject({ kept: false, reason: "ignored" })
     expect(await version(plain)).toMatchObject({ kept: true })
+  })
+
+  test("in a repository git won't read, nothing keeps a copy: what it ignores can't be told", async () => {
+    writeFileSync(join(project, ".git"), "not a repository\n")
+    const notes = join(project, "notes.md")
+    writeFileSync(notes, "maybe ignored\n")
+    await store.change(notes, { by: { kind: "agent" }, via: "write", where: { project } })
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(notes)}`)).value.versions[0]).toMatchObject({ kept: false, reason: "ignored" })
   })
 
   test("with the disk down to its floor, what a new version replaces keeps no copy, but the newest, memory and what's pinned keep theirs", async () => {

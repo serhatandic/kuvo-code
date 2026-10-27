@@ -661,9 +661,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   made there, never on the engine. A Mac answers for its own; a machine's bridge for the
   machine's, with the Mac closed too: each machine signs in to them on its own, and has its
   own Custom Auto lists. `kuvo/info` has `agents: true` while the bridge is up; otherwise these
-  answer 503. All of its API, but for the two routes only the app wires things with:
-  `api/kuvo/engine` (where the engine is) and `api/kuvo/groups` (group chats' own steps, which a
-  phone takes through `kuvo/groups`). The same on both (`Vectors/link.json`, `agentRoutes`).
+  answer 503. All of its API, but for the routes only the box and the app wire things with:
+  `api/kuvo/engine` (where the engine is), `api/kuvo/groups` (group chats' own steps, which a
+  phone takes through `kuvo/groups`) and `api/kuvo/artifacts` (what its browser downloaded; the
+  record is read through `kuvo/artifacts`). The same on both (`Vectors/link.json`, `agentRoutes`).
   - Accounts: besides each agent's own sign-in, ones you added, each its own provider
     `<agent's provider>@<id>` (`claude-code@1f2e3d4c`), named `Claude Code · Work` in
     `kuvo/agents/api/integration` (`metadata.accountID`, `metadata.accountLabel`). Their models

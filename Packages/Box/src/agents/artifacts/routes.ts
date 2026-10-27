@@ -116,7 +116,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     const { pinned, note } = (await body()) ?? {}
     if (typeof pinned !== "boolean") return message(400, "Say whether it's pinned (pinned).")
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
-    return json(clientArtifact(changed!, store))
+    return changed ? json(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.")
   }
 
   if (second === "restore") {
@@ -158,11 +158,11 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
   return message(404, "No such route.")
 }
 
-/** Why a version can't be read, in words. */
 /**
  * `POST /api/kuvo/artifacts/noted {path, session, via}`: a file a conversation got without a tool
  * call naming it, as this box's own programs tell it (its agent browser's downloads). Not one a
- * client reaches: the box's link passes on only `kuvo/artifacts`' own routes.
+ * client reaches: the box's link passes on only `kuvo/artifacts`' own routes, and keeps
+ * `kuvo/agents/` off the bridge's `api/kuvo/artifacts…` too.
  */
 export async function notedRoute(noted: ((session: string, path: string, via: string) => Promise<boolean>) | undefined, method: string, body: () => Promise<any>): Promise<Response> {
   if (!noted) return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.")
@@ -174,6 +174,7 @@ export async function notedRoute(noted: ((session: string, path: string, via: st
   return (await noted(session, path, via)) ? json({ ok: true }) : message(404, "There's no such conversation on this computer.")
 }
 
+/** Why a version can't be read, in words. */
 function notKept(version: Version): string {
   if (version.status === "deleted") return "It was deleted then."
   switch (version.reason) {

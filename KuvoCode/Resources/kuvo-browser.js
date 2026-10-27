@@ -681,9 +681,13 @@ async function host() {
     }
     if (message.method === "Target.detachedFromTarget" && (ownFrames.delete(message.params.sessionId) || [...own.values()].includes(message.params.sessionId))) return;
     if (message.method === "Browser.downloadWillBegin" && !downloads.has(message.params.guid)) {
-      // Whose it is: the conversation using the page it started in (its main frame's ID is the
-      // page's), else the page in use.
-      const session = (claims.get(message.params.frameId) ?? claims.get(active))?.session;
+      // Whose it is: the conversation at work in the page it started in (a page's main frame's ID
+      // is the page's), now or in the last two minutes, unless you'd taken the page over. Anyone
+      // else's (yours, a frame's in a page, a page an agent left) is nobody's.
+      const page = message.params.frameId;
+      const worker = everyStatus().workers.find((each) => each.targetId === page && each.session);
+      const claim = claims.get(page);
+      const session = held.has(page) ? undefined : worker?.session ?? (claim && Date.now() - claim.at < 2 * 60_000 ? claim.session : undefined);
       downloads.set(message.params.guid, { name: message.params.suggestedFilename || "download", session });
       broadcast({ method: "Kuvo.downloading", params: { name: downloads.get(message.params.guid).name } });
     }

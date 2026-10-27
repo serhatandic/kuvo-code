@@ -59,7 +59,7 @@ export class CopyPolicy {
     }
     await Promise.all([...asks].map(async ([top, asked]) => {
       let ignored = await this.checkIgnore(top, asked)
-      // Git refused them all for one it can't look at (beyond a symbolic link, in a submodule): each on its own.
+      // Git refused them all for one it can't look at (beyond a symbolic link): each on its own.
       if (!ignored) {
         ignored = new Set()
         for (const path of asked) if ((await this.checkIgnore(top, [path]))?.size) ignored.add(path)
@@ -93,25 +93,29 @@ export class CopyPolicy {
     return found
   }
 
-  /** Which of `paths` (in `top`'s repository) git ignores; undefined when it refused to say. Git missing: none. */
+  /**
+   * Which of `paths` (in `top`'s repository) git ignores; undefined when it refused the batch. What
+   * git can't say of (a path beyond a symbolic link, a repository it won't read, git missing or
+   * stopped) counts as ignored: never copied unasked.
+   */
   private async checkIgnore(top: string, paths: string[]): Promise<Set<string> | undefined> {
     let ran
     try {
       ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
-        input: paths.map((path) => relative(top, path)).join("\0") + "\0",
+        // As `./…`: a name like `:x` isn't read as pathspec magic, and git says each back as sent.
+        input: paths.map((path) => "./" + relative(top, path)).join("\0") + "\0",
         timeout: 5000,
         env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
       })
     } catch {
-      return new Set()
+      return new Set(paths)
     }
-    // Stopped before it said: all taken as ignored, never copied unasked.
     if (ran.timedOut) return new Set(paths)
-    // 0: some ignored; 1: none; 128: it refused (one path it can't look at).
-    if (ran.code === 128) return paths.length > 1 ? undefined : new Set()
-    if (ran.code !== 0) return new Set()
+    // 0: some ignored; 1: none; 128: it refused (one path it can't look at, or all).
+    if (ran.code === 128 && paths.length > 1) return undefined
+    if (ran.code !== 0 && ran.code !== 1) return new Set(paths)
     const said = new Set(ran.stdout.split("\0").filter(Boolean))
-    return new Set(paths.filter((path) => said.has(relative(top, path))))
+    return new Set(paths.filter((path) => said.has("./" + relative(top, path))))
   }
 }
 

@@ -640,21 +640,21 @@ class CopyPolicy {
     let ran;
     try {
       ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
-        input: paths.map((path) => relative(top, path)).join("\x00") + "\x00",
+        input: paths.map((path) => "./" + relative(top, path)).join("\x00") + "\x00",
         timeout: 5000,
         env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
       });
     } catch {
-      return new Set;
+      return new Set(paths);
     }
     if (ran.timedOut)
       return new Set(paths);
-    if (ran.code === 128)
-      return paths.length > 1 ? undefined : new Set;
-    if (ran.code !== 0)
-      return new Set;
+    if (ran.code === 128 && paths.length > 1)
+      return;
+    if (ran.code !== 0 && ran.code !== 1)
+      return new Set(paths);
     const said = new Set(ran.stdout.split("\x00").filter(Boolean));
-    return new Set(paths.filter((path) => said.has(relative(top, path))));
+    return new Set(paths.filter((path) => said.has("./" + relative(top, path))));
   }
 }
 function freeSpace(folder) {
@@ -743,10 +743,20 @@ class ArtifactStore {
     await this.queue;
   }
   change(path, made) {
-    return this.inTurn([path], () => this.changeNow(path, made));
+    const seen = this.look(path);
+    return this.inTurn([path], () => this.changeNow(path, made, seen));
   }
   changeAll(paths, made) {
-    return this.inTurn(paths, () => paths.forEach((path) => this.changeNow(path, made)));
+    const seen = paths.map((path) => this.look(path));
+    return this.inTurn(paths, () => {
+      paths.forEach((path, index) => {
+        try {
+          this.changeNow(path, made, seen[index]);
+        } catch (error) {
+          console.error("artifacts:", error?.message ?? error);
+        }
+      });
+    });
   }
   before(path, bytes, where = {}, at = this.now()) {
     return this.inTurn([path], () => this.beforeNow(path, bytes, where, at));
@@ -762,9 +772,9 @@ class ArtifactStore {
   shown(path, made) {
     return this.inTurn([path], () => this.shownNow(path, made));
   }
-  changeNow(path, made) {
+  changeNow(path, made, seen = this.look(path)) {
     const now = made.at ?? this.now();
-    const read = this.read(path);
+    const read = this.read(path, seen);
     let artifact = this.at(path);
     if (read === null)
       return;
@@ -1121,7 +1131,17 @@ class ArtifactStore {
       return kind;
     return bytes.subarray(0, 8192).includes(0) ? "file" : kind;
   }
-  read(path) {
+  read(path, seen = this.look(path)) {
+    if (!seen)
+      return seen;
+    const privacy = this.policy.privacy(path);
+    if (!seen.bytes)
+      return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...privacy ? { private: privacy } : {} };
+    if (privacy)
+      return { hash: "keyed:" + createHmac("sha256", this.key).update(seen.bytes).digest("hex"), size: seen.size, private: privacy };
+    return { hash: "sha256:" + createHash("sha256").update(seen.bytes).digest("hex"), size: seen.size, bytes: seen.bytes };
+  }
+  look(path) {
     let stat;
     try {
       stat = statSync2(path);
@@ -1130,14 +1150,11 @@ class ArtifactStore {
     }
     if (!stat.isFile())
       return;
-    const privacy = this.policy.privacy(path);
     if (stat.size > copyLimit)
-      return { hash: `stat:${stat.size}:${stat.mtimeMs}`, size: stat.size, ...privacy ? { private: privacy } : {} };
+      return { size: stat.size, mtime: stat.mtimeMs };
     try {
       const bytes = readFileSync3(path);
-      if (privacy)
-        return { hash: "keyed:" + createHmac("sha256", this.key).update(bytes).digest("hex"), size: bytes.length, private: privacy };
-      return { hash: "sha256:" + createHash("sha256").update(bytes).digest("hex"), size: bytes.length, bytes };
+      return { size: bytes.length, mtime: stat.mtimeMs, bytes };
     } catch (error) {
       return error?.code === "ENOENT" ? undefined : null;
     }
@@ -13620,7 +13637,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return json5(clientArtifact(changed, store));
+    return changed ? json5(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -18601,4 +18618,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2cc28813031ca2ca44af2c1f27029a0d5e3640fcba79c02b2bb281c4af47be73
+// Built from Packages/Box/src/agents 8bf0aef0ad7e518913a4715ac9a39860dbd28c7eb572193d9e969ebe0e1d9b63

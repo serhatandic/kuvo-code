@@ -224,12 +224,23 @@ export class ArtifactStore {
 
   /** The file at `path` as it is now, recorded as `made` it (`changeNow`). */
   change(path: string, made: Made): Promise<Artifact | undefined> {
-    return this.inTurn([path], () => this.changeNow(path, made))
+    // As it is now, not once git has answered (another change may come meanwhile).
+    const seen = this.look(path)
+    return this.inTurn([path], () => this.changeNow(path, made, seen))
   }
 
   /** Each of `paths` as it is now, recorded as `made` it, git asked about them all at once. */
   changeAll(paths: string[], made: Made): Promise<unknown> {
-    return this.inTurn(paths, () => paths.forEach((path) => this.changeNow(path, made)))
+    const seen = paths.map((path) => this.look(path))
+    return this.inTurn(paths, () => {
+      paths.forEach((path, index) => {
+        try {
+          this.changeNow(path, made, seen[index])
+        } catch (error: any) {
+          console.error("artifacts:", error?.message ?? error)
+        }
+      })
+    })
   }
 
   /** What a file was before the record first saw it change (`beforeNow`). */
@@ -259,9 +270,9 @@ export class ArtifactStore {
    * brought up to date, or (unchanged since its newest version) only who touched it noted. Returns
    * the artifact when anything changed.
    */
-  private changeNow(path: string, made: Made): Artifact | undefined {
+  private changeNow(path: string, made: Made, seen = this.look(path)): Artifact | undefined {
     const now = made.at ?? this.now()
-    const read = this.read(path)
+    const read = this.read(path, seen)
     let artifact = this.at(path)
     // There, but it couldn't be read now (no permission, too many files open): nothing to say.
     if (read === null) return undefined
@@ -634,11 +645,24 @@ export class ArtifactStore {
   }
 
   /**
-   * The file now: its bytes when a copy could be kept, and a hash either way (keyed for what's
+   * The file as `seen` (now, unless given): its bytes when a copy could be kept, and a hash either way (keyed for what's
    * private, of its size and time for what's too big to read); undefined when it isn't there (or
    * isn't a file), null when it is but can't be read now.
    */
-  private read(path: string): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } | undefined | null {
+  private read(path: string, seen = this.look(path)): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } | undefined | null {
+    if (!seen) return seen
+    const privacy = this.policy.privacy(path)
+    if (!seen.bytes) return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...(privacy ? { private: privacy } : {}) }
+    // What's private: keyed, so the record says when it changed and nothing of what it holds.
+    if (privacy) return { hash: "keyed:" + createHmac("sha256", this.key).update(seen.bytes).digest("hex"), size: seen.size, private: privacy }
+    return { hash: "sha256:" + createHash("sha256").update(seen.bytes).digest("hex"), size: seen.size, bytes: seen.bytes }
+  }
+
+  /**
+   * The file as it is now: its bytes up to the copy limit, its size and time either way;
+   * undefined when it isn't there (or isn't a file), null when it is but can't be read now.
+   */
+  private look(path: string): { size: number; mtime: number; bytes?: Buffer } | undefined | null {
     let stat
     try {
       stat = statSync(path)
@@ -646,13 +670,10 @@ export class ArtifactStore {
       return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null
     }
     if (!stat.isFile()) return undefined
-    const privacy = this.policy.privacy(path)
-    if (stat.size > copyLimit) return { hash: `stat:${stat.size}:${stat.mtimeMs}`, size: stat.size, ...(privacy ? { private: privacy } : {}) }
+    if (stat.size > copyLimit) return { size: stat.size, mtime: stat.mtimeMs }
     try {
       const bytes = readFileSync(path)
-      // What's private: keyed, so the record says when it changed and nothing of what it holds.
-      if (privacy) return { hash: "keyed:" + createHmac("sha256", this.key).update(bytes).digest("hex"), size: bytes.length, private: privacy }
-      return { hash: "sha256:" + createHash("sha256").update(bytes).digest("hex"), size: bytes.length, bytes }
+      return { size: bytes.length, mtime: stat.mtimeMs, bytes }
     } catch (error: any) {
       return error?.code === "ENOENT" ? undefined : null
     }
