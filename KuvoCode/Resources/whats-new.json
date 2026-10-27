@@ -1,0 +1,39 @@
+{
+  "releases": [
+    {
+      "version": "Unreleased",
+      "highlights": [
+        {
+          "title": "Goals that keep going",
+          "line": "write `/goal all tests pass`, and the agent works turn after turn until a check says it's met.",
+          "symbol": "target"
+        },
+        {
+          "title": "What your agents made",
+          "line": "a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline.",
+          "symbol": "tray.full"
+        },
+        {
+          "title": "Answers you can try",
+          "line": "agents show charts, diagrams and things to click right in the conversation.",
+          "symbol": "chart.xyaxis.line"
+        },
+        {
+          "title": "Settings that guide you",
+          "line": "pick folders, plugins and models from what's there instead of typing them.",
+          "symbol": "slider.horizontal.3",
+          "open": "settings/worktrees"
+        }
+      ],
+      "marks": [
+        "keyword/loop",
+        "keyword/plan",
+        "keyword/review",
+        "keyword/btw",
+        "keyword/handoff",
+        "keyword/compact",
+        "keyword/goal"
+      ]
+    }
+  ]
+}

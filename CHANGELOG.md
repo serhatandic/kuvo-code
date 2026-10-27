@@ -6,6 +6,16 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+### Highlights
+
+- **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
+- **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
+- **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
+- **Settings that guide you**: pick folders, plugins and models from what's there instead of typing them. <!-- symbol: slider.horizontal.3; open: settings/worktrees -->
+
+### All Changes
+
+- After an update with new features, **What's New** shows its highlights once, each with **Try It** where it opens something; **Help › What's New** shows them again. New keywords in the **/** list carry a small **New** until you use them.
 - An integration whose sign-in ended says **Sign In Again…** on its one button, and "Sign-in ended" under its name, rather than a Sign In button beside a Sign In Again in its menu.
 - A first launch of its own: Kuvo Code's bots gather while it gets ready (only this once; it carries on by itself if you were offline), then it finds what's already on your Mac to bring over (coding agents you're signed in to, keys from an opencode you use, keys in your shell), each with one click, and turns on the usage panel in the menu bar if you like. Last, it asks for Screen Recording and Accessibility for agents: drag Kuvo Code's icon from the small window beside System Settings into its list, and it moves on once macOS says yes. Each step can be skipped. The usage panel's own welcome window is gone.
 - The usage panel's bars read in the system's own type, like the rest of Kuvo Code, sit snug in the panel's rounded corners, and a bar's details fold open and closed with the panel instead of sliding away before it.
@@ -14,7 +24,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Settings › Storage shows how much the older versions of what your agents made take on each computer, lets you choose how much they may take, and clears them. Likely secrets and files git ignores are never copied.
 - A group chat's side panel no longer offers Changes and Files for a project it doesn't have: it opens on a new tab instead.
 - Every key you type in the composer and in your answers to quotes stays, also while Kuvo Code is busy, rather than one now and then going missing.
-- New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. The engine's own review is now **/review-quick**.
+- New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. The engine's own review is now **/review-quick**. <!-- new: keyword/loop, keyword/plan, keyword/review, keyword/btw, keyword/handoff, keyword/compact -->
 - **Help › Report a Problem…** opens a short sheet: say what happened, see the versions that go with it, and open a new GitHub issue filled in with both, to read over and post. It says up front that issues are public.
 - With machines, the sidebar switches computers by name: a line of names at the top that follows your two-finger swipe and wraps around, from the last back to the first, with a dot on a computer that needs you or has something new. Settings' pages switch the same way.
 - Adding a project's folder on a machine, in New Project or Edit Project, shows the machine's own folders to pick from, as on your phone, rather than a box to type its path in.
@@ -36,7 +46,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A web link in an agent's reply shows its site's own icon before it, fetched from the site itself and kept in Kuvo Code's caches; a globe shows while it comes, or for a site without one that reads well.
 - Web addresses you write show as links, in the composer and in your message once it's sent, where a click opens them.
 - The card you're working in now looks it as soon as you click anything in it, a reply's words too, or the keyboard moves into it (Tab into the panel's terminal, say), rather than staying dimmed until you clicked the composer. Opening a session from the sidebar or picking a tab in the tab bar leaves its conversation looking ready, with the keyboard in its composer.
-- `/goal` gives the agent a goal to keep at until it's met, like `/goal all tests pass`: it works turn after turn on its own, a check after each turn tells it what's left, and a bar over the composer shows how it's going, with Pause, Resume and Stop. Goals run on the computer the session is on, your Mac or a machine, with the window closed too.
+- `/goal` gives the agent a goal to keep at until it's met, like `/goal all tests pass`: it works turn after turn on its own, a check after each turn tells it what's left, and a bar over the composer shows how it's going, with Pause, Resume and Stop. Goals run on the computer the session is on, your Mac or a machine, with the window closed too. <!-- new: keyword/goal -->
 - A message you send while the agent waits on a long command or a subagent is read at once, and so is another agent's: what it waits on carries on in the background, as the bar over the composer shows, and the agent answers you now rather than when the command ends.
 - A conversation, bot or group chat you read on your phone or another Mac stops showing as unread on this one at once, and its notifications go from Notification Center, on your machines too, with sessions from your coding agents as well.
 - Agents on your Mac and your machines reach each other through your Mac's background service now, as machines do. In a group chat, "&" offers only the agents that chat can reach: a machine whose agents it can't (one another Mac runs, or whose bridge is out of date) is left out, and Settings › Machines says why.

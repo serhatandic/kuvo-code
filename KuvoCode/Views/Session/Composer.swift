@@ -1,3 +1,4 @@
+import ClientNews
 import ClientDesign
 import ClientText
 import OpenCodeKit
@@ -74,6 +75,7 @@ struct Composer: View {
 
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
+    @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
     @Environment(\.cardIsFocused) private var cardIsFocused
     @Environment(\.messageFont) private var messageFont
@@ -447,6 +449,8 @@ struct Composer: View {
             if isOffline, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Analytics.shared.firstMessageBlocked("engine_offline") }
             return
         }
+        // A keyword used: its "New" goes.
+        if let (keyword, _) = Keyword.parse(text) { app.newMarks.use("keyword/" + keyword.rawValue) }
         onSend()
     }
 
@@ -471,6 +475,7 @@ struct Composer: View {
         switch item {
         case .keyword(let keyword):
             text = keyword.typed + " "
+            app.newMarks.use("keyword/" + keyword.rawValue)
             focusAtEnd()
         case .command(let command):
             text = "/" + command.name

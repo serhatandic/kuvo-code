@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "ClientText", targets: ["ClientText"]),
         .library(name: "ClientAccounts", targets: ["ClientAccounts"]),
         .library(name: "ClientDesign", targets: ["ClientDesign"]),
+        .library(name: "ClientNews", targets: ["ClientNews"]),
     ],
     // Textual draws the replies' code blocks in both apps; ClientDesign gives it their colors.
     dependencies: [
@@ -23,5 +24,7 @@ let package = Package(
         .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts"]),
         .target(name: "ClientDesign", dependencies: [.product(name: "Textual", package: "textual")]),
         .testTarget(name: "ClientDesignTests", dependencies: ["ClientDesign"]),
+        .target(name: "ClientNews"),
+        .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
     ]
 )
