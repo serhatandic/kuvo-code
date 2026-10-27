@@ -76,6 +76,8 @@ import Testing
         let decode = { (json: String) in try JSONDecoder().decode(ArtifactVersion.self, from: Data(json.utf8)) }
         let base = #""at": 1, "via": ["write"], "edits": 1, "size": 1, "hash": null, "kept": true"#
         #expect(ArtifactWords.what(try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", \#(base)}"#), bot: "Ada") == "Ada wrote it")
+        #expect(ArtifactWords.what(try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["browser_screenshot"], "edits": 1, "size": 1, "hash": null, "kept": true}"#), bot: "Pixel") == "Pixel took it")
+        #expect(ArtifactWords.what(try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["download"], "edits": 1, "size": 1, "hash": null, "kept": true}"#), bot: "Ada") == "Ada downloaded it")
         #expect(ArtifactWords.what(try decode(#"{"n": 2, "by": {"kind": "agent"}, "status": "modified", "at": 1, "via": ["edit"], "edits": 3, "size": 1, "hash": null, "kept": true}"#)) == "Changed it 3 times")
         #expect(ArtifactWords.what(try decode(#"{"n": 4, "by": {"kind": "you"}, "status": "modified", "restored": 1, \#(base)}"#)) == "You put back version 1")
         #expect(ArtifactWords.what(try decode(#"{"n": 0, "by": {"kind": "outside"}, "status": "added", "before": true, \#(base)}"#)) == "Before it was changed")
