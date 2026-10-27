@@ -1,34 +1,41 @@
-import AppKit
+import QuartzCore
 import SwiftUI
-
-extension Color {
-    static let additions = Color(nsColor: .systemGreen)
-    static let deletions = Color(nsColor: .systemRed)
-}
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Text that shimmers while the agent is working ("Thinking…"): a light sweeping across it,
 /// played by Core Animation (as a SwiftUI animation, three on screen took a tenth of a core,
 /// even with the window hidden).
-struct ShimmerText: View {
+public struct ShimmerText: View {
     let text: String
     @Environment(\.self) private var environment
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var width: CGFloat = 0
 
-    var body: some View {
+    public init(text: String) {
+        self.text = text
+    }
+
+    public var body: some View {
         Text(text)
             .foregroundStyle(.secondary)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .overlay {
                 if !reduceMotion, width > 0 {
                     // Its letters, as they're set here (cut short the same way), are where the
-                    // light shows.
-                    ShimmerSweep(key: "\(width)|\(text)", letters: Text(text).environment(\.self, environment).frame(width: width, alignment: .leading))
+                    // light shows: drawn again when they change, as their width, font or text
+                    // size does.
+                    ShimmerSweep(key: "\(width)|\(text)|\(String(describing: environment.font))|\(environment.dynamicTypeSize)",
+                                 letters: Text(text).environment(\.self, environment).frame(width: width, alignment: .leading))
                 }
             }
     }
 }
 
+#if os(macOS)
 private struct ShimmerSweep<Letters: View>: NSViewRepresentable {
     /// Changes when the letters do.
     let key: String
@@ -113,16 +120,84 @@ private final class ShimmerView: NSView {
     }
 }
 
-/// `+12 −3`, in diff colors.
-struct DiffStat: View {
-    let additions: Int
-    let deletions: Int
+#else
+private struct ShimmerSweep<Letters: View>: UIViewRepresentable {
+    /// What the letters say and how they're set: drawn again only when it changes.
+    let key: String
+    let letters: Letters
+    @Environment(\.displayScale) private var scale
 
-    var body: some View {
-        HStack(spacing: 4) {
-            if additions > 0 { Text("+\(additions)").foregroundStyle(Color.additions) }
-            if deletions > 0 { Text("−\(deletions)").foregroundStyle(Color.deletions) }
-        }
-        .font(.caption.monospacedDigit().weight(.medium))
+    func makeUIView(context: Context) -> ShimmerView { ShimmerView() }
+
+    func updateUIView(_ view: ShimmerView, context: Context) {
+        let key = "\(key)|\(scale)"
+        guard view.key != key else { return }
+        let renderer = ImageRenderer(content: letters)
+        renderer.scale = scale
+        view.show(renderer.cgImage, scale: scale, key: key)
     }
 }
+
+private final class ShimmerView: UIView {
+    /// Shows only where the letters are; the light moves inside it.
+    private let lit = CALayer()
+    private let letters = CALayer()
+    private let sweep = CAGradientLayer()
+    private var image: CGImage?
+    /// What the shown letters were drawn from.
+    private(set) var key: String?
+    private static let cycle = 1.6
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        layer.addSublayer(lit)
+        lit.mask = letters
+        lit.addSublayer(sweep)
+        sweep.startPoint = CGPoint(x: 0, y: 0.5)
+        sweep.endPoint = CGPoint(x: 1, y: 0.5)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ShimmerView, _) in view.color() }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func show(_ image: CGImage?, scale: CGFloat, key: String) {
+        self.key = key
+        self.image = image
+        letters.contents = image
+        letters.contentsScale = scale
+        setNeedsLayout()
+    }
+
+    private func color() {
+        let ink = UIColor.label.resolvedColor(with: traitCollection)
+        sweep.colors = [UIColor.clear.cgColor, ink.withAlphaComponent(0.9).cgColor, UIColor.clear.cgColor]
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let width = bounds.width, height = bounds.height
+        lit.frame = bounds
+        let scale = max(letters.contentsScale, 1)
+        let size = image.map { CGSize(width: CGFloat($0.width) / scale, height: CGFloat($0.height) / scale) } ?? bounds.size
+        letters.frame = CGRect(x: 0, y: (height - size.height) / 2, width: size.width, height: size.height)
+        color()
+        // The light, six tenths as wide as the text, from well before it to just past it.
+        sweep.frame = CGRect(x: 0, y: 0, width: width * 0.6, height: height)
+        let animation = CABasicAnimation(keyPath: "position.x")
+        animation.fromValue = -1.2 * width + width * 0.3
+        animation.toValue = 1.44 * width + width * 0.3
+        animation.duration = Self.cycle
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        // In step with every other one on screen.
+        let now = CACurrentMediaTime()
+        animation.beginTime = sweep.convertTime(now, from: nil) - now.truncatingRemainder(dividingBy: Self.cycle)
+        sweep.add(animation, forKey: "sweep")
+    }
+}
+#endif

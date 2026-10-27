@@ -71,6 +71,8 @@ struct Composer: View {
     var focusesOnAppear = true
     /// What the empty field says, when it isn't the usual.
     var prompt: String?
+    /// Its own card; off in the card it shares with the bars and the queue over it (the session's).
+    var drawsSurface = true
 
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
@@ -292,11 +294,13 @@ struct Composer: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 7)
-        .modifier(ComposerSurface())
+        .modifier(ComposerSurface(isOn: drawsSurface))
         .overlay {
             if isTargeted {
-                RoundedRectangle(cornerRadius: Metrics.composerRadius)
+                // Its own card's edge; inside the card it shares, a ring of its own in it.
+                RoundedRectangle(cornerRadius: drawsSurface ? Metrics.composerRadius : 12)
                     .strokeBorder(.tint, lineWidth: 2)
+                    .padding(drawsSurface ? 0 : 4)
             }
         }
         // Files dropped anywhere on it are attached, on its text too (which would take them as
@@ -816,10 +820,16 @@ extension SendStopButton where Menu == EmptyView {
 /// The composer's box. Quiet, so the message draws the eye and not the box: a step off the card,
 /// opaque since messages scroll under it, a lit top edge, no outline, and only a tiny lift.
 struct ComposerSurface: ViewModifier {
+    /// Off for content in a card that has it already.
+    var isOn = true
     @Environment(\.colorScheme) private var scheme
     @Environment(\.cardIsFocused) private var cardIsFocused
 
     func body(content: Content) -> some View {
+        if isOn { surfaced(content) } else { content }
+    }
+
+    private func surfaced(_ content: Content) -> some View {
         content
             .background {
                 RoundedRectangle(cornerRadius: Metrics.composerRadius)

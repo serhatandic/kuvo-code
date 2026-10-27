@@ -14,12 +14,12 @@ import Textual
 ///
 /// Math is always typeset at its own width: SwiftUIMath's line breaking, which Textual's own math
 /// asks for, drops spaces and breaks superscripts off.
-enum MathText {
+public enum MathText {
     /// The language a formula of its own goes in, as a code block.
-    nonisolated static let blockLanguage = "kuvo-math"
+    public nonisolated static let blockLanguage = "kuvo-math"
 
     /// Replies' math: drawn where SwiftUIMath can draw it.
-    static var syntax: MathSyntax {
+    public static var syntax: MathSyntax {
         MathSyntax(blockLanguage: blockLanguage) { formula, attributes in
             guard let drawn = drawable(formula.latex) else { return nil }
             var text = AttributedString("\u{FFFC}", attributes: attributes)
@@ -34,7 +34,7 @@ enum MathText {
     /// as `\ldots`, `\operatorname{f}` as `\mathrm{f}`, `\begin{align}` as `aligned`, sizes and
     /// boxes left out); nil when it still can't, so the formula shows as written rather than as
     /// nothing. Kept, as each reply is read again with every word that streams in.
-    nonisolated static func drawable(_ latex: String) -> String? {
+    public nonisolated static func drawable(_ latex: String) -> String? {
         let key = latex as NSString
         if let known = drawables.object(forKey: key) { return known.latex }
         let drawn = substituted(latex)
@@ -152,19 +152,25 @@ enum MathText {
 
 /// A formula in a line of text. Measured and drawn at its own width; drawn larger than it shows,
 /// as the text's own size isn't known where it's drawn, and scaled down into its place.
-struct InlineMath: Attachment {
+public struct InlineMath: Textual.Attachment {
     /// As written, and as drawn (see `MathText.drawable`).
-    let latex: String
-    let drawn: String
+    public let latex: String
+    public let drawn: String
     /// Set as a formula of its own is (larger operators, limits above and below).
-    let isDisplay: Bool
+    public let isDisplay: Bool
 
-    var description: String { isDisplay ? "$$\(latex)$$" : "$\(latex)$" }
-    var selectionStyle: AttachmentSelectionStyle { .text }
+    public init(latex: String, drawn: String, isDisplay: Bool) {
+        self.latex = latex
+        self.drawn = drawn
+        self.isDisplay = isDisplay
+    }
+
+    public var description: String { isDisplay ? "$$\(latex)$$" : "$\(latex)$" }
+    public var selectionStyle: AttachmentSelectionStyle { .text }
 
     private static let drawnSize: CGFloat = 40
 
-    var body: some View {
+    public var body: some View {
         Math(drawn)
             .mathFont(.init(name: .latinModern, size: MathText.drawingSize(for: drawn, near: Self.drawnSize, display: isDisplay)))
             .mathTypesettingStyle(isDisplay ? .display : .text)
@@ -172,11 +178,11 @@ struct InlineMath: Attachment {
             .fixedSize()
     }
 
-    func baselineOffset(in environment: TextEnvironmentValues) -> CGFloat {
+    public func baselineOffset(in environment: TextEnvironmentValues) -> CGFloat {
         -bounds(in: environment).descent
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, in environment: TextEnvironmentValues) -> CGSize {
+    public func sizeThatFits(_ proposal: ProposedViewSize, in environment: TextEnvironmentValues) -> CGSize {
         bounds(in: environment).size
     }
 
@@ -196,15 +202,21 @@ struct InlineMath: Attachment {
 /// It's centered on a whole pixel: centered between two, its edges are rounded to pixels and it's
 /// drawn a pixel narrower or wider than it measured, which SwiftUIMath sets again to fit, breaking
 /// it onto a second line its height has no room for.
-struct MathBlockView: View {
+public struct MathBlockView: View {
     /// As SwiftUIMath draws it (see `MathText.drawable`).
     let latex: String
-    @Environment(\.messageFont) private var font
+    /// The size of the text it's in: the app's message text.
+    let textSize: CGFloat
     @Environment(\.displayScale) private var displayScale
     @State private var room: CGFloat = 0
 
-    var body: some View {
-        let size = MathText.drawingSize(for: latex, near: font.size * MathText.scale, display: true)
+    public init(latex: String, textSize: CGFloat) {
+        self.latex = latex
+        self.textSize = textSize
+    }
+
+    public var body: some View {
+        let size = MathText.drawingSize(for: latex, near: textSize * MathText.scale, display: true)
         let width = Math.typographicBounds(for: latex, fitting: .unspecified, font: .init(name: .latinModern, size: size), style: .display).width
         let formula = Math(latex)
             .mathFont(.init(name: .latinModern, size: size))
@@ -228,8 +240,10 @@ struct MathBlockView: View {
 
 /// Markdown with its math drawn (a file's preview); replies use `FileLinkingParser`, which does
 /// the same.
-struct MathMarkdownParser: MarkupParser {
-    func attributedString(for input: String) throws -> AttributedString {
+public struct MathMarkdownParser: MarkupParser {
+    public init() {}
+
+    public func attributedString(for input: String) throws -> AttributedString {
         try MathText.syntax.attributedString(markdown: input)
     }
 }

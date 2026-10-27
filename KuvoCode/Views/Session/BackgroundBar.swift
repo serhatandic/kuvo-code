@@ -90,9 +90,10 @@ struct WorkBar<Item: Identifiable, Row: View>: View {
     }
 }
 
-/// The line of a bar over the composer (`WorkBar`, the goal's): its mark, what it says, how far
-/// along it is, and while what's under it is hidden, what that is; clicking it shows or hides
-/// what's under it. A button or two of its own go at its end.
+/// The line of a bar in the card over the composer (`WorkBar`, the goal's, the keywords'): its
+/// mark, what it says, how far along it is, and while what's under it is hidden, what that is;
+/// clicking it shows or hides what's under it. A button of its own goes before the end column:
+/// the chevron, then ✕ to put the bar away, in the same place on every line of the card.
 struct BarLine: View {
     let mark: AnyView
     let title: String
@@ -103,21 +104,44 @@ struct BarLine: View {
     let showHelp: String
     let hideHelp: String
     @Binding var isHidden: Bool
+    /// Whether there's anything under it: one with nothing keeps the chevron's room, empty.
+    var opens = true
+    /// Puts the bar away, as its ✕; nil for one that goes by itself.
+    var close: (() -> Void)?
+    /// What ✕ puts away, under the pointer ("Put the review away").
+    var closeHelp = "Close"
 
     var body: some View {
         HStack(spacing: 0) {
             toggle
             if let accessory {
                 accessory
-                    .padding(.trailing, 12)
+                    .padding(.trailing, 4)
             }
+            BarEnd(isHidden: $isHidden, opens: opens, showHelp: showHelp, hideHelp: hideHelp, close: close, closeLabel: "Close \(title)", closeHelp: closeHelp)
         }
     }
 
-    private var toggle: some View {
-        Button {
-            withAnimation(.ui) { isHidden.toggle() }
-        } label: {
+    @ViewBuilder private var toggle: some View {
+        if opens {
+            Button {
+                withAnimation(.ui) { isHidden.toggle() }
+            } label: {
+                words
+            }
+            .buttonStyle(.plain)
+            .clickablePointer()
+            .help(isHidden ? showHelp : hideHelp)
+            .accessibilityLabel(progress.map { "\(title), \($0.replacingOccurrences(of: " · ", with: ", "))" } ?? title)
+            .accessibilityValue(isHidden ? "Hidden" : "Shown")
+        } else {
+            // Nothing under it: words, not a button, its detail read with them.
+            words
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var words: some View {
             HStack(spacing: 10) {
                 mark
                     .frame(width: 18)
@@ -125,36 +149,90 @@ struct BarLine: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                     .layoutPriority(2)
+                // Whole, or not at all where a narrow card has no room: cut down to a letter or
+                // two, they said nothing.
                 if let progress {
-                    Text(progress)
-                        .font(.system(size: 13).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .layoutPriority(1)
+                    ViewThatFits(in: .horizontal) {
+                        Text(progress)
+                            .font(.system(size: 13).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .layoutPriority(1)
                 }
-                if isHidden, let detail {
+                if !opens, let detail {
+                    // All it says beyond its title: cut at its end, never dropped.
                     detail
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
+                } else if isHidden, let detail {
+                    ViewThatFits(in: .horizontal) {
+                        detail
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                        detail
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(minWidth: 90, idealWidth: 90, maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isHidden ? 180 : 0))
-                    .accessibilityHidden(true)
             }
             .padding(.leading, 14)
-            .padding(.trailing, 16)
             .frame(height: 36)
             .contentShape(.rect)
+    }
+}
+
+/// The end of a bar's line, one column down the whole card: the chevron that shows or hides
+/// what's under it (the line itself does too), then ✕ that puts the bar away, or their room.
+struct BarEnd: View {
+    @Binding var isHidden: Bool
+    var opens = true
+    var showHelp = ""
+    var hideHelp = ""
+    var close: (() -> Void)?
+    /// For VoiceOver: which bar it closes ("Close Review").
+    var closeLabel = "Close"
+    var closeHelp = "Close"
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                withAnimation(.ui) { isHidden.toggle() }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .rotationEffect(.degrees(isHidden ? 180 : 0))
+            }
+            .buttonStyle(IconButtonStyle(width: 24, height: 24))
+            .foregroundStyle(.secondary)
+            .help(isHidden ? showHelp : hideHelp)
+            // The line says the same, and shows and hides it.
+            .accessibilityHidden(true)
+            .focusable(false)
+            .opacity(opens ? 1 : 0)
+            .disabled(!opens)
+            if let close {
+                Button(closeLabel, systemImage: "xmark", action: close)
+                    .font(.system(size: 10, weight: .semibold))
+                    .buttonStyle(IconButtonStyle(width: 24, height: 24))
+                    .foregroundStyle(.secondary)
+                    .help(closeHelp)
+                    .accessibilityHint(closeHelp)
+            } else {
+                Color.clear
+                    .frame(width: 24, height: 24)
+                    .accessibilityHidden(true)
+            }
         }
-        .buttonStyle(.plain)
-        .clickablePointer()
-        .help(isHidden ? showHelp : hideHelp)
-        .accessibilityLabel(progress.map { "\(title), \($0.replacingOccurrences(of: " · ", with: ", "))" } ?? title)
-        .accessibilityValue(isHidden ? "Hidden" : "Shown")
+        .padding(.trailing, 8)
     }
 }
 

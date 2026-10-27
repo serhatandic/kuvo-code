@@ -37,7 +37,7 @@ for Linux's tools).
 | A message to an agent waiting on a long command or a subagent is read at once: the box moves what it waits on to the background | the bridge's steering.test.js | the engine's own background route (checked by hand against a real engine) |
 | Read on one client, read on all: a session, bot or group chat read on the phone or another Mac stops showing unread here | SessionLifecycleTests, BoxGroupTests; Agents' sessions test (a coding agent's look told) | the phone's side (its own tests) |
 | B17 A folder that isn't a git repository | SessionEditsTests | |
-| B18 Rename, archive, restore, delete, search | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
+| B18 Rename, archive, restore, delete, search (a bot found as itself) | SidebarListsTests, SessionsTests, SessionTitlesTests, SessionSearchTests, SessionLifecycleTests | |
 | B20 Commands, skills, and ! commands | SlashCommandsTests, SkillsOnBoxTests, ShellCommandsTests | |
 | C1–C3 Attach pictures, PDFs, files; a picture named where you write ("[Image 1]"), its name gone with it | AttachmentRoutesTests, AttachmentsTests, SentFilesTests, ComposerFieldTests | how the names and links look in the field and your bubble (a look before and after) |
 | C4 Quote part of a reply and answer it, the answer taking the keyboard | QuotingTests, ComposerFieldTests | |

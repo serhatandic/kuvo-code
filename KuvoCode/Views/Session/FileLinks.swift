@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import ClientText
 import Foundation
 import SwiftUI
