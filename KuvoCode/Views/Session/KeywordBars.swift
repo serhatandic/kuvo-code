@@ -51,8 +51,8 @@ struct KeywordBars: View {
                 model.fixReview()
             } done: {
                 model.dismissReview()
-            } open: { finding in
-                if let url = Self.file(finding.file, in: model.session.location.directory) { app.utilities.show(url) }
+            } open: { place in
+                if let url = Self.file(place.file, in: model.session.location.directory) { app.utilities.show(url) }
             }
             .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
             .glassEffectID("review", in: glass)
@@ -181,7 +181,7 @@ struct ReviewBar: View {
     @Binding var isHidden: Bool
     let fix: () -> Void
     let done: () -> Void
-    let open: (Review.Finding) -> Void
+    let open: (Review.Place) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -269,8 +269,8 @@ struct ReviewBar: View {
                 if !review.findings.isEmpty {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(review.findings.enumerated()), id: \.offset) { _, finding in
-                                FindingRow(finding: finding) { open(finding) }
+                            ForEach(review.findings) { finding in
+                                FindingRow(finding: finding, open: open)
                             }
                         }
                     }
@@ -284,7 +284,7 @@ struct ReviewBar: View {
 
 private struct FindingRow: View {
     let finding: Review.Finding
-    let open: () -> Void
+    let open: (Review.Place) -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -293,18 +293,27 @@ private struct FindingRow: View {
                 .foregroundStyle(finding.severity == .nit ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                 .frame(width: 30, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
-                Button(action: open) {
-                    Text(finding.line.map { "\(finding.file):\($0)" } ?? finding.file)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                .buttonStyle(TextButtonStyle(outset: true))
-                .help("Open \(finding.file) in the side panel")
-                Text(finding.note)
-                    .font(.system(size: 13))
+                Text(finding.title)
+                    .font(.system(size: 13, weight: .medium))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if !finding.explanation.isEmpty {
+                    Text(finding.explanation)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(finding.locations, id: \.self) { place in
+                    Button { open(place) } label: {
+                        Text(place.text)
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .help("Open \(place.file) in the side panel")
+                }
             }
         }
         .accessibilityElement(children: .combine)

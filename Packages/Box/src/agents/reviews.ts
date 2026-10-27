@@ -15,11 +15,23 @@ import { run } from "./proc"
 
 export type Severity = "bug" | "risk" | "nit"
 
-export interface Finding {
+/** Where a finding is: a file, a line in it, or lines `line` to `endLine`. */
+export interface Place {
   file: string
   line?: number
+  endLine?: number
+}
+
+export interface Finding {
+  /** Its own, for a client to fix one. */
+  id: string
+  /** What's wrong, in a line. */
+  title: string
+  /** Why, and how to fix it, in a sentence or two ("" when the title says it all). */
+  explanation: string
   severity: Severity
-  note: string
+  /** Every place it's in, none when it's about the change as a whole (a missing test). */
+  locations: Place[]
 }
 
 export interface Review {
@@ -77,6 +89,8 @@ export class Reviews {
         if (typeof review?.session !== "string") continue
         // One under way as the box stopped: said, to be asked again.
         if (review.state === "reviewing") Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." })
+        // One kept in the first shape (a file and a note each): in this one.
+        review.findings = readFindings(review.findings)
         this.kept.set(review.session, review)
       }
     } catch {}
@@ -236,7 +250,7 @@ export function reviewPrompt(diff: string): string {
 ${diff.replaceAll("</diff>", "</ diff>")}
 </diff>
 
-Reply with JSON alone, no other words: {"summary": "<one sentence on how the change looks>", "findings": [{"file": "<path>", "line": <line in the new file, or null>, "severity": "bug" | "risk" | "nit", "note": "<what's wrong and how to fix it, in a sentence or two>"}]}. An empty list when you find nothing wrong.`
+Reply with JSON alone, no other words: {"summary": "<one sentence on how the change looks>", "findings": [{"title": "<what's wrong, in a short line>", "explanation": "<why it's a problem and how to fix it, in a sentence or two>", "severity": "bug" | "risk" | "nit", "locations": [{"file": "<path>", "line": <first line in the new file, or null>, "endLine": <last line, or null>}]}]}. One finding per problem, with every place it's in; no locations when it's about the change as a whole (a missing test). An empty list when you find nothing wrong.`
 }
 
 /** The review's answer; one it can't make sense of is said as such, its words kept as the summary. */
@@ -245,14 +259,7 @@ export function parseReview(text: string): { summary: string; findings: Finding[
   const end = text.lastIndexOf("}")
   try {
     const value = JSON.parse(text.slice(start, end + 1))
-    const findings: Finding[] = (Array.isArray(value?.findings) ? value.findings : [])
-      .filter((each: any) => typeof each?.file === "string" && typeof each?.note === "string" && each.note.trim())
-      .map((each: any) => ({
-        file: each.file,
-        ...(Number.isInteger(each.line) && each.line > 0 ? { line: each.line } : {}),
-        severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
-        note: each.note.trim(),
-      }))
+    const findings = readFindings(value?.findings)
     const order: Record<Severity, number> = { bug: 0, risk: 1, nit: 2 }
     findings.sort((a, b) => order[a.severity] - order[b.severity])
     const summary = typeof value?.summary === "string" && value.summary.trim() ? value.summary.trim() : findings.length ? "It found things to fix." : "It found nothing wrong."
@@ -262,10 +269,57 @@ export function parseReview(text: string): { summary: string; findings: Finding[
   }
 }
 
+/**
+ * Findings as a model wrote them (or as they were kept): a title, why, and where, each; or, in the
+ * first shape, a file, a line and a note, whose first sentence is then the title.
+ */
+export function readFindings(list: unknown): Finding[] {
+  const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
+  const count = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? (value as number) : undefined)
+  const place = (each: any): Place | undefined => {
+    const file = text(each?.file)
+    if (!file) return
+    const line = count(each.line)
+    const endLine = line ? count(each.endLine) : undefined
+    return { file, ...(line ? { line } : {}), ...(endLine && endLine > line! ? { endLine } : {}) }
+  }
+  const findings: Finding[] = []
+  for (const each of Array.isArray(list) ? (list as any[]) : []) {
+    let title = text(each?.title)
+    let explanation = text(each?.explanation)
+    const note = text(each?.note)
+    if (!title && note) {
+      const end = note.search(/[.!?](\s|$)/)
+      title = end < 0 ? note : note.slice(0, end + 1)
+      explanation = note.slice(title.length).trim()
+    }
+    if (!title) continue
+    const locations = (Array.isArray(each.locations) ? each.locations.map(place) : [place(each)]).filter((at: Place | undefined): at is Place => !!at)
+    findings.push({
+      id: typeof each.id === "string" && each.id ? each.id : newID("fnd"),
+      title,
+      explanation,
+      severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
+      locations,
+    })
+  }
+  return findings
+}
+
+/** A place as people write it: `src/timer.ts:88-92`. */
+export function placeText(at: Place): string {
+  return at.file + (at.line ? `:${at.line}` : "") + (at.endLine ? `-${at.endLine}` : "")
+}
+
 /** What the agent is told to fix: the review's findings, as a message of yours. */
 export function fixMessage(review: Review): string {
   return `A review of the changes with fresh eyes found these. Fix the real problems (bugs first), say if you think one isn't, and run the tests after:\n\n${review.findings
-    .map((each) => `- ${each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing"} in ${each.file}${each.line ? `:${each.line}` : ""}: ${each.note}`)
+    .map((each) => {
+      const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing"
+      const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : ""
+      const title = /[.!?]$/.test(each.title) ? each.title.slice(0, -1) : each.title
+      return `- ${kind}: ${title}${where}.${each.explanation ? " " + each.explanation : ""}`
+    })
     .join("\n")}`
 }
 

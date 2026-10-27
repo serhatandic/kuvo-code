@@ -3904,6 +3904,7 @@ class Reviews {
           continue;
         if (review.state === "reviewing")
           Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." });
+        review.findings = readFindings(review.findings);
         this.kept.set(review.session, review);
       }
     } catch {}
@@ -4056,19 +4057,14 @@ function reviewPrompt(diff) {
 ${diff.replaceAll("</diff>", "</ diff>")}
 </diff>
 
-Reply with JSON alone, no other words: {"summary": "<one sentence on how the change looks>", "findings": [{"file": "<path>", "line": <line in the new file, or null>, "severity": "bug" | "risk" | "nit", "note": "<what's wrong and how to fix it, in a sentence or two>"}]}. An empty list when you find nothing wrong.`;
+Reply with JSON alone, no other words: {"summary": "<one sentence on how the change looks>", "findings": [{"title": "<what's wrong, in a short line>", "explanation": "<why it's a problem and how to fix it, in a sentence or two>", "severity": "bug" | "risk" | "nit", "locations": [{"file": "<path>", "line": <first line in the new file, or null>, "endLine": <last line, or null>}]}]}. One finding per problem, with every place it's in; no locations when it's about the change as a whole (a missing test). An empty list when you find nothing wrong.`;
 }
 function parseReview(text2) {
   const start = text2.indexOf("{");
   const end = text2.lastIndexOf("}");
   try {
     const value = JSON.parse(text2.slice(start, end + 1));
-    const findings = (Array.isArray(value?.findings) ? value.findings : []).filter((each) => typeof each?.file === "string" && typeof each?.note === "string" && each.note.trim()).map((each) => ({
-      file: each.file,
-      ...Number.isInteger(each.line) && each.line > 0 ? { line: each.line } : {},
-      severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
-      note: each.note.trim()
-    }));
+    const findings = readFindings(value?.findings);
     const order = { bug: 0, risk: 1, nit: 2 };
     findings.sort((a, b) => order[a.severity] - order[b.severity]);
     const summary2 = typeof value?.summary === "string" && value.summary.trim() ? value.summary.trim() : findings.length ? "It found things to fix." : "It found nothing wrong.";
@@ -4077,10 +4073,52 @@ function parseReview(text2) {
     return { summary: text2.trim().slice(0, 600) || "The review gave no answer.", findings: [] };
   }
 }
+function readFindings(list) {
+  const text2 = (value) => typeof value === "string" ? value.trim() : "";
+  const count = (value) => Number.isInteger(value) && value > 0 ? value : undefined;
+  const place = (each) => {
+    const file = text2(each?.file);
+    if (!file)
+      return;
+    const line3 = count(each.line);
+    const endLine = line3 ? count(each.endLine) : undefined;
+    return { file, ...line3 ? { line: line3 } : {}, ...endLine && endLine > line3 ? { endLine } : {} };
+  };
+  const findings = [];
+  for (const each of Array.isArray(list) ? list : []) {
+    let title = text2(each?.title);
+    let explanation = text2(each?.explanation);
+    const note = text2(each?.note);
+    if (!title && note) {
+      const end = note.search(/[.!?](\s|$)/);
+      title = end < 0 ? note : note.slice(0, end + 1);
+      explanation = note.slice(title.length).trim();
+    }
+    if (!title)
+      continue;
+    const locations = (Array.isArray(each.locations) ? each.locations.map(place) : [place(each)]).filter((at3) => !!at3);
+    findings.push({
+      id: typeof each.id === "string" && each.id ? each.id : newID("fnd"),
+      title,
+      explanation,
+      severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
+      locations
+    });
+  }
+  return findings;
+}
+function placeText(at3) {
+  return at3.file + (at3.line ? `:${at3.line}` : "") + (at3.endLine ? `-${at3.endLine}` : "");
+}
 function fixMessage(review) {
   return `A review of the changes with fresh eyes found these. Fix the real problems (bugs first), say if you think one isn't, and run the tests after:
 
-${review.findings.map((each) => `- ${each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing"} in ${each.file}${each.line ? `:${each.line}` : ""}: ${each.note}`).join(`
+${review.findings.map((each) => {
+    const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing";
+    const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : "";
+    const title = /[.!?]$/.test(each.title) ? each.title.slice(0, -1) : each.title;
+    return `- ${kind}: ${title}${where}.${each.explanation ? " " + each.explanation : ""}`;
+  }).join(`
 `)}`;
 }
 var json4 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -18451,4 +18489,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 61708fe19fe1ab12368619edfec86ff73a84f576fa34f3a849f40919bcdc0439
+// Built from Packages/Box/src/agents 8addfa1f389f5db65af5d80eccfd785385ba142e82ea8fd59dfb41483741e71c

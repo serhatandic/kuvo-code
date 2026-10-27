@@ -275,9 +275,32 @@ describe("a review with fresh eyes", () => {
     expect(engine.checks[0].prompt).toContain("setTimeout(tick, 1000)")
     expect(review.summary).toBe("Mostly fine.")
     expect(review.findings.map((each) => each.severity)).toEqual(["bug", "nit"])
-    expect(review.fix).toContain("Bug in src/timer.ts:40: The interval isn't cleared on pause.")
+    expect(review.fix).toContain("Bug: The interval isn't cleared on pause (src/timer.ts:40).")
     expect(told()).toBe(0)
     expect((events.filter((event) => event.type === "kuvo.review.updated").at(-1)?.data as any)?.review.state).toBe("done")
+  })
+
+  test("a finding can be in several places or in none; each has a title and says why", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+  setTimeout(tick, 1000)\n"))
+    reviews.onEnded = beat
+    engine.answers = [`{"summary": "Two problems.", "findings": [
+      {"title": "No test covers the paused timer", "explanation": "Nothing checks that pausing stops the ticks.", "severity": "risk", "locations": []},
+      {"title": "Pausing twice skips a second", "explanation": "Both handlers clear the interval, then both start it again.", "severity": "bug",
+       "locations": [{"file": "src/timer.ts", "line": 88, "endLine": 92}, {"file": "src/pause.ts", "line": 12}, {"file": "src/timer.ts"}]},
+      {"file": "README.md", "line": 3, "severity": "nit", "note": "Says five minutes; the code says four. Make them agree."}]}`]
+    await reviews.start("ses_work")
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const [bug, risk, nit] = reviews.get("ses_work")!.findings
+    expect(bug).toMatchObject({ title: "Pausing twice skips a second", severity: "bug", explanation: "Both handlers clear the interval, then both start it again." })
+    expect(bug.locations).toEqual([{ file: "src/timer.ts", line: 88, endLine: 92 }, { file: "src/pause.ts", line: 12 }, { file: "src/timer.ts" }])
+    expect(risk).toMatchObject({ title: "No test covers the paused timer", locations: [] })
+    // An answer in the old shape is still read: its first sentence is the title.
+    expect(nit).toMatchObject({ title: "Says five minutes; the code says four.", explanation: "Make them agree.", locations: [{ file: "README.md", line: 3 }] })
+    expect(new Set([bug.id, risk.id, nit.id]).size).toBe(3)
+    // The agent is told each, with every place it's in.
+    const fix = reviews.get("ses_work")!.fix!
+    expect(fix).toContain("Bug: Pausing twice skips a second (src/timer.ts:88-92, src/pause.ts:12, src/timer.ts). Both handlers clear the interval")
+    expect(fix).toContain("Risk: No test covers the paused timer. Nothing checks")
   })
 
   test("with nothing to review says so; one under way is waited for; put away, it's gone", async () => {

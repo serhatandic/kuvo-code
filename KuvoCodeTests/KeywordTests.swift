@@ -103,7 +103,7 @@ import Testing
         try repository.git("add", "-A")
         try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
         try repository.write("src/timer.ts", "export const tick = 1000\nsetInterval(tick)\n")
-        serve(directory: repository.path, answers: [#"{"summary": "One real problem.", "findings": [{"file": "src/timer.ts", "line": 2, "severity": "bug", "note": "The interval is never cleared."}]}"#])
+        serve(directory: repository.path, answers: [#"{"summary": "One real problem.", "findings": [{"title": "The interval is never cleared", "explanation": "Clear it when the timer stops.", "severity": "bug", "locations": [{"file": "src/timer.ts", "line": 2}, {"file": "src/stop.ts"}]}]}"#])
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
         let model = try session(directory: repository.path)
         let bridge = try await start(model)
@@ -114,14 +114,15 @@ import Testing
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.summary == "One real problem.")
-        #expect(review.findings.map(\.note) == ["The interval is never cleared."])
+        #expect(review.findings.map(\.title) == ["The interval is never cleared"])
+        #expect(review.findings.first?.locations.map(\.text) == ["src/timer.ts:2", "src/stop.ts"])
         #expect(told == 0)
 
         // Ask the Agent to Fix: the findings go as your message, and the review is put away.
         model.fixReview()
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
-        #expect(String(describing: sent.body).contains("src/timer.ts:2: The interval is never cleared."))
+        #expect(String(describing: sent.body).contains("The interval is never cleared (src/timer.ts:2, src/stop.ts). Clear it when the timer stops."))
         try await until { model.review == nil }
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }

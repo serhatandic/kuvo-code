@@ -16,7 +16,7 @@ function ascending(): string {
   return time + random
 }
 
-export const newID = (prefix: "ses" | "msg" | "evt" | "per" | "frm" | "att" | "call" | "shl" | "btw" | "rev") => `${prefix}_${ascending()}`
+export const newID = (prefix: "ses" | "msg" | "evt" | "per" | "frm" | "att" | "call" | "shl" | "btw" | "rev" | "fnd") => `${prefix}_${ascending()}`
 
 /** The message an event names as its own (the app's reducer does the same for idle markers). */
 export const messageID = (eventID: string) => "msg_" + eventID.slice("evt_".length)

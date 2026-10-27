@@ -1402,9 +1402,11 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
   - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
     `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
-    "failed", model?, summary?, findings: [{file, line?, severity: "bug" | "risk" | "nit", note}],
-    error?, fix?, started, ended?}`, its findings bugs first. `fix` is what to send the agent, as
-    your message, to fix them.
+    "failed", model?, summary?, findings: [finding], error?, fix?, started, ended?}`, its findings
+    bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
+    [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
+    says it all), and every place it's in, none when it's about the change as a whole (a missing
+    test). `fix` is what to send the agent, as your message, to fix them all.
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
     conversation's; `DELETE …/kuvo/reviews/<session>` puts it away.
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
