@@ -37,6 +37,8 @@ export const BOX_KEYS = path.join(BOX, "keys");
 export const BOT_KEYS = path.join(K, "box", "bot-keys");
 // What the box's own updates keep: the files a rollback puts back, what was installed.
 export const UPDATES = path.join(K, "updates");
+/** What was said in each conversation, kept to search it (`kuvo/search`) until its session changes. */
+export const SEARCH = path.join(K, "search");
 // What integrations' servers keep (a sign-in), where the engine runs them with it (KUVO_INTEGRATIONS:
 // this Mac's in the app's own folder, a machine's in `integrations`).
 export const INTEGRATION_DATA = process.env.KUVO_INTEGRATIONS || path.join(K, "integrations");

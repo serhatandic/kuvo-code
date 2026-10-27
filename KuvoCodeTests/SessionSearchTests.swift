@@ -9,7 +9,8 @@ import Testing
 /// …" for a step), though a step's file is found.
 /// A bot's own conversation is found as the bot, with its face, as the sidebar shows it: by its name,
 /// its conversation's title, or what was said in it.
-/// The engine is stubbed.
+/// Each box searches its own conversations (`kuvo/search`): this Mac's is the real box; the engine
+/// is stubbed.
 @MainActor
 @Suite(.serialized) struct SessionSearchTests {
     let engine = StubEngine(port: 47990)
@@ -49,12 +50,23 @@ import Testing
         await workspace.refresh()
     }
 
+    /// This Mac's box, which searches, reaching the stubbed engine.
+    private func searching() async throws -> TestBox {
+        let box = try await TestBox(engine: engine.url)
+        workspace.boxes = { _ in box.client(engine: engine.url) }
+        return box
+    }
+
     private func found(_ query: String) async -> [String] {
         await workspace.searchConversations(query).map(\.session.id)
     }
 
     @Test func findsWhatWasSaidLatestFirstArchivedToo() async throws {
-        defer { engine.stop() }
+        let box = try await searching()
+        defer {
+            box.stop()
+            engine.stop()
+        }
         await start()
         #expect(await found("email") == ["ses_login", "ses_logs"])
         #expect(await found("THEME") == ["ses_dark"])
@@ -65,7 +77,11 @@ import Testing
     /// Words only the app adds when it writes a conversation out (who's speaking, its title) find
     /// nothing: no one said them.
     @Test func theAppsOwnLabelsFindNothing() async throws {
-        defer { engine.stop() }
+        let box = try await searching()
+        defer {
+            box.stop()
+            engine.stop()
+        }
         await start()
         #expect(await found("you").isEmpty)
         #expect(await found("Agent").isEmpty)
@@ -78,7 +94,11 @@ import Testing
     }
 
     @Test func aDeletedSessionIsntFound() async throws {
-        defer { engine.stop() }
+        let box = try await searching()
+        defer {
+            box.stop()
+            engine.stop()
+        }
         await start()
         #expect(await found("email").contains("ses_logs"))
         workspace.handle(try engine.event("session.deleted", session: "ses_logs"))
@@ -103,7 +123,9 @@ import Testing
     }
 
     @Test func aBotIsFoundAsItself() async throws {
+        let box = try await searching()
         defer {
+            box.stop()
             engine.stop()
             try? FileManager.default.removeItem(at: Bots.file)
         }

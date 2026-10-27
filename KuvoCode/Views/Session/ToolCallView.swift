@@ -166,17 +166,6 @@ struct ToolCallView: View {
         ToolCallView(call: call, directory: directory).summary
     }
 
-    /// What a step worked on, without the app's words for it ("Read", "Asked you a question"):
-    /// its files, its command, what it looked for, the page; for searching what's in a
-    /// conversation. Nil when it names none.
-    static func subject(of call: Message.ToolCall, in directory: String) -> String? {
-        let view = ToolCallView(call: call, directory: directory)
-        let parts = [view.relative(view.string("path"))] + ["command", "pattern", "query", "url", "description"].map(view.string)
-            + view.diffs.map { view.relative($0.file) ?? $0.file }
-        let named = parts.compactMap(\.self).filter { !$0.isEmpty }
-        return named.isEmpty ? nil : named.joined(separator: " ")
-    }
-
     private var summary: String {
         let path = relative(string("path"))
         // A bot's memory file goes by what it is.
