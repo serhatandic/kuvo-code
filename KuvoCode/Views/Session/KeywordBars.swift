@@ -323,8 +323,8 @@ struct ReviewBar: View {
         }.joined(separator: " · ")
     }
 
-    /// Fix… for `findings` (nil: all of them).
-    private func fixMenu(_ findings: [String]?, label: String) -> some View {
+    /// Fix… for `findings` (nil: all of them); `outset` lines its words up with the text above.
+    private func fixMenu(_ findings: [String]?, label: String, outset: Bool = false) -> some View {
         Menu {
             Button("Fix in a New Session", systemImage: "plus.square") { fix(findings, .newSession) }
             Button("Fix Here", systemImage: "text.bubble") { fix(findings, .here) }
@@ -343,7 +343,7 @@ struct ReviewBar: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(TextButtonStyle())
+        .buttonStyle(TextButtonStyle(outset: outset))
         .font(.system(size: 13))
         .fixedSize()
         .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
@@ -374,7 +374,7 @@ struct ReviewBar: View {
                 }
                 if !review.findings.isEmpty {
                     if layout == ReviewLayout.single.rawValue {
-                        SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…") }, open: open)
+                        SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…", outset: true) }, open: open)
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {
@@ -397,7 +397,7 @@ struct ReviewBar: View {
     private var layoutSwitch: some View {
         HStack(spacing: 0) {
             ForEach([ReviewLayout.list, .single], id: \.rawValue) { each in
-                Button(each == .list ? "As a List" : "One at a Time", systemImage: each == .list ? "list.bullet" : "square.stack") {
+                Button(each == .list ? "As a List" : "One at a Time", systemImage: each == .list ? "list.bullet" : "rectangle.portrait") {
                     withAnimation(.ui) { layout = each.rawValue }
                 }
                 .buttonStyle(IconButtonStyle(width: 22, height: 20))
