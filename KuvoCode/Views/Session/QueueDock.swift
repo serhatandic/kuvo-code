@@ -83,8 +83,15 @@ struct QueueDock: View {
                 .padding(.vertical, folding ? 3 : 0)
                 .transition(.fold)
             }
+            // The message last removed, for a moment.
+            if let text = model.putAways.text(.message) {
+                UndoLine(text: text, undo: model.putAways.canUndo(.message) ? { model.putAways.undo(.message) } : nil)
+                    .padding(.horizontal, folding ? 0 : 6)
+                    .transition(.fold)
+            }
         }
         .animation(.ui, value: items.map(\.id))
+        .animation(.ui, value: model.putAways.isPutAway(.message))
     }
 }
 
@@ -92,6 +99,7 @@ private struct QueueRow: View {
     let item: Transcript.Pending
     let isRunning: Bool
     let model: SessionModel
+    @Environment(Catalog.self) private var catalog
 
     private var isQueued: Bool { item.delivery == .queue }
 
@@ -143,7 +151,7 @@ private struct QueueRow: View {
                     .font(.system(size: 13))
                     .help("Send Now: stops the agent's current step and gives it this")
                 }
-                Button("Remove", systemImage: "trash") { model.cancelPending(item) }
+                Button("Remove", systemImage: "trash") { remove() }
                     .buttonStyle(CardActionStyle())
                     .help("Remove")
                 Menu {
@@ -152,7 +160,7 @@ private struct QueueRow: View {
                     }
                     Button("Edit") { model.edit(item) }
                     Divider()
-                    Button("Remove", role: .destructive) { model.cancelPending(item) }
+                    Button("Remove", role: .destructive) { remove() }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 13))
@@ -175,9 +183,20 @@ private struct QueueRow: View {
             Button("Send Now") { model.sendNow(item) }
             Button("Edit") { model.edit(item) }
             Divider()
-            Button("Remove", role: .destructive) { model.cancelPending(item) }
+            Button("Remove", role: .destructive) { remove() }
         }
         .disabled(item.isLocal)
+    }
+
+    /// Removed at once, as the agent would take it meanwhile; Undo puts it back, at the queue's end.
+    private func remove() {
+        // Held for Resume, after a Stop: it comes back the same way.
+        let paused = model.isQueuePaused && !model.isRunning
+        model.cancelPending(item)
+        let item = item, model = model, catalog = catalog
+        model.putAways.put(.message, text: "Message removed", undo: {
+            model.requeue(item, for: catalog.model(model.session.model), paused: paused)
+        })
     }
 
     /// The summary, with the agents and files it names standing out, as in its bubble.

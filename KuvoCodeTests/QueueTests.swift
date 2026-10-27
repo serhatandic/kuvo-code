@@ -179,4 +179,40 @@ import Testing
         _ = try await open(running: false, inbox: [steering])
         #expect(engine.requests("PATCH", "/inbox/msg_03").isEmpty, "not moved to the queue")
     }
+
+    /// A queued message removed by mistake: Undo puts it back in the queue, as it was, behind
+    /// the run, rather than starting it.
+    @Test func undoPutsARemovedMessageBackInTheQueue() async throws {
+        defer { engine.stop() }
+        engine.on("DELETE", "/api/session/\(id)/inbox/*", json: [:])
+        let model = try await open(running: true, inbox: [queued])
+        let item = try #require(model.waiting.first)
+        model.cancelPending(item)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+
+        model.requeue(item, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        let back = try #require(engine.requests("POST", "/prompt").first)
+        #expect(back.body["text"] as? String == "Then update the docs")
+        #expect(back.body["delivery"] as? String == "queue", "it should wait behind the run, as it did")
+    }
+
+    /// After Stop, the only queued message removed and brought back: it waits under Paused again,
+    /// rather than starting the agent.
+    @Test func undoAfterStopKeepsTheMessagePaused() async throws {
+        defer { engine.stop() }
+        engine.on("DELETE", "/api/session/\(id)/inbox/*", json: [:])
+        let model = try await open(running: false, inbox: [queued])
+        #expect(model.isQueuePaused)
+        let item = try #require(model.waiting.first)
+        model.cancelPending(item)
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+
+        model.requeue(item, for: nil, paused: true)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").first?.body["delivery"] as? String == "queue", "it shouldn't start the agent")
+        #expect(model.isQueuePaused, "it should wait for Resume again")
+        #expect(engine.requests("POST", "/interrupt").isEmpty)
+    }
 }
