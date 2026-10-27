@@ -12,6 +12,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 - `WebLinks`: the web addresses written in a message.
 - `SiteAddresses`: the site a web link is on (its main domain), whether an address is a public
   one, and the icons a page declares.
+- `TypedEchoes`: a message field's own typing handed back to it late by a busy app, told apart from
+  a change by the app, so no key is lost.
 
 ## What belongs here
 

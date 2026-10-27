@@ -61,3 +61,83 @@ import ClientText
         #expect(SiteAddresses.declaredIcons(in: html, page: page, drawsSVG: false).first?.absoluteString == "https://cdn.example.com/32.png")
     }
 }
+
+/// A message field keeps every key while the app hands it its draft late: as it was a key or two
+/// ago, from before the first key, or the same older words again. A real change from the app (the
+/// message sent) still applies. A field as both apps run it: it tells its draft each key, and puts
+/// what it's handed in place unless that's an echo.
+@Suite struct TypedEchoesTests {
+    struct Field {
+        var text = ""
+        var echoes = TypedEchoes()
+        mutating func type(_ new: String) { text = new; echoes.told(new) }
+        mutating func handed(_ draft: String) { if !echoes.isEcho(draft) { text = draft } }
+    }
+
+    @Test func lateDraftsKeepTheKeysSince() {
+        var field = Field()
+        for text in ["F", "Fr", "Fri"] { field.type(text) }
+        field.handed("Fr")
+        #expect(field.text == "Fri")
+        field.type("Frid")
+        field.handed("Fri")
+        field.handed("Frid")
+        #expect(field.text == "Frid")
+        field.handed("")
+        #expect(field.text == "", "the message sent")
+    }
+
+    @Test func aTypoFixedWhileBusyStaysFixed() {
+        var field = Field()
+        for text in ["a", "ab", "a"] { field.type(text) }
+        field.handed("a")
+        field.handed("ab")
+        field.type("ac")
+        field.handed("a")
+        #expect(field.text == "ac", "the deleted letter stays deleted and the next key stays")
+    }
+
+    @Test func wordsFromBeforeTheFirstKeyAndRepeatsAreKept() {
+        var field = Field()
+        field.handed("")
+        field.type("Y")
+        field.handed("")
+        #expect(field.text == "Y")
+        field.type("Ye")
+        field.type("Yes")
+        field.handed("Y")
+        field.handed("Y")
+        #expect(field.text == "Yes")
+        field.handed("Yes")
+        field.handed("")
+        #expect(field.text == "", "the message sent")
+    }
+
+    /// "y" and Return before the app has caught up: the message sent empties the field, though the
+    /// field was empty before the key too. ↑ brings back words typed a moment ago: they show.
+    @Test func wordsTheAppPutsInOnAKeyApply() {
+        var field = Field()
+        field.handed("")
+        field.type("y")
+        field.handed("")
+        field.echoes.changing(to: "")
+        field.handed("")
+        #expect(field.text == "", "the message sent")
+        field.type("y")
+        field.type("")
+        field.echoes.changing(to: "y")
+        field.handed("y")
+        #expect(field.text == "y", "the message brought back")
+    }
+
+    @Test func aDraftBroughtBackApplies() {
+        var field = Field()
+        field.type("h")
+        field.handed("h")
+        field.handed("Earlier words")
+        #expect(field.text == "Earlier words")
+        field.type("Earlier words!")
+        field.handed("Earlier words")
+        #expect(field.text == "Earlier words!", "words brought back become where the next typing starts")
+    }
+}
