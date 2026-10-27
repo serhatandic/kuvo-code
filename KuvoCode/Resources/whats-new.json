@@ -4,6 +4,11 @@
       "version": "Unreleased",
       "highlights": [
         {
+          "title": "Voice input",
+          "line": "Click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; nothing is sent until you send it.",
+          "symbol": "mic"
+        },
+        {
           "title": "Goals that keep going",
           "line": "Write `/goal all tests pass`, and the agent works turn after turn until a check says it's met.",
           "symbol": "target"

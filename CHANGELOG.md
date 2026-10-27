@@ -8,7 +8,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
-- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing. Your words are recognized on your Mac and go into the message; nothing is sent until you send it. Settings › General picks how it shows: in the composer, or a voice field the window steps back for.
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; nothing is sent until you send it. <!-- symbol: mic -->
 - **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
 - **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
 - **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
