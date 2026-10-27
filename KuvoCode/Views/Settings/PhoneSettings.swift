@@ -27,13 +27,9 @@ struct PhoneSettings: View {
                             .foregroundStyle(.secondary)
                         // The code reaches this Mac only through the relay: until it's connected,
                         // scanning it would fail, so it says so.
-                        if link.status != .connected {
+                        if case .failed = link.status {
                             HStack(spacing: 6) {
-                                if case .failed = link.status {
-                                    Image(systemName: "exclamationmark.triangle")
-                                } else {
-                                    Spinner(size: 12)
-                                }
+                                Image(systemName: "exclamationmark.triangle")
                                 Text(waitingText)
                             }
                             .font(.callout)
@@ -41,6 +37,9 @@ struct PhoneSettings: View {
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityElement(children: .combine)
+                        } else if link.status != .connected {
+                            ConnectingLink(waitingText)
+                                .font(.callout)
                         }
                         Button("Done") { link.endPairing() }
                     }

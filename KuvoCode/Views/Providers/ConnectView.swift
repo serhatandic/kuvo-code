@@ -305,10 +305,15 @@ struct ConnectView: View {
                     .padding(.top, 8)
                 }
             } else if gettingReady == nil {
-                HStack(spacing: 8) {
-                    Spinner(size: 16)
-                    Text(isCheckingCode ? "Checking the code…" : "Waiting for you to finish…")
-                        .foregroundStyle(.secondary)
+                // Checking a pasted code is a moment's wait here, not on you.
+                if isCheckingCode {
+                    HStack(spacing: 8) {
+                        Spinner(size: 16)
+                        Text("Checking the code…")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    HandoffWait("Waiting for you to finish…", to: .browser)
                 }
                 if attempt.acceptsCode == true, isPastingCode, !isCheckingCode {
                     VStack(alignment: .leading, spacing: 8) {

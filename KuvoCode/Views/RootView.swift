@@ -101,7 +101,9 @@ struct EngineSetupView: View {
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
             default:
-                Spinner(size: 16)
+                // The heading says it; the wire lights as the engine answers.
+                ConnectingLink(isConnected: app.engine == .ready)
+                    .accessibilityHidden(true)
             }
         }
         .padding(40)
