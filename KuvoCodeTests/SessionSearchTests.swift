@@ -7,6 +7,8 @@ import Testing
 /// the words, archived ones too, the latest first, with the words around them; not one deleted
 /// since, and not every session for a word only the app's own labels have ("You", "Agent", "Read
 /// …" for a step), though a step's file is found.
+/// A bot's own conversation is found as the bot, with its face, as the sidebar shows it: by its name,
+/// its conversation's title, or what was said in it.
 /// The engine is stubbed.
 @MainActor
 @Suite(.serialized) struct SessionSearchTests {
@@ -81,5 +83,46 @@ import Testing
         #expect(await found("email").contains("ses_logs"))
         workspace.handle(try engine.event("session.deleted", session: "ses_logs"))
         #expect(await found("email") == ["ses_login"])
+    }
+
+    /// A bot, Ada, whose conversation is called "Morning digest" and has the email in it.
+    private func startWithABot() async throws {
+        try FileManager.default.createDirectory(at: Bots.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [[
+            "id": "bot_ada", "name": "Ada", "job": "Reads my mail", "instructions": "Reads my mail.", "jobInMemory": true,
+            "look": ["color": "mint", "shape": "round", "face": "calm"], "folder": AppInfo.testRoot.appending(path: "bot_ada").path,
+            "sessionID": "ses_ada", "created": "2026-10-21T09:00:00Z",
+        ]]).write(to: Bots.file)
+        engine.list([
+            StubEngine.session("ses_login", title: "Login", directory: "/tmp/kuvo-tests-search", created: 30),
+            StubEngine.session("ses_ada", title: "Morning digest", directory: AppInfo.testRoot.appending(path: "bot_ada").path, created: 40),
+        ])
+        engine.conversation("ses_login", conversation("login", you: "The sign-in form forgets the email", agent: "Fixed."))
+        engine.conversation("ses_ada", conversation("ada", you: "Sum up the email from the bank", agent: "Ada here: the bank wrote twice."))
+        await workspace.refresh()
+    }
+
+    @Test func aBotIsFoundAsItself() async throws {
+        defer {
+            engine.stop()
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try await startWithABot()
+        let bots = Bots()
+        func shown(_ found: [SidebarSearch.Found]) -> [String] {
+            found.map { if case .bot(let bot) = $0 { "bot " + bot.name } else { "session " + $0.id } }
+        }
+        #expect(shown(SidebarSearch.byName("ada", in: workspace, bots: bots)) == ["bot Ada"], "by its name")
+        #expect(shown(SidebarSearch.byName("digest", in: workspace, bots: bots)) == ["bot Ada"], "by its conversation's title")
+        #expect(shown(SidebarSearch.byName("log", in: workspace, bots: bots)) == ["session ses_login"])
+        let said = SidebarSearch.inConversations(await workspace.searchConversations("email"), besides: [], in: workspace, bots: bots)
+        #expect(shown(said.map(\.found)) == ["bot Ada", "session ses_login"], "by what was said in it, the latest first")
+        #expect(said.first?.snippet.contains("email from the bank") == true, "with the words found")
+        // Found by its name and by what was said to it: once.
+        let named = SidebarSearch.byName("Ada", in: workspace, bots: bots)
+        let ada = await workspace.searchConversations("Ada")
+        #expect(ada.map(\.session.id) == ["ses_ada"], "it's in what was said too")
+        let alsoSaid = SidebarSearch.inConversations(ada, besides: named, in: workspace, bots: bots)
+        #expect(shown(named) + shown(alsoSaid.map(\.found)) == ["bot Ada"])
     }
 }
