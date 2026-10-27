@@ -162,17 +162,21 @@ public enum CommandWords {
         var quote: Character?
         var hasWord = false
         var escaped = false
+        // Whether a word had begun before a backslash (one ending a line begins none).
+        var hadWord = false
         for character in line {
             if escaped {
                 // A backslash at the end of a line carries it on to the next, as in a shell.
                 if character.isNewline {
                     escaped = false
+                    hasWord = hadWord
                     continue
                 }
                 if quote == "\"", !"\"\\$`".contains(character) { current.append("\\") }
                 current.append(character)
                 escaped = false
             } else if character == "\\", quote != "'" {
+                hadWord = hasWord
                 escaped = true
                 hasWord = true
             } else if let open = quote {

@@ -474,6 +474,8 @@ private struct RuleRow: View {
     /// For a new one: save it now, if it can be.
     var commit: () -> Void = {}
     @State private var resource = ""
+    @Environment(\.settingsBox) private var box
+    @Environment(\.chooseBoxFolder) private var chooseBoxFolder
     @FocusState private var isFocused: Bool
     /// You've been in its pattern and left it: only then does an empty new one say it needs one
     /// (not while the cursor is on its way there).
