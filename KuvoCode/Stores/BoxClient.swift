@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -38,14 +39,8 @@ struct BoxClient: Sendable {
     /// box said (`BoxRefusal`: not there, can't be read, too big).
     /// `max`: refused (413) over it, for what's only shown up to a size.
     func file(_ path: String, max: Int? = nil) async throws -> Data {
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&+=?#")
-        // Its path as written, byte for byte (a file URL would spell "ş" as "s" and a mark, which a
-        // Linux machine's disk takes for another name), percent-encoded once in the URI and again
-        // as the query's value.
-        let uri = "file://" + (path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)
-        let query = "uri=" + (uri.addingPercentEncoding(withAllowedCharacters: allowed) ?? uri) + (max.map { "&max=\($0)" } ?? "")
-        let (status, data) = try await send("GET", "kuvo/file?" + query)
+        // Its path as written, byte for byte, as the phone names it too (`FileAddresses`).
+        let (status, data) = try await send("GET", FileAddresses.route(path, max: max))
         guard status == 200 else { throw BoxRefusal(status: status, data: data) }
         return data
     }
