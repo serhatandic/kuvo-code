@@ -235,6 +235,37 @@ describe("a bot's folder", () => {
     }
   })
 
+  test("a picture a command made and removed in the same turn keeps what it was, then its deletion", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    try {
+      await hear([{ type: "session.execution.started", data: { sessionID: "ses_bot_ada" } }, { type: "session.inbox.delivered", data: { sessionID: "ses_bot_ada", inboxID: "msg_1" } }])
+      const picture = join(folder, "workspace", "checker.png")
+      writeFileSync(picture, "PNG checker")
+      folders.changed(picture)
+      folders.flush()
+      unlinkSync(picture)
+      folders.changed(picture)
+      await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+      const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(picture)}`)
+      expect(value.versions.map((version: any) => [version.n, version.status, version.kept])).toEqual([[1, "added", true], [2, "deleted", false]])
+      expect((await route("GET", `kuvo/artifacts/${value.id}/versions/1`)).value).toBe("PNG checker")
+    } finally {
+      folders.stop()
+    }
+  })
+
+  test("a file a tool deletes before the record saw it keeps what it was, from the deletion's own change", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const notes = join(folder, "workspace", "notes.md")
+    writeFileSync(notes, "# Notes\nkeep this\n")
+    unlinkSync(notes)
+    await hear(turn("ses_bot_ada", "msg_1", tool("ses_bot_ada", "c1", "apply_patch", { patchText: "*** Delete File" }, { metadata: { files: [{ file: notes, patch: unified("# Notes\nkeep this\n", "").patch, status: "deleted" }] } })))
+    const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(notes)}`)
+    expect(value.versions.map((version: any) => [version.n, version.status, Boolean(version.before)])).toEqual([[0, "added", true], [1, "deleted", false]])
+    expect((await route("GET", `kuvo/artifacts/${value.id}/versions/0`)).value).toBe("# Notes\nkeep this\n")
+  })
+
   test("your edit to its memory, outside any turn, is by no agent and shows what changed since the watch began", async () => {
     const folder = bot("bot_ada", "Likes tea.\n")
     const folders = watched()

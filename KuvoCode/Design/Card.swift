@@ -188,15 +188,27 @@ struct CardActionStyle: ButtonStyle {
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .labelStyle(.iconOnly)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(isHovering ? .primary : .secondary)
-            .frame(width: 26, height: 24)
-            .background(configuration.isPressed ? Pressable.pressedFill : isHovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
-            .contentShape(.rect)
-            .onHover { isHovering = $0 }
-            .clickablePointer()
+        ActionLabel(configuration: configuration, isHovering: $isHovering)
+    }
+
+    /// Dimmed, with no hover or pointer, when it can't be clicked (a version arrow at the end).
+    private struct ActionLabel: View {
+        let configuration: Configuration
+        @Binding var isHovering: Bool
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let hovering = isHovering && isEnabled
+            configuration.label
+                .labelStyle(.iconOnly)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(!isEnabled ? .tertiary : hovering ? .primary : .secondary)
+                .frame(width: 26, height: 24)
+                .background(configuration.isPressed && isEnabled ? Pressable.pressedFill : hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+                .contentShape(.rect)
+                .onHover { isHovering = $0 }
+                .clickablePointer()
+        }
     }
 }
 
