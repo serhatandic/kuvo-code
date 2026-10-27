@@ -359,6 +359,8 @@ private struct FileViewer: View {
         case text(String)
         case image(NSImage)
         case preview
+        /// What a machine's box said of it: gone, too big to show, can't be read.
+        case unavailable(String)
     }
 
     private var isMarkdown: Bool { ["md", "markdown", "mdx"].contains(url.pathExtension.lowercased()) }
@@ -399,6 +401,8 @@ private struct FileViewer: View {
                             .frame(maxWidth: image.size.width, maxHeight: image.size.height)
                             .padding(20)
                     }
+                case .unavailable(let why):
+                    ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
                 case .preview where !url.isFileURL:
                     ContentUnavailableView("No Preview", systemImage: "doc", description: Text("This file can’t be shown here."))
                 case .preview:
@@ -486,7 +490,14 @@ private struct FileViewer: View {
             let type = UTType(filenameExtension: url.pathExtension)
             if !url.isFileURL {
                 // On a machine: pictures and text, from its box; nothing for Quick Look there.
-                guard let machine, let path = RemoteFolder.parse(url)?.path, let data = try? await machine.file(path) else { return .preview }
+                guard let machine, let path = RemoteFolder.parse(url)?.path else { return .preview }
+                // Pictures whole; anything else only as far as it's shown as text.
+                let data: Data
+                do {
+                    data = try await machine.file(path, max: type?.conforms(to: .image) == true ? nil : 2_000_000)
+                } catch {
+                    return .unavailable(error.localizedDescription)
+                }
                 if type?.conforms(to: .image) == true, let image = NSImage(data: data) { return .image(image) }
                 if data.count <= 2_000_000, !data.contains(0), let text = String(data: data, encoding: .utf8) { return .text(text) }
                 return .preview

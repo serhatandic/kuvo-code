@@ -347,6 +347,16 @@ describe("what the agent's browser downloads", () => {
     expect(value.versions.map((version: any) => [version.n, version.status, version.kept])).toEqual([[1, "added", true]])
     expect((await route("GET", `kuvo/artifacts/${id}/versions/1`)).value).toBe("%PDF-1.4 invoice")
     expect((await route("GET", "kuvo/artifacts?bot=bot_ada&kind=download")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["invoice.pdf"])
+    // Its one copy stays, cleared or not.
+    await route("POST", "kuvo/artifacts/storage/clear", {})
+    expect((await route("GET", `kuvo/artifacts/${id}/versions/1`)).value).toBe("%PDF-1.4 invoice")
+    // Downloaded again, the same: there again, and no new version.
+    mkdirSync(downloads, { recursive: true })
+    writeFileSync(invoice, "%PDF-1.4 invoice")
+    const again = (await route("GET", `kuvo/artifacts/${id}`)).value
+    expect(again.gone).toBeNull()
+    await store.change(invoice, { by: { kind: "outside" }, via: "outside" })
+    expect((await route("GET", `kuvo/artifacts/${id}`)).value.versions).toHaveLength(1)
   })
 
   test("for a conversation this computer doesn't have, says so and records nothing", async () => {

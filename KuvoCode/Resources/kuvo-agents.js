@@ -725,19 +725,23 @@ class ArtifactStore {
     return this.artifacts.get(id);
   }
   checkGone(id) {
-    const artifact = this.artifacts.get(id);
-    if (!artifact || artifact.gone)
-      return artifact;
-    try {
-      statSync2(artifact.path);
-    } catch (error) {
-      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR")
+    return this.inTurn([], () => {
+      const artifact = this.artifacts.get(id);
+      if (!artifact || artifact.versions.at(-1)?.status === "deleted")
         return artifact;
-      artifact.gone = stamp(this.now());
+      let there = true;
+      try {
+        statSync2(artifact.path);
+      } catch (error) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
+          there = false;
+      }
+      if (there === !artifact.gone)
+        return artifact;
+      artifact.gone = there ? null : stamp(this.now());
       this.write(artifact);
-      this.told(artifact);
-    }
-    return artifact;
+      return this.told(artifact);
+    });
   }
   at(path) {
     return this.artifacts.get(ArtifactStore.idOf(path));
@@ -805,7 +809,9 @@ class ArtifactStore {
       this.artifacts.set(artifact.id, artifact);
     }
     const latest = artifact.versions.at(-1);
-    if (latest && latest.hash === read.hash && !artifact.gone) {
+    if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      const back = artifact.gone !== null;
+      artifact.gone = null;
       if (made.keep && !latest.kept && read.bytes && !(latest.reason && privateReasons.has(latest.reason))) {
         this.keep(read.hash, read.bytes);
         this.use(read.hash, read.size, 1);
@@ -820,7 +826,7 @@ class ArtifactStore {
         this.write(artifact, latest);
         return this.told(artifact);
       }
-      if (noted) {
+      if (noted || back) {
         this.write(artifact);
         return this.told(artifact);
       }
@@ -1016,7 +1022,7 @@ class ArtifactStore {
     for (const artifact of this.artifacts.values()) {
       if (artifact.pinned || kindsKeptWhole.has(artifact.kind))
         continue;
-      const newest = artifact.gone ? undefined : [...artifact.versions].reverse().find((version) => version.kept);
+      const newest = artifact.versions.at(-1)?.status === "deleted" ? undefined : [...artifact.versions].reverse().find((version) => version.kept);
       for (const version of artifact.versions)
         if (version.kept && version !== newest)
           found.push({ artifact, version });
@@ -13643,7 +13649,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json5(clientArtifact(store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json5(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -18632,4 +18638,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f184ce38d03b649be20b8f1351b93216724afd022971e92fbaac0b4823baa2d5
+// Built from Packages/Box/src/agents aaacba51896c0cbe04c8bddd05b2df1ac2a7a1caf4c03140cf2cd7fe10f52b53

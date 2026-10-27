@@ -199,22 +199,26 @@ export class ArtifactStore {
   }
 
   /**
-   * Whether its file is still there, as it's opened: one taken away with no change seen (a
-   * machine's browser clearing week-old downloads) is marked gone, its versions kept as they were,
-   * so a client opens the record's copy of it rather than a file that isn't there.
+   * Whether its file is still there, as it's opened, after what's being recorded: one taken away
+   * with no change seen (a machine's browser clearing week-old downloads) is marked gone, its
+   * versions and its newest copy kept as they were, so a client opens the record's copy of it; one
+   * back again since isn't gone any more.
    */
-  checkGone(id: string): Artifact | undefined {
-    const artifact = this.artifacts.get(id)
-    if (!artifact || artifact.gone) return artifact
-    try {
-      statSync(artifact.path)
-    } catch (error: any) {
-      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") return artifact
-      artifact.gone = stamp(this.now())
+  checkGone(id: string): Promise<Artifact | undefined> {
+    return this.inTurn([], () => {
+      const artifact = this.artifacts.get(id)
+      if (!artifact || artifact.versions.at(-1)?.status === "deleted") return artifact
+      let there = true
+      try {
+        statSync(artifact.path)
+      } catch (error: any) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") there = false
+      }
+      if (there === !artifact.gone) return artifact
+      artifact.gone = there ? null : stamp(this.now())
       this.write(artifact)
-      this.told(artifact)
-    }
-    return artifact
+      return this.told(artifact)
+    })
   }
 
   at(path: string): Artifact | undefined {
@@ -308,7 +312,10 @@ export class ArtifactStore {
       this.artifacts.set(artifact.id, artifact)
     }
     const latest = artifact.versions.at(-1)
-    if (latest && latest.hash === read.hash && !artifact.gone) {
+    // (Gone but not deleted: taken away unseen, and back as it was.)
+    if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      const back = artifact.gone !== null
+      artifact.gone = null
       // Unchanged: only who touched it, and how; and a copy kept now, if one's needed and allowed.
       if (made.keep && !latest.kept && read.bytes && !(latest.reason && privateReasons.has(latest.reason))) {
         this.keep(read.hash, read.bytes)
@@ -325,7 +332,7 @@ export class ArtifactStore {
         this.write(artifact, latest)
         return this.told(artifact)
       }
-      if (noted) {
+      if (noted || back) {
         this.write(artifact)
         return this.told(artifact)
       }
@@ -536,8 +543,9 @@ export class ArtifactStore {
     const found: { artifact: Artifact; version: Version }[] = []
     for (const artifact of this.artifacts.values()) {
       if (artifact.pinned || kindsKeptWhole.has(artifact.kind)) continue
-      // A deleted file's last copy can go too: it's no file's newest any more.
-      const newest = artifact.gone ? undefined : [...artifact.versions].reverse().find((version) => version.kept)
+      // A deleted file's last copy can go too: it's no file's newest any more. Not one taken away
+      // unseen (a machine's week-old downloads): its copy is how it's opened now.
+      const newest = artifact.versions.at(-1)?.status === "deleted" ? undefined : [...artifact.versions].reverse().find((version) => version.kept)
       for (const version of artifact.versions) if (version.kept && version !== newest) found.push({ artifact, version })
     }
     return found.sort((a, b) => (a.version.at < b.version.at ? -1 : a.version.at > b.version.at ? 1 : 0))

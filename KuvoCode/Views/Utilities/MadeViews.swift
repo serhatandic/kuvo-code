@@ -850,6 +850,8 @@ struct ArtifactDetail: View {
     @State private var restoring: ArtifactVersion?
     @State private var isRestoring = false
     @State private var problem: String?
+    /// A copy on its way to this Mac (Save a Copy).
+    @State private var saving = false
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
 
@@ -971,14 +973,22 @@ struct ArtifactDetail: View {
                         .help("Show in Finder")
                     }
                 }
-                if !onMac, known, let version, kept || (there && version.n == artifact.versions.last?.n) {
+                // A machine's, and this Mac's that's gone from its folder (there's no Finder for it).
+                // The newest with no copy comes from its box, which sends 25 MB at most.
+                let label = onMac ? "Save a Copy…" : "Save a Copy to This Mac…"
+                if known, let version, onMac ? !there && kept : kept || (there && version.n == artifact.versions.last?.n && version.size <= 25 * 1024 * 1024) {
                     Button {
                         saveCopy(artifact, version)
                     } label: {
-                        Label("Save a Copy to This Mac…", systemImage: "square.and.arrow.down")
+                        if saving {
+                            Spinner(size: 14)
+                        } else {
+                            Label(label, systemImage: "square.and.arrow.down")
+                        }
                     }
                     .buttonStyle(CardActionStyle())
-                    .help("Save a Copy to This Mac…")
+                    .disabled(saving)
+                    .help(saving ? "Saving a copy…" : label)
                 }
             }
         }
@@ -999,7 +1009,7 @@ struct ArtifactDetail: View {
         Task {
             do {
                 let data = try await things.bytes(of: artifact.id, version: version.n)
-                let file = try Self.keptCopy(data, name: artifact.name)
+                let file = try Self.keptCopy(data, name: artifact.name, id: artifact.id)
                 close()
                 app.utilities.revealFile(file)
             } catch {
@@ -1008,32 +1018,45 @@ struct ArtifactDetail: View {
         }
     }
 
-    /// A machine's file saved to this Mac, where you choose (Downloads to begin with): the version
-    /// shown as the record keeps it, or, for the newest with no copy kept, the file as it is now.
+    /// A copy saved where you choose (Downloads to begin with): the version shown as the record
+    /// keeps it, or, for a machine's newest with no copy kept, the file as it is now from its box.
+    /// The save panel is a window of its own (the popover may close for it), so a failure says so
+    /// in an alert.
     private func saveCopy(_ artifact: Artifact, _ version: ArtifactVersion) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = artifact.name
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.canCreateDirectories = true
+        let things = things
         Task {
+            guard await panel.begin() == .OK, let url = panel.url else { return }
+            saving = true
+            defer { saving = false }
             do {
                 let data = version.kept
                     ? try await things.bytes(of: artifact.id, version: version.n)
                     : try await things.box.file(artifact.path)
-                let panel = NSSavePanel()
-                panel.nameFieldStringValue = artifact.name
-                panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                panel.canCreateDirectories = true
-                guard await panel.begin() == .OK, let url = panel.url else { return }
                 try data.write(to: url, options: .atomic)
             } catch {
-                problem = error.localizedDescription
+                let alert = NSAlert()
+                alert.messageText = "\(artifact.name) couldn’t be saved"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
             }
         }
     }
 
     /// A version as the record keeps it, as a file in the app's temporary folder for the panel to
-    /// show: the one before goes, so they don't pile up.
-    private static func keptCopy(_ data: Data, name: String) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "Made copies")
-        try? FileManager.default.removeItem(at: folder)
-        let file = folder.appending(path: UUID().uuidString).appending(path: name)
+    /// show, one folder for each thing (the one shown before goes); others' a day old go too, so
+    /// none are left behind for long.
+    private static func keptCopy(_ data: Data, name: String, id: String) throws -> URL {
+        let copies = FileManager.default.temporaryDirectory.appending(path: AppInfo.bundleID).appending(path: "Made copies")
+        let day = Date.now.addingTimeInterval(-86_400)
+        for folder in (try? FileManager.default.contentsOfDirectory(at: copies, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let modified = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if folder.lastPathComponent == id || modified < day { try? FileManager.default.removeItem(at: folder) }
+        }
+        let file = copies.appending(path: id).appending(path: name)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: file)
         return file
