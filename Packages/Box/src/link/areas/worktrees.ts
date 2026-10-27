@@ -370,6 +370,6 @@ export async function* worktreesRoute(context: RouteContext): AsyncGenerator<Ans
     if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
     return yield* json(200, await worktreesWhere(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"), engine, signal));
   }
-  const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
+  const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body) as WorktreesBody | null | undefined, engine, signal);
   return yield* json(status, value);
 }

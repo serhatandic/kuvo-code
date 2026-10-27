@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { promptedFolders } from "../../shared/platform";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 
@@ -47,7 +48,7 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | { mess
 
 /** `POST kuvo/folders {"path"}`: a new folder, in one that's there, as a folder panel's New Folder
  * makes one: `{path}` (`~/` starts at the home folder). */
-export function makeFolder(body: { path?: unknown } | undefined): JSONAnswer<{ path: string } | { message: string }> {
+export function makeFolder(body: Body<"path">): JSONAnswer<{ path: string } | { message: string }> {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
   const home = os.homedir();
   const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
@@ -69,6 +70,6 @@ export async function* foldersRoute(context: RouteContext): AsyncGenerator<Answe
   const { request, json } = context;
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST") return yield* json(405, {});
-  const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body));
+  const { status, value } = method === "GET" ? listFolders(request.path) : makeFolder(parsed(request.body) as Body<"path">);
   return yield* json(status, value);
 }

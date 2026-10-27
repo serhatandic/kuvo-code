@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { readEngineFile } from "../engine/client";
 import { writePrivate } from "../files";
 import { RUN } from "../home";
@@ -25,7 +26,7 @@ export type MacLetterAnswer = LetterReply | { text: null };
 // This Mac in use, or not any more, as its app says (`kuvo/attention`): each of your machines hears
 // it by mail, with what of its own this Mac's notifications showed (`elsewhere`, by its id here), so
 // notices for your phones wait a little there too, and one you saw here doesn't go.
-export function macAttendPeers(body: { elsewhere?: unknown } | null | undefined, given: Pick<Attention, "seconds" | "sessions">): void {
+export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "seconds" | "sessions">): void {
   const host = macLink.host;
   const link = readLink();
   if (!host?.welcomed || !link?.key) return;

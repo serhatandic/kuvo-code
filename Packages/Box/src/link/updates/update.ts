@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { alive, processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Infer } from "../../shared/shape";
@@ -611,7 +612,7 @@ export async function* updateRoute(context: RouteContext): AsyncGenerator<Answer
   const method = request.method.toUpperCase();
   if (method === "GET") return yield* json(200, updateStatus());
   if (method === "POST") {
-    if (parsed(request.body)?.now !== true) return yield* json(400, { message: "Say to update now (now)." });
+    if ((parsed(request.body) as Body<"now">)?.now !== true) return yield* json(400, { message: "Say to update now (now)." });
     if (!UPDATE_KEYS.length) return yield* json(409, { message: "Updates aren't set up for this machine yet." });
     const blocked = updatesBlocked();
     if (blocked) return yield* json(409, { message: blocked });

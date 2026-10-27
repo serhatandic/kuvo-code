@@ -11,6 +11,8 @@ import { freshenBots, settleBot } from "../bots/tell";
 import { followed } from "../follow";
 import { BOTS } from "../home";
 import type { Target } from "../../shared/records";
+import type { BotChange } from "../bots/edit";
+import type { GivenBot } from "../bots/make";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export async function* botTemplatesRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
@@ -25,7 +27,7 @@ export async function* botTemplatesRoute(context: RouteContext): AsyncGenerator<
 // New bots, made here as New Bot makes them on the Mac, which takes them in when it next connects.
 export async function* newBotRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, readEngine, bridge, info, json } = context;
-  const { status, value } = await makeBot(parsed(request.body), readEngine, bridge, info.name, signal);
+  const { status, value } = await makeBot(parsed(request.body) as GivenBot | null | undefined, readEngine, bridge, info.name, signal);
   return yield* json(status, value);
 }
 
@@ -39,7 +41,7 @@ export async function* botRoute(context: RouteContext, oneBot: RegExpMatchArray)
     return yield* json(404, { message: "That bot isn’t there any more." });
   }
   const { status, value } = request.method.toUpperCase() === "PATCH"
-    ? await changeBot(id, parsed(request.body), readEngine, bridge, info.name, signal)
+    ? await changeBot(id, parsed(request.body) as BotChange | null | undefined, readEngine, bridge, info.name, signal)
     : await deleteBot(id, readEngine, bridge, signal);
   return yield* json(status, value);
 }

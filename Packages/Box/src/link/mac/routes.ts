@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DOC_KINDS } from "../../shared/documents";
 import { isObject, parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { macDocsChanged, receiveDocs } from "../documents/exchange";
 import { ownSign, SIGN } from "../documents/format";
 import { digestOf, ownDocs, pruneDocs, takeDoc } from "../documents/work";
@@ -149,7 +150,7 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
   switch (route) {
     case "kuvo/link/config": {
       if (method !== "PUT") return yield* json(405, {});
-      const given = parsed(request.body);
+      const given = parsed(request.body) as Body<"relay" | "phones" | "machines" | "name" | "app" | "features">;
       let relay = null;
       try { relay = given?.relay ? new URL(String(given.relay)) : null; } catch {}
       if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
@@ -188,7 +189,7 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       return yield* followed(macPhones, macLink.phoneFollowers, signal);
     case "kuvo/link/phones/take": {
       if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body);
+      const given = parsed(request.body) as KeptPhones | null | undefined;
       if (!isObject(given) || !Array.isArray(given.phones ?? []) || !Array.isArray(given.removed ?? [])) return yield* json(400, { message: "Send {phones, removed}." });
       updateLink(link => takeMacDocuments(takePhones(link ?? { phones: [] }, given), given.documents));
       macLink.wake?.();
@@ -230,10 +231,11 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
     case "kuvo/link/docs": {
       // Documents a machine gave as it was set up (over SSH): taken as if they'd come by mail.
       if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body);
+      const given = parsed(request.body) as Body<"from" | "docs">;
       const sender = peersOf(readLink()).find(peer => peer.key === given?.from);
-      if (!sender || !isObject(given.docs)) return yield* json(404, { message: "That isn't one of this Mac's machines." });
-      await receiveDocs(sender, given.docs, macLink.host);
+      // (One of its machines is `from`, so there's a body.)
+      if (!sender || !isObject(given!.docs)) return yield* json(404, { message: "That isn't one of this Mac's machines." });
+      await receiveDocs(sender, given!.docs, macLink.host);
       return yield* json(200, {});
     }
     case "kuvo/link/documents": {
@@ -255,7 +257,7 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       // (`peer`, its key), left in the outbox as a machine's tool leaves one: sent now, and each
       // minute until it's there; with `wait`, its answer, for as long as this is asked.
       if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body);
+      const given = parsed(request.body) as Body<"peer" | "from" | "to" | "text" | "wait">;
       const link = readLink();
       const peer = peersOf(link).find(each => each.key === given?.peer);
       const from = typeof given?.from === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(given.from) ? given.from : null;
@@ -291,7 +293,7 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       // What an earlier Kuvo Code kept itself (PhoneLink, before this Mac's box took its peers): its
       // letters on their way, and the letters it had delivered (so one sent again isn't twice).
       if (method !== "POST") return yield* json(405, {});
-      const given = parsed(request.body);
+      const given = parsed(request.body) as Body<"letters" | "seen">;
       if (!isObject(given)) return yield* json(400, { message: "Send {letters, seen}." });
       const now = Date.now();
       try {

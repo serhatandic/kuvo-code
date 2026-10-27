@@ -67,7 +67,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
   const personalities = botPersonalities(kit);
   if ("personality" in given) {
     if (given.personality === null) delete changed.personality;
-    else if (personalities.some(each => each.id === given.personality)) changed.personality = given.personality;
+    else if (personalities.some(each => each.id === given.personality)) changed.personality = given.personality as string;
     else return no(400, `There’s no personality “${given.personality}”.`);
   }
   let job: Job | undefined;

@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import type { Fields } from "../../shared/json";
 import { newID, plainName, stamp } from "../../shared/text";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
@@ -22,24 +23,31 @@ import type { BotDescription } from "./here";
 import type { BotLooks, BotTemplate } from "./kit";
 
 /** A bot to make, as New Bot sends it (`POST kuvo/bots`): its name, and the template, job,
- * personality, project, look and model it's made with, each checked here. */
+ * personality, project, look and model it's made with, each whatever the client sent until it's
+ * checked here. */
 export interface GivenBot {
   name?: unknown;
   /** Where it lives: `mac`, or a machine's name (a Mac's box makes only its own). */
-  machine?: string | null;
-  template?: string | null;
+  machine?: unknown;
+  /** A template's id, or null for none. */
+  template?: unknown;
   /** A shared bot's job (File › Import Bot…): its line and all of it. */
   job?: unknown;
-  personality?: string | null;
-  project?: string | null;
-  look?: BotLook | null;
-  model?: Partial<BotModel> | null;
+  /** A personality's id, or null for the template's. */
+  personality?: unknown;
+  /** One of its projects' folders, or null for its own workspace. */
+  project?: unknown;
+  /** A look (BotLook), or null for the template's or one picked. */
+  look?: unknown;
+  /** A model (BotModel), or null for the template's or the kit's. */
+  model?: unknown;
 }
 
 /** What `makeBot` answers: the bot made and its job for your composer, or why not. */
 export type MadeAnswer = JSONAnswer<MadeBot | { message: string }>;
 
-export const fitsLook = (looks: BotLooks, look: BotLook | null | undefined): look is BotLook => Boolean(look) && looks.colors.includes(look!.color) && looks.shapes.includes(look!.shape) && looks.faces.includes(look!.face);
+// (Its parts read as whatever they are, once it's something, and checked against the kit's.)
+export const fitsLook = (looks: BotLooks, look: unknown): look is BotLook => Boolean(look) && (looks.colors as unknown[]).includes((look as Fields<"color">).color) && (looks.shapes as unknown[]).includes((look as Fields<"shape">).shape) && (looks.faces as unknown[]).includes((look as Fields<"face">).face);
 
 // Why a model of the engine's can't run here: its account isn't signed in here, and the engine
 // would drop a message on it without a word; null when it can (or the engine doesn't say).
@@ -94,7 +102,8 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
 
   const id = newID("bot_");
   const folder = path.join(BOTS, id);
-  const directory = project ?? path.join(folder, "workspace");
+  // (A project is one of its projects' folders, checked above.)
+  const directory = (project as string | undefined) ?? path.join(folder, "workspace");
   const discard = () => fs.rmSync(folder, { recursive: true, force: true });
   let session: { id?: string } | undefined;
   try {
@@ -105,7 +114,7 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
     session = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal);
     if (!session?.id) throw new Error("No conversation was made.");
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
-    const told = botInstructions(kit, name, folder, personality?.instruction, project);
+    const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, signal);
     fs.writeFileSync(path.join(folder, "session"), session.id);
     noteTold(folder, { session: session.id, instructions: toldDigest(told), rules: folder });
@@ -115,7 +124,7 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
     if (kit.zoneinfo && !IS_MAC) fs.writeFileSync(path.join(folder, "zoneinfo"), Buffer.from(kit.zoneinfo, "base64"));
     if (agents) fs.writeFileSync(path.join(folder, "via"), "bridge");
     const now = stamp();
-    const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project } : {}), updated: now } satisfies BotDescription;
+    const described = { created: now, id, job: "", kuvo: DESCRIPTION, look, model, name, ...(personality ? { personality: personality.id } : {}), ...(project ? { project: project as string } : {}), updated: now } satisfies BotDescription;
     fs.writeFileSync(path.join(folder, "bot.json"), JSON.stringify(described, null, 2));
   } catch (error) {
     if (session?.id) await call(target, "DELETE", `/api/session/${encodeURIComponent(session.id)}`, undefined, signal).catch(() => {});

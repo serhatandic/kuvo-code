@@ -2,6 +2,7 @@
 // box").
 
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import type { Config } from "../../shared/routes/settings";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { applySettings } from "./apply";
@@ -25,12 +26,12 @@ export async function* settingsRoute(context: RouteContext): AsyncGenerator<Answ
       const { settings, problem } = readSettings();
       return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings! satisfies Config));
     }
-    if (method === "PATCH") return yield* answered(changeSettings(parsed(request.body)?.changes));
+    if (method === "PATCH") return yield* answered(changeSettings((parsed(request.body) as Body<"changes">)?.changes));
     return yield* json(405, {});
   }
   if (route === "kuvo/config/apply") {
     if (method !== "POST") return yield* json(405, {});
-    const { status, ...answer } = applySettings(parsed(request.body));
+    const { status, ...answer } = applySettings(parsed(request.body) as Body<"changes" | "dry">);
     return yield* json(status, answer);
   }
   if (route === "kuvo/mcp/catalog") {
@@ -42,7 +43,7 @@ export async function* settingsRoute(context: RouteContext): AsyncGenerator<Answ
   // Its integrations' keys, where it keeps them (a machine's files, this Mac's Keychain through
   // its app): a bot's own aren't among them.
   if (route === "kuvo/keys" || route.startsWith("kuvo/keys/")) {
-    const { status, value } = await answerKeys(method, route, parsed(request.body));
+    const { status, value } = await answerKeys(method, route, parsed(request.body) as Body<"value">);
     return yield* json(status, value);
   }
   return yield* json(404, {});

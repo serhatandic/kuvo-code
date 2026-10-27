@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
@@ -14,7 +15,6 @@ import { holdArchived } from "./wakes";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
 import type { Carried } from "../../shared/routes/sessions";
-import type { BotModel } from "../../shared/routes/bots";
 import type { EngineSession } from "../peers/agents";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 
@@ -77,7 +77,7 @@ const promptFiles = (payload: WaitingPayload | undefined): AgentFile[] => (Array
 // Auto), as picking it in the conversation does: a session of theirs with the whole conversation
 // and what was waiting; the engine's goes to Archived, and a bot's conversation becomes the new
 // one. `{status, value}`: 200 `{session}`, the new one.
-export async function carryToAgents(id: string, model: Partial<BotModel> | null | undefined, readEngine: () => Target, agents: Target | null | undefined, signal?: AbortSignal): Promise<CarryAnswer> {
+export async function carryToAgents(id: string, model: unknown, readEngine: () => Target, agents: Target | null | undefined, signal?: AbortSignal): Promise<CarryAnswer> {
   const no = (status: number, message: string): CarryAnswer => ({ status, value: { message } });
   if (!isModel(model) || !runsWithAgents(model)) return no(400, "That isn’t a coding agent’s model.");
   let engine: Target | undefined;
@@ -180,6 +180,6 @@ export async function* carryRoute(context: RouteContext, toAgents: RegExpMatchAr
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   let id: string;
   try { id = decodeURIComponent(toAgents[1]); } catch { return yield* json(404, { message: "That conversation isn’t there any more." }); }
-  const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge(), signal);
+  const { status, value } = await carryToAgents(id, (parsed(request.body) as Body<"model">)?.model, readEngine, bridge(), signal);
   return yield* json(status, value);
 }

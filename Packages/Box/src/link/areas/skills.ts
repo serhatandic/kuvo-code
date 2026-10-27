@@ -349,7 +349,7 @@ async function installSkill(repository: SkillRepository, skill: RepositorySkill)
 }
 
 /** `kuvo/skills…`, `kuvo/skill-trash…` and `kuvo/skill-library…`, for this box's own folder. */
-export async function answerSkills(method: string, requestPath: string, body: SkillsBody | undefined, engine: EngineRecord | null = null): Promise<JSONAnswer> {
+export async function answerSkills(method: string, requestPath: string, body: SkillsBody | null | undefined, engine: EngineRecord | null = null): Promise<JSONAnswer> {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
   if (parts.includes(null)) return { status: 400, value: { message: "That isn’t a path." } };
@@ -464,6 +464,6 @@ export async function* skillsRoute(context: RouteContext): AsyncGenerator<Answer
   const { request, readEngine, json } = context;
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
-  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body) as SkillsBody | null | undefined, engine);
   return yield* json(status, value);
 }

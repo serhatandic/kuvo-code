@@ -7,6 +7,7 @@ import { locked, writePrivate } from "../files";
 import { BOX_KEYS, CONFIG_LOCK } from "../home";
 import { KeysUnavailable } from "../host-interface";
 import { deleteKey, keyNames, keyWork, readKey, STORED_KEY, writeKey } from "../keys";
+import type { Body } from "../../shared/json";
 import type { Key, Keys } from "../../shared/routes/settings";
 import type { JSONAnswer } from "../server/context";
 import { KEY_NAME } from "./config";
@@ -17,7 +18,7 @@ export type KeysAnswer = JSONAnswer<Keys | Key | { message: string } | Record<st
 
 // `kuvo/keys…`: the box's integrations' keys, through its key store (`keyNames`, `readKey`…), a
 // bot's own not among them; where they can't be reached now (this Mac's app not answering), `503`.
-export async function answerKeys(method: string, route: string, body: { value?: unknown } | null | undefined): Promise<KeysAnswer> {
+export async function answerKeys(method: string, route: string, body: Body<"value">): Promise<KeysAnswer> {
   try {
     if (route === "kuvo/keys") return method === "GET" ? { status: 200, value: { keys: (await keyNames()).filter(name => !name.includes("__")) } satisfies Keys } : { status: 405, value: {} };
     const parts = route.split("/");
