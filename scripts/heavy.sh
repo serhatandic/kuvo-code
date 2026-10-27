@@ -17,8 +17,9 @@
 #
 # A job inside one that holds its kind's lock already (a test run its caller started with this
 # helper) runs at once. So does one under the single lock every heavy job took before
-# (kuvo-code-heavy-<uid>.lock); and while a job holds that one, every kind waits for it, so runs
-# started the old way finish first. That lock goes on 2026-10-28.
+# (kuvo-code-heavy-<uid>.lock). Until 2026-10-28 (KUVO_HEAVY_OLD_UNTIL), while other checkouts still
+# start jobs that way, a job also takes that lock as it runs: none of theirs starts beside it, and
+# kinds take turns as they did. From the 29th, kinds run side by side.
 #
 #   scripts/heavy.sh --holds <kind>   whether this runs inside such a job already (exit 0), for
 #                                     a script that takes its turn itself (scripts/test-app.sh)
@@ -73,12 +74,15 @@ fi
 if [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK" ] && held "$LOCK"; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
-    # A job started the old way, under the one lock for every kind: it finishes first (until the
-    # 28th, by when every session takes turns this way).
-    if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261028}" ] && ! lockf -ks -t 0 "$OLD" true; then
-        [ "$WAITS" = 0 ] && cannot_wait "A heavy job started the old way is running."
-        echo "Waiting for a heavy job started the old way to finish…" >&2
-        lockf -k "$OLD" true
+    # Until the 28th, jobs started the old way, under one lock for every kind, still run (other
+    # checkouts' test-app.sh): this one waits for them, and holds that lock too while it runs, so
+    # none starts beside it.
+    if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261028}" ]; then
+        if ! lockf -ks -t 0 "$OLD" true; then
+            [ "$WAITS" = 0 ] && cannot_wait "A heavy job started the old way is running."
+            echo "Waiting for a heavy job started the old way to finish…" >&2
+        fi
+        old_way=1
     fi
 else
     # Inside a job that holds the lock already: on at once.
@@ -103,4 +107,5 @@ while [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; do
     sleep 15
 done
 
+[ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
 exec "$@"
