@@ -190,7 +190,8 @@ enum MachineBox {
     static func route(_ method: String, _ path: String, body: [String: Any]? = nil, on connection: SSHConnection) async throws -> (status: Int, body: Data) {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = body }
-        let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), on: connection)
+        // One that only reads (a search, a list) is let go when nothing waits for it any more.
+        let output = try await lastLine("route", input: try JSONSerialization.data(withJSONObject: request), cancellable: method == "GET", on: connection)
         /// Text as it came, or bytes that aren't text (a picture) in base64.
         struct Routed: Decodable { var status: Int; var body: String?; var bodyBase64: String? }
         guard let routed = try? JSONDecoder().decode(Routed.self, from: Data(output.utf8)) else { throw Failure.refused("The machine didn't answer: \(output.prefix(200))") }
@@ -238,14 +239,14 @@ enum MachineBox {
 
     /// The last line `kuvo-link.js box <arguments>` printed, with whichever engine runtime the
     /// machine has.
-    private static func lastLine(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> String {
+    private static func lastLine(_ arguments: String, input: Data?, cancellable: Bool = false, on connection: SSHConnection) async throws -> String {
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-box-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: file.path, contents: input ?? Data(), attributes: [.posixPermissions: 0o600])
         defer { try? FileManager.default.removeItem(at: file) }
         let output = try await connection.run(RemoteEngineInstaller.script("""
             [ -x "$E" ] || E=$(for d in "$K"/engine/*/; do [ -x "${d}opencode" ] && printf '%s\\n' "${d}opencode"; done | tail -n 1)
             KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" "$K/bin/\(Bridge.fileName)" box \(arguments)
-            """), input: file)
+            """), input: file, cancellable: cancellable)
         return output.split(separator: "\n").last.map(String.init) ?? ""
     }
 }
