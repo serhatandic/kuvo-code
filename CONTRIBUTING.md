@@ -382,6 +382,7 @@ when you're there to answer.
 | `KUVO_DEMO_MACHINE_SETUP_FAILED` | `<machine>`: Settings › Machines as when that machine couldn't be set up for your phones and other computers |
 | `KUVO_DEMO_MACHINE_NOT_PEER` | `<machine>`, or `<machine>\|another`: Settings › Machines as when agents on your other computers can't reach that machine's (its bridge out of date, or another Mac runs its engine) |
 | `KUVO_DEMO_MACHINE_HOME` | `<machine>\|<Mac>`: Settings › Machines shows that machine as run by that Mac, with Make This Mac Its Home… (nothing moves unless you click) |
+| `KUVO_DEMO_MAKE_HOME` | `<machine>`, with `KUVO_DEMO_SETTINGS=machines`: once it's connected, makes this Mac its home, as Make This Mac Its Home… does (to try a move between two demo copies) |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |

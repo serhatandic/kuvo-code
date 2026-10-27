@@ -81,6 +81,12 @@ struct MachinesSettings: View {
                 try? await Task.sleep(for: .seconds(1))
                 showsAdd = true
             }
+            // KUVO_DEMO_MAKE_HOME=<id>: once it's connected, makes this Mac its home, as the button
+            // does once you've said so (to try a move between two demo copies).
+            if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_MAKE_HOME"], let engine = app.machines.engine(id) {
+                while !engine.isReady, !Task.isCancelled { try? await Task.sleep(for: .seconds(1)) }
+                if !Task.isCancelled { makeHome(engine) }
+            }
             if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_REMOVE_MACHINE"] {
                 try? await Task.sleep(for: .seconds(1))
                 removing = app.machines.list.first { $0.id == id }
