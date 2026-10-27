@@ -70,6 +70,14 @@ final class MachineEngine {
     /// Start was pressed here: the next connection starts it if it's stopped, until one does (one
     /// that fails, the machine away, carries it to Try Again), or it's stopped or disconnected.
     var startWanted = false
+    /// Make This Mac Its Home: the next start takes the engine another Mac started there, starting
+    /// it again as this Mac's.
+    var takingHome = false
+    /// Make This Mac Its Home under way: the Mac it's moving from. Kept here, not in Settings, so a
+    /// move the phone asked for shows too, and one goes on with Settings closed.
+    var movingHomeFrom: OtherMac?
+    /// Why the last move asked for in Settings didn't work, until it's been seen.
+    var homeFailure: String?
     /// The box there was set up by a newer Kuvo Code than this app (`BoxVersion`): its engine and
     /// files are left as they are.
     private(set) var boxIsNewer = false
@@ -282,6 +290,10 @@ final class MachineEngine {
     }
 
     /// This Mac, as the engines it starts on machines note it.
+    /// This Mac's name as the launch notes keep it: without braces, quotes or backslashes, which the
+    /// machine's keeper reads the notes past.
+    static var noteName: String { PhoneLink.computerName.filter { !"{}\"\\".contains($0) } }
+
     static let macID: String = {
         let key = "machineClientID"
         if let id = UserDefaults.standard.string(forKey: key) { return id }
@@ -308,6 +320,17 @@ final class MachineEngine {
     private func isAnotherMacs(_ engine: RemoteServer.Engine) -> Bool {
         engine.notes["mac"].map { $0 != Self.macID } ?? false
     }
+
+    /// The engine there is newer than this app's (another Mac's, which this one mustn't put back).
+    var engineIsNewer: Bool {
+        server.map { $0.engine.version.compare(OpenCodeEngine.version, options: .numeric) == .orderedDescending } ?? false
+    }
+
+    /// Another Mac, which runs the engine there: by the name its start noted, where it did.
+    struct OtherMac: Equatable { var name: String? }
+
+    /// The Mac that runs the engine there, when it's another one.
+    var otherMac: OtherMac? { isAnotherMacsEngine ? OtherMac(name: server?.engine.notes["macName"]) : nil }
 
     // COMPAT(0.7 engine-stop): an engine an older Mac started (no `notes.box`). Goes 3 months after 0.8.0.
     /// Started by a Kuvo Code from before boxes kept their own settings (0.7 and before, on this
@@ -452,7 +475,10 @@ final class MachineEngine {
             try check()
             let api = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
             // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
-            if !boxIsNewer, isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+            // Taken from another Mac (Make This Mac Its Home): this Mac's from now on.
+            let takes = takingHome && isAnotherMacs(server.engine)
+            if !boxIsNewer, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+                takingHome = false
                 // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
                 try check()
                 server.disconnect()
@@ -547,7 +573,7 @@ final class MachineEngine {
     }
 
     private func launchEngine(_ launch: Launch, replace: Int? = nil, starting: Bool = false) async throws -> RemoteServer.Engine {
-        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "box": BoxVersion.mine],
+        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": Self.noteName, "box": BoxVersion.mine],
                                       withAgents: launch.agents != nil, replace: replace, start: starting)
     }
 

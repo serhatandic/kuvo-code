@@ -646,6 +646,21 @@ test("kuvo/info says when the engine running now came up, which a restart change
   fs.rmSync(record);
 });
 
+test("kuvo/info names the Mac that runs the engine, so another Mac or a phone can say so", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const record = path.join(home, "run", "engine.json");
+  const engine = { pid: 4242, port: 1, password: "p", version: "2.0.32", notes: { mac: "mac-studio-id", macName: "Studio" } };
+  fs.writeFileSync(record, JSON.stringify(engine));
+  const read = () => JSON.parse(fs.readFileSync(record, "utf8"));
+  assert.deepEqual((await answer(link.engineHandler(read), "GET", "kuvo/info")).json.home, { mac: "mac-studio-id", name: "Studio" });
+  // Started by a Mac from before names were noted: its id alone.
+  fs.writeFileSync(record, JSON.stringify({ ...engine, notes: { mac: "mac-old-id" } }));
+  assert.deepEqual((await answer(link.engineHandler(read), "GET", "kuvo/info")).json.home, { mac: "mac-old-id" });
+  // No engine, or one no Mac started: no home said.
+  fs.rmSync(record);
+  assert.equal((await answer(link.engineHandler(() => { throw new Error("none"); }), "GET", "kuvo/info")).json.home, undefined);
+});
+
 test("plan accounts: listed, signed in to and switched from a phone", async t => {
   const engine = await fakeEngine();
   t.after(engine.close);
