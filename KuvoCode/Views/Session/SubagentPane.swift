@@ -212,7 +212,7 @@ private struct SubagentConversation: View {
                 .environment(\.isSubagentConversation, true)
                 .environment(\.isOffline, isOffline)
                 .frame(maxHeight: .infinity)
-                .safeAreaBar(edge: .bottom, spacing: 0) {
+                .conversationBar {
                     VStack(spacing: 10) {
                         if model.waitsForYou {
                             Label("It's asking you something in the conversation it works for.", systemImage: "hand.raised")
