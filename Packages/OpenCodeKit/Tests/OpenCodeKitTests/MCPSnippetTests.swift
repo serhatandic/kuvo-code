@@ -52,6 +52,29 @@ struct MCPSnippetTests {
         #expect(MCPSnippet.parse(#"claude mcp add --transport sse asana https://mcp.asana.com/sse -H "Authorization: Bearer t""#)?.headers == ["Authorization": "Bearer t"])
     }
 
+    @Test func claudeCodesLinesAsREADMEsWriteThem() {
+        // Carried on over lines with a backslash.
+        #expect(MCPSnippet.parse("claude mcp add --transport http \\\n  notion https://mcp.notion.com/mcp") == MCPSnippet(name: "notion", url: "https://mcp.notion.com/mcp"))
+        // Options written with =, several keys after one -e, and one left empty to fill in.
+        #expect(MCPSnippet.parse("claude mcp add --scope=user -e A=1 B=2 KEY= weather -- uvx weather-mcp")
+            == MCPSnippet(name: "weather", command: ["uvx", "weather-mcp"], environment: ["A": "1", "B": "2", "KEY": ""]))
+        // add-json: the entry, named.
+        #expect(MCPSnippet.parse(#"claude mcp add-json -s user github '{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-github"]}'"#)
+            == MCPSnippet(name: "github", command: ["npx", "-y", "@modelcontextprotocol/server-github"]))
+        #expect(MCPSnippet.parse("claude mcp add-from-claude-desktop") == nil)
+    }
+
+    @Test func numbersAndSwitchesAreKeptAsWritten() {
+        #expect(MCPSnippet.parse(#"{"api": {"command": "node", "args": ["server.js", "--port", 8080], "env": {"PORT": 8080, "DEBUG": true}}}"#)
+            == MCPSnippet(name: "api", command: ["node", "server.js", "--port", "8080"], environment: ["PORT": "8080", "DEBUG": "true"]))
+    }
+
+    @Test func severalServersAreAllFoundThoughNoneIsChosen() {
+        let pasted = #"{"mcpServers": {"b": {"command": "y"}, "a": {"command": "x"}}}"#
+        #expect(MCPSnippet.parse(pasted) == nil)
+        #expect(MCPSnippet.all(pasted).map(\.name) == ["a", "b"])
+    }
+
     @Test func whatIsntASnippetStaysAsTyped() {
         #expect(MCPSnippet.parse("npx -y @acme/server") == nil)
         #expect(MCPSnippet.parse("{ not json") == nil)

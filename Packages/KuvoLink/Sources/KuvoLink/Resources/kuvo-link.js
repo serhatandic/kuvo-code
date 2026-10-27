@@ -8375,7 +8375,7 @@ import fs41 from "node:fs";
 import path41 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.82";
+var BRIDGE_VERSION = "0.9.83";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -8566,6 +8566,8 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
       return false;
     }
   };
+  if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name))
+    return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
     const file = name.startsWith("~/") ? path43.join(os8.homedir(), name.slice(2)) : name;
     return { status: 200, value: { name, path: path43.isAbsolute(file) && runnable(file) ? file : null } };
@@ -8600,14 +8602,21 @@ async function providerModels(body, signal) {
   }
   if (body?.api === "anthropic")
     headers["anthropic-version"] ??= "2023-06-01";
-  const address = `${base.href.replace(/\/+$/, "")}/models`;
+  const address = new URL(base.href);
+  address.pathname = `${address.pathname.replace(/\/+$/, "")}/models`;
+  if (body?.api === "anthropic" && !address.searchParams.has("limit"))
+    address.searchParams.set("limit", "1000");
   const deadline = AbortSignal.timeout(1e4);
   let answered;
   try {
-    answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
+    answered = await fetch(address, { headers, redirect: "manual", signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
   } catch (error) {
     const timedOut = error?.name === "TimeoutError";
     return { status: 200, value: { reached: false, message: timedOut ? "It didn't answer in time." : "Nothing answers at this address." } };
+  }
+  if (answered.status >= 300 && answered.status < 400) {
+    const to = answered.headers.get("location");
+    return { status: 200, value: { reached: false, message: to ? `It sends its list of models to ${new URL(to, address).host}. Use that address instead.` : `It answered ${answered.status} for its list of models.` } };
   }
   if (answered.status === 401 || answered.status === 403)
     return { status: 200, value: { reached: true, needsKey: true } };

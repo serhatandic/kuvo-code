@@ -25,8 +25,9 @@ export const PLUGIN_SEARCH = object({
   "missing?": string,
 });
 
-/** A program an MCP server's command names, and where this box runs it from (null: it hasn't it). */
-export const PROGRAM_FOUND = object({ name: string, path: nullable(string) });
+/** A program an MCP server's command names, and where this box runs it from (null: it hasn't it,
+ * or, `unknown`, it can't tell from here). */
+export const PROGRAM_FOUND = object({ name: string, path: nullable(string), "unknown?": bool });
 
 /** A provider of your own's models, as it lists them to this box: `reached` and the models, or
  * `needsKey` when it asks for its key first; not reached, what's wrong. */

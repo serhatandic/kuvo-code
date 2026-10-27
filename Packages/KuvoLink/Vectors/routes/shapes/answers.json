@@ -4055,7 +4055,8 @@
         "string",
         "null"
        ]
-      }
+      },
+      "unknown?": "bool"
      }
     }
    }

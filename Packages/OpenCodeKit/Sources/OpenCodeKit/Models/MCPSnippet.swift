@@ -25,32 +25,50 @@ public struct MCPSnippet: Equatable, Sendable {
     }
 
     /// The server `text` sets up; nil for anything else (a command line typed as it is, say), or
-    /// a snippet with several servers.
+    /// a snippet with several servers (`all` has them).
     public static func parse(_ text: String) -> MCPSnippet? {
+        let found = all(text)
+        return found.count == 1 ? found[0] : nil
+    }
+
+    /// Every server `text` sets up, in the order it names them; none for anything else.
+    public static func all(_ text: String) -> [MCPSnippet] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("claude mcp add") { return claudeCode(trimmed) }
-        guard let first = trimmed.first, first == "{" || first == "\"" else { return nil }
-        // `"name": { … }` alone, as READMEs often show one entry: an object of its own.
-        let wrapped = first == "\"" ? "{\(trimmed.hasSuffix(",") ? String(trimmed.dropLast()) : trimmed)}" : trimmed
-        guard let data = wrapped.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed]) as? [String: Any] else { return nil }
+        if trimmed.hasPrefix("claude mcp add-json ") { return claudeCodeJSON(trimmed).map { [$0] } ?? [] }
+        if trimmed.hasPrefix("claude mcp add ") { return claudeCode(trimmed).map { [$0] } ?? [] }
+        guard let object = jsonObject(trimmed) else { return [] }
         // The servers a settings file lists, under the key each app uses.
         for key in ["mcpServers", "servers", "mcp", "context_servers"] {
             if let servers = object[key] as? [String: Any] {
-                guard servers.count == 1, let (name, entry) = servers.first, let server = entry as? [String: Any] else { return nil }
-                return Self.server(server, name: name)
+                return servers.keys.sorted().compactMap { name in (servers[name] as? [String: Any]).flatMap { Self.server($0, name: name) } }
             }
         }
-        if let server = Self.server(object, name: nil) { return server }
-        // One named entry: `{"github": { … }}`.
-        guard object.count == 1, let (name, entry) = object.first, let server = entry as? [String: Any] else { return nil }
-        return Self.server(server, name: name)
+        if let server = Self.server(object, name: nil) { return [server] }
+        // Named entries: `{"github": { … }}`.
+        return object.keys.sorted().compactMap { name in (object[name] as? [String: Any]).flatMap { Self.server($0, name: name) } }
+    }
+
+    /// A JSON object, with comments and trailing commas; `"name": { … }` alone, as READMEs often
+    /// show one entry, as an object of its own.
+    private static func jsonObject(_ text: String) -> [String: Any]? {
+        guard let first = text.first, first == "{" || first == "\"" else { return nil }
+        let wrapped = first == "\"" ? "{\(text.hasSuffix(",") ? String(text.dropLast()) : text)}" : text
+        guard let data = wrapped.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed]) as? [String: Any]
+    }
+
+    /// A JSON value as the settings write it: a string as it is, a number or true or false as
+    /// written (`"PORT": 8080`); nil for anything else.
+    private static func text(_ value: Any) -> String? {
+        if let string = value as? String { return string }
+        guard let number = value as? NSNumber else { return nil }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() ? (number.boolValue ? "true" : "false") : number.stringValue
     }
 
     /// One server's entry: a command (a word and its `args`, or opencode's list of words) or a
     /// URL (`url`, or Windsurf's `serverUrl`).
     private static func server(_ entry: [String: Any], name: String?) -> MCPSnippet? {
-        let strings = { (value: Any?) -> [String: String] in (value as? [String: Any])?.compactMapValues { $0 as? String } ?? [:] }
+        let strings = { (value: Any?) -> [String: String] in (value as? [String: Any])?.compactMapValues(text) ?? [:] }
         if let url = (entry["url"] ?? entry["serverUrl"]) as? String, !url.isEmpty {
             return MCPSnippet(name: name, url: url, headers: strings(entry["headers"]))
         }
@@ -58,7 +76,7 @@ public struct MCPSnippet: Equatable, Sendable {
         if let words = entry["command"] as? [String] {
             command = words
         } else if let word = entry["command"] as? String, !word.isEmpty {
-            command = [word] + ((entry["args"] as? [Any])?.compactMap { $0 as? String } ?? [])
+            command = [word] + ((entry["args"] as? [Any])?.compactMap(text) ?? [])
         } else {
             return nil
         }
@@ -67,11 +85,25 @@ public struct MCPSnippet: Equatable, Sendable {
         return MCPSnippet(name: name, command: command, environment: strings(entry["env"] ?? entry["environment"]))
     }
 
+    /// `claude mcp add-json [options] <name> '<json>'`: one server's entry, named.
+    private static func claudeCodeJSON(_ line: String) -> MCPSnippet? {
+        var words = Array(CommandWords.split(line).dropFirst(3))
+        while let first = words.first, first.hasPrefix("-") {
+            words.removeFirst(first.contains("=") || first == "--client-secret" ? 1 : min(2, words.count))
+        }
+        guard words.count >= 2, let entry = jsonObject(words[1]) else { return nil }
+        return server(entry, name: words[0])
+    }
+
     /// `claude mcp add [options] <name> -- <command…>`, or `claude mcp add --transport http
     /// <name> <url>`: its name, environment (`-e KEY=value`), headers (`-H "Key: value"`) and
     /// what it runs or reaches.
     private static func claudeCode(_ line: String) -> MCPSnippet? {
-        let words = Array(CommandWords.split(line).dropFirst(3))
+        // `--env=K=v` as `--env K=v`.
+        let words = CommandWords.split(line).dropFirst(3).flatMap { word -> [String] in
+            guard word.hasPrefix("--"), let equals = word.firstIndex(of: "=") else { return [word] }
+            return [String(word[..<equals]), String(word[word.index(after: equals)...])]
+        }
         var snippet = MCPSnippet()
         var remote = false
         var rest: [String] = []
@@ -85,8 +117,12 @@ public struct MCPSnippet: Equatable, Sendable {
             let value = index + 1 < words.count ? words[index + 1] : nil
             switch word {
             case "-e", "--env":
-                if let pair = value?.split(separator: "=", maxSplits: 1), pair.count == 2 { snippet.environment[String(pair[0])] = String(pair[1]) }
-                index += 1
+                // One or more `KEY=value`s (an empty value too).
+                while index + 1 < words.count, let equals = words[index + 1].firstIndex(of: "="), equals != words[index + 1].startIndex {
+                    let pair = words[index + 1]
+                    snippet.environment[String(pair[..<equals])] = String(pair[pair.index(after: equals)...])
+                    index += 1
+                }
             case "-H", "--header":
                 if let pair = value?.split(separator: ":", maxSplits: 1), pair.count == 2 {
                     snippet.headers[String(pair[0]).trimmingCharacters(in: .whitespaces)] = String(pair[1]).trimmingCharacters(in: .whitespaces)
@@ -128,6 +164,11 @@ public enum CommandWords {
         var escaped = false
         for character in line {
             if escaped {
+                // A backslash at the end of a line carries it on to the next, as in a shell.
+                if character.isNewline {
+                    escaped = false
+                    continue
+                }
                 if quote == "\"", !"\"\\$`".contains(character) { current.append("\\") }
                 current.append(character)
                 escaped = false

@@ -356,8 +356,16 @@ private struct ServerEditor: View {
                     .onChange(of: newName) { takeNamePaste() }
             }
         } footer: {
-            if pasted != nil, newID.isEmpty {
+            let several = MCPSnippet.all(newName)
+            if several.count > 1 {
+                Text("This sets up \(several.count) servers (\(several.compactMap(\.name).joined(separator: ", "))). Paste one server’s part at a time.")
+                    .foregroundStyle(.secondary)
+            } else if let pasted, newID.isEmpty {
                 Text("Name it to add it with the setup you pasted.").foregroundStyle(.secondary)
+            } else if let pasted, problem == nil {
+                // What it'll run or reach, to read before adding it.
+                Text(pasted.url.map { "Add it to reach \($0)." } ?? "Add it to run \(Self.commandLine(.array(pasted.command.map(JSONValue.string))))" + (pasted.environment.isEmpty ? "." : ", with \(pasted.environment.count.counting("key")) to fill in."))
+                    .foregroundStyle(.secondary)
             } else if let problem {
                 Text(problem).foregroundStyle(.red)
             } else if !newID.isEmpty, newID != newName.trimmingCharacters(in: .whitespaces) {
@@ -582,13 +590,12 @@ private struct ServerEditor: View {
     /// "this Mac", or the machine's name.
     private var computer: String { box.machine == nil ? "this Mac" : app.name(of: box) }
 
-    /// A server's setup pasted into its name: its name taken, and the rest kept to write once
-    /// it's added (at once, when the name it gives can be used).
+    /// A server's setup pasted into its name: its name taken, and the rest kept to write once you
+    /// add it (never before: what it runs is said under the name first).
     private func takeNamePaste() {
         guard let snippet = MCPSnippet.parse(newName) else { return }
         pasted = snippet
         newName = snippet.name ?? ""
-        if !newID.isEmpty, problem == nil { add() }
     }
 
     /// A server's setup pasted into its command: what it runs or reaches, and its keys' names,
@@ -602,19 +609,28 @@ private struct ServerEditor: View {
         tookPaste = true
     }
 
-    /// `snippet` as this server's settings: running its command, or reaching its URL, turned on.
+    /// `snippet` as this server's settings: running its command, or reaching its URL. What it
+    /// doesn't say stays (a working folder, a sign-in, keys it doesn't name); one that had
+    /// nothing to run yet is turned on, and one turned off stays off.
     private func apply(_ snippet: MCPSnippet, at path: [String]) {
         var settings = config.value(at: path)?.object ?? [:]
-        for key in MCPSettings.kindFields + ["disabled"] { settings[key] = nil }
+        let wasEmpty = (settings["command"]?.array ?? []).isEmpty && (settings["url"]?.string ?? "").isEmpty
+        let merged = { (key: String, given: [String: String]) -> JSONValue? in
+            let kept = settings[key]?.object ?? [:]
+            return kept.isEmpty && given.isEmpty ? nil : .object(kept.merging(given.mapValues(JSONValue.string)) { $1 })
+        }
         if let url = snippet.url {
+            for key in ["command", "cwd", "environment"] { settings[key] = nil }
             settings["type"] = .string("remote")
             settings["url"] = .string(url)
-            if !snippet.headers.isEmpty { settings["headers"] = .object(snippet.headers.mapValues(JSONValue.string)) }
+            settings["headers"] = merged("headers", snippet.headers)
         } else {
+            for key in ["url", "headers", "oauth"] { settings[key] = nil }
             settings["type"] = .string("local")
             settings["command"] = .array(snippet.command.map(JSONValue.string))
-            if !snippet.environment.isEmpty { settings["environment"] = .object(snippet.environment.mapValues(JSONValue.string)) }
+            settings["environment"] = merged("environment", snippet.environment)
         }
+        if wasEmpty { settings["disabled"] = nil }
         putAside = [:]
         pendingRemote = false
         config.set(.object(settings), at: path)
@@ -623,17 +639,17 @@ private struct ServerEditor: View {
         showAddress(path)
     }
 
-    /// Whether this computer has the command's program, as its box finds it.
+    /// Whether this computer has the command's program, as its box finds it: nothing said while
+    /// it's asked, or for one it can't tell (`./server`, from the working folder).
     private func findProgram() async {
-        guard let word = Self.words(command).first else {
-            program = nil
-            return
-        }
-        struct Found: Decodable { var name: String; var path: String? }
+        // Never the last word's answer under a new one.
+        program = nil
+        guard let word = Self.words(command).first else { return }
+        struct Found: Decodable { var name: String; var path: String?; var unknown: Bool? }
         // A moment after the last key, so each one isn't asked.
         try? await Task.sleep(for: .milliseconds(400))
         guard !Task.isCancelled, let found = try? await app.box(box.machine ?? BoxClient.mac).value(Found.self, "GET", "kuvo/programs?name=\(Workspace.queryValue(word))"),
-              !Task.isCancelled else { return }
+              !Task.isCancelled, found.unknown != true else { return }
         program = (found.name, found.path)
     }
 
@@ -729,19 +745,25 @@ private struct ProgramNote: View {
 
     var body: some View {
         if path != nil {
-            Label("\(name) is on \(computer).", systemImage: "checkmark")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .help(path ?? "")
+            Label {
+                Text("\(name) is on \(computer).")
+            } icon: {
+                Image(systemName: "checkmark").foregroundStyle(.green).accessibilityHidden(true)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .help(path ?? "")
+            .accessibilityElement(children: .combine)
         } else {
             Label {
                 Text("\(name) isn’t on \(computer)" + (Self.source(of: name).map { ". It comes with \($0): install that there first." } ?? ". Install it there first, or use a command it has."))
             } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityHidden(true)
             }
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
         }
     }
 }
@@ -764,6 +786,8 @@ private struct WorkingFolderRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(folder ?? "")
+                    // The path gives way first, at larger text too.
+                    .layoutPriority(-1)
                 Button("Choose…") {
                     guard box.machine == nil else {
                         choosing = true

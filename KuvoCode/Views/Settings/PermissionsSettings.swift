@@ -9,6 +9,8 @@ struct PermissionsSettings: View {
     @Environment(\.settingsBox) private var box
     @Environment(Workspace.self) private var workspace
     @State private var saved: [Saved] = []
+    /// A rule's folder being chosen on a machine: what to do with it.
+    @State private var choosingFolder: ((_ path: String, _ home: String) -> Void)?
 
     /// An approval saved with Always, and the engine that keeps it: this Mac's, or a machine's.
     struct Saved: Identifiable {
@@ -119,6 +121,16 @@ struct PermissionsSettings: View {
         }
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
+        // A machine's folder for a rule, from its own folders.
+        .environment(\.chooseBoxFolder, box.machine == nil ? nil : { done in choosingFolder = done })
+        .settingsDetail(isPresented: Binding(get: { choosingFolder != nil }, set: { if !$0 { choosingFolder = nil } }), title: "Choose a Folder for the Rule") {
+            BoxFolderBrowser(box: box.machine ?? BoxClient.mac, start: nil, primary: "Choose") { path, home in
+                choosingFolder?(path, home)
+                choosingFolder = nil
+            } cancel: {
+                choosingFolder = nil
+            }
+        }
     }
 
     static let policyKinds: [(id: String, title: String)] = [
@@ -257,6 +269,7 @@ struct RulesEditor: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(\.editedConfig) private var edited
+    @Environment(\.chooseBoxFolder) private var chooseBoxFolder
     @Environment(Catalog.self) private var catalog
     /// The computer's skills, by name, for a rule's pattern menu.
     @State private var skills: [String] = []
@@ -340,6 +353,13 @@ struct RulesEditor: View {
         }
     }
 
+    /// What the computer being edited has, as its engine lists it; nil while a machine's isn't
+    /// running (never this Mac's in its place).
+    private var here: Catalog? {
+        guard let machine = box.machine else { return catalog }
+        return app.machines.engine(machine)?.catalog
+    }
+
     /// What a rule for `action` can name, from what this computer has: its subagents, skills,
     /// providers and servers, a folder, or the patterns people use most.
     private func suggestions(for action: String) -> [PatternSuggestion] {
@@ -350,15 +370,15 @@ struct RulesEditor: View {
         case "edit", "read":
             return [.init("Environment files", "*.env"), .init("Keys and certificates", "*.pem"), .init("Lock files", "*.lock")]
         case "external_directory":
-            return [.init("Downloads", "~/Downloads/*"), .init("Temporary files", "/tmp/*")] + (box.machine == nil ? [PatternSuggestion.folder] : [])
+            return [.init("Downloads", "~/Downloads/*"), .init("Temporary files", "/tmp/*")] + (box.machine == nil || chooseBoxFolder != nil ? [PatternSuggestion.folder] : [])
         case "webfetch":
             return [.init("GitHub", "https://github.com/*"), .init("Any http address", "http://*")]
         case "subagent":
-            return catalog.agents.filter { !$0.isPrimary && !$0.hidden }.map { .init($0.name, $0.id) }
+            return (here?.agents ?? []).filter { !$0.isPrimary && !$0.hidden }.map { .init($0.name, $0.id) }
         case "skill":
             return skills.map { .init($0, $0) }
         case "provider.use":
-            return catalog.providers.map { .init($0.name, $0.id) }
+            return (here?.connectedProviders ?? []).map { .init($0.name, $0.id) }
         case "integration.use":
             return servers.map { .init("\($0) (MCP server)", "mcp:\($0)") } + skills.map { .init("\($0) (skill)", "skill:\($0)") }
         case "tool.use":
@@ -488,7 +508,7 @@ private struct RuleRow: View {
                     }
                     .onChange(of: resource) { typed(resource) }
                 if !suggestions.isEmpty {
-                    Menu {
+                    ChoicesMenu(title: "Common Patterns", help: "What this rule’s pattern can be") {
                         ForEach(suggestions) { suggestion in
                             if suggestion.isFolder {
                                 Divider()
@@ -502,14 +522,7 @@ private struct RuleRow: View {
                                 }
                             }
                         }
-                    } label: {
-                        Image(systemName: "chevron.down")
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("What it can be")
-                    .accessibilityLabel("Choose a pattern")
                 }
                 Picker("Effect", selection: Binding(get: { rule.effect }, set: { change(PermissionRule(action: rule.action, resource: pattern, effect: $0)) })) {
                     ForEach(effects, id: \.self) { Text(Self.title(of: $0)).tag($0) }
@@ -557,8 +570,12 @@ private struct RuleRow: View {
         save()
     }
 
-    /// A folder on this Mac, and what's in it.
+    /// A folder on the computer, and what's in it: a machine's in its own folders' browser.
     private func chooseFolder() {
+        if box.machine != nil {
+            chooseBoxFolder? { path, home in pick(BoxPaths.setting(path, home: home) + "/*") }
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false

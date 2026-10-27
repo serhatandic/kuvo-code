@@ -32,14 +32,22 @@ export async function providerModels(body: ProviderAsk | null | undefined, signa
     if (typeof value === "string" && !value.includes("{env:") && !value.includes("{file:") && /^[!-~]+$/.test(name)) headers[name] = value;
   }
   if (body?.api === "anthropic") headers["anthropic-version"] ??= "2023-06-01";
-  const address = `${base.href.replace(/\/+$/, "")}/models`;
+  // `<its path>/models`, with its query kept; Anthropic's list asked for whole (it pages by 20).
+  const address = new URL(base.href);
+  address.pathname = `${address.pathname.replace(/\/+$/, "")}/models`;
+  if (body?.api === "anthropic" && !address.searchParams.has("limit")) address.searchParams.set("limit", "1000");
   const deadline = AbortSignal.timeout(10_000);
   let answered: Response;
   try {
-    answered = await fetch(address, { headers, signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
+    // Never followed elsewhere: its headers are for this address only.
+    answered = await fetch(address, { headers, redirect: "manual", signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
   } catch (error) {
     const timedOut = (error as Error | null)?.name === "TimeoutError";
     return { status: 200, value: { reached: false, message: timedOut ? "It didn't answer in time." : "Nothing answers at this address." } };
+  }
+  if (answered.status >= 300 && answered.status < 400) {
+    const to = answered.headers.get("location");
+    return { status: 200, value: { reached: false, message: to ? `It sends its list of models to ${new URL(to, address).host}. Use that address instead.` : `It answered ${answered.status} for its list of models.` } };
   }
   if (answered.status === 401 || answered.status === 403) return { status: 200, value: { reached: true, needsKey: true } };
   if (!answered.ok) return { status: 200, value: { reached: false, message: `It answered ${answered.status} for its list of models. Check the address, often ending in /v1.` } };

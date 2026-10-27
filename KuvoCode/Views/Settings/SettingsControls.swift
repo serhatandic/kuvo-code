@@ -30,6 +30,9 @@ extension EnvironmentValues {
     /// The settings the controls below edit, when it isn't the engine's file: a draft of
     /// something being made (a new agent).
     @Entry var editedConfig: EngineConfig?
+    /// Shows one of the settings' computer's folders to choose, for a control deep in a page (a
+    /// rule's pattern) on a machine: set by the page that shows the browser. Nil where none can.
+    @Entry var chooseBoxFolder: ((@escaping (_ path: String, _ home: String) -> Void) -> Void)?
 }
 
 /// A text setting, saved when you press Return or leave the field.
@@ -40,8 +43,12 @@ struct ConfigTextField: View {
     /// For a few sentences (a description): its name above it, and the field as tall as what's
     /// written in it, so all of it shows.
     var multiline = false
-    /// What it's often set to, in a menu beside it (a title, and the value it sets).
+    /// What it's often set to, in a menu beside it (a title, and the value it sets), called
+    /// `choicesTitle`; `chose` hears which was picked.
     var choices: [(title: String, value: String)] = []
+    var choicesTitle = "Choices"
+    var choicesHelp = "What it’s often set to"
+    var chose: (String) -> Void = { _ in }
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(\.editedConfig) private var edited
@@ -64,24 +71,18 @@ struct ConfigTextField: View {
             SettingsTextRow(title: title) {
                 HStack(spacing: 4) {
                     text
-                    Menu {
+                    ChoicesMenu(title: choicesTitle, help: choicesHelp) {
                         ForEach(choices, id: \.value) { choice in
                             Button {
                                 field.load(choice.value)
                                 config.set(.string(choice.value), at: path)
+                                chose(choice.value)
                             } label: {
                                 Text(choice.title)
                                 Text(choice.value)
                             }
                         }
-                    } label: {
-                        Image(systemName: "chevron.down")
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("Common choices")
-                    .accessibilityLabel("Choose \(title)")
                 }
             }
         }
@@ -809,5 +810,30 @@ struct SettingsSearchRow: View {
                 .help("Clear")
             }
         }
+    }
+}
+
+/// What a field is often set to, in a menu beside it: its title and the app's chevron, so it
+/// reads as a menu and has room to click.
+struct ChoicesMenu<Items: View>: View {
+    let title: String
+    let help: String
+    @ViewBuilder let items: Items
+
+    var body: some View {
+        Menu {
+            items
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                MenuChevron()
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass)
+        // Its own chevron, not the system's beside it too.
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(help)
     }
 }

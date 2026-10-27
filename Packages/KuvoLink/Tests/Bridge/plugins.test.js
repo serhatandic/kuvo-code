@@ -86,8 +86,11 @@ test("a provider of your own's models, as its service lists them to this box", a
     seen.push(request.headers);
     const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     if (request.url === "/v1/models") return send({ object: "list", data: [{ id: "qwen3:8b" }, { id: "llama3.2" }, { id: "qwen3:8b" }] });
-    if (request.url === "/keyed/models") return send({ error: "no key" }, 401);
+    if (request.url.startsWith("/keyed/models")) return send({ error: "no key" }, 401);
     if (request.url === "/ollama/models") return send({ models: [{ name: "gemma3" }] });
+    if (request.url === "/gateway/models?team=a") return send({ data: [{ id: "gpt-x" }] });
+    if (request.url === "/moved/models") { response.writeHead(302, { location: "https://elsewhere.example/models" }); return response.end(); }
+    if (request.url === "/anthropic/models?limit=1000") return send({ data: [{ id: "claude-a" }], has_more: false });
     send("<html>", 200);
   });
   await new Promise(resolve => service.listen(0, "127.0.0.1", resolve));
@@ -100,6 +103,13 @@ test("a provider of your own's models, as its service lists them to this box", a
     assert.deepEqual((await link.providerModels({ url: `${at}/keyed`, api: "anthropic" })).value, { reached: true, needsKey: true });
     assert.equal(seen.at(-1)["anthropic-version"], "2023-06-01");
     assert.deepEqual((await link.providerModels({ url: `${at}/ollama` })).value.models, ["gemma3"]);
+    // Its query kept after the path; an Anthropic list asked for whole.
+    assert.deepEqual((await link.providerModels({ url: `${at}/gateway?team=a` })).value.models, ["gpt-x"]);
+    assert.deepEqual((await link.providerModels({ url: `${at}/anthropic`, api: "anthropic" })).value.models, ["claude-a"]);
+    // Sent somewhere else: not followed, so its headers never go there.
+    const moved = (await link.providerModels({ url: `${at}/moved`, headers: { "X-Team": "a" } })).value;
+    assert.equal(moved.reached, false);
+    assert.match(moved.message, /elsewhere\.example/);
     const other = (await link.providerModels({ url: `${at}/page` })).value;
     assert.equal(other.reached, false);
     assert.match(other.message, /\/v1/);

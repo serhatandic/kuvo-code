@@ -172,4 +172,8 @@ test("an MCP server's program is found where the engine would run it from, or sa
   // A path, from the home folder too.
   assert.equal(link.findProgram(`kuvo/programs?name=${encodeURIComponent("~/bin/npx")}`, "").value.path, path.join(home, "bin", "npx"));
   assert.equal(link.findProgram("kuvo/programs?name=", PATH).status, 400);
+  // One the engine finds from the server's working folder, or a shell's variable: not known here.
+  for (const name of ["./server", "../bin/run", "$HOME/bin/x", "~other/x"]) {
+    assert.deepEqual(link.findProgram(`kuvo/programs?name=${encodeURIComponent(name)}`, PATH).value, { name, path: null, unknown: true }, name);
+  }
 });
