@@ -172,8 +172,17 @@ public struct RemoteEngineInstaller: Sendable {
     }
 
     /// The folder in the machine's home with everything Kuvo Code keeps there. A copy of the app
-    /// for testing can take another, so its engine there is its own; set before connecting.
-    nonisolated(unsafe) public static var root = ".kuvo-code"
+    /// for testing can take another, so its engine there is its own; set before connecting. Within
+    /// `$scopedRoot.withValue(…)`, that one instead, for those tasks alone.
+    public static var root: String {
+        get { scopedRoot ?? appRoot }
+        set { appRoot = newValue }
+    }
+    nonisolated(unsafe) private static var appRoot = ".kuvo-code"
+
+    /// A folder for some tasks alone (tests against a real machine, beside others that run the
+    /// scripts on this Mac with the app's), which `root` names for them.
+    @TaskLocal public static var scopedRoot: String?
 
     /// The newest engine's runtime there, by version, as a shell expression (a box that updated
     /// itself, or another Mac's, may have only that one).

@@ -153,13 +153,13 @@ struct RemoteEngineTests {
 /// with its keys (it installs the engine in that machine's ~/.kuvo-code-test, apart from the app's):
 ///
 ///     KUVO_TEST_SSH_HOST=my-server swift test --filter LiveRemoteEngineTests
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] != nil), .serialized)
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] != nil), .serialized, OwnMachineFolder())
 struct LiveRemoteEngineTests {
     let connection = SSHConnection(destination: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] ?? "")
 
-    init() {
-        // A folder of its own, so the tests never stop an engine the app runs there.
-        RemoteEngineInstaller.root = ".kuvo-code-test"
+    init() throws {
+        // Never the app's own folder there, whose engine these would stop.
+        try #require(RemoteEngineInstaller.root == ".kuvo-code-test", "the live tests run in a folder of their own")
     }
 
     @Test func runsOnItsOwnAndIsFoundAgain() async throws {
@@ -501,5 +501,15 @@ struct LiveRemoteEngineTests {
 
         try await RemoteServer.stop(on: connection)
         _ = try await connection.run("pkill -f '[/]\\.kuvo-code-test/' || true; rm -rf \"$HOME/.kuvo-code-test\"")
+    }
+}
+
+/// A folder of the live tests' own on the machine, so they never stop an engine the app runs
+/// there: for their tasks alone (the suite's, whose tests run within it), so the tests that run the
+/// scripts on this Mac meanwhile keep the app's.
+struct OwnMachineFolder: SuiteTrait, TestScoping {
+
+    func provideScope(for test: Test, testCase: Test.Case?, performing function: @Sendable () async throws -> Void) async throws {
+        try await RemoteEngineInstaller.$scopedRoot.withValue(".kuvo-code-test") { try await function() }
     }
 }
