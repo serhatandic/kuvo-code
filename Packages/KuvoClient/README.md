@@ -37,6 +37,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `Color(hex:)`: a color written as 0xRRGGBB, and `PlatformColor` (NSColor or UIColor).
 - `CodeColors`: the colors of code everywhere (diffs, files, replies), and Textual's theme of them.
 - `TerminalColors`: a command's output colored as a terminal shows it.
+- `BarFolds`: which bar in the card over a conversation's composer is open once the card is full
+  (three bars or more): the newest change, none while a card asks, one at a time.
 
 ## What belongs here
 

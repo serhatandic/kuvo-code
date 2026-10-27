@@ -127,8 +127,9 @@ extension EnvironmentValues {
     @Entry var isOffline = false
 }
 
-/// Questions and permission requests, stacked on the composer in one glass
-/// container so they grow out of it and melt back in when answered.
+/// What's over the conversation's end: questions and permission requests as solid cards, then
+/// one card holding the bars (a goal, a review, a side question, work out of sight), the messages
+/// waiting, and the composer.
 private struct BottomStack: View {
     @Bindable var model: SessionModel
     @Binding var lastModel: ModelRef?
@@ -137,7 +138,62 @@ private struct BottomStack: View {
     @Environment(AppModel.self) private var app
     @AppStorage(ToolApproval.key) private var defaultApproval = ToolApproval.approveAll
     @Environment(\.takesCardKeys) private var takesCardKeys
-    @Namespace private var glass
+    /// Which bar is open once the card is full (`BarFolds`).
+    @State private var folds = BarFolds<ComposerBar>()
+    /// The waiting messages, open under their line once there are more than two.
+    @State private var queueOpen = false
+
+    /// The bars showing in the card, in its order.
+    private var bars: [ComposerBar] {
+        var bars: [ComposerBar] = []
+        if model.goal != nil { bars.append(.goal) }
+        if let handoff = model.handoff, handoff != model.putAwayHandoff { bars.append(.handoff) }
+        if model.review != nil { bars.append(.review) }
+        if let id = model.shownSideQuestion, model.sideQuestions.contains(where: { $0.id == id }) { bars.append(.sideQuestion) }
+        if !subagentsAtWork.isEmpty { bars.append(.subagents) }
+        if !backgroundJobs.isEmpty { bars.append(.background) }
+        if wakeOwner != nil { bars.append(.wakes) }
+        return bars
+    }
+
+    /// A card over the composer asks you something: it's what needs you, and the bars fold.
+    private var isAsking: Bool {
+        !model.permissions.isEmpty || !forms.isEmpty || !app.browserAsks.asks(for: model.session.id).isEmpty
+    }
+
+    /// Whether a bar is folded: its own way with fewer than three, the card's with more.
+    private func hidden(_ bar: ComposerBar, _ own: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { folds.isHidden(bar, among: bars, asking: isAsking, own: own.wrappedValue) },
+                set: { hidden in
+                    var left = own.wrappedValue
+                    folds.set(bar, hidden: hidden, among: bars, own: &left)
+                    if left != own.wrappedValue { own.wrappedValue = left }
+                })
+    }
+
+    /// What in a bar is worth opening it for: a review that found something, a side question
+    /// answered, a goal that's over or that the box paused for you. A bar that only says it's at
+    /// work isn't, nor a goal you paused yourself.
+    private var news: [ComposerBar: Bool] {
+        [.review: model.review.map { $0.state == .done && !$0.findings.isEmpty } ?? false,
+         .sideQuestion: model.sideQuestions.first { $0.id == model.shownSideQuestion }?.state == .answered,
+         .goal: model.goal.map { goal in
+             goal.state == .met || goal.state == .unmet || (goal.state == .paused && (goal.pausedBy == .error || goal.pausedBy == .stalled))
+         } ?? false]
+    }
+
+    /// Each bar's own way, folded or not, for when the card isn't full.
+    private func own(_ bar: ComposerBar) -> Binding<Bool> {
+        switch bar {
+        case .goal: $model.hidesGoal
+        case .review: $model.hidesReview
+        case .sideQuestion: $model.hidesSideQuestion
+        case .subagents: $model.hidesSubagents
+        case .background: $model.hidesBackgroundJobs
+        case .wakes: $model.hidesWakes
+        case .handoff: .constant(true)
+        }
+    }
 
     /// Commands its agent left running, which the conversation doesn't show as they run: once
     /// they've run a moment (see `Workspace.lastingShellJobs`).
@@ -167,15 +223,15 @@ private struct BottomStack: View {
     }
 
     var body: some View {
-        GlassEffectContainer(spacing: 12) {
+        Group {
             VStack(spacing: 12) {
+                // What asks you something: solid cards over the composer's, apart from it.
                 ForEach(model.permissions) { request in
                     PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory) { decision in
                         model.reply(to: request, decision)
                     }
                     .disabled(offlineMachine != nil)
-                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                    .glassEffectID(request.id, in: glass)
+                    .modifier(ComposerSurface())
                 }
                 ForEach(Array(forms.enumerated()), id: \.element.id) { index, form in
                     QuestionCard(form: form, progress: Binding(get: { model.questionProgress[form.id] ?? QuestionProgress() }, set: { model.questionProgress[form.id] = $0 }),
@@ -185,116 +241,141 @@ private struct BottomStack: View {
                         model.dismiss(form)
                     }
                     .disabled(offlineMachine != nil)
-                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                    .glassEffectID(form.id, in: glass)
+                    .modifier(ComposerSurface())
                 }
                 ForEach(app.browserAsks.asks(for: model.session.id)) { ask in
                     BrowserAskCard(ask: ask)
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                        .glassEffectID(ask.id, in: glass)
+                        .modifier(ComposerSurface())
                 }
                 // What went wrong, over the composer rather than in an alert you must click away.
                 if let failure = model.failure, offlineMachine == nil {
                     FailureBar(text: failure) { model.failure = nil }
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                        .glassEffectID("failure", in: glass)
+                        .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
                 if let engine = offlineMachine {
                     MachineOfflineBar(engine: engine)
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                        .glassEffectID("offline", in: glass)
+                        .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
-                if let goal = model.goal {
-                    GoalBar(goal: goal, isHidden: $model.hidesGoal, isChanging: model.isChangingGoal || offlineMachine != nil) {
-                        model.changeGoal(.pause)
-                    } resume: {
-                        model.changeGoal(.resume)
-                    } stop: {
-                        model.stopGoal()
-                    } done: {
-                        model.changeGoal(.clear)
-                    }
-                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                    .glassEffectID("goal", in: glass)
-                    .transition(.opacity)
-                }
-                KeywordBars(model: model, glass: glass)
-                if !subagentsAtWork.isEmpty {
-                    SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: $model.hidesSubagents)
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                        .glassEffectID("subagents", in: glass)
-                        .transition(.opacity)
-                }
-                if !backgroundJobs.isEmpty {
-                    BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: $model.hidesBackgroundJobs) { job in
-                        Task { await workspace.stopShellJob(job, in: model.id) }
-                    }
-                    .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                    .glassEffectID("background", in: glass)
-                    .transition(.opacity)
-                }
-                if let owner = wakeOwner {
-                    WakeBar(owner: owner, isHidden: $model.hidesWakes)
-                        .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
-                        .glassEffectID("wakes", in: glass)
-                        .transition(.opacity)
-                }
-                // What's waiting, tucked behind the composer's top edge.
-                VStack(spacing: -QueueDock.overlap) {
-                if !model.waiting.isEmpty {
-                    QueueDock(model: model)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                Composer(
-                    session: model.id,
-                    text: $model.draftText,
-                    files: $model.draftFiles,
-                    quotes: $model.draftQuotes,
-                    quoteFocus: model.quoteFocus,
-                    agent: model.agent,
-                    approval: model.approval,
-                    model: model.session.model ?? catalog.startingModel(lastModel),
-                    modelInUse: model.modelInUse,
-                    isRunning: model.isRunning,
-                    hasQueue: !model.waiting.isEmpty,
-                    history: { model.sentMessages },
-                    folders: [model.session.location.directory] + workspace.extraFolders(model.session.location.directory),
-                    commands: commands,
-                    keywords: model.keywords,
-                    focusRequest: model.composerFocus,
-                    isOffline: offlineMachine != nil,
-                    blurRequest: model.composerBlur,
-                    commentCount: model.reviewComments.count,
-                    onDiscardComments: { model.reviewComments = [] },
-                    onSelectAgent: model.selectAgent,
-                    onSelectApproval: { approval in
-                        model.setApproval(approval)
-                        defaultApproval = approval
-                    },
-                    onSelectModel: { ref in
-                        // A coding agent's model (or Auto) in a session on the engine: it carries on with them.
-                        if !OutsideAgents.isAgentSession(model.session), OutsideAgents.runsInBridge(ref.providerID) {
-                            // (A bot's conversation as any: the bot takes the new session.)
-                            Task {
-                                do { try await workspace.moveToAgents(model.id, model: ref) } catch { model.failure = error.localizedDescription }
-                            }
-                        } else {
-                            model.selectModel(ref)
+                // The bars, what's waiting and the composer: one card.
+                VStack(spacing: 0) {
+                    if let goal = model.goal {
+                        GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                            model.changeGoal(.pause)
+                        } resume: {
+                            model.changeGoal(.resume)
+                        } stop: {
+                            model.stopGoal()
+                        } done: {
+                            model.changeGoal(.clear)
                         }
-                        lastModel = ref
-                    },
-                    onSend: { send(queue: false) },
-                    onQueue: { send(queue: true) },
-                    onEditLast: model.editLast,
-                    onStop: model.stop
-                )
-                .glassEffectID("composer", in: glass)
+                        .modifier(CardRow())
+                        .transition(.fold)
+                    }
+                    KeywordBars(model: model, hidden: hidden)
+                    if !subagentsAtWork.isEmpty {
+                        SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
+                            .modifier(CardRow())
+                            .transition(.fold)
+                    }
+                    if !backgroundJobs.isEmpty {
+                        BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
+                            Task { await workspace.stopShellJob(job, in: model.id) }
+                        }
+                        .modifier(CardRow())
+                        .transition(.fold)
+                    }
+                    if let owner = wakeOwner {
+                        WakeBar(owner: owner, isHidden: hidden(.wakes, $model.hidesWakes))
+                            .modifier(CardRow())
+                            .transition(.fold)
+                    }
+                    // What's waiting for the agent.
+                    if !model.waiting.isEmpty {
+                        QueueDock(model: model, inCard: true, isOpen: $queueOpen)
+                            .modifier(CardRow())
+                            .transition(.fold)
+                    }
+                    Composer(
+                        session: model.id,
+                        text: $model.draftText,
+                        files: $model.draftFiles,
+                        quotes: $model.draftQuotes,
+                        quoteFocus: model.quoteFocus,
+                        agent: model.agent,
+                        approval: model.approval,
+                        model: model.session.model ?? catalog.startingModel(lastModel),
+                        modelInUse: model.modelInUse,
+                        isRunning: model.isRunning,
+                        hasQueue: !model.waiting.isEmpty,
+                        history: { model.sentMessages },
+                        folders: [model.session.location.directory] + workspace.extraFolders(model.session.location.directory),
+                        commands: commands,
+                        keywords: model.keywords,
+                        focusRequest: model.composerFocus,
+                        isOffline: offlineMachine != nil,
+                        blurRequest: model.composerBlur,
+                        commentCount: model.reviewComments.count,
+                        onDiscardComments: { model.reviewComments = [] },
+                        onSelectAgent: model.selectAgent,
+                        onSelectApproval: { approval in
+                            model.setApproval(approval)
+                            defaultApproval = approval
+                        },
+                        onSelectModel: { ref in
+                            // A coding agent's model (or Auto) in a session on the engine: it carries on with them.
+                            if !OutsideAgents.isAgentSession(model.session), OutsideAgents.runsInBridge(ref.providerID) {
+                                // (A bot's conversation as any: the bot takes the new session.)
+                                Task {
+                                    do { try await workspace.moveToAgents(model.id, model: ref) } catch { model.failure = error.localizedDescription }
+                                }
+                            } else {
+                                model.selectModel(ref)
+                            }
+                            lastModel = ref
+                        },
+                        onSend: { send(queue: false) },
+                        onQueue: { send(queue: true) },
+                        onEditLast: model.editLast,
+                        onStop: model.stop,
+                    drawsSurface: false
+                    )
                 }
+                .modifier(ComposerSurface())
             }
             .animation(.ui, value: model.permissions.map(\.id))
             .animation(.ui, value: model.forms.map(\.id))
+            .animation(.ui, value: bars)
+            .animation(.ui, value: folds)
+            .animation(.ui, value: isAsking)
+            .animation(.ui, value: model.waiting.count > 2)
+            // The newest change opens, where the card is full; shown again, what has something to see.
+            .onChange(of: bars, initial: true) { old, new in
+                // No longer full: each keeps what the card showed, rather than springing open.
+                if old.count >= BarFolds<ComposerBar>.full, new.count < BarFolds<ComposerBar>.full {
+                    for bar in new { own(bar).wrappedValue = folds.isHidden(bar, among: old, asking: isAsking, own: own(bar).wrappedValue) }
+                }
+                if old == new {
+                    folds.start(new) { news[$0] == true }
+                } else {
+                    folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
+                }
+            }
+            .onChange(of: news) { old, new in
+                if let now = new.first(where: { $0.value && old[$0.key] != true })?.key { folds.changed(now) }
+            }
+            // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
+            .onChange(of: model.shownSideQuestion) { _, shown in
+                if shown != nil, bars.count >= BarFolds<ComposerBar>.full { folds.changed(.sideQuestion) }
+            }
+            .onChange(of: isAsking) { _, asking in
+                if !asking { folds.askingEnded() }
+            }
+            // Two waiting or fewer: the next time there are more, they start on their line.
+            .onChange(of: model.waiting.count > 2) { _, folds in
+                if !folds { queueOpen = false }
+            }
             // A question came: the keyboard goes to it, after the composer takes it as it shows.
             .onChange(of: forms.first?.id, initial: true) { _, id in
                 guard id != nil else { return }
@@ -314,7 +395,15 @@ private struct BottomStack: View {
             .animation(.ui, value: model.handoff == nil || model.handoff == model.putAwayHandoff)
             .animation(.ui, value: app.browserAsks.asks(for: model.session.id).map(\.id))
             // Its side questions, for the bar's menu and the sidebar's.
-            .task(id: model.id) { await workspace.agents(forFolder: model.session.location.directory)?.loadSideQuestions(of: model.id) }
+            .task(id: model.id) {
+                await workspace.agents(forFolder: model.session.location.directory)?.loadSideQuestions(of: model.id)
+                #if DEBUG
+                if let which = ProcessInfo.processInfo.environment["KUVO_DEMO_BARS"], let bridge = model.goalBridge() {
+                    bridge.showDemoBars(which, for: model.id)
+                    model.shownSideQuestion = "btw_demo"
+                }
+                #endif
+            }
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.bottom, 16)

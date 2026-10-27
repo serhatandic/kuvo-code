@@ -213,11 +213,11 @@ private struct SubagentConversation: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
-                                .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                                .modifier(ComposerSurface())
                         }
                         if let failure = model.failure {
                             FailureBar(text: failure) { model.failure = nil }
-                                .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                                .modifier(ComposerSurface())
                         }
                         if isAgentsOwn {
                             // Its agent runs it for the conversation that started it, and takes
@@ -228,7 +228,7 @@ private struct SubagentConversation: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
-                                .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerRadius))
+                                .modifier(ComposerSurface())
                         } else {
                             composer
                         }

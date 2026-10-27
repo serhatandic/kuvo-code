@@ -7,6 +7,10 @@ import SwiftUI
 /// come back to the composer for editing, or be removed. A long queue scrolls.
 struct QueueDock: View {
     let model: SessionModel
+    /// In the card with the bars and the composer: no surface of its own, and more than two
+    /// waiting fold to one line, "3 queued", until it's opened.
+    var inCard = false
+    var isOpen: Binding<Bool> = .constant(true)
     @Environment(\.colorScheme) private var scheme
     @Environment(\.cardIsFocused) private var cardIsFocused
 
@@ -16,10 +20,36 @@ struct QueueDock: View {
     static let overlap: CGFloat = 14
     private static let shape = UnevenRoundedRectangle(topLeadingRadius: Metrics.composerRadius, topTrailingRadius: Metrics.composerRadius)
 
+    /// Folded to its line: in the card, with more than two waiting.
+    static func folds(_ count: Int) -> Bool { count > 2 }
+
     var body: some View {
+        if inCard { list(folding: true) } else { docked }
+    }
+
+    private var docked: some View {
+        list(folding: false)
+            .padding(.horizontal, 6)
+            .padding(.top, 4)
+            .padding(.bottom, Self.overlap + 2)
+            .background(Surface.cardFill(scheme, focused: cardIsFocused), in: Self.shape)
+            .overlay(Self.shape.fill(scheme == .dark ? Color.white.opacity(0.02) : Surface.slate.opacity(0.025)).allowsHitTesting(false))
+            .specularRim(Self.shape)
+            // A step in from the composer's sides, so it reads as behind it.
+            .padding(.horizontal, 16)
+    }
+
+    private func list(folding: Bool) -> some View {
         let items = model.waiting
         let isPaused = model.isQueuePaused && !model.isRunning
-        VStack(alignment: .leading, spacing: 0) {
+        let folds = folding && Self.folds(items.count)
+        return VStack(alignment: .leading, spacing: 0) {
+            if folds {
+                BarLine(mark: AnyView(Image(systemName: "text.line.last.and.arrowtriangle.forward").font(.system(size: 13)).foregroundStyle(.tertiary)),
+                        title: "\(items.count) queued", detail: items.first.map { Text(QueueRow.summary(of: $0)) },
+                        showHelp: "Show the messages waiting", hideHelp: "Fold them to this line",
+                        isHidden: Binding(get: { !isOpen.wrappedValue }, set: { isOpen.wrappedValue = !$0 }))
+            }
             if isPaused {
                 HStack(spacing: 6) {
                     Image(systemName: "pause.circle")
@@ -32,30 +62,29 @@ struct QueueDock: View {
                         .help("Send the waiting messages, one after another")
                 }
                 .font(.system(size: 12, weight: .medium))
-                .padding(.leading, 12)
-                .padding(.trailing, 6)
+                // In the card, its words where the bars' start.
+                .padding(.leading, folding ? 14 : 12)
+                .padding(.trailing, folding ? 14 : 6)
                 .frame(height: 28)
             }
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(items) { item in
-                        QueueRow(item: item, isRunning: model.isRunning, model: model)
-                            .frame(height: Self.rowHeight)
+            if !folds || isOpen.wrappedValue {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(items) { item in
+                            QueueRow(item: item, isRunning: model.isRunning, model: model)
+                                .frame(height: Self.rowHeight)
+                        }
                     }
                 }
+                .frame(height: CGFloat(min(items.count, Self.visibleRows)) * Self.rowHeight)
+                .scrollBounceBehavior(.basedOnSize)
+                // Its rows' words start where the bars' do.
+                .padding(.horizontal, folding ? 8 : 0)
+                .padding(.vertical, folding ? 3 : 0)
+                .transition(.fold)
             }
-            .frame(height: CGFloat(min(items.count, Self.visibleRows)) * Self.rowHeight)
-            .scrollBounceBehavior(.basedOnSize)
-            .animation(.ui, value: items.map(\.id))
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 4)
-        .padding(.bottom, Self.overlap + 2)
-        .background(Surface.cardFill(scheme, focused: cardIsFocused), in: Self.shape)
-        .overlay(Self.shape.fill(scheme == .dark ? Color.white.opacity(0.02) : Surface.slate.opacity(0.025)).allowsHitTesting(false))
-        .specularRim(Self.shape)
-        // A step in from the composer's sides, so it reads as behind it.
-        .padding(.horizontal, 16)
+        .animation(.ui, value: items.map(\.id))
     }
 }
 
@@ -161,8 +190,10 @@ private struct QueueRow: View {
         return styled
     }
 
-    /// The message's first line, or what's attached when there's no text.
-    private var summary: String {
+    private var summary: String { Self.summary(of: item) }
+
+    /// A message's first line, or what's attached when there's no text.
+    static func summary(of item: Transcript.Pending) -> String {
         let (text, comments, paths) = UserBubble.split(item.text)
         if let line = text.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             return String(line)
