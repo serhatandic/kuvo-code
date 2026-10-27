@@ -29,6 +29,8 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @Environment(\.colorScheme) private var scheme
+    /// Its content is covered (`CardContentCovered`): the header doesn't fade it.
+    @State private var isCovered = false
     @Environment(\.windowControlsInset) private var windowControlsInset
     @Environment(\.windowControlsTrailingInset) private var windowControlsTrailingInset
 
@@ -69,8 +71,9 @@ struct Card<Icon: View, Actions: View, Content: View>: View {
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .safeAreaPadding(.top, Metrics.cardHeaderHeight)
                 .overlay(alignment: .top) {
-                    header.background(alignment: .top) { headerFade }
+                    header.background(alignment: .top) { if !isCovered { headerFade } }
                 }
+                .onPreferenceChange(CardContentCovered.self) { isCovered = $0 }
         } else {
             content()
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
@@ -353,4 +356,11 @@ private struct CardClicks: NSViewRepresentable {
             }
         }
     }
+}
+
+/// Something shows over all of a card's content (a widget opened larger): nothing scrolls under
+/// the header then, so it doesn't fade what's under it, the covering view's own top included.
+struct CardContentCovered: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }

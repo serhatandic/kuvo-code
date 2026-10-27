@@ -253,6 +253,8 @@ private struct LargeWidgetHost: ViewModifier {
                         .transition(.opacity.combined(with: .scale(0.985)))
                 }
             }
+            // Over all of the card's content: its header doesn't fade the widget's own.
+            .preference(key: CardContentCovered.self, value: large != nil)
     }
 }
 

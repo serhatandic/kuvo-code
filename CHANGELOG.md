@@ -117,6 +117,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Each machine keeps Kuvo Code up to date by itself: at night, while nothing runs there, a few days after a release, going back to what it had if the new version doesn't start.
 - With a coding agent, Send Now on a message the agent is just being handed starts it next if the agent doesn't take it, rather than leaving it waiting for another nudge.
 - Stop also stops a coding agent that carries on by itself (a command it left running ended) just as its turn ends, rather than letting that go on once the turn's over.
+- A widget opened larger shows its title clearly, rather than faded out like the conversation under a card's header.
 
 ## 0.7.2
 
