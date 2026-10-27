@@ -86,11 +86,16 @@ struct KeywordBars: View {
             .modifier(CardRow())
             .transition(.fold)
         }
-        if let review = model.shownReview {
+        if let review = model.review, let text = model.putAways.text(.review(review.id)) {
+            let item = PutAway.review(review.id)
+            UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
+                .modifier(CardRow())
+                .transition(.fold)
+        } else if let review = model.shownReview {
             ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets) { findings, target in
                 fix(findings, target)
             } putAway: {
-                model.putAwayReviewForNow()
+                model.putAwayReview()
             } cancel: {
                 model.dismissReview()
             } open: { place in
@@ -98,10 +103,6 @@ struct KeywordBars: View {
             }
             .modifier(CardRow())
             .transition(.fold)
-        } else if model.putAwayReview != nil {
-            BarUndoLine(mark: AnyView(Image(systemName: Keyword.review.symbol).font(.system(size: 13))), text: "Review put away") { model.undoPutAwayReview() }
-                .modifier(CardRow())
-                .transition(.fold)
         }
         if let question = shownSideQuestion {
             SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion)) {

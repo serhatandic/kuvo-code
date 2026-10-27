@@ -1,3 +1,4 @@
+import ClientDesign
 import Foundation
 import OpenCodeKit
 import Testing
@@ -149,18 +150,20 @@ import Testing
         #expect(one.contains("No test covers stopping"))
         #expect(!one.contains("The interval is never cleared"))
 
-        // ✕ puts it away at once; Undo brings it back, still on its computer.
-        model.reviewUndoSeconds = 60
-        model.putAwayReviewForNow()
+        // ✕ puts it away at once, its line saying so; Undo brings it back, still on its computer.
+        let item = PutAway.review(review.id)
+        model.putAwayReview()
         #expect(model.shownReview == nil)
-        model.undoPutAwayReview()
+        #expect(model.putAways.text(item) == "Review put away")
+        model.putAways.undo(item)
         #expect(model.shownReview?.id == review.id)
         #expect(try await bridge.api?.reviews().map(\.id) == [review.id])
 
-        // Left to go: gone from its computer too.
-        model.reviewUndoSeconds = 0
-        model.putAwayReviewForNow()
+        // Its moment over: gone from its computer too, and its line with it.
+        model.putAwayReview()
+        model.putAways.expire(item)
         try await until { model.review == nil }
+        #expect(model.putAways.text(item) == nil)
         await model.dismissingReview?.value
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }

@@ -1231,36 +1231,22 @@ final class SessionModel {
         }
     }
 
-    /// A finished review put away with ✕: gone from the card at once, kept a few seconds for its
-    /// Undo, then put away on its computer.
-    private(set) var putAwayReview: Review?
-    @ObservationIgnored private var putAwayTask: Task<Void, Never>?
-    /// How long Undo is offered (a test makes it short).
-    @ObservationIgnored var reviewUndoSeconds = 5.0
-
     /// The review the card shows: not one put away, waiting out its Undo.
     var shownReview: Review? {
-        guard let review, review.id != putAwayReview?.id else { return nil }
+        guard let review, !putAways.isPutAway(.review(review.id)) else { return nil }
         return review
     }
 
-    func putAwayReviewForNow() {
-        guard let review else { return }
-        putAwayReview = review
-        putAwayTask?.cancel()
-        let seconds = reviewUndoSeconds
-        putAwayTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard !Task.isCancelled, let self, self.putAwayReview?.id == review.id else { return }
-            self.putAwayReview = nil
+    /// A finished review put away with ✕: its line says so, with Undo, for a moment; then it's
+    /// put away on its computer too.
+    func putAwayReview() {
+        guard let review, review.state != .reviewing else { return }
+        let item = PutAway.review(review.id)
+        putAways.put(item, text: "Review put away", lingers: true, done: { [weak self] in
             // Only that one: a review asked for since has taken its place on its computer.
-            if self.review?.id == review.id { self.dismissReview() }
-        }
-    }
-
-    func undoPutAwayReview() {
-        putAwayTask?.cancel()
-        putAwayReview = nil
+            if self?.review?.id == review.id { self?.dismissReview() }
+            self?.putAways.gone(item)
+        })
     }
 
     private func keywordUnavailable(_ written: String) {
