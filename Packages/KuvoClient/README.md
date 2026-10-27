@@ -31,6 +31,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `Metrics`, `Animation.ui`, `.fold`, `readableColumn()`: the shared sizes, the app's spring, how
   folds open and close, and the readable column; `formattedCost` and `compactTokens` for a run's
   cost and tokens.
+- `Spinner`: the app's loader, played by Core Animation on each platform's own view.
+- `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `FolderIcon`: a project's folder, open or closed.
 - `Color(hex:)`: a color written as 0xRRGGBB, and `PlatformColor` (NSColor or UIColor).
 - `CodeColors`: the colors of code everywhere (diffs, files, replies), and Textual's theme of them.
