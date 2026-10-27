@@ -34,6 +34,22 @@ struct BoxClient: Sendable {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// A file on this box by its path (`kuvo/file`), as a phone reads one: its bytes, or what the
+    /// box said (`BoxRefusal`: not there, can't be read, too big).
+    /// `max`: refused (413) over it, for what's only shown up to a size.
+    func file(_ path: String, max: Int? = nil) async throws -> Data {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&+=?#")
+        // Its path as written, byte for byte (a file URL would spell "ş" as "s" and a mark, which a
+        // Linux machine's disk takes for another name), percent-encoded once in the URI and again
+        // as the query's value.
+        let uri = "file://" + (path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)
+        let query = "uri=" + (uri.addingPercentEncoding(withAllowedCharacters: allowed) ?? uri) + (max.map { "&max=\($0)" } ?? "")
+        let (status, data) = try await send("GET", "kuvo/file?" + query)
+        guard status == 200 else { throw BoxRefusal(status: status, data: data) }
+        return data
+    }
+
     /// A route that follows something (`kuvo/…/events`): each line it sends, as it comes. It ends
     /// when the box stops sending; one that doesn't stream (a machine's, over SSH) sends its answer
     /// once and ends.

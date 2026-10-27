@@ -66,4 +66,62 @@ import Testing
         try handle.close()
         #expect(try await ask(big.absoluteString, of: box).status == 413)
     }
+
+    /// The Mac's panel reads a machine's file as a phone does, from that computer's box
+    /// (`BoxClient.file`, never its own SSH): any name, and the box's words for one that's gone.
+    @Test func theMacsPanelReadsABoxsFileAsAPhoneDoes() async throws {
+        let box = try await SettingsBox(port: 47_968)
+        defer { box.stop(); try? FileManager.default.removeItem(at: folder) }
+        let engine = URL(string: box.engine.url + "/")!
+        let client = BoxClient(box: "test", transport: LocalBox { request in
+            PhoneLink.respond(to: request, link: nil, engine: engine, password: "test", agents: nil, asking: Data(repeating: 1, count: 32))
+        })
+        let notes = folder.appending(path: "plans & notes #2 100%+=?.md")
+        try Data("# Plans\n".utf8).write(to: notes)
+        #expect(try await client.file(notes.path) == Data("# Plans\n".utf8))
+        do {
+            _ = try await client.file(folder.appending(path: "gone.md").path)
+            Issue.record("A file that's gone came back")
+        } catch let refusal as BoxRefusal {
+            #expect(refusal.status == 404)
+            #expect(refusal.message == "That file isn’t there anymore.")
+        }
+    }
+
+    /// A name with letters like "ş" goes as it's written (one character, not "s" and a mark), which
+    /// a Linux machine's disk needs to find it; and a file bigger than what's shown is refused with
+    /// the box's words, before any of it is sent.
+    @Test func aNameGoesAsWrittenAndOnlyWhatsShownIsSent() async throws {
+        let box = try await SettingsBox(port: 47_968)
+        defer { box.stop(); try? FileManager.default.removeItem(at: folder) }
+        let engine = URL(string: box.engine.url + "/")!
+        let asked = Asked()
+        let client = BoxClient(box: "test", transport: LocalBox { request in
+            asked.add(request.path)
+            return PhoneLink.respond(to: request, link: nil, engine: engine, password: "test", agents: nil, asking: Data(repeating: 1, count: 32))
+        })
+        let name = "\u{015F}eker.md"
+        let sugar = folder.appending(path: name)
+        try Data("sweet\n".utf8).write(to: sugar)
+        #expect(try await client.file(folder.path + "/" + name) == Data("sweet\n".utf8))
+        #expect(asked.paths.last?.contains("%25C5%259Feker.md") == true, "precomposed ş, as UTF-8, percent-encoded twice")
+        let log = folder.appending(path: "long.log")
+        try Data(repeating: UInt8(ascii: "x"), count: 3_000_000).write(to: log)
+        do {
+            _ = try await client.file(log.path, max: 2_000_000)
+            Issue.record("A file over max came whole")
+        } catch let refusal as BoxRefusal {
+            #expect(refusal.status == 413)
+            #expect(refusal.message == "That file is too big to show here.")
+        }
+        #expect(try await client.file(log.path).count == 3_000_000)
+    }
+
+    /// What a test's stand-in transport was asked.
+    nonisolated private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        var paths: [String] { lock.withLock { asked } }
+        func add(_ path: String) { lock.withLock { asked.append(path) } }
+    }
 }

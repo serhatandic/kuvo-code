@@ -359,6 +359,8 @@ private struct FileViewer: View {
         case text(String)
         case image(NSImage)
         case preview
+        /// What a machine's box said of it: gone, too big to show, can't be read.
+        case unavailable(String)
     }
 
     private var isMarkdown: Bool { ["md", "markdown", "mdx"].contains(url.pathExtension.lowercased()) }
@@ -399,6 +401,8 @@ private struct FileViewer: View {
                             .frame(maxWidth: image.size.width, maxHeight: image.size.height)
                             .padding(20)
                     }
+                case .unavailable(let why):
+                    ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
                 case .preview where !url.isFileURL:
                     ContentUnavailableView("No Preview", systemImage: "doc", description: Text("This file can’t be shown here."))
                 case .preview:
@@ -410,7 +414,7 @@ private struct FileViewer: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: "\(url.absoluteString)\n\(app.utilities.fileShown)") {
-            content = await Self.load(url)
+            content = await Self.load(url, from: RemoteFolder.parse(url).map { app.box($0.machine) })
             // Changed on disk (by the agent, say): shown again as it is. A machine's file is read
             // again when it's shown again, which reading it each time would cost a round trip for.
             guard url.isFileURL else { return }
@@ -420,7 +424,7 @@ private struct FileViewer: View {
                 let now = Self.modified(url)
                 if now != seen {
                     seen = now
-                    content = await Self.load(url)
+                    content = await Self.load(url, from: RemoteFolder.parse(url).map { app.box($0.machine) })
                 }
             }
         }
@@ -480,12 +484,20 @@ private struct FileViewer: View {
     }
 
     /// Text up to 2 MB as text, pictures as pictures, the rest for Quick Look.
-    private static func load(_ url: URL) async -> Content {
+    /// `machine`: the box a machine's file is on, which sends it as it does a phone (`kuvo/file`).
+    static func load(_ url: URL, from machine: BoxClient?) async -> Content {
         await Task.detached { () -> Content in
             let type = UTType(filenameExtension: url.pathExtension)
             if !url.isFileURL {
-                // On a machine: pictures and text, read over SSH; nothing for Quick Look there.
-                guard let data = RemoteShell.read(url, limit: 2_000_001) else { return .preview }
+                // On a machine: pictures and text, from its box; nothing for Quick Look there.
+                guard let machine, let path = RemoteFolder.parse(url)?.path else { return .preview }
+                // Pictures whole; anything else only as far as it's shown as text.
+                let data: Data
+                do {
+                    data = try await machine.file(path, max: type?.conforms(to: .image) == true ? nil : 2_000_000)
+                } catch {
+                    return .unavailable(error.localizedDescription)
+                }
                 if type?.conforms(to: .image) == true, let image = NSImage(data: data) { return .image(image) }
                 if data.count <= 2_000_000, !data.contains(0), let text = String(data: data, encoding: .utf8) { return .text(text) }
                 return .preview

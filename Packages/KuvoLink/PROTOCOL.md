@@ -1334,7 +1334,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   it (never a peer), and they have that computer's terminals anyway. It answers `200` with its
   bytes and `content-type` (from its extension; `application/octet-stream` when unknown), `404
   {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for one it can't read,
-  `413 {"message"}` over 25 MB, `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
+  `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
+  show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it (each provider's
   name, plan, brand color, mark as a PNG to tint, notice, whether it's outdated, and its lines as
   UsageKit writes them), whether a refresh is under way and when the last one ended;

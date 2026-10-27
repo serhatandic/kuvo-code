@@ -724,6 +724,25 @@ class ArtifactStore {
   get(id) {
     return this.artifacts.get(id);
   }
+  checkGone(id) {
+    return this.inTurn([], () => {
+      const artifact = this.artifacts.get(id);
+      if (!artifact || artifact.versions.at(-1)?.status === "deleted")
+        return artifact;
+      let there = true;
+      try {
+        statSync2(artifact.path);
+      } catch (error) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
+          there = false;
+      }
+      if (there === !artifact.gone)
+        return artifact;
+      artifact.gone = there ? null : stamp(this.now());
+      this.write(artifact);
+      return this.told(artifact);
+    });
+  }
   at(path) {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
@@ -790,7 +809,9 @@ class ArtifactStore {
       this.artifacts.set(artifact.id, artifact);
     }
     const latest = artifact.versions.at(-1);
-    if (latest && latest.hash === read.hash && !artifact.gone) {
+    if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      const back = artifact.gone !== null;
+      artifact.gone = null;
       if (made.keep && !latest.kept && read.bytes && !(latest.reason && privateReasons.has(latest.reason))) {
         this.keep(read.hash, read.bytes);
         this.use(read.hash, read.size, 1);
@@ -805,7 +826,7 @@ class ArtifactStore {
         this.write(artifact, latest);
         return this.told(artifact);
       }
-      if (noted) {
+      if (noted || back) {
         this.write(artifact);
         return this.told(artifact);
       }
@@ -1001,7 +1022,7 @@ class ArtifactStore {
     for (const artifact of this.artifacts.values()) {
       if (artifact.pinned || kindsKeptWhole.has(artifact.kind))
         continue;
-      const newest = artifact.gone ? undefined : [...artifact.versions].reverse().find((version) => version.kept);
+      const newest = artifact.versions.at(-1)?.status === "deleted" ? undefined : [...artifact.versions].reverse().find((version) => version.kept);
       for (const version of artifact.versions)
         if (version.kept && version !== newest)
           found.push({ artifact, version });
@@ -13644,7 +13665,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json5(clientArtifact(artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json5(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -18633,4 +18654,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1f0929db26ebc0dd896d6ee0b5c0c2d61d6677d5e779e60d33312a53f7641843
+// Built from Packages/Box/src/agents 12ad36fb94566c77fd5f0881df6b1583fc33d71f9f5998a13d04e157a98f078e

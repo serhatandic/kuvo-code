@@ -8237,7 +8237,9 @@ var TYPES = {
 };
 async function* fileAt(requestPath, json) {
   const query = requestPath.includes("?") ? requestPath.slice(requestPath.indexOf("?") + 1) : "";
-  const uri = new URLSearchParams(query).get("uri");
+  const asked = new URLSearchParams(query);
+  const uri = asked.get("uri");
+  const max = Number(asked.get("max") ?? FILE_LIMIT);
   let file;
   try {
     file = uri ? fileURLToPath(uri) : undefined;
@@ -8252,6 +8254,8 @@ async function* fileAt(requestPath, json) {
     return yield* json(404, { message: "That file isn’t there anymore." });
   if (stat.size > FILE_LIMIT)
     return yield* json(413, { message: "That file is too big to open here." });
+  if (Number.isFinite(max) && stat.size > max)
+    return yield* json(413, { message: "That file is too big to show here." });
   const type = TYPES[path39.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
   let handle;
   try {
@@ -8374,7 +8378,7 @@ import fs41 from "node:fs";
 import path41 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.85";
+var BRIDGE_VERSION = "0.9.86";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
