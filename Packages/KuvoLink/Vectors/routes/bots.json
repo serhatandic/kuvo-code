@@ -22,8 +22,7 @@
             "mac": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "machine": "<absent>" } ] } },
             "machine": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "machine": "lab.invalid" } ] } }
           }
-        },
-        { "send": "GET kuvo/bots?memory=1", "expect": { "status": 200, "json": { "bots": [ { "id": "bot_ada", "memoryJob": "<absent>" } ] } } }
+        }
       ]
     },
     {

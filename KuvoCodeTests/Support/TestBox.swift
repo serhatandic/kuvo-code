@@ -70,7 +70,7 @@ final class TestBox {
         link["phones"] = phones.map { ["key": $0.key, "name": $0.name, "added": added.timeIntervalSince1970, "from": "pair", "pairing": $0.pairing] }
         link["removed"] = link["removed"] ?? []
         try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: link).write(to: file)
+        try JSONSerialization.data(withJSONObject: link).write(to: file, options: .atomic)
     }
 
     /// Started again after it stopped (`BoxProcess.startAgain`), at a port of its own.

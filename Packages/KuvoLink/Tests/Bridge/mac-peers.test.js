@@ -204,8 +204,6 @@ const run = file => path.join(machineHome, "run", file);
 const read = file => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } };
 const sending = home => { try { return fs.readdirSync(path.join(home, "run", "outbox", "sending")).filter(name => name.endsWith(".json")); } catch { return []; } };
 
-// A group chat's letter a Kuvo Code of no release kept itself (its SeatRelay), as it wrote it.
-const kept = { kind: "turn", chat: "grp_before", text: "From before." };
 let lab = null;
 
 before(async () => {
@@ -221,8 +219,6 @@ before(async () => {
   });
   assert.equal(result.status, 0, result.stderr);
   lab = JSON.parse(result.stdout.trim().split("\n").at(-1));
-  // What a Kuvo Code of no release kept, there as its box starts: left as it is.
-  write(path.join(macHome, "run", "seat-letters.json"), { seat_before1: { peer: lab.key, seat: Buffer.from(JSON.stringify(kept)).toString("base64"), at: Date.now() } });
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
   link.runMacLink();
   link.runMacPeers();
@@ -320,9 +316,6 @@ test("this Mac's group chats' mail reaches the machine's, and what mustn't be lo
   // no longer on its way.
   await arrived(() => macBridge.seen.sent.includes("seat_turn1"));
   await eventually(() => !sending(macHome).includes("seat_turn1.json"));
-  // A seat's letter kept by a Kuvo Code of no release isn't taken: by now it would have gone too.
-  assert.ok(!labBridge.seen.mail.some(each => each.mail.chat === "grp_before"));
-  assert.ok(fs.existsSync(path.join(macHome, "run", "seat-letters.json")));
 });
 
 test("letters an earlier Kuvo Code had on their way go on from this Mac's box, and those it delivered aren't delivered twice", { timeout: 60_000 }, async t => {

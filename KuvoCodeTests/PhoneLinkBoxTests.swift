@@ -25,17 +25,27 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         UserDefaults.standard.set(true, forKey: "phoneLink")
         UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
-        // The app's copy of your phones, as it last heard them from the box (`paired`): two, one
-        // paired before pairings had an id.
+        // The app's copy of your phones (phone-link.json): none yet, until it hears the box's.
+        try Data(#"{"phones":[],"removed":[],"machines":{}}"#.utf8).write(to: file)
+    }
+
+    /// The phones paired with this Mac, as its box keeps them: two, one paired before pairings had
+    /// an id.
+    private func paired(_ box: SettingsBox) throws {
+        try box.box.paired([(mine.publicBytes.base64URL, "Mine", ""), (lost.publicBytes.base64URL, "Lost", "p-lost")])
+    }
+
+    /// The app's copy as it last heard the box's phones, before this launch.
+    private func copied() throws {
         let phones = [(mine, "Mine", ""), (lost, "Lost", "p-lost")].map {
             #"{"key":"\#($0.0.publicBytes.base64URL)","name":"\#($0.1)","added":700000000,"pairing":"\#($0.2)"}"#
         }
         try Data(#"{"phones":[\#(phones.joined(separator: ","))],"removed":[],"machines":{}}"#.utf8).write(to: file)
     }
 
-    /// The phones paired with this Mac, as its box keeps them: those the app's copy has.
-    private func paired(_ box: SettingsBox) throws {
-        try box.box.paired([(mine.publicBytes.base64URL, "Mine", ""), (lost.publicBytes.base64URL, "Lost", "p-lost")])
+    /// Once the app has the box's phones.
+    private func heard(_ link: PhoneLink) async throws {
+        try await until { link.phones.map(\.name).sorted() == ["Lost", "Mine"] }
     }
 
     private func done(_ box: SettingsBox, _ links: PhoneLink...) {
@@ -153,7 +163,7 @@ import Testing
         let link = try link(on: box)
         defer { done(box, link) }
         try await linked(link)
-        #expect(try await onTheBox(box).phones.map(\.name).sorted() == ["Lost", "Mine"])
+        try await heard(link)
         #expect(link.phones.first { $0.name == "Mine" }?.added == Date(timeIntervalSinceReferenceDate: 700_000_000), "as paired, then")
 
         // Removed in Settings › Phone: the box takes it off, and the app's copy has it gone too.
@@ -173,6 +183,7 @@ import Testing
         let link = try link(on: box, refusing: "kuvo/phones/remove", times: PhoneLink.graceTries)
         defer { done(box, link) }
         try await linked(link)
+        try await heard(link)
         link.remove(try #require(link.phones.first { $0.name == "Lost" }))
         #expect(link.phones.map(\.name) == ["Mine"])
         try await until { link.removalProblem != nil }
@@ -186,7 +197,8 @@ import Testing
 
     /// A phone removed as Kuvo Code starts, before this Mac's box has been told anything: that one
     /// stays out, and the others are all still there.
-    @Test func aPhoneRemovedBeforeTheBoxHasYourPhonesLeavesTheOthers() async throws {
+    @Test func aPhoneRemovedBeforeTheBoxIsReachedLeavesTheOthers() async throws {
+        try copied()
         let box = try await SettingsBox(port: 47_954)
         let link = try link(on: box, starting: false)
         defer { done(box, link) }
@@ -210,7 +222,7 @@ import Testing
         defer { done(box, link) }
         try await linked(link)
         #expect(try await onTheBox(box).phones.map(\.name).sorted() == ["Lost", "Mine"])
-        #expect(link.phones.map(\.name).sorted() == ["Lost", "Mine"])
+        try await heard(link)
         #expect(link.removalProblem == nil)
     }
 

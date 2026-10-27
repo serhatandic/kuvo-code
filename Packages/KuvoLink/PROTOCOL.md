@@ -175,8 +175,7 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   Mac's signing key (from the app, in memory only), takes its machines' and passes them on, and
   mails them on its relay connection, as a machine's bridge does; its peers are the machines its
   app set up (`kuvo/link/peers`, "This Mac's box: the relay"). It takes `peers` only of its own (a
-  copy it lost count of), and `phones` and `personalities` from its machines and itself. (No
-  released Kuvo Code signed documents before the box did, so it has no older counts to take.)
+  copy it lost count of), and `phones` and `personalities` from its machines and itself.
 - **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
   pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
   lets in its own and its Macs' phones, less every pairing removed in any phones document it
@@ -1644,8 +1643,6 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `kuvo/link/phones/take` is gone (bridge 0.9.77): it took the phones and document counts an
-  earlier app kept in `phone-link.json`, and no released Kuvo Code had either.
 - `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
   one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
   key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a
@@ -1676,7 +1673,8 @@ For the app only (anyone else gets `403`):
   machine's setup answer gave of documents (`from`, its key), taken as if by mail; `404` for one
   that isn't one of this Mac's machines.
 - `GET kuvo/link/documents` → `{"own", "held", "views", "left", "have"}`: this Mac's documents as the
-  box keeps them, its own brought up to date first, and its digest.
+  box keeps them, its own brought up to date first, and its digest, for looking at them (the app
+  doesn't read it; the bridge's tests do).
 
 The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
 phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone

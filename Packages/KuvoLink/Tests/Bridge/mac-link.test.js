@@ -380,13 +380,10 @@ test("the app's own notices go out on the box's connection", async () => {
   assert.equal((await ask("POST", "kuvo/attention/notice", { notice: { title: "x" } }, { fromApp: false })).status, 403);
 });
 
-test("the app removes a phone as the Mac; phones from before aren't taken any more; the link's routes are the app's alone", async () => {
+test("the app removes a phone as the Mac; the link's routes are the app's alone", async () => {
   const { it } = await paired();
   assert.ok((await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
   assert.equal((await ask("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] })).status, 200);
-  assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
-  // What an earlier app kept in phone-link.json: no released Kuvo Code had any, so nothing takes it.
-  assert.equal((await ask("POST", "kuvo/link/phones/take", { phones: [{ key: it.public, name: "Old iPhone", pairing: "" }], removed: [] })).status, 404);
   assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
   for (const p of ["kuvo/link/status", "kuvo/link/phones", "kuvo/link/config"]) assert.equal((await ask("GET", p, undefined, { fromApp: false })).status, 403, p);
   assert.equal((await ask("PUT", "kuvo/link/config", { phones: true, machines: false, relay: "https://example.com" })).status, 400);

@@ -148,8 +148,6 @@ test("a bot's job is its record: taken once from its memory, and never again fro
   // From now on its memory is its own: what it writes there isn't its job.
   write(path.join(scout, "MEMORY.md"), "# Scout's memory\n\n## Job\nSomething else entirely.\n");
   assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.find(each => each.name === "Scout").job, "Watches the nightly build");
-  // Asked as a Mac of no released version did (`?memory=1`), it's the same list.
-  assert.equal((await ask(handle, "GET", "kuvo/bots?memory=1")).json.bots.some(each => "memoryJob" in each), false);
 });
 
 test("kuvo/wakes reads a bot's or a session's wake-ups, watches and pause", async () => {
