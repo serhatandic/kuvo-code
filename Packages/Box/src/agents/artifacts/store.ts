@@ -198,6 +198,25 @@ export class ArtifactStore {
     return this.artifacts.get(id)
   }
 
+  /**
+   * Whether its file is still there, as it's opened: one taken away with no change seen (a
+   * machine's browser clearing week-old downloads) is marked gone, its versions kept as they were,
+   * so a client opens the record's copy of it rather than a file that isn't there.
+   */
+  checkGone(id: string): Artifact | undefined {
+    const artifact = this.artifacts.get(id)
+    if (!artifact || artifact.gone) return artifact
+    try {
+      statSync(artifact.path)
+    } catch (error: any) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") return artifact
+      artifact.gone = stamp(this.now())
+      this.write(artifact)
+      this.told(artifact)
+    }
+    return artifact
+  }
+
   at(path: string): Artifact | undefined {
     return this.artifacts.get(ArtifactStore.idOf(path))
   }

@@ -109,7 +109,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
   const artifact = store.get(first)
   if (!artifact) return message(404, "That isn't in this computer's record.")
 
-  if (!second) return method === "GET" ? json(clientArtifact(artifact, store)) : message(405, "Read it with GET.")
+  if (!second) return method === "GET" ? json(clientArtifact(store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.")
 
   if (second === "pin") {
     if (method !== "POST") return message(405, "Pin it with POST.")

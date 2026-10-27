@@ -724,6 +724,21 @@ class ArtifactStore {
   get(id) {
     return this.artifacts.get(id);
   }
+  checkGone(id) {
+    const artifact = this.artifacts.get(id);
+    if (!artifact || artifact.gone)
+      return artifact;
+    try {
+      statSync2(artifact.path);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR")
+        return artifact;
+      artifact.gone = stamp(this.now());
+      this.write(artifact);
+      this.told(artifact);
+    }
+    return artifact;
+  }
   at(path) {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
@@ -13628,7 +13643,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json5(clientArtifact(artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json5(clientArtifact(store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -18617,4 +18632,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f77374cec7773574099e03c5af107fa61edd7b8f8acb6834812f0cc18b1caad3
+// Built from Packages/Box/src/agents f184ce38d03b649be20b8f1351b93216724afd022971e92fbaac0b4823baa2d5

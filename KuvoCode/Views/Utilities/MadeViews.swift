@@ -863,15 +863,6 @@ struct ArtifactDetail: View {
             if let artifact, let version {
                 versionBar(artifact, version)
                     .padding(.bottom, 6)
-                // A machine's file: what's missing here, and why.
-                if things.box.box != BoxClient.mac, artifact.gone == nil {
-                    Label("It’s on \(app.machines.list.first { $0.id == things.box.box }?.name ?? "a machine"), so Finder can’t show it from here.", systemImage: "info.circle")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                }
                 if let restoring { confirm(artifact, restoring) }
                 if let problem {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -956,20 +947,21 @@ struct ArtifactDetail: View {
                 }
                 .buttonStyle(CardActionStyle())
                 .help(artifact.pinned == nil ? "Pin it to the top" : artifact.pinned?.by == "bot" ? "Unpin (its bot marked it final)" : "Unpin")
-                // The file as it is now: in the panel's Files (a machine's, read there over SSH), and
-                // this Mac's in Finder.
+                // The file: in the panel's Files (a machine's from its box), this Mac's in Finder, a
+                // machine's saved to this Mac. One that's gone opens as the record keeps it.
                 let onMac = things.box.box == BoxClient.mac
                 let known = onMac || app.machines.list.contains { $0.id == things.box.box }
-                if artifact.gone == nil, known, !onMac || FileManager.default.fileExists(atPath: artifact.path) {
+                let there = artifact.gone == nil && (!onMac || FileManager.default.fileExists(atPath: artifact.path))
+                let kept = version?.kept == true
+                if known, there || kept {
                     Button {
-                        close()
-                        app.utilities.revealFile(onMac ? URL(fileURLWithPath: artifact.path) : RemoteFolder.url(RemoteFolder.folder(artifact.path, on: things.box.box)))
+                        openInPanel(artifact, version, there: there, onMac: onMac)
                     } label: {
                         Label("Open in the Side Panel", systemImage: "sidebar.right")
                     }
                     .buttonStyle(CardActionStyle())
-                    .help("Open in the Side Panel")
-                    if onMac {
+                    .help(there ? "Open in the Side Panel" : "Open in the Side Panel, as it was kept")
+                    if onMac, there {
                         Button {
                             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: artifact.path)])
                         } label: {
@@ -979,11 +971,72 @@ struct ArtifactDetail: View {
                         .help("Show in Finder")
                     }
                 }
+                if !onMac, known, let version, kept || (there && version.n == artifact.versions.last?.n) {
+                    Button {
+                        saveCopy(artifact, version)
+                    } label: {
+                        Label("Save a Copy to This Mac…", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(CardActionStyle())
+                    .help("Save a Copy to This Mac…")
+                }
             }
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .frame(height: 40)
+    }
+
+    /// The file in the panel's Files: as it is now where it's there (a machine's read from its
+    /// box), else the version shown as the record keeps it.
+    private func openInPanel(_ artifact: Artifact, _ version: ArtifactVersion?, there: Bool, onMac: Bool) {
+        if there {
+            close()
+            app.utilities.revealFile(onMac ? URL(fileURLWithPath: artifact.path) : RemoteFolder.url(RemoteFolder.folder(artifact.path, on: things.box.box)))
+            return
+        }
+        guard let version else { return }
+        Task {
+            do {
+                let data = try await things.bytes(of: artifact.id, version: version.n)
+                let file = try Self.keptCopy(data, name: artifact.name)
+                close()
+                app.utilities.revealFile(file)
+            } catch {
+                problem = error.localizedDescription
+            }
+        }
+    }
+
+    /// A machine's file saved to this Mac, where you choose (Downloads to begin with): the version
+    /// shown as the record keeps it, or, for the newest with no copy kept, the file as it is now.
+    private func saveCopy(_ artifact: Artifact, _ version: ArtifactVersion) {
+        Task {
+            do {
+                let data = version.kept
+                    ? try await things.bytes(of: artifact.id, version: version.n)
+                    : try await things.box.file(artifact.path)
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = artifact.name
+                panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                panel.canCreateDirectories = true
+                guard await panel.begin() == .OK, let url = panel.url else { return }
+                try data.write(to: url, options: .atomic)
+            } catch {
+                problem = error.localizedDescription
+            }
+        }
+    }
+
+    /// A version as the record keeps it, as a file in the app's temporary folder for the panel to
+    /// show: the one before goes, so they don't pile up.
+    private static func keptCopy(_ data: Data, name: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "Made copies")
+        try? FileManager.default.removeItem(at: folder)
+        let file = folder.appending(path: UUID().uuidString).appending(path: name)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file)
+        return file
     }
 
     /// An older version, kept, of a file its box can write back.
