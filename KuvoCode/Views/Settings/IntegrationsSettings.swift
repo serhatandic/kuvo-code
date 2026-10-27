@@ -265,7 +265,8 @@ struct IntegrationsSettings: View {
                     let isOff = health == .disabled
                     // What needs you, first.
                     if health == .needsSignIn, let signIn = entry.signIn {
-                        Button("Sign In…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
+                        // Again when the sign-in it had ended: the one way to sign in, said so.
+                        Button(entry.signInEnded == true ? "Sign In Again…" : "Sign In…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
                     } else if health == .failed {
                         Button("Try Again") { reconnect(entry) }
                     } else if isOff {
@@ -280,8 +281,9 @@ struct IntegrationsSettings: View {
                             .foregroundStyle(.secondary)
                     }
                     Menu {
-                        // Nothing to sign in to or connect while it's off.
-                        if !isOff, let signIn = entry.signIn {
+                        // Nothing to sign in to or connect while it's off, and not twice: while
+                        // it needs one, its button signs in.
+                        if !isOff, health != .needsSignIn, let signIn = entry.signIn {
                             Button("Sign In Again…") { signingIn = IntegrationRef(id: signIn, service: Integrations.service(entry.id)) }
                         }
                         if entry.takesKeys {
@@ -317,7 +319,7 @@ struct IntegrationsSettings: View {
 
     /// How it's doing on this computer.
     private func places(_ entry: Integrations.Entry) -> [Place] {
-        [Place(name: name, machine: box.machine, state: health(of: entry).map(Place.state) ?? .engineDown)]
+        [Place(name: name, machine: box.machine, state: health(of: entry).map { Place.state($0, signInEnded: entry.signInEnded == true) } ?? .engineDown)]
     }
 
     /// Whether a service the agent uses on its site is signed in on this computer: as this Mac's
@@ -458,7 +460,7 @@ private struct Place: Identifiable {
 
     /// Worst last.
     enum State: Int, Comparable {
-        case connected, signedIn, off, starting, engineDown, signedOut, waitsForCode, needsSignIn, failed
+        case connected, signedIn, off, starting, engineDown, signedOut, waitsForCode, needsSignIn, signInEnded, failed
 
         static func < (a: State, b: State) -> Bool { a.rawValue < b.rawValue }
 
@@ -472,6 +474,7 @@ private struct Place: Identifiable {
             case .engineDown: "Engine not running"
             case .waitsForCode: "Not signed in yet"
             case .needsSignIn: "Needs sign-in"
+            case .signInEnded: "Sign-in ended"
             case .failed: "Couldn’t connect"
             }
         }
@@ -480,19 +483,19 @@ private struct Place: Identifiable {
             switch self {
             case .connected, .signedIn: .green
             case .off, .starting, .engineDown, .signedOut: .secondary
-            case .waitsForCode, .needsSignIn: .orange
+            case .waitsForCode, .needsSignIn, .signInEnded: .orange
             case .failed: .red
             }
         }
     }
 
-    /// As its box says it's doing.
-    static func state(_ health: Integrations.Entry.Health) -> State {
+    /// As its box says it's doing (`signInEnded`: the sign-in it had ended).
+    static func state(_ health: Integrations.Entry.Health, signInEnded: Bool = false) -> State {
         switch health {
         case .connected: .connected
         case .starting: .starting
         case .waitsForCode: .waitsForCode
-        case .needsSignIn: .needsSignIn
+        case .needsSignIn: signInEnded ? .signInEnded : .needsSignIn
         case .failed: .failed
         case .disabled: .off
         }

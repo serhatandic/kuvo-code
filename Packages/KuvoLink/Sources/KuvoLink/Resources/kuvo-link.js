@@ -816,10 +816,13 @@ async function integrationEntries(catalog, engine, signal) {
   const { settings } = readSettings();
   let servers = null;
   let signedIn = new Set;
+  let hadSignIn = new Set;
   if (engine) {
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
     const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-    signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter((each) => each?.active && each?.value?.type === "oauth").map((each) => each.integrationID));
+    const oauth = (Array.isArray(credentials) ? credentials : []).filter((each) => each?.value?.type === "oauth");
+    signedIn = new Set(oauth.filter((each) => each.active).map((each) => each.integrationID));
+    hadSignIn = new Set(oauth.map((each) => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
   let names = null;
@@ -844,6 +847,8 @@ async function integrationEntries(catalog, engine, signal) {
         shown.health = integrationHealth({ ...entry, signInFile }, server, off, signedIn);
       if (server?.integrationID)
         shown.signIn = server.integrationID;
+      if (shown.health === "needsSignIn" && server?.integrationID && hadSignIn.has(server.integrationID))
+        shown.signInEnded = true;
     }
     return shown;
   });
@@ -8370,7 +8375,7 @@ import fs41 from "node:fs";
 import path41 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.81";
+var BRIDGE_VERSION = "0.9.82";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
