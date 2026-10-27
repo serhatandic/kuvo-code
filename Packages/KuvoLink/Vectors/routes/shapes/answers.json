@@ -2078,6 +2078,9 @@
             "literal": "accounts.ended"
            },
            {
+            "literal": "accounts.found"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -2276,6 +2279,9 @@
            },
            {
             "literal": "accounts.ended"
+           },
+           {
+            "literal": "accounts.found"
            },
            {
             "literal": "agents"
@@ -2816,6 +2822,63 @@
        }
       }
      }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/accounts/found",
+   "answers": {
+    "200": {
+     "object": {
+      "agents": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "installed": "bool",
+         "signedIn": "bool",
+         "label?": "string"
+        }
+       }
+      },
+      "opencode": {
+       "list": {
+        "object": {
+         "id": "string",
+         "integrationID": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "key"
+           },
+           {
+            "literal": "signIn"
+           }
+          ]
+         },
+         "connected": "bool"
+        }
+       }
+      },
+      "shell": {
+       "list": {
+        "object": {
+         "integrationID": "string",
+         "name": "string",
+         "variable": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/accounts/found/use",
+   "answers": {
+    "200": {
+     "object": {}
     }
    }
   },

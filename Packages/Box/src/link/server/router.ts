@@ -5,6 +5,7 @@
 
 import { processRuns as runs } from "../../shared/platform";
 import { accountsRoute, credentialsRoute } from "../areas/accounts";
+import { foundRoute } from "../areas/found";
 import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
 import { botKeysRefreshRoute, botKeysRoute } from "../areas/bot-keys";
@@ -70,6 +71,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: route => route === "kuvo/accounts/ended" || /^kuvo\/accounts\/[^/]+\/forget$/.test(route), answer: accountsRoute },
   { when: route => route === "kuvo/accounts/credentials", answer: credentialsRoute },
+  { when: route => route === "kuvo/accounts/found" || route === "kuvo/accounts/found/use", answer: foundRoute },
   { when: route => route === "kuvo/personalities/events", answer: personalityEventsRoute },
   { when: route => route === "kuvo/personalities/document" || route === "kuvo/personalities/take", answer: personalitiesDocumentRoute },
   { when: route => route.match(/^kuvo\/personalities(?:\/([^/]+))?$/), answer: personalityRoute },

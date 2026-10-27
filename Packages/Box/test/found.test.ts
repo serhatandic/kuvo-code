@@ -1,0 +1,172 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Target } from "../src/shared/records";
+import { found, opencodeAuthFile, useFound } from "../src/link/areas/found";
+
+// The first launch's "Bring your subscriptions": what a computer already has, as its box lists it,
+// and a key of it brought over. The engine and the agents bridge are stand-ins that answer their
+// HTTP routes as the real ones do; opencode's auth.json is a real file in a folder of the test's own.
+
+let root = "";
+const servers: http.Server[] = [];
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "kuvo-box-found-"));
+});
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
+  rmSync(root, { recursive: true, force: true });
+});
+
+/** A local server answering `GET api/integration` with `list`, and keeping what's posted. */
+async function serve(list: unknown[], posted: unknown[] = []): Promise<Target> {
+  const server = http.createServer((request, response) => {
+    if (request.headers.authorization !== `Basic ${Buffer.from("opencode:secret").toString("base64")}`) {
+      response.writeHead(401).end();
+      return;
+    }
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      if (request.method === "GET" && request.url?.startsWith("/api/integration")) {
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ location: "global", data: list }));
+      } else if (request.method === "POST" && request.url === "/api/credential") {
+        posted.push(JSON.parse(body));
+        response.writeHead(200, { "content-type": "application/json" }).end("{}");
+      } else {
+        response.writeHead(404).end();
+      }
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  return { port: (server.address() as AddressInfo).port, password: "secret" }
+}
+
+function opencode(entries: Record<string, unknown>) {
+  const file = opencodeAuthFile(root);
+  mkdirSync(join(root, ".local", "share", "opencode"), { recursive: true });
+  writeFileSync(file, JSON.stringify(entries));
+  return file;
+}
+
+/** An agent as the agents bridge lists it (src/agents/server.ts): its own sign-in (`accountLabel`
+ * names an account you added, empty for this one), who it's signed in as in `account`, and a
+ * connection only while it's signed in. */
+const agent = (id: string, name: string, installed: boolean, account?: string) => ({
+  id,
+  name,
+  metadata: { source: "agent", agent: id, accountID: "default", accountLabel: "", installed, ...(account ? { account } : {}) },
+  methods: [],
+  connections: account ? [{ type: "agent", label: account, method: "oauth", status: { status: "connected", message: `Signed in as ${account}` } }] : [],
+});
+/** A sign-in the engine keeps, as it lists one. */
+const credential = { type: "credential", credentialID: "c1", label: "API key", method: "key", status: { status: "connected" } };
+
+test("a Mac with agents and an opencode of its own: each is offered for what it needs", async () => {
+  const bridge = await serve([
+    agent("claude-code", "Claude Code", true, "you@example.com · Max plan"),
+    agent("grok-cli", "Grok", true),
+    agent("codex-cli", "Codex", false),
+  ]);
+  const engine = await serve([
+    { id: "anthropic", name: "Anthropic", methods: [], connections: [] },
+    { id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] },
+    { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [] },
+    { id: "openai", name: "OpenAI", methods: [], connections: [{ type: "env", name: "OPENAI_API_KEY" }] },
+  ]);
+  const authFile = opencode({
+    anthropic: { type: "api", key: "sk-ant-1" },
+    openrouter: { type: "api", key: "sk-or-1" },
+    "github-copilot": { type: "oauth", refresh: "gho_1", access: "x", expires: 1 },
+  });
+
+  const what = await found({ engine, bridge, authFile });
+
+  // Signed in: ready, with who it is. Installed but signed out: no label. Not installed: says so.
+  expect(what.agents).toEqual([
+    { id: "claude-code", name: "Claude Code", installed: true, signedIn: true, label: "you@example.com · Max plan" },
+    { id: "grok-cli", name: "Grok", installed: true, signedIn: false },
+    { id: "codex-cli", name: "Codex", installed: false, signedIn: false },
+  ]);
+  // Keys can come over; a sign-in that renews itself is offered as a sign-in; one the engine already
+  // has needs nothing. Named as the engine names them.
+  expect(what.opencode).toEqual([
+    { id: "opencode:anthropic", integrationID: "anthropic", name: "Anthropic", kind: "key", connected: false },
+    { id: "opencode:github-copilot", integrationID: "github-copilot", name: "GitHub Copilot", kind: "signIn", connected: false },
+    { id: "opencode:openrouter", integrationID: "openrouter", name: "OpenRouter", kind: "key", connected: true },
+  ]);
+  expect(what.shell).toEqual([{ integrationID: "openai", name: "OpenAI", variable: "OPENAI_API_KEY" }]);
+  // No key leaves the box.
+  expect(JSON.stringify(what)).not.toContain("sk-");
+});
+
+test("a fresh computer: nothing to bring over, and nothing fails", async () => {
+  const what = await found({ engine: await serve([]), bridge: await serve([]), authFile: join(root, "none.json") });
+  expect(what).toEqual({ agents: [], opencode: [], shell: [] });
+});
+
+test("with the engine and the agents not running yet, opencode's keys are still listed", async () => {
+  const what = await found({ engine: null, bridge: null, authFile: opencode({ zai: { type: "api", key: "k-1" } }) });
+  expect(what.agents).toEqual([]);
+  expect(what.opencode).toEqual([{ id: "opencode:zai", integrationID: "zai", name: "zai", kind: "key", connected: false }]);
+});
+
+test("a well-known server's sign-in, named by its address, isn't offered", async () => {
+  const authFile = opencode({ "https://ai.example.com": { type: "wellknown", key: "EXAMPLE_TOKEN", token: "t-1" }, zai: { type: "api", key: "k-1" } });
+  expect((await found({ engine: null, bridge: null, authFile })).opencode.map(each => each.integrationID)).toEqual(["zai"]);
+});
+
+test("opencode's sign-ins are found in your own data folder, also on a machine whose box points it elsewhere", () => {
+  expect(opencodeAuthFile("/home/ada", {})).toBe("/home/ada/.local/share/opencode/auth.json");
+  expect(opencodeAuthFile("/home/ada", { XDG_DATA_HOME: "/data/ada" })).toBe("/data/ada/opencode/auth.json");
+  // A machine's launch keeps yours aside (none set: the usual place) and points the box's into ~/.kuvo-code.
+  expect(opencodeAuthFile("/home/ada", { XDG_DATA_HOME: "/home/ada/.kuvo-code/data", KUVO_OWN_XDG_DATA_HOME: "" })).toBe("/home/ada/.local/share/opencode/auth.json");
+  expect(opencodeAuthFile("/home/ada", { XDG_DATA_HOME: "/home/ada/.kuvo-code/data", KUVO_OWN_XDG_DATA_HOME: "/data/ada" })).toBe("/data/ada/opencode/auth.json");
+});
+
+test("a damaged auth.json is nothing found, not an error", async () => {
+  const file = opencodeAuthFile(root);
+  mkdirSync(join(root, ".local", "share", "opencode"), { recursive: true });
+  writeFileSync(file, "{ not json");
+  expect((await found({ engine: null, bridge: null, authFile: file })).opencode).toEqual([]);
+});
+
+test("Use brings an opencode key into the engine as the active one", async () => {
+  const posted: unknown[] = [];
+  const engine = await serve([], posted);
+  const authFile = opencode({ anthropic: { type: "api", key: "sk-ant-1", metadata: { org: "o" } } });
+
+  expect(await useFound("opencode:anthropic", { engine, authFile })).toEqual({ status: 200 });
+  expect(posted).toEqual([{ integrationID: "anthropic", label: "API key", value: { type: "key", key: "sk-ant-1", metadata: { org: "o" } }, activate: true }]);
+});
+
+test("Use twice (a second tap, or the phone too) brings the key over once", async () => {
+  const posted: unknown[] = [];
+  const authFile = opencode({ anthropic: { type: "api", key: "sk-ant-1" } });
+  expect(await useFound("opencode:anthropic", { engine: await serve([], posted), authFile })).toEqual({ status: 200 });
+  const broughtOver = await serve([{ id: "anthropic", name: "Anthropic", methods: [], connections: [credential] }], posted);
+  expect(await useFound("opencode:anthropic", { engine: broughtOver, authFile })).toEqual({ status: 200 });
+  expect(posted.length).toBe(1);
+});
+
+test("a sign-in can't be copied over, and a key that's gone says so", async () => {
+  const posted: unknown[] = [];
+  const engine = await serve([], posted);
+  const authFile = opencode({ "github-copilot": { type: "oauth", refresh: "r", access: "a", expires: 1 } });
+
+  const signIn = await useFound("opencode:github-copilot", { engine, authFile });
+  expect(signIn).toMatchObject({ status: 409 });
+  const gone = await useFound("opencode:anthropic", { engine, authFile });
+  expect(gone).toMatchObject({ status: 404 });
+  expect(posted).toEqual([]);
+});
+
+test("the engine not running: Use says so", async () => {
+  const authFile = opencode({ anthropic: { type: "api", key: "sk-ant-1" } });
+  expect(await useFound("opencode:anthropic", { engine: null, authFile })).toMatchObject({ status: 503 });
+});
+

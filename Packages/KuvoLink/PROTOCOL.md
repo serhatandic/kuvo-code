@@ -736,6 +736,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
+  - `GET kuvo/accounts/found` → `{agents, opencode, shell}`: what the computer already has, for
+    the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
+    installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
+    apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
+    `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
+    sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
+    the shell the engine uses (`{integrationID, name, variable}`). Names only, never a key. `POST
+    kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
+    `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
+    refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).
   What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
 - On a Mac, `kuvo/hosts`: the machines this phone may reach directly, with their addresses
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
@@ -1413,6 +1423,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | Name | What it answers |
 | --- | --- |
 | `accounts.credentials` | `kuvo/accounts/credentials` |
+| `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |

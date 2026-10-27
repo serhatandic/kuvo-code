@@ -45,6 +45,8 @@ final class TestBox {
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
+        // Never the opencode sign-ins of whoever runs the tests (`kuvo/accounts/found`): none.
+        environment["KUVO_DEMO_OPENCODE_AUTH"] = BoxProcess.home.appending(path: "opencode-auth.json").path
         // Where its host interface answers, in its folder (`run/host.json`), as the app tells it.
         try await host.start()
         MachineBox.writeMacCatalog()
