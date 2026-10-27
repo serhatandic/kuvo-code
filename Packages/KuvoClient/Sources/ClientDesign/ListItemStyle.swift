@@ -5,8 +5,10 @@ import Textual
 /// works that line out from the item's last baseline, so an item ending in a code block, a quote
 /// or a table (padded below their last line) had its marker pushed down beside that, and the
 /// item's first words looked like the end of the item before.
-struct FirstLineListItemStyle: StructuredText.ListItemStyle {
-    func makeBody(configuration: Configuration) -> some View {
+public struct FirstLineListItemStyle: StructuredText.ListItemStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .firstLineCenter, spacing: 0) {
             configuration.marker
                 .textual.padding(.trailing, .fontScaled(0.5))
@@ -17,7 +19,7 @@ struct FirstLineListItemStyle: StructuredText.ListItemStyle {
 
 extension StructuredText.ListItemStyle where Self == FirstLineListItemStyle {
     /// Its marker on the middle of the item's first line, whatever comes after it.
-    static var firstLine: Self { .init() }
+    public static var firstLine: Self { .init() }
 }
 
 extension VerticalAlignment {
@@ -31,5 +33,5 @@ extension VerticalAlignment {
         }
     }
 
-    static let firstLineCenter = Self(FirstLineCenter.self)
+    public static let firstLineCenter = Self(FirstLineCenter.self)
 }

@@ -1,7 +1,4 @@
-import ClientDesign
 import JavaScriptCore
-import SwiftUI
-import Textual
 
 /// Colors code with Prism.js (bundled in Resources, MIT), off the main thread. Prism
 /// hands back tokens rather than HTML, so a whole file is tokenized once and every line

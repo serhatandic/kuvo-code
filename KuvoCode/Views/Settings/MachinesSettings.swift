@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// Machines: Linux servers whose engine Kuvo Code runs over SSH, for projects on them. Each can
