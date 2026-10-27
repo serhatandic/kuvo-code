@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -8,7 +8,7 @@ import { unified } from "../../src/agents/diff"
 import { EngineLink } from "../../src/agents/engine"
 import { record } from "../../src/agents/artifacts/record"
 import { Recorder, type Event, type Source } from "../../src/agents/artifacts/recorder"
-import { artifactRoutes } from "../../src/agents/artifacts/routes"
+import { artifactRoutes, notedRoute } from "../../src/agents/artifacts/routes"
 import { ArtifactStore } from "../../src/agents/artifacts/store"
 
 // The box's record of what its agents made, as a client reads it (`kuvo/artifacts`): a bot's memory
@@ -200,7 +200,7 @@ describe("a bot's memory", () => {
     const memory = join(folder, "MEMORY.md")
     await hear(turn("ses_bot_ada", "msg_1", edit("ses_bot_ada", "c1", memory, "one\ntwo\n")))
     writeFileSync(memory, "one\ntwo\nmine\n")
-    store.change(memory, { by: { kind: "outside" }, via: "outside", where: { bot: "bot_ada" } })
+    await store.change(memory, { by: { kind: "outside" }, via: "outside", where: { bot: "bot_ada" } })
     const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(memory)}`)
     expect(value.versions.at(-1)).toMatchObject({ n: 2, by: { kind: "outside" }, lines: { added: 1, removed: 0 } })
   })
@@ -304,6 +304,38 @@ describe("files a command made", () => {
     await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_repo" } }])
     const names = (await route("GET", "kuvo/artifacts?session=ses_repo")).value.artifacts.map((artifact: any) => artifact.name)
     expect(names).toEqual(["summary.md"])
+  })
+})
+
+describe("what the agent's browser downloads", () => {
+  /** As the box's browser tells the record, once a download is done. */
+  async function note(body: unknown) {
+    const response = await notedRoute((session, path, via) => recorder.noted([source], session, path, via), "POST", async () => body)
+    return { status: response.status, value: await response.json() }
+  }
+
+  test("is the bot's, in the turn it was downloaded in, as a download on its shelf", async () => {
+    bot("bot_ada", "m\n")
+    const downloads = join(root, "browser", "downloads")
+    mkdirSync(downloads, { recursive: true })
+    const invoice = join(downloads, "invoice.pdf")
+    writeFileSync(invoice, "%PDF-1.4 invoice")
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_bot_ada" } }, { type: "session.inbox.delivered", data: { sessionID: "ses_bot_ada", inboxID: "msg_1" } }])
+    expect((await note({ path: invoice, session: "ses_bot_ada", via: "download" })).status).toBe(200)
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+    const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada&kind=download")
+    expect(value.artifacts).toHaveLength(1)
+    expect(value.artifacts[0]).toMatchObject({ name: "invoice.pdf", kind: "download", where: { bots: ["bot_ada"], sessions: ["ses_bot_ada"] } })
+    expect(value.artifacts[0].latest).toMatchObject({ via: ["download"], turn: { session: "ses_bot_ada", message: "msg_1" }, by: { kind: "agent", bot: "bot_ada" } })
+    expect((await route("GET", `kuvo/artifacts/${value.artifacts[0].id}/versions/1`)).value).toBe("%PDF-1.4 invoice")
+  })
+
+  test("for a conversation this computer doesn't have, says so and records nothing", async () => {
+    const file = join(root, "stray.zip")
+    writeFileSync(file, "zip")
+    const answer = await note({ path: file, session: "ses_nobody", via: "download" })
+    expect(answer.status).toBe(404)
+    expect(store.at(file)).toBeUndefined()
   })
 })
 
@@ -501,6 +533,31 @@ describe("what the record keeps a copy of", () => {
     const { value: ignored } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(built)}`)
     expect(ignored.versions[0]).toMatchObject({ kept: false, reason: "ignored" })
     expect((await route("GET", `kuvo/artifacts/${ignored.id}/versions/1`)).status).toBe(410)
+  })
+
+  test("what git ignores, or won't say of (a file beyond a symbolic link), keeps no copy; the rest of the same turn's files do", async () => {
+    spawnSync("git", ["init", "-q", project])
+    writeFileSync(join(project, ".gitignore"), "*.log\n")
+    mkdirSync(join(root, "elsewhere"))
+    symlinkSync(join(root, "elsewhere"), join(project, "linked"))
+    const log = join(project, "run.log")
+    const linked = join(project, "linked", "notes.md")
+    const plain = join(project, "notes.md")
+    for (const file of [log, linked, plain]) writeFileSync(file, "SECRET-ish\n")
+    await store.changeAll([log, linked, plain], { by: { kind: "agent" }, via: "shell", where: { project } })
+    const version = async (path: string) => (await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(path)}`)).value.versions[0]
+    expect(await version(log)).toMatchObject({ kept: false, reason: "ignored" })
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(log)}/versions/1`)).status).toBe(410)
+    expect(await version(linked)).toMatchObject({ kept: false, reason: "ignored" })
+    expect(await version(plain)).toMatchObject({ kept: true })
+  })
+
+  test("in a repository git won't read, nothing keeps a copy: what it ignores can't be told", async () => {
+    writeFileSync(join(project, ".git"), "not a repository\n")
+    const notes = join(project, "notes.md")
+    writeFileSync(notes, "maybe ignored\n")
+    await store.change(notes, { by: { kind: "agent" }, via: "write", where: { project } })
+    expect((await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(notes)}`)).value.versions[0]).toMatchObject({ kept: false, reason: "ignored" })
   })
 
   test("with the disk down to its floor, what a new version replaces keeps no copy, but the newest, memory and what's pinned keep theirs", async () => {

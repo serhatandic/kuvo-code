@@ -65,6 +65,8 @@ function scopeOf(query: URLSearchParams): Scope | string {
 export async function artifactRoutes(store: ArtifactStore | undefined, method: string, parts: string[], query: URLSearchParams, body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
   if (!store) return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.")
   const [first, second, third, fourth] = parts
+  // What's being recorded now first, so a turn that just ended reads as it ended.
+  await store.settled()
 
   if (!first) {
     if (method !== "GET") return message(405, "Read them with GET.")
@@ -113,15 +115,15 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     if (method !== "POST") return message(405, "Pin it with POST.")
     const { pinned, note } = (await body()) ?? {}
     if (typeof pinned !== "boolean") return message(400, "Say whether it's pinned (pinned).")
-    const changed = store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
-    return json(clientArtifact(changed!, store))
+    const changed = await store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
+    return changed ? json(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.")
   }
 
   if (second === "restore") {
     if (method !== "POST") return message(405, "Restore it with POST.")
     const { version } = (await body()) ?? {}
     if (!Number.isInteger(version)) return message(400, "Say which version to put back (version).")
-    const restored = store.restore(artifact.id, version)
+    const restored = await store.restore(artifact.id, version)
     return typeof restored === "string" ? message(409, restored) : json(clientArtifact(restored, store))
   }
 
@@ -154,6 +156,22 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     }
   }
   return message(404, "No such route.")
+}
+
+/**
+ * `POST /api/kuvo/artifacts/noted {path, session, via}`: a file a conversation got without a tool
+ * call naming it, as this box's own programs tell it (its agent browser's downloads). Not one a
+ * client reaches: the box's link passes on only `kuvo/artifacts`' own routes, and keeps
+ * `kuvo/agents/` off the bridge's `api/kuvo/artifacts…` too.
+ */
+export async function notedRoute(noted: ((session: string, path: string, via: string) => Promise<boolean>) | undefined, method: string, body: () => Promise<any>): Promise<Response> {
+  if (!noted) return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.")
+  if (method !== "POST") return message(405, "Tell it with POST.")
+  const { path, session, via } = (await body()) ?? {}
+  if (typeof path !== "string" || !path.startsWith("/")) return message(400, "Say the file's whole path (path).")
+  if (typeof session !== "string" || !session) return message(400, "Say whose it is (session).")
+  if (via !== "download") return message(400, "Say how it came (via: download).")
+  return (await noted(session, path, via)) ? json({ ok: true }) : message(404, "There's no such conversation on this computer.")
 }
 
 /** Why a version can't be read, in words. */

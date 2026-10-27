@@ -3,7 +3,6 @@
 // listed and removed here, from a Mac (through `box route`) or a phone, with the Mac closed too.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { Fields } from "../../shared/json";
@@ -16,7 +15,7 @@ import type { EngineSession } from "../engine/sessions";
 import { writePrivate } from "../files";
 import { followed } from "../follow";
 import { gitIn, gitLater, sizeLater } from "../git";
-import { ENGINE_DATA } from "../home";
+import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
 import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
@@ -286,7 +285,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
  * one starts at the repository's own checkout, not at the project's folder in it. */
 export async function worktreesWhere(directory: unknown, engine: Target | null, signal: AbortSignal | undefined, projects: string[] = readProjects().filter(each => !each.removed).map(each => each.directory)) {
   const value = typeof directory === "string" && directory !== "" ? directory : null;
-  const answer: Omit<WorktreesWhere, "projects"> & { projects: WhereProject[] } = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: os.homedir(), projects: [] };
+  const answer: Omit<WorktreesWhere, "projects"> & { projects: WhereProject[] } = { directory: value, default: path.join(ENGINE_DATA, "worktree"), home: homeFolder(), projects: [] };
   // The engine's projects, by their own checkout, from one call about none of them (one about a
   // folder would start the engine there): their ids name the engine's own folders.
   const ids = new Map<string, string | null>();

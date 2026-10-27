@@ -3,9 +3,9 @@
 // copy and are never sent. A code file git tracks keeps only the change its tool call made, as git
 // keeps the rest. And nothing past the free-space floor but what's always kept.
 
-import { spawnSync } from "node:child_process"
 import { existsSync, statfsSync } from "node:fs"
 import { basename, dirname, relative, sep } from "node:path"
+import { run } from "../proc"
 
 /** Why a version has no copy. */
 export type NoCopy = "secret" | "ignored" | "git" | "too-big" | "low-disk" | "cleared"
@@ -35,14 +35,38 @@ export class CopyPolicy {
   /** `disk`: the free and whole space of the disk the copies are on. */
   constructor(private readonly disk: () => { free: number; total: number }) {}
 
-  /** Why `path`'s bytes must never be copied or sent, if they mustn't. */
+  /**
+   * Why `path`'s bytes must never be copied or sent, if they mustn't. What git ignores is read from
+   * what `learn` found out, so ask that first; one it hasn't is taken as ignored, never copied.
+   */
   privacy(path: string): NoCopy | undefined {
     if (isSecret(path)) return "secret"
     const top = this.top(dirname(path))
-    if (top && this.isIgnored(top, path)) return "ignored"
+    if (top && this.ignored.get(path) !== false) return "ignored"
     return undefined
   }
 
+  /**
+   * Finds out which of `paths` git ignores, for `privacy`: each repository asked once for all of
+   * its paths, without holding up the bridge while git answers.
+   */
+  async learn(paths: string[]): Promise<void> {
+    const asks = new Map<string, string[]>()
+    for (const path of new Set(paths)) {
+      if (this.ignored.has(path) || isSecret(path)) continue
+      const top = this.top(dirname(path))
+      if (top) asks.set(top, [...(asks.get(top) ?? []), path])
+    }
+    await Promise.all([...asks].map(async ([top, asked]) => {
+      let ignored = await this.checkIgnore(top, asked)
+      // Git refused them all for one it can't look at (beyond a symbolic link): each on its own.
+      if (!ignored) {
+        ignored = new Set()
+        for (const path of asked) if ((await this.checkIgnore(top, [path]))?.size) ignored.add(path)
+      }
+      for (const path of asked) this.ignored.set(path, ignored.has(path))
+    }))
+  }
   /** Whether `path` is in a git repository (whose history git keeps). */
   inGit(path: string): boolean {
     return this.top(dirname(path)) !== null
@@ -69,17 +93,30 @@ export class CopyPolicy {
     return found
   }
 
-  private isIgnored(top: string, path: string): boolean {
-    const known = this.ignored.get(path)
-    if (known !== undefined) return known
-    // 0: ignored; 1: not; anything else (git missing): taken as not.
-    const result = spawnSync("git", ["-C", top, "check-ignore", "-q", "--", relative(top, path)], {
-      timeout: 5000,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
-    })
-    const ignored = result.status === 0
-    this.ignored.set(path, ignored)
-    return ignored
+  /**
+   * Which of `paths` (in `top`'s repository) git ignores; undefined when it refused the batch. What
+   * git can't say of (a path beyond a symbolic link, a repository it won't read, git missing or
+   * stopped) counts as ignored: never copied unasked.
+   */
+  private async checkIgnore(top: string, paths: string[]): Promise<Set<string> | undefined> {
+    let ran
+    try {
+      ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
+        // As `./…`: a name like `:x` isn't read as pathspec magic, and git says each back as sent.
+        input: paths.map((path) => "./" + relative(top, path)).join("\0") + "\0",
+        timeout: 5000,
+        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+      })
+    } catch {
+      return new Set(paths)
+    }
+    if (ran.timedOut) return new Set(paths)
+    // 0: some ignored; 1: none; 128: it refused: for one path beyond a symbolic link, the batch is
+    // asked a path at a time; for the repository (one it won't read), all of it.
+    if (ran.code === 128 && paths.length > 1 && ran.stderr.includes("beyond a symbolic link")) return undefined
+    if (ran.code !== 0 && ran.code !== 1) return new Set(paths)
+    const said = new Set(ran.stdout.split("\0").filter(Boolean))
+    return new Set(paths.filter((path) => said.has("./" + relative(top, path))))
   }
 }
 

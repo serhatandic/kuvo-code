@@ -58,14 +58,15 @@ const plainly = (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16
 export const allowed = (path: string, method = "GET"): boolean => /^api(\/|\?|$)/.test(canonicalPath(path) ?? "");
 export const socketAllowed = (path: string): boolean => SOCKETS.some(pattern => pattern.test(canonicalPath(path) ?? ""));
 
-// The same of the coding agents' bridge (`kuvo/agents/api/…`), but for the two routes only the
-// app wires things with: where the engine is, and its group chats' own steps (moves), which a
-// phone does through `kuvo/groups`. Checked on the path as it's sent, which the bridge reads part
+// The same of the coding agents' bridge (`kuvo/agents/api/…`), but for the routes only the box
+// and the app wire things with: where the engine is, its group chats' own steps (moves), which a
+// phone does through `kuvo/groups`, and what its browser downloaded (`api/kuvo/artifacts/noted`;
+// a client reads the record through `kuvo/artifacts`). Checked on the path as it's sent, which the bridge reads part
 // by part. As the Mac allows them (EngineRoutes.allowsAgents; both are checked against
 // Vectors/link.json).
 export const agentsAllowed = (path: string, method = "GET"): boolean => {
   const sent = canonicalPath(path) ?? "";
-  return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups)(\/|\?|$)/.test(sent);
+  return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups|artifacts)(\/|\?|$)/.test(sent);
 };
 
 // Where a sign-in's page sent the browser back to this machine, for it to load

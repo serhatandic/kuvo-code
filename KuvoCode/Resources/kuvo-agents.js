@@ -187,12 +187,12 @@ import { sep as sep7 } from "path";
 
 // Packages/Box/src/agents/artifacts/folders.ts
 import { readdirSync as readdirSync4, readFileSync as readFileSync4, statSync as statSync4, watch } from "fs";
-import { join as join5, relative as relative2, sep as sep5 } from "path";
+import { join as join6, relative as relative2, sep as sep5 } from "path";
 
 // Packages/Box/src/agents/artifacts/store.ts
 import { createHash, createHmac, randomBytes as randomBytes2 } from "crypto";
 import { appendFileSync, chmodSync, existsSync as existsSync2, mkdirSync as mkdirSync3, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
-import { basename as basename3, join as join3, sep as sep3 } from "path";
+import { basename as basename3, join as join4, sep as sep3 } from "path";
 
 // Packages/Box/src/agents/diff.ts
 var searchLimit = 2000;
@@ -444,9 +444,125 @@ function kindOf(path, { bots, download = false } = {}) {
 }
 
 // Packages/Box/src/agents/artifacts/policy.ts
-import { spawnSync } from "child_process";
 import { existsSync, statfsSync } from "fs";
 import { basename as basename2, dirname, relative, sep as sep2 } from "path";
+
+// Packages/Box/src/agents/proc.ts
+import { spawn } from "child_process";
+import { accessSync, constants } from "fs";
+import { delimiter, join as join3 } from "path";
+function which(name, extra = []) {
+  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
+  for (const folder of folders) {
+    const path = join3(folder, name);
+    try {
+      accessSync(path, constants.X_OK);
+      return path;
+    } catch {}
+  }
+  return;
+}
+async function run(command, args, options = {}) {
+  const env = { ...process.env, ...options.env };
+  for (const name of Object.keys(env))
+    if (env[name] === undefined)
+      delete env[name];
+  const child = Bun.spawn([command, ...args], {
+    cwd: options.cwd,
+    env,
+    stdin: options.input !== undefined ? "pipe" : "ignore",
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  if (options.input !== undefined && child.stdin) {
+    child.stdin.write(options.input);
+    child.stdin.end();
+  }
+  let timedOut = false;
+  const timer = options.timeout ? setTimeout(() => {
+    timedOut = true;
+    child.kill();
+  }, options.timeout) : undefined;
+  let stdout = "";
+  let stderr = "";
+  const reads = Promise.all([new Response(child.stdout).text().then((text) => stdout = text), new Response(child.stderr).text().then((text) => stderr = text)]);
+  const code = await child.exited;
+  await Promise.race([reads, Bun.sleep(2000)]);
+  if (timer)
+    clearTimeout(timer);
+  return { code, stdout, stderr, ...timedOut ? { timedOut } : {} };
+}
+function runGroup(command, args, options = {}) {
+  const env = { ...process.env, ...options.env };
+  for (const name of Object.keys(env))
+    if (env[name] === undefined)
+      delete env[name];
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => stdout += chunk);
+    child.stderr?.on("data", (chunk) => stderr += chunk);
+    const stop = (signal) => {
+      try {
+        if (child.pid)
+          process.kill(-child.pid, signal);
+      } catch {}
+    };
+    const timer = options.timeout ? setTimeout(() => {
+      stop("SIGTERM");
+      setTimeout(() => stop("SIGKILL"), 3000);
+    }, options.timeout) : undefined;
+    child.on("error", (error) => {
+      if (timer)
+        clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: stderr + String(error) });
+    });
+    child.on("close", (code) => {
+      if (timer)
+        clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
+  });
+}
+var startPath = process.env.PATH ?? "";
+var pathRead = 0;
+var reading;
+async function refreshLoginPath(now = false) {
+  if (reading) {
+    await reading;
+    if (!now)
+      return;
+  }
+  if (!now && Date.now() - pathRead < 5000)
+    return;
+  reading = readLoginPath().finally(() => {
+    pathRead = Date.now();
+    reading = undefined;
+  });
+  await reading;
+}
+async function readLoginPath() {
+  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
+    try {
+      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
+      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
+      if (found?.trim()) {
+        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
+        return;
+      }
+    } catch {}
+  }
+}
+function firstURL(text) {
+  return text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
+}
+function plain(text) {
+  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+}
+
+// Packages/Box/src/agents/artifacts/policy.ts
 var privateReasons = new Set(["secret", "ignored"]);
 function isSecret(path) {
   const name = basename2(path);
@@ -472,9 +588,30 @@ class CopyPolicy {
     if (isSecret(path))
       return "secret";
     const top = this.top(dirname(path));
-    if (top && this.isIgnored(top, path))
+    if (top && this.ignored.get(path) !== false)
       return "ignored";
     return;
+  }
+  async learn(paths) {
+    const asks = new Map;
+    for (const path of new Set(paths)) {
+      if (this.ignored.has(path) || isSecret(path))
+        continue;
+      const top = this.top(dirname(path));
+      if (top)
+        asks.set(top, [...asks.get(top) ?? [], path]);
+    }
+    await Promise.all([...asks].map(async ([top, asked]) => {
+      let ignored = await this.checkIgnore(top, asked);
+      if (!ignored) {
+        ignored = new Set;
+        for (const path of asked)
+          if ((await this.checkIgnore(top, [path]))?.size)
+            ignored.add(path);
+      }
+      for (const path of asked)
+        this.ignored.set(path, ignored.has(path));
+    }));
   }
   inGit(path) {
     return this.top(dirname(path)) !== null;
@@ -499,17 +636,25 @@ class CopyPolicy {
     this.tops.set(folder, found);
     return found;
   }
-  isIgnored(top, path) {
-    const known = this.ignored.get(path);
-    if (known !== undefined)
-      return known;
-    const result = spawnSync("git", ["-C", top, "check-ignore", "-q", "--", relative(top, path)], {
-      timeout: 5000,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
-    });
-    const ignored = result.status === 0;
-    this.ignored.set(path, ignored);
-    return ignored;
+  async checkIgnore(top, paths) {
+    let ran;
+    try {
+      ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
+        input: paths.map((path) => "./" + relative(top, path)).join("\x00") + "\x00",
+        timeout: 5000,
+        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
+      });
+    } catch {
+      return new Set(paths);
+    }
+    if (ran.timedOut)
+      return new Set(paths);
+    if (ran.code === 128 && paths.length > 1 && ran.stderr.includes("beyond a symbolic link"))
+      return;
+    if (ran.code !== 0 && ran.code !== 1)
+      return new Set(paths);
+    const said = new Set(ran.stdout.split("\x00").filter(Boolean));
+    return new Set(paths.filter((path) => said.has("./" + relative(top, path))));
   }
 }
 function freeSpace(folder) {
@@ -543,12 +688,12 @@ class ArtifactStore {
   constructor(root, options = {}) {
     this.root = root;
     this.options = options;
-    mkdirSync3(join3(root, "log"), { recursive: true });
-    mkdirSync3(join3(root, "copies"), { recursive: true });
+    mkdirSync3(join4(root, "log"), { recursive: true });
+    mkdirSync3(join4(root, "copies"), { recursive: true });
     this.policy = new CopyPolicy(options.disk ?? (() => freeSpace(root)));
     this.key = ArtifactStore.keyIn(root);
     try {
-      const budget = JSON.parse(readFileSync3(join3(root, "settings.json"), "utf8"))?.budget;
+      const budget = JSON.parse(readFileSync3(join4(root, "settings.json"), "utf8"))?.budget;
       if (typeof budget === "number" && budget >= 0)
         this.chosenBudget = budget;
     } catch {}
@@ -562,7 +707,7 @@ class ArtifactStore {
     return () => this.listeners.delete(listener);
   }
   static keyIn(root) {
-    const file = join3(root, "key");
+    const file = join4(root, "key");
     try {
       const key2 = readFileSync3(file);
       if (key2.length === 32)
@@ -582,9 +727,53 @@ class ArtifactStore {
   at(path) {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
+  queue = Promise.resolve();
+  inTurn(paths, work) {
+    const next = this.queue.then(async () => {
+      await this.policy.learn(paths);
+      return work();
+    }).catch((error) => {
+      console.error("artifacts:", error?.message ?? error);
+      return;
+    });
+    this.queue = next;
+    return next;
+  }
+  async settled() {
+    await this.queue;
+  }
   change(path, made) {
+    const seen = this.look(path);
+    return this.inTurn([path], () => this.changeNow(path, made, seen));
+  }
+  changeAll(paths, made) {
+    return this.inTurn(paths, () => {
+      paths.forEach((path) => {
+        try {
+          this.changeNow(path, made);
+        } catch (error) {
+          console.error("artifacts:", error?.message ?? error);
+        }
+      });
+    });
+  }
+  before(path, bytes, where = {}, at = this.now()) {
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at));
+  }
+  pin(id, pinned) {
+    const path = this.artifacts.get(id)?.path;
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned));
+  }
+  async restore(id, n, at = this.now()) {
+    const path = this.artifacts.get(id)?.path;
+    return await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at)) ?? "It couldn't be put back.";
+  }
+  shown(path, made) {
+    return this.inTurn([path], () => this.shownNow(path, made));
+  }
+  changeNow(path, made, seen = this.look(path)) {
     const now = made.at ?? this.now();
-    const read = this.read(path);
+    const read = this.read(path, seen);
     let artifact = this.at(path);
     if (read === null)
       return;
@@ -638,7 +827,7 @@ class ArtifactStore {
       return "git";
     return;
   }
-  before(path, bytes, where = {}, at = this.now()) {
+  beforeNow(path, bytes, where = {}, at = this.now()) {
     if (this.at(path) || bytes.length > copyLimit || this.policy.privacy(path))
       return;
     const kind = this.refine(kindOf(path, { bots: this.options.bots }), bytes);
@@ -664,7 +853,7 @@ class ArtifactStore {
     this.use(hash, bytes.length, 1);
     this.write(artifact, version);
   }
-  pin(id, pinned) {
+  pinNow(id, pinned) {
     const artifact = this.artifacts.get(id);
     if (!artifact)
       return;
@@ -688,7 +877,7 @@ class ArtifactStore {
     const inProject = Boolean(artifact.where.project && artifact.path.startsWith(artifact.where.project + sep3));
     return inBots || inProject;
   }
-  restore(id, n, at = this.now()) {
+  restoreNow(id, n, at) {
     const artifact = this.artifacts.get(id);
     const version = artifact?.versions.find((each) => each.n === n);
     if (!artifact || !version)
@@ -698,12 +887,12 @@ class ArtifactStore {
     const bytes = this.bytes(id, n);
     if (!bytes)
       return version.status === "deleted" ? "That version is a deletion: there's nothing to put back." : "That version's copy isn't kept, so it can't be put back.";
-    this.change(artifact.path, { by: { kind: "you" }, via: "replaced", separate: true, keep: true, at });
+    this.changeNow(artifact.path, { by: { kind: "you" }, via: "replaced", separate: true, keep: true, at });
     const latest = artifact.versions.at(-1);
     if (latest && latest.status !== "deleted" && !latest.kept)
       return "What's there now can't be kept, so putting this back couldn't be undone.";
     try {
-      mkdirSync3(join3(artifact.path, ".."), { recursive: true });
+      mkdirSync3(join4(artifact.path, ".."), { recursive: true });
       let mode;
       try {
         mode = statSync2(artifact.path).mode & 4095;
@@ -716,7 +905,7 @@ class ArtifactStore {
       rmSync3(artifact.path + ".kuvo-restore", { force: true });
       return `It couldn't be written: ${error?.message ?? error}`;
     }
-    this.change(artifact.path, { by: { kind: "you" }, via: "restore", separate: true, keep: true, at });
+    this.changeNow(artifact.path, { by: { kind: "you" }, via: "restore", separate: true, keep: true, at });
     const restored = artifact.versions.at(-1);
     if (restored && restored.n !== latest?.n) {
       restored.restored = n;
@@ -724,8 +913,8 @@ class ArtifactStore {
     }
     return artifact;
   }
-  shown(path, made) {
-    const artifact = this.change(path, made) ?? this.at(path);
+  shownNow(path, made) {
+    const artifact = this.changeNow(path, made) ?? this.at(path);
     if (!artifact)
       return;
     artifact.shown = stamp(made.at ?? this.now());
@@ -790,8 +979,8 @@ class ArtifactStore {
   }
   setBudget(bytes) {
     this.chosenBudget = Math.max(0, Math.floor(bytes));
-    writeFileSync3(join3(this.root, "settings.json.new"), JSON.stringify({ budget: this.chosenBudget }));
-    renameSync2(join3(this.root, "settings.json.new"), join3(this.root, "settings.json"));
+    writeFileSync3(join4(this.root, "settings.json.new"), JSON.stringify({ budget: this.chosenBudget }));
+    renameSync2(join4(this.root, "settings.json.new"), join4(this.root, "settings.json"));
     this.settle();
   }
   clearOlder(before) {
@@ -941,7 +1130,17 @@ class ArtifactStore {
       return kind;
     return bytes.subarray(0, 8192).includes(0) ? "file" : kind;
   }
-  read(path) {
+  read(path, seen = this.look(path)) {
+    if (!seen)
+      return seen;
+    const privacy = this.policy.privacy(path);
+    if (!seen.bytes)
+      return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...privacy ? { private: privacy } : {} };
+    if (privacy)
+      return { hash: "keyed:" + createHmac("sha256", this.key).update(seen.bytes).digest("hex"), size: seen.size, private: privacy };
+    return { hash: "sha256:" + createHash("sha256").update(seen.bytes).digest("hex"), size: seen.size, bytes: seen.bytes };
+  }
+  look(path) {
     let stat;
     try {
       stat = statSync2(path);
@@ -950,14 +1149,11 @@ class ArtifactStore {
     }
     if (!stat.isFile())
       return;
-    const privacy = this.policy.privacy(path);
     if (stat.size > copyLimit)
-      return { hash: `stat:${stat.size}:${stat.mtimeMs}`, size: stat.size, ...privacy ? { private: privacy } : {} };
+      return { size: stat.size, mtime: stat.mtimeMs };
     try {
       const bytes = readFileSync3(path);
-      if (privacy)
-        return { hash: "keyed:" + createHmac("sha256", this.key).update(bytes).digest("hex"), size: bytes.length, private: privacy };
-      return { hash: "sha256:" + createHash("sha256").update(bytes).digest("hex"), size: bytes.length, bytes };
+      return { size: bytes.length, mtime: stat.mtimeMs, bytes };
     } catch (error) {
       return error?.code === "ENOENT" ? undefined : null;
     }
@@ -971,7 +1167,7 @@ class ArtifactStore {
       for (const version of [...versions].sort((a, b) => a.n - b.n))
         lines2.push(JSON.stringify({ a: header2, v: version }));
     }
-    const file = join3(this.root, "log", "0000-00.jsonl");
+    const file = join4(this.root, "log", "0000-00.jsonl");
     try {
       writeFileSync3(file + ".new", lines2.join(`
 `) + `
@@ -979,7 +1175,7 @@ class ArtifactStore {
       renameSync2(file + ".new", file);
       for (const month of months)
         if (month !== "0000-00.jsonl")
-          rmSync3(join3(this.root, "log", month), { force: true });
+          rmSync3(join4(this.root, "log", month), { force: true });
     } catch (error) {
       rmSync3(file + ".new", { force: true });
       console.error("artifacts: the log couldn't be compacted:", error?.message ?? error);
@@ -987,13 +1183,13 @@ class ArtifactStore {
   }
   copyPath(hash) {
     const hex = hash.slice("sha256:".length);
-    return join3(this.root, "copies", hex.slice(0, 2), hex);
+    return join4(this.root, "copies", hex.slice(0, 2), hex);
   }
   keep(hash, bytes) {
     const file = this.copyPath(hash);
     if (existsSync2(file))
       return;
-    mkdirSync3(join3(file, ".."), { recursive: true });
+    mkdirSync3(join4(file, ".."), { recursive: true });
     writeFileSync3(file + ".new", bytes);
     renameSync2(file + ".new", file);
   }
@@ -1020,19 +1216,19 @@ class ArtifactStore {
   write(artifact, version) {
     const { versions: _, ...header2 } = artifact;
     const line = { a: header2, ...version ? { v: version } : {} };
-    appendFileSync(join3(this.root, "log", stamp(this.now()).slice(0, 7) + ".jsonl"), JSON.stringify(line) + `
+    appendFileSync(join4(this.root, "log", stamp(this.now()).slice(0, 7) + ".jsonl"), JSON.stringify(line) + `
 `);
   }
   load() {
     let months = [];
     try {
-      months = readdirSync2(join3(this.root, "log")).filter((name) => name.endsWith(".jsonl")).sort();
+      months = readdirSync2(join4(this.root, "log")).filter((name) => name.endsWith(".jsonl")).sort();
     } catch {}
     let lines2 = 0;
     for (const month of months) {
       let text = "";
       try {
-        text = readFileSync3(join3(this.root, "log", month), "utf8");
+        text = readFileSync3(join4(this.root, "log", month), "utf8");
       } catch {}
       for (const each of text.split(`
 `)) {
@@ -1096,16 +1292,16 @@ function summary(artifact) {
 }
 
 // Packages/Box/src/agents/artifacts/turnfiles.ts
-import { spawnSync as spawnSync2 } from "child_process";
+import { spawnSync } from "child_process";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
-import { dirname as dirname2, join as join4, sep as sep4 } from "path";
+import { dirname as dirname2, join as join5, sep as sep4 } from "path";
 var skipped = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".cache", ".pytest_cache", ".mypy_cache", ".next", ".turbo", ".gradle", "target", "DerivedData"]);
 var clockSlack = 2000;
 var walkLimit = 20000;
 var fileLimit = 200;
 function repositoryOf(folder) {
   for (let at = folder;; at = dirname2(at)) {
-    if (existsSync3(join4(at, ".git")))
+    if (existsSync3(join5(at, ".git")))
       return at;
     if (dirname2(at) === at)
       return;
@@ -1130,7 +1326,7 @@ function changedSince(folder, since, keep = () => true) {
   return found;
 }
 function fromGit(top, folder) {
-  const result = spawnSync2("git", ["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], {
+  const result = spawnSync("git", ["-C", folder, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], {
     timeout: 15000,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
@@ -1147,7 +1343,7 @@ function fromGit(top, folder) {
       i++;
     if (entry[0] === "D" || entry[1] === "D")
       continue;
-    paths.push(join4(top, entry.slice(3)));
+    paths.push(join5(top, entry.slice(3)));
   }
   return paths.filter((path) => path.startsWith(folder + sep4));
 }
@@ -1166,7 +1362,7 @@ function walk(folder) {
         return;
       if (skipped.has(name))
         continue;
-      const path = join4(at, name);
+      const path = join5(at, name);
       let stat;
       try {
         stat = statSync3(path);
@@ -1209,7 +1405,7 @@ function watchTree(folder, changed, failed, { limit = 4000, linux = process.plat
   if (!linux) {
     const watcher = watch(folder, { recursive: true }, (_, name) => {
       if (name)
-        changed(join5(folder, name.toString()));
+        changed(join6(folder, name.toString()));
     });
     watcher.on("error", (error) => failed(String(error?.message ?? error)));
     return { close: () => watcher.close() };
@@ -1228,7 +1424,7 @@ function watchTree(folder, changed, failed, { limit = 4000, linux = process.plat
       watcher = watch(at, (_, name) => {
         if (!name)
           return;
-        const path = join5(at, name.toString());
+        const path = join6(at, name.toString());
         changed(path);
         try {
           if (statSync4(path).isDirectory() && wanted(relative2(folder, path)))
@@ -1254,7 +1450,7 @@ function watchTree(folder, changed, failed, { limit = 4000, linux = process.plat
       return;
     }
     for (const name of names) {
-      const path = join5(at, name);
+      const path = join6(at, name);
       try {
         if (statSync4(path).isDirectory() && wanted(relative2(folder, path)))
           visit(path);
@@ -1326,9 +1522,8 @@ class BotFolders {
     this.flush(bot);
     if (this.watching)
       return;
-    const folder = join5(this.bots, bot);
-    for (const path of changedSince(folder, since, (inside) => recordable(join5(bot, inside))))
-      this.store.change(path, made("shell"));
+    const folder = join6(this.bots, bot);
+    this.store.changeAll(changedSince(folder, since, (inside) => recordable(join6(bot, inside))), made("shell"));
   }
   flush(bot) {
     for (const path of [...this.pending.keys()]) {
@@ -1352,8 +1547,8 @@ class BotFolders {
     }
   }
   baseline(bot) {
-    const folder = join5(this.bots, bot);
-    const files = [join5(folder, "MEMORY.md"), join5(folder, "job.json"), ...walk2(join5(folder, "workspace", ".opencode", "skills"), 200)];
+    const folder = join6(this.bots, bot);
+    const files = [join6(folder, "MEMORY.md"), join6(folder, "job.json"), ...walk2(join6(folder, "workspace", ".opencode", "skills"), 200)];
     for (const file of files) {
       if (this.store.at(file))
         continue;
@@ -1378,7 +1573,7 @@ function walk2(folder, limit) {
     for (const name of names) {
       if (found.length >= limit || skipped.has(name))
         return;
-      const path = join5(at, name);
+      const path = join6(at, name);
       try {
         if (statSync4(path).isDirectory())
           visit(path);
@@ -1393,7 +1588,7 @@ function walk2(folder, limit) {
 
 // Packages/Box/src/agents/artifacts/recorder.ts
 import { readdirSync as readdirSync5, readFileSync as readFileSync5 } from "fs";
-import { isAbsolute, join as join6, relative as relative3, resolve, sep as sep6 } from "path";
+import { isAbsolute, join as join7, relative as relative3, resolve, sep as sep6 } from "path";
 import { fileURLToPath } from "url";
 
 // Packages/Box/src/agents/artifacts/changes.ts
@@ -1427,7 +1622,7 @@ function changes(before, after, prose) {
     const pairs = Math.min(gone.length, come.length);
     for (let p = 0;p < pairs; p++) {
       const runs = words(gone[p], come[p]);
-      const kept = runs.filter((run) => run.t === " ").reduce((sum, run) => sum + run.text.trim().length, 0);
+      const kept = runs.filter((run2) => run2.t === " ").reduce((sum, run2) => sum + run2.text.trim().length, 0);
       const size = Math.min(gone[p].trim().length, come[p].trim().length) || 1;
       if (kept / size < 1 - rewritten) {
         out.push({ kind: "removed", text: gone[p] }, { kind: "added", text: come[p] });
@@ -1621,6 +1816,23 @@ class Recorder {
     });
     return done;
   }
+  async noted(sources, id, path, via) {
+    for (const source of sources) {
+      let found;
+      try {
+        found = await source.session(id);
+      } catch {}
+      if (!found)
+        continue;
+      const live = this.live.get(source.name + "\x00" + id) ?? { calls: new Map, queue: Promise.resolve() };
+      await live.queue.catch(() => {});
+      const context = await this.context(source, id, live);
+      if (context)
+        await this.store.change(path, { ...context.made(via), ...via === "download" ? { download: true } : {} });
+      return true;
+    }
+    return false;
+  }
   given(prompt, chat) {
     remember(this.parts, prompt, chat);
   }
@@ -1737,12 +1949,12 @@ class Recorder {
         continue;
       const path = absolute(file.file);
       if (!this.store.at(path) && file.status !== "added" && typeof file.patch === "string")
-        this.seedBefore(path, file.patch);
-      this.store.change(path, { ...made(name), ...typeof file.patch === "string" ? { patch: file.patch } : {} });
+        await this.seedBefore(path, file.patch);
+      await this.store.change(path, { ...made(name), ...typeof file.patch === "string" ? { patch: file.patch } : {} });
     }
     const written = input.path ?? input.filePath ?? input.file_path;
     if (!files.length && writes.has(name) && typeof written === "string")
-      this.store.change(absolute(written), made(name));
+      await this.store.change(absolute(written), made(name));
     if (makers.has(name) && (name !== "browser_screenshot" || input.show)) {
       for (const part of Array.isArray(content) ? content : []) {
         if (part?.type !== "file" || typeof part.uri !== "string" || !part.uri.startsWith("file:"))
@@ -1753,18 +1965,18 @@ class Recorder {
         } catch {
           continue;
         }
-        this.store.change(path, made(name));
+        await this.store.change(path, made(name));
       }
     }
     if ((name === "show_file" || name === "show_in_panel") && typeof input.path === "string")
-      this.store.shown(absolute(input.path), made(name));
+      await this.store.shown(absolute(input.path), made(name));
     if (name === "mark_final" && typeof input.path === "string") {
-      const artifact = this.store.change(absolute(input.path), made(name)) ?? this.store.at(absolute(input.path));
+      const artifact = await this.store.change(absolute(input.path), made(name)) ?? this.store.at(absolute(input.path));
       if (artifact)
-        this.store.pin(artifact.id, { by: "bot", ...typeof input.note === "string" && input.note ? { note: input.note } : {} });
+        await this.store.pin(artifact.id, { by: "bot", ...typeof input.note === "string" && input.note ? { note: input.note } : {} });
     }
   }
-  seedBefore(path, patch) {
+  async seedBefore(path, patch) {
     let now;
     try {
       now = readFileSync5(path, "utf8");
@@ -1773,7 +1985,7 @@ class Recorder {
     }
     const before = unapplyExactly(patch, now);
     if (before !== undefined && before !== now)
-      this.store.before(path, Buffer.from(before));
+      await this.store.before(path, Buffer.from(before));
   }
   async root(source, id, info) {
     let current = { id, info };
@@ -1788,7 +2000,7 @@ class Recorder {
     const known = this.infos.get(key);
     if (known)
       return known;
-    const reading = (async () => {
+    const reading2 = (async () => {
       let session;
       try {
         session = await source.session(id);
@@ -1808,8 +2020,8 @@ class Recorder {
         ...source.name === "engine" && kuvo.engineFor ? { hidden: true } : {}
       };
     })();
-    remember(this.infos, key, reading);
-    return reading;
+    remember(this.infos, key, reading2);
+    return reading2;
   }
   inBots(folder) {
     return Boolean(this.options.bots && (folder + sep6).startsWith(this.options.bots + sep6));
@@ -1828,7 +2040,7 @@ class Recorder {
         if (!bot.startsWith("bot_"))
           continue;
         try {
-          if (readFileSync5(join6(bots, bot, "session"), "utf8").trim() === id)
+          if (readFileSync5(join7(bots, bot, "session"), "utf8").trim() === id)
             return bot;
         } catch {}
       }
@@ -1862,8 +2074,7 @@ function record(store, { bots, watch: watch2 = true, settle = 1000 } = {}) {
       if (bot && folders)
         folders.turnEnded(bot, since, made);
       if (folder && !(bots && (folder + sep7).startsWith(bots + sep7))) {
-        for (const path of changedSince(folder, since))
-          store.change(path, made("shell"));
+        store.changeAll(changedSince(folder, since), made("shell"));
       }
     }
   });
@@ -1876,7 +2087,7 @@ function record(store, { bots, watch: watch2 = true, settle = 1000 } = {}) {
 
 // Packages/Box/src/agents/auto.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync6, renameSync as renameSync3, writeFileSync as writeFileSync4 } from "fs";
-import { join as join7 } from "path";
+import { join as join8 } from "path";
 
 // Packages/Box/src/agents/ids.ts
 var alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -1995,7 +2206,7 @@ class Auto {
     }));
   }
   get file() {
-    return join7(this.root, "auto.json");
+    return join8(this.root, "auto.json");
   }
   list(id) {
     const list = this.lists.find((list2) => list2.id === id) ?? this.lists[0];
@@ -2098,7 +2309,7 @@ function resetTime(at) {
 
 // Packages/Box/src/agents/deps.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "fs";
-import { join as join8 } from "path";
+import { join as join9 } from "path";
 var installing = new Map;
 
 class Deps {
@@ -2109,7 +2320,7 @@ class Deps {
     this.cache = cache;
   }
   folder(agent) {
-    return join8(this.root, agent);
+    return join9(this.root, agent);
   }
   has(agent, packages) {
     return packages.every((pkg) => installedVersion(this.folder(agent), pkg.name) === pkg.version);
@@ -2129,7 +2340,7 @@ class Deps {
   async install(folder, packages, optional) {
     mkdirSync5(folder, { recursive: true });
     const manifest = { name: "kuvo-agents-runtime", private: true, dependencies: Object.fromEntries(packages.map((pkg) => [pkg.name, pkg.version])) };
-    writeFileSync5(join8(folder, "package.json"), JSON.stringify(manifest, null, 2));
+    writeFileSync5(join9(folder, "package.json"), JSON.stringify(manifest, null, 2));
     const args = [process.execPath, "install", "--no-save", "--no-progress", "--silent"];
     if (!optional)
       args.push("--omit", "optional");
@@ -2139,14 +2350,14 @@ class Deps {
         ...process.env,
         BUN_BE_BUN: "1",
         BUN_INSTALL: this.cache,
-        BUN_INSTALL_CACHE_DIR: join8(this.cache, "install")
+        BUN_INSTALL_CACHE_DIR: join9(this.cache, "install")
       },
       stdout: "pipe",
       stderr: "pipe"
     });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     if (installing.size <= 1)
-      rmSync4(join8(this.cache, "install"), { recursive: true, force: true });
+      rmSync4(join9(this.cache, "install"), { recursive: true, force: true });
     if (code !== 0)
       throw new Error(`Couldn't download what the agent needs (${packages.map((pkg) => pkg.name).join(", ")}): ${stderr.trim().slice(-400)}`);
   }
@@ -2159,7 +2370,7 @@ class Deps {
   }
 }
 function installedVersion(folder, name) {
-  const file = join8(folder, "node_modules", name, "package.json");
+  const file = join9(folder, "node_modules", name, "package.json");
   if (!existsSync4(file))
     return;
   try {
@@ -2171,7 +2382,7 @@ function installedVersion(folder, name) {
 
 // Packages/Box/src/agents/engine.ts
 import { readFileSync as readFileSync8 } from "fs";
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 
 // Packages/Box/src/agents/agent.ts
 class ContextWindows {
@@ -2374,7 +2585,7 @@ ${directory}`;
       if (source?.type === "directory" && typeof source.path === "string" && /^[\w.-]+(\/[\w.-]+)*$/.test(name) && !name.split("/").includes("..")) {
         for (const folder of ["command", "commands"]) {
           try {
-            const text = readFileSync8(join9(source.path, folder, `${name}.md`), "utf8");
+            const text = readFileSync8(join10(source.path, folder, `${name}.md`), "utf8");
             const body = text.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
             if (body)
               template = body;
@@ -2671,11 +2882,11 @@ class EngineThread {
         return;
       let cursor = 0;
       let output = "";
-      let reading = false;
+      let reading2 = false;
       const read = async () => {
-        if (reading)
+        if (reading2)
           return;
-        reading = true;
+        reading2 = true;
         try {
           const answer = await this.link.request("GET", `/api/shell/${encodeURIComponent(shellID)}/output?cursor=${cursor}`, undefined, 1e4, this.session.location.directory).catch(() => {
             return;
@@ -2688,7 +2899,7 @@ class EngineThread {
           output = (output + more).slice(-outputLimit);
           turn.toolProgress(tool, { output });
         } finally {
-          reading = false;
+          reading2 = false;
         }
       };
       shells.set(tool, setInterval(read, 1000));
@@ -3755,123 +3966,6 @@ async function handoffRoutes(handoffs, method, parts, body) {
 // Packages/Box/src/agents/reviews.ts
 import { lstatSync, readFileSync as readFileSync11, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
 import { join as join11 } from "path";
-
-// Packages/Box/src/agents/proc.ts
-import { spawn } from "child_process";
-import { accessSync, constants } from "fs";
-import { delimiter, join as join10 } from "path";
-function which(name, extra = []) {
-  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
-  for (const folder of folders) {
-    const path = join10(folder, name);
-    try {
-      accessSync(path, constants.X_OK);
-      return path;
-    } catch {}
-  }
-  return;
-}
-async function run(command, args, options = {}) {
-  const env = { ...process.env, ...options.env };
-  for (const name of Object.keys(env))
-    if (env[name] === undefined)
-      delete env[name];
-  const child = Bun.spawn([command, ...args], {
-    cwd: options.cwd,
-    env,
-    stdin: options.input !== undefined ? "pipe" : "ignore",
-    stdout: "pipe",
-    stderr: "pipe"
-  });
-  if (options.input !== undefined && child.stdin) {
-    child.stdin.write(options.input);
-    child.stdin.end();
-  }
-  let timedOut = false;
-  const timer = options.timeout ? setTimeout(() => {
-    timedOut = true;
-    child.kill();
-  }, options.timeout) : undefined;
-  let stdout = "";
-  let stderr = "";
-  const reads = Promise.all([new Response(child.stdout).text().then((text2) => stdout = text2), new Response(child.stderr).text().then((text2) => stderr = text2)]);
-  const code = await child.exited;
-  await Promise.race([reads, Bun.sleep(2000)]);
-  if (timer)
-    clearTimeout(timer);
-  return { code, stdout, stderr, ...timedOut ? { timedOut } : {} };
-}
-function runGroup(command, args, options = {}) {
-  const env = { ...process.env, ...options.env };
-  for (const name of Object.keys(env))
-    if (env[name] === undefined)
-      delete env[name];
-  return new Promise((resolve2) => {
-    const child = spawn(command, args, { cwd: options.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => stdout += chunk);
-    child.stderr?.on("data", (chunk) => stderr += chunk);
-    const stop = (signal) => {
-      try {
-        if (child.pid)
-          process.kill(-child.pid, signal);
-      } catch {}
-    };
-    const timer = options.timeout ? setTimeout(() => {
-      stop("SIGTERM");
-      setTimeout(() => stop("SIGKILL"), 3000);
-    }, options.timeout) : undefined;
-    child.on("error", (error) => {
-      if (timer)
-        clearTimeout(timer);
-      resolve2({ code: -1, stdout, stderr: stderr + String(error) });
-    });
-    child.on("close", (code) => {
-      if (timer)
-        clearTimeout(timer);
-      resolve2({ code: code ?? -1, stdout, stderr });
-    });
-  });
-}
-var startPath = process.env.PATH ?? "";
-var pathRead = 0;
-var reading;
-async function refreshLoginPath(now = false) {
-  if (reading) {
-    await reading;
-    if (!now)
-      return;
-  }
-  if (!now && Date.now() - pathRead < 5000)
-    return;
-  reading = readLoginPath().finally(() => {
-    pathRead = Date.now();
-    reading = undefined;
-  });
-  await reading;
-}
-async function readLoginPath() {
-  const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  for (const flags of onMachine ? ["-lc"] : ["-ilc", "-lc"]) {
-    try {
-      const ran = await run(shell, [flags, 'printf "__KUVO_PATH__%s__KUVO_END__" "$PATH"'], { timeout: 8000, env: { ...ownEnvironment(), PATH: startPath, DISABLE_AUTO_UPDATE: "true" } });
-      const found = ran.stdout.match(/__KUVO_PATH__([\s\S]*?)__KUVO_END__/)?.[1];
-      if (found?.trim()) {
-        process.env.PATH = [...new Set([process.env.KUVO_BIN, ...found.trim().split(":")].filter(Boolean))].join(":");
-        return;
-      }
-    } catch {}
-  }
-}
-function firstURL(text2) {
-  return text2.match(/https?:\/\/[^\s"'<>]+/)?.[0];
-}
-function plain(text2) {
-  return text2.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
-}
-
-// Packages/Box/src/agents/reviews.ts
 var diffLimit = 80000;
 var newFileLimit = 256000;
 
@@ -13488,6 +13582,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!store)
     return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.");
   const [first, second, third, fourth] = parts;
+  await store.settled();
   if (!first) {
     if (method !== "GET")
       return message(405, "Read them with GET.");
@@ -13540,8 +13635,8 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const { pinned, note } = await body() ?? {};
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
-    const changed = store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return json5(clientArtifact(changed, store));
+    const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
+    return changed ? json5(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -13549,7 +13644,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const { version: version2 } = await body() ?? {};
     if (!Number.isInteger(version2))
       return message(400, "Say which version to put back (version).");
-    const restored = store.restore(artifact.id, version2);
+    const restored = await store.restore(artifact.id, version2);
     return typeof restored === "string" ? message(409, restored) : json5(clientArtifact(restored, store));
   }
   if (second === "versions" && third !== undefined) {
@@ -13584,6 +13679,20 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     }
   }
   return message(404, "No such route.");
+}
+async function notedRoute(noted, method, body) {
+  if (!noted)
+    return message(503, "This computer's record of what its agents made isn't running. Try again in a moment.");
+  if (method !== "POST")
+    return message(405, "Tell it with POST.");
+  const { path, session, via } = await body() ?? {};
+  if (typeof path !== "string" || !path.startsWith("/"))
+    return message(400, "Say the file's whole path (path).");
+  if (typeof session !== "string" || !session)
+    return message(400, "Say whose it is (session).");
+  if (via !== "download")
+    return message(400, "Say how it came (via: download).");
+  return await noted(session, path, via) ? json5({ ok: true }) : message(404, "There's no such conversation on this computer.");
 }
 function notKept(version2) {
   if (version2.status === "deleted")
@@ -18112,6 +18221,8 @@ function handler(context) {
         return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "link" && b === "groups")
         return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(4), body, request.signal);
+      if (area === "kuvo" && a === "artifacts" && b === "noted" && !c)
+        return await notedRoute(context.noted, method, body);
       if (area === "kuvo" && a === "link" && b === "artifacts")
         return await artifactRoutes(context.artifacts, method, parts2.slice(4), url.searchParams, body, request.signal);
       if (area === "kuvo" && a === "peers")
@@ -18400,6 +18511,7 @@ var sideQuestions = new SideQuestions(join24(home2, "side-questions.json"), plac
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join24(home2, "reviews.json"), places4);
 var artifacts;
+var noted;
 if (artifactsFolder) {
   try {
     artifacts = new ArtifactStore(artifactsFolder, { bots: botsFolder });
@@ -18431,6 +18543,7 @@ if (artifactsFolder) {
       }
     };
     partGiven = (prompt, chat2) => recorder.given(prompt, chat2);
+    noted = (session, path, via) => recorder.noted([engineSource, bridgeSource], session, path, via);
     link2.watch((event) => void recorder.heard(engineSource, event));
     subscribe((event) => void recorder.heard(bridgeSource, event));
   } catch (error3) {
@@ -18443,7 +18556,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, artifacts })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, artifacts, noted })
   });
 } catch (error3) {
   console.error("couldn't listen:", error3?.message ?? error3);
@@ -18504,4 +18617,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c77032ff5cd803c2d01f3a61fe0ac130dfef1ff336d2962a1244094a626ae8fa
+// Built from Packages/Box/src/agents f77374cec7773574099e03c5af107fa61edd7b8f8acb6834812f0cc18b1caad3
