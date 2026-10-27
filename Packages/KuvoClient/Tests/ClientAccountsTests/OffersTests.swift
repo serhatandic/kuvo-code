@@ -97,6 +97,17 @@ import ClientAccounts
         #expect(fresh.plans.map(\.action) == [.install(integrationID: "claude-code"), .install(integrationID: "codex-cli"), .signIn(integrationID: "cursor"), .signIn(integrationID: "github-copilot")])
         #expect(fresh.keys.isEmpty)
         #expect(fresh.more.map(\.name) == ["Grok", "Antigravity", "GitLab Duo", "Poe", "OpenCode"])
+
+        // Signed in to GitHub Copilot from its row: the engine has it now, and so does the row,
+        // though opencode never listed it.
+        let signedIn = Offers(found: found(agents: [
+            .init(id: "claude-code", name: "Claude Code", installed: false, signedIn: false),
+            .init(id: "codex-cli", name: "Codex", installed: false, signedIn: false),
+            .init(id: "cursor", name: "Cursor", installed: true, signedIn: false),
+        ], connected: ["github-copilot"]))
+        let copilot = signedIn.plans.first { $0.integrationID == "github-copilot" }
+        #expect(copilot?.detail == "Signed in")
+        #expect(copilot?.action == .ready)
     }
 
     @Test func agentsNotListedYetArentOfferedToInstall() {
