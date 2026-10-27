@@ -231,11 +231,11 @@ export class ArtifactStore {
 
   /** Each of `paths` as it is now, recorded as `made` it, git asked about them all at once. */
   changeAll(paths: string[], made: Made): Promise<unknown> {
-    const seen = paths.map((path) => this.look(path))
+    // (Read once git has answered, a file at a time: a turn's end, with nothing more to come of it.)
     return this.inTurn(paths, () => {
-      paths.forEach((path, index) => {
+      paths.forEach((path) => {
         try {
-          this.changeNow(path, made, seen[index])
+          this.changeNow(path, made)
         } catch (error: any) {
           console.error("artifacts:", error?.message ?? error)
         }

@@ -105,14 +105,15 @@ export class CopyPolicy {
         // As `./…`: a name like `:x` isn't read as pathspec magic, and git says each back as sent.
         input: paths.map((path) => "./" + relative(top, path)).join("\0") + "\0",
         timeout: 5000,
-        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
       })
     } catch {
       return new Set(paths)
     }
     if (ran.timedOut) return new Set(paths)
-    // 0: some ignored; 1: none; 128: it refused (one path it can't look at, or all).
-    if (ran.code === 128 && paths.length > 1) return undefined
+    // 0: some ignored; 1: none; 128: it refused: for one path beyond a symbolic link, the batch is
+    // asked a path at a time; for the repository (one it won't read), all of it.
+    if (ran.code === 128 && paths.length > 1 && ran.stderr.includes("beyond a symbolic link")) return undefined
     if (ran.code !== 0 && ran.code !== 1) return new Set(paths)
     const said = new Set(ran.stdout.split("\0").filter(Boolean))
     return new Set(paths.filter((path) => said.has("./" + relative(top, path))))

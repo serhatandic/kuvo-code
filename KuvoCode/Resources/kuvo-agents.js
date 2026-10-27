@@ -642,14 +642,14 @@ class CopyPolicy {
       ran = await run("git", ["-C", top, "check-ignore", "-z", "--stdin"], {
         input: paths.map((path) => "./" + relative(top, path)).join("\x00") + "\x00",
         timeout: 5000,
-        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
+        env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
       });
     } catch {
       return new Set(paths);
     }
     if (ran.timedOut)
       return new Set(paths);
-    if (ran.code === 128 && paths.length > 1)
+    if (ran.code === 128 && paths.length > 1 && ran.stderr.includes("beyond a symbolic link"))
       return;
     if (ran.code !== 0 && ran.code !== 1)
       return new Set(paths);
@@ -747,11 +747,10 @@ class ArtifactStore {
     return this.inTurn([path], () => this.changeNow(path, made, seen));
   }
   changeAll(paths, made) {
-    const seen = paths.map((path) => this.look(path));
     return this.inTurn(paths, () => {
-      paths.forEach((path, index) => {
+      paths.forEach((path) => {
         try {
-          this.changeNow(path, made, seen[index]);
+          this.changeNow(path, made);
         } catch (error) {
           console.error("artifacts:", error?.message ?? error);
         }
@@ -18618,4 +18617,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8bf0aef0ad7e518913a4715ac9a39860dbd28c7eb572193d9e969ebe0e1d9b63
+// Built from Packages/Box/src/agents f77374cec7773574099e03c5af107fa61edd7b8f8acb6834812f0cc18b1caad3
