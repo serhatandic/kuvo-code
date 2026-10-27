@@ -84,6 +84,17 @@ import Testing
         #expect(ArtifactWords.name(memory[1].header, bot: "Ben") == "notes.md")
     }
 
+    @Test func aLikelySecretIsNeverSavedOrSharedButWhatGitIgnoresIs() throws {
+        let decode = { (reason: String) in
+            try JSONDecoder().decode(ArtifactVersion.self, from: Data(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["write"], "edits": 1, "size": 9, "hash": "sha256:a", "kept": false, "reason": "\#(reason)"}"#.utf8))
+        }
+        #expect(try !decode("secret").mayLeave)
+        #expect(try decode("ignored").mayLeave)
+        #expect(try decode("git").mayLeave)
+        // A reason a newer box gives that this app doesn't know: not sent until it does.
+        #expect(try !decode("sealed-by-policy").mayLeave)
+    }
+
     @Test func aDeletionSaysWhetherThereIsAnythingToStepBackTo() throws {
         let decode = { (json: String) in try JSONDecoder().decode(ArtifactVersion.self, from: Data(json.utf8)) }
         let made = try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["shell"], "edits": 1, "size": 9, "hash": "sha256:a", "kept": true}"#)
