@@ -303,6 +303,37 @@ describe("a review with fresh eyes", () => {
     expect(fix).toContain("Risk: No test covers the paused timer. Nothing checks")
   })
 
+  test("what a model writes loosely is still read: places as text, a place twice, its own ids, a note beside a title", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+x\n"))
+    reviews.onEnded = beat
+    engine.answers = [`{"summary": "Loose.", "findings": [
+      {"id": "1", "title": "Pausing twice skips a second!?", "note": "Both handlers clear the interval.", "severity": "bug",
+       "locations": ["src/timer.ts:88-92", "src/pause.ts:12", {"file": "src/pause.ts", "line": 12}, "README.md"]},
+      {"id": "1", "title": "Another one", "severity": "nit", "locations": []}]}`]
+    await reviews.start("ses_work")
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const [bug, nit] = reviews.get("ses_work")!.findings
+    expect(bug.locations).toEqual([{ file: "src/timer.ts", line: 88, endLine: 92 }, { file: "src/pause.ts", line: 12 }, { file: "README.md" }])
+    expect(bug.explanation).toBe("Both handlers clear the interval.")
+    expect(bug.id).not.toBe(nit.id)
+    expect(reviews.get("ses_work")!.fix).toContain("Bug: Pausing twice skips a second (src/timer.ts:88-92, src/pause.ts:12, README.md). Both")
+
+    // Kept and read again, each finding is still the same one.
+    const again = new Reviews(join(root, "reviews.json"), places(), changes(""))
+    expect(again.get("ses_work")!.findings.map((each) => each.id)).toEqual([bug.id, nit.id])
+  })
+
+  test("a review kept in the first shape is read in this one, and keeps its findings' ids", async () => {
+    writeFileSync(join(root, "reviews.json"), JSON.stringify([{ id: "rev_1", session: "ses_work", state: "done", findings: [{ file: "src/a.ts", line: 3, severity: "bug", note: "It breaks. Fix it." }], started: 1, ended: 2 }]))
+    const first = new Reviews(join(root, "reviews.json"), places(), changes(""))
+    const [finding] = first.get("ses_work")!.findings
+    expect(finding).toMatchObject({ title: "It breaks.", explanation: "Fix it.", locations: [{ file: "src/a.ts", line: 3 }] })
+    first.stopAll()
+    const second = new Reviews(join(root, "reviews.json"), places(), changes(""))
+    expect(second.get("ses_work")!.findings[0].id).toBe(finding.id)
+    second.stopAll()
+  })
+
   test("with nothing to review says so; one under way is waited for; put away, it's gone", async () => {
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes(""))
     reviews.onEnded = beat

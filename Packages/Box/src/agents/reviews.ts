@@ -85,14 +85,18 @@ export class Reviews {
   ) {
     try {
       const saved = JSON.parse(readFileSync(file, "utf8"))
+      let reshaped = false
       for (const review of Array.isArray(saved) ? saved : []) {
         if (typeof review?.session !== "string") continue
         // One under way as the box stopped: said, to be asked again.
         if (review.state === "reviewing") Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." })
-        // One kept in the first shape (a file and a note each): in this one.
-        review.findings = readFindings(review.findings)
+        // One kept in the first shape (a file and a note each): in this one, kept so, so each
+        // finding stays the same one (its id) the next time too.
+        if (Array.isArray(review.findings) && review.findings.some((each: any) => typeof each?.id !== "string")) reshaped = true
+        review.findings = readFindings(review.findings, { kept: true })
         this.kept.set(review.session, review)
       }
+      if (reshaped) this.save()
     } catch {}
     for (const session of this.kept.keys()) {
       this.follow(session)
@@ -271,12 +275,18 @@ export function parseReview(text: string): { summary: string; findings: Finding[
 
 /**
  * Findings as a model wrote them (or as they were kept): a title, why, and where, each; or, in the
- * first shape, a file, a line and a note, whose first sentence is then the title.
+ * first shape, a file, a line and a note, whose first sentence is then the title. A place can be
+ * written as text too (`src/timer.ts:88-92`). A model's own ids aren't kept (it may number two the
+ * same); kept ones are, while they're each a finding's own.
  */
-export function readFindings(list: unknown): Finding[] {
+export function readFindings(list: unknown, { kept = false } = {}): Finding[] {
   const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
   const count = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? (value as number) : undefined)
   const place = (each: any): Place | undefined => {
+    if (typeof each === "string") {
+      const [, file, line, endLine] = each.trim().match(/^(.+?)(?::(\d+)(?:\s*[-–]\s*(\d+))?)?$/) ?? []
+      each = { file, line: line ? Number(line) : undefined, endLine: endLine ? Number(endLine) : undefined }
+    }
     const file = text(each?.file)
     if (!file) return
     const line = count(each.line)
@@ -284,6 +294,7 @@ export function readFindings(list: unknown): Finding[] {
     return { file, ...(line ? { line } : {}), ...(endLine && endLine > line! ? { endLine } : {}) }
   }
   const findings: Finding[] = []
+  const ids = new Set<string>()
   for (const each of Array.isArray(list) ? (list as any[]) : []) {
     let title = text(each?.title)
     let explanation = text(each?.explanation)
@@ -292,11 +303,20 @@ export function readFindings(list: unknown): Finding[] {
       const end = note.search(/[.!?](\s|$)/)
       title = end < 0 ? note : note.slice(0, end + 1)
       explanation = note.slice(title.length).trim()
-    }
+    } else if (!explanation) explanation = note
     if (!title) continue
-    const locations = (Array.isArray(each.locations) ? each.locations.map(place) : [place(each)]).filter((at: Place | undefined): at is Place => !!at)
+    // Each place once.
+    const locations: Place[] = [
+      ...new Map<string, Place>(
+        (Array.isArray(each.locations) ? each.locations.map(place) : [place(each)])
+          .filter((at: Place | undefined): at is Place => !!at)
+          .map((at: Place) => [placeText(at), at] as const),
+      ).values(),
+    ]
+    const id = kept && typeof each.id === "string" && each.id && !ids.has(each.id) ? each.id : newID("fnd")
+    ids.add(id)
     findings.push({
-      id: typeof each.id === "string" && each.id ? each.id : newID("fnd"),
+      id,
       title,
       explanation,
       severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
@@ -317,7 +337,7 @@ export function fixMessage(review: Review): string {
     .map((each) => {
       const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing"
       const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : ""
-      const title = /[.!?]$/.test(each.title) ? each.title.slice(0, -1) : each.title
+      const title = each.title.replace(/[.!?]+$/, "")
       return `- ${kind}: ${title}${where}.${each.explanation ? " " + each.explanation : ""}`
     })
     .join("\n")}`

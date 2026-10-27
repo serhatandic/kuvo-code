@@ -3899,14 +3899,19 @@ class Reviews {
     this.now = now;
     try {
       const saved = JSON.parse(readFileSync11(file, "utf8"));
+      let reshaped = false;
       for (const review of Array.isArray(saved) ? saved : []) {
         if (typeof review?.session !== "string")
           continue;
         if (review.state === "reviewing")
           Object.assign(review, { state: "failed", error: "The computer stopped before the review was done. Ask for it again." });
-        review.findings = readFindings(review.findings);
+        if (Array.isArray(review.findings) && review.findings.some((each) => typeof each?.id !== "string"))
+          reshaped = true;
+        review.findings = readFindings(review.findings, { kept: true });
         this.kept.set(review.session, review);
       }
+      if (reshaped)
+        this.save();
     } catch {}
     for (const session of this.kept.keys()) {
       this.follow(session);
@@ -4073,10 +4078,14 @@ function parseReview(text2) {
     return { summary: text2.trim().slice(0, 600) || "The review gave no answer.", findings: [] };
   }
 }
-function readFindings(list) {
+function readFindings(list, { kept = false } = {}) {
   const text2 = (value) => typeof value === "string" ? value.trim() : "";
   const count = (value) => Number.isInteger(value) && value > 0 ? value : undefined;
   const place = (each) => {
+    if (typeof each === "string") {
+      const [, file2, line4, endLine2] = each.trim().match(/^(.+?)(?::(\d+)(?:\s*[-\u2013]\s*(\d+))?)?$/) ?? [];
+      each = { file: file2, line: line4 ? Number(line4) : undefined, endLine: endLine2 ? Number(endLine2) : undefined };
+    }
     const file = text2(each?.file);
     if (!file)
       return;
@@ -4085,6 +4094,7 @@ function readFindings(list) {
     return { file, ...line3 ? { line: line3 } : {}, ...endLine && endLine > line3 ? { endLine } : {} };
   };
   const findings = [];
+  const ids = new Set;
   for (const each of Array.isArray(list) ? list : []) {
     let title = text2(each?.title);
     let explanation = text2(each?.explanation);
@@ -4093,12 +4103,17 @@ function readFindings(list) {
       const end = note.search(/[.!?](\s|$)/);
       title = end < 0 ? note : note.slice(0, end + 1);
       explanation = note.slice(title.length).trim();
-    }
+    } else if (!explanation)
+      explanation = note;
     if (!title)
       continue;
-    const locations = (Array.isArray(each.locations) ? each.locations.map(place) : [place(each)]).filter((at3) => !!at3);
+    const locations = [
+      ...new Map((Array.isArray(each.locations) ? each.locations.map(place) : [place(each)]).filter((at3) => !!at3).map((at3) => [placeText(at3), at3])).values()
+    ];
+    const id = kept && typeof each.id === "string" && each.id && !ids.has(each.id) ? each.id : newID("fnd");
+    ids.add(id);
     findings.push({
-      id: typeof each.id === "string" && each.id ? each.id : newID("fnd"),
+      id,
       title,
       explanation,
       severity: each.severity === "bug" || each.severity === "nit" ? each.severity : "risk",
@@ -4116,7 +4131,7 @@ function fixMessage(review) {
 ${review.findings.map((each) => {
     const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing";
     const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : "";
-    const title = /[.!?]$/.test(each.title) ? each.title.slice(0, -1) : each.title;
+    const title = each.title.replace(/[.!?]+$/, "");
     return `- ${kind}: ${title}${where}.${each.explanation ? " " + each.explanation : ""}`;
   }).join(`
 `)}`;
@@ -18489,4 +18504,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8addfa1f389f5db65af5d80eccfd785385ba142e82ea8fd59dfb41483741e71c
+// Built from Packages/Box/src/agents c77032ff5cd803c2d01f3a61fe0ac130dfef1ff336d2962a1244094a626ae8fa

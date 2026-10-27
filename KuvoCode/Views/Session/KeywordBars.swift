@@ -317,6 +317,12 @@ private struct FindingRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+        // Read as one, each of its places still opens.
+        .accessibilityActions {
+            ForEach(finding.locations, id: \.self) { place in
+                Button("Open \(place.text)") { open(place) }
+            }
+        }
     }
 
     private var severity: String {
