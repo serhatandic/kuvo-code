@@ -938,7 +938,8 @@ final class SessionModel {
                 update(id) { $0.request = asked }
                 if let machine, !prepared.files.isEmpty {
                     try await MachineBox.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked,
-                                                withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                                                withAgents: OutsideAgents.isAgentSession(session), folder: RemoteFolder.parse(session.location.directory)?.path,
+                                                on: SSHConnection(destination: machine))
                 } else {
                     try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
                 }
@@ -1376,7 +1377,8 @@ final class SessionModel {
                 if Moves.isFrozen(id) { throw Moves.Failure.moving }
                 if let machine, !prepared.files.isEmpty {
                     try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,
-                                                 withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                                                 withAgents: OutsideAgents.isAgentSession(session), folder: RemoteFolder.parse(session.location.directory)?.path,
+                                                 on: SSHConnection(destination: machine))
                 } else {
                     try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
                 }

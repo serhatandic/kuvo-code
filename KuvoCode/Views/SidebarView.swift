@@ -481,7 +481,9 @@ struct SidebarView: View {
             case .bot(let bot): botRow(bot)
             }
         }
-        if !inConversations.isEmpty || isSearchingConversations {
+        // Computers whose conversations couldn't be searched, said, once there's a search of them.
+        let unsearched = search.trimmingCharacters(in: .whitespaces).count >= 3 && !isSearchingConversations ? workspace.unsearched.sorted { $0.key < $1.key } : []
+        if !inConversations.isEmpty || isSearchingConversations || !unsearched.isEmpty {
             SectionHeader(title: "In Conversations") {
                 if isSearchingConversations { Spinner(size: 11).padding(.trailing, 6) }
             }
@@ -497,6 +499,14 @@ struct SidebarView: View {
                     ConversationResultRow(title: session.title ?? "New Session", snippet: result.snippet, isSelected: selection == session.id, action: show)
                         .contextMenu { menu(for: session) }
                 }
+            }
+            ForEach(unsearched, id: \.key) { computer, why in
+                Text("\(computer) \(why), so its conversations weren’t searched.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

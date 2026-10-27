@@ -135,8 +135,8 @@ nonisolated enum Attachments {
             }
             // A folder goes as the list of what's in it, named so.
             let name = kind == .folder ? "\(url.lastPathComponent) (list of its files).txt" : url.lastPathComponent
-            if let inline = inlined(file), total + inline.utf8.count <= maxMessageBytes {
-                total += inline.utf8.count
+            if let inline = inlined(file), total + inline.utf8.count / 4 * 3 <= maxMessageBytes {
+                total += inline.utf8.count / 4 * 3
                 prepared.files.append(.init(uri: inline, name: name))
             } else {
                 prepared.unsent.append(url.path)
@@ -145,9 +145,10 @@ nonisolated enum Attachments {
         return prepared
     }
 
-    /// What a message's files can weigh together, sent to a machine (with their contents, as text):
-    /// each at most `maxBytes`, as the model takes one.
-    static let maxMessageBytes = 60 * 1024 * 1024
+    /// What a file sent to a machine can weigh, and a message's files together: the machine's box
+    /// gives the model one up to `maxBytes`, and the agent a bigger one to open with its tools.
+    static let maxMachineBytes = 50 * 1024 * 1024
+    static let maxMessageBytes = 100 * 1024 * 1024
 
     /// Where on a machine, in its box's folder there, the files sent to it are kept.
     private static let machineFolder = "attachments"
@@ -163,7 +164,7 @@ nonisolated enum Attachments {
             .sorted { $0.isFolder != $1.isFolder ? $0.isFolder : $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return "data:text/plain;base64," + Data(entries.map(\.name).joined(separator: "\n").utf8).base64EncodedString()
         }
-        guard ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxBytes, let data = try? Data(contentsOf: url) else { return nil }
+        guard ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) <= maxMachineBytes, let data = try? Data(contentsOf: url) else { return nil }
         let type = UTType(filenameExtension: url.pathExtension)
         let mime = kind(of: url) == .text ? "text/plain" : (type?.preferredMIMEType ?? "application/octet-stream")
         return "data:\(mime);base64," + data.base64EncodedString()

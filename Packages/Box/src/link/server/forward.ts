@@ -53,7 +53,7 @@ function modelInput(base: URL, headers: Record<string, string>, signal: AbortSig
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
 // streams back what it answers. What's sent is the path as `canonicalPath` writes it, which is
 // what `allows` checks.
-export async function* forward(target: Target, path: string, request: LinkRequest, signal: AbortSignal | undefined, allows: (path: string, method: string) => boolean, naming: Naming | null = null, down: () => string = engineDown): AsyncGenerator<AnswerPiece> {
+export async function* forward(target: Target, path: string, request: LinkRequest, signal: AbortSignal | undefined, allows: (path: string, method: string) => boolean, naming: Naming | null = null, down: () => string = engineDown, toAgents = false): AsyncGenerator<AnswerPiece> {
   const method = request.method.toUpperCase();
   const sent = canonicalPath(path);
   if (sent === null || !allows(sent, method)) {
@@ -85,7 +85,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
   const outgoing = async (): Promise<Buffer | undefined> => {
     if (!sending) return request.body;
     const session = decodeURIComponent(sending[1]!);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, !toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response: Response;
@@ -141,7 +141,7 @@ export async function* agentsRoute(context: RouteContext): AsyncGenerator<Answer
     yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
     return;
   }
-  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
+  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);
 }
 
 // What's left goes to the engine (the paths a phone may ask for), and a command stopped to whichever
