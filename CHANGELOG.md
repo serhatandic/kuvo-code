@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
 - A session's subagents show under it in the sidebar, folded until you click the count beside it: on a line under the session, each with its status, opening its own conversation with the way back. A subagent you open no longer takes a tab in the side panel.
 - After an update with new features, **What's New** shows its highlights once, each with **Try It** where it opens something; **Help › What's New** shows them again. New keywords in the **/** list carry a small **New** until you use them.
 - Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.

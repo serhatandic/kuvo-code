@@ -72,6 +72,9 @@ jobs:
           python3 scripts/whats-new.py --check
           python3 -m unittest discover -s scripts -p test_whats_new.py
 
+      - name: Test scripts/heavy.sh, which takes turns for heavy jobs
+        run: python3 -m unittest discover -s scripts -p test_heavy.py
+
       - name: Test KuvoLink and the machines' bridge
         working-directory: Packages/KuvoLink
         run: |

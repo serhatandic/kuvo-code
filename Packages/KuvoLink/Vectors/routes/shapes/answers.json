@@ -2189,6 +2189,9 @@
             "literal": "reviews"
            },
            {
+            "literal": "search"
+           },
+           {
             "literal": "sessions.agents"
            },
            {
@@ -2396,6 +2399,9 @@
            },
            {
             "literal": "reviews"
+           },
+           {
+            "literal": "search"
            },
            {
             "literal": "sessions.agents"
@@ -4082,6 +4088,24 @@
     "200": {
      "object": {
       "status": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/search",
+   "answers": {
+    "200": {
+     "object": {
+      "results": {
+       "list": {
+        "object": {
+         "session": "string",
+         "snippet": "string",
+         "info": "any"
+        }
+       }
+      }
      }
     }
    }
