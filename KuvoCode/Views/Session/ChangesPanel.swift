@@ -849,15 +849,18 @@ private struct ImageDiff: View {
     /// Each side from git when it's committed or staged, otherwise from disk.
     private static func load(_ file: ChangedFile) async -> Pair {
         await Task.detached {
-            func read(_ object: String?, disk: URL?) -> NSImage? {
+            // A machine's file from disk comes from its box, as a phone reads it.
+            func read(_ object: String?, disk: URL?) async -> NSImage? {
                 if let object, let root = file.root, let data = Git.data(["show", object], in: root) { return NSImage(data: data) }
-                if let disk, !disk.isFileURL { return RemoteShell.read(disk, limit: 20_000_000).flatMap(NSImage.init(data:)) }
+                if let disk, let (machine, path) = RemoteFolder.parse(disk) {
+                    return (try? await BoxClient.machine(machine).file(path)).flatMap(NSImage.init(data:))
+                }
                 if let disk, FileManager.default.fileExists(atPath: disk.path) { return NSImage(contentsOf: disk) }
                 return nil
             }
             return Pair(
-                old: file.status == .added ? nil : read(file.oldObject, disk: nil),
-                new: file.status == .deleted ? nil : read(file.newObject, disk: file.url)
+                old: file.status == .added ? nil : await read(file.oldObject, disk: nil),
+                new: file.status == .deleted ? nil : await read(file.newObject, disk: file.url)
             )
         }.value
     }

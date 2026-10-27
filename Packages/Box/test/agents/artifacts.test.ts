@@ -306,6 +306,29 @@ describe("files a command made", () => {
     expect(names).toEqual(["summary.md"])
   })
 
+  test("in a Mac's home folder, the app's caches and logs that change meanwhile aren't the agent's", async () => {
+    recorder = record(store, { bots }).recorder
+    const home = join(root, "home")
+    const caches = join(home, "Library", "Caches", "run.kuvo.code")
+    const logs = join(home, "Library", "Logs", "Kuvo Code")
+    mkdirSync(caches, { recursive: true })
+    mkdirSync(logs, { recursive: true })
+    const was = process.env.KUVO_OWN_FOLDERS
+    process.env.KUVO_OWN_FOLDERS = `${caches}:${logs}`
+    try {
+      session("ses_home", home)
+      await hear([{ type: "session.execution.started", data: { sessionID: "ses_home" } }])
+      writeFileSync(join(caches, "sessions.json"), "{}")
+      writeFileSync(join(logs, "usage.log"), "line\n")
+      writeFileSync(join(home, "notes.txt"), "made\n")
+      await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_home" } }])
+      expect((await route("GET", "kuvo/artifacts?session=ses_home")).value.artifacts.map((artifact: any) => artifact.name)).toEqual(["notes.txt"])
+    } finally {
+      if (was === undefined) delete process.env.KUVO_OWN_FOLDERS
+      else process.env.KUVO_OWN_FOLDERS = was
+    }
+  })
+
   test("in the home folder, what Kuvo Code keeps there (a file you sent with the message) isn't the agent's", async () => {
     recorder = record(store, { bots }).recorder
     const home = join(root, "home")

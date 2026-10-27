@@ -25,11 +25,13 @@ const fileLimit = 200
  * Kuvo Code's own folders on this computer (the box's, with the files sent with messages, its run
  * state and records): never what an agent made, though a session working in the home folder walks
  * over them. On a machine they're `~/.kuvo-code`; on a Mac, the app's support folder, which holds
- * the bridge's and the box's.
+ * the bridge's and the box's, and its caches and logs, which the app names (`KUVO_OWN_FOLDERS`,
+ * separated by colons).
  */
 function ownFolders(): string[] {
   const agents = process.env.KUVO_AGENTS_HOME
-  return [process.env.KUVO_HOME, agents ? dirname(agents) : undefined].filter((folder): folder is string => !!folder)
+  const named = (process.env.KUVO_OWN_FOLDERS ?? "").split(":")
+  return [process.env.KUVO_HOME, agents ? dirname(agents) : undefined, ...named].filter((folder): folder is string => !!folder)
 }
 
 /** The git repository `folder` is in, or none. */

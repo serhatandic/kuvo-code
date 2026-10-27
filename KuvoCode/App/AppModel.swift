@@ -659,6 +659,11 @@ final class AppModel {
         environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
         // Its record of what agents made, in the box's own folder, as a machine's is in `~/.kuvo-code`.
         environment["KUVO_ARTIFACTS"] = BoxProcess.home.appending(path: "artifacts").path
+        // The app's caches and logs, which a session in your home folder walks over: never what an
+        // agent made (the support folder, which holds the box's, it knows already).
+        let info = Bundle.main.infoDictionary
+        let name = (info?["CFBundleDisplayName"] as? String) ?? (info?["CFBundleName"] as? String) ?? "Kuvo Code"
+        environment["KUVO_OWN_FOLDERS"] = [URL.libraryDirectory.appending(path: "Caches/\(AppInfo.bundleID)"), URL.libraryDirectory.appending(path: "Logs/\(name)")].map(\.path).joined(separator: ":")
         Task { await agents.start(engine: binary, environment: environment) }
         // Your time zone or how you write dates changed: meetings go by the new ones.
         if clockObservers.isEmpty {

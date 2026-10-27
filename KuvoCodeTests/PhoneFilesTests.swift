@@ -117,6 +117,37 @@ import Testing
         #expect(try await client.file(log.path).count == 3_000_000)
     }
 
+    /// Changes shows a machine's new file from that machine's box, as the panel does: its lines,
+    /// a picture as binary, and one too big to read through as too big, without fetching all of it.
+    @Test func changesShowsAMachinesNewFileFromItsBox() async throws {
+        let box = try await SettingsBox(port: 47_968)
+        defer { box.stop(); try? FileManager.default.removeItem(at: folder) }
+        let engine = URL(string: box.engine.url + "/")!
+        let client = BoxClient(box: "test", transport: LocalBox { request in
+            PhoneLink.respond(to: request, link: nil, engine: engine, password: "test", agents: nil, asking: Data(repeating: 1, count: 32))
+        })
+        try Data("one\ntwo\n".utf8).write(to: folder.appending(path: "notes.md"))
+        try Data([0x89, 0x50, 0x4E, 0x47, 0, 1]).write(to: folder.appending(path: "chart.png"))
+        try Data(repeating: UInt8(ascii: "x"), count: 2_500_000).write(to: folder.appending(path: "big.log"))
+        let root = RemoteFolder.folder(folder.path, on: "test")
+        let listed = ["notes.md", "chart.png", "big.log"].map { name in
+            var file = ChangedFile(path: name, status: .added, url: RemoteFolder.url(root).appending(path: name))
+            file.root = root
+            file.unread = true
+            return file
+        }
+        var asked: [String] = []
+        let read = await Git.readNew(listed) { machine in
+            asked.append(machine)
+            return client
+        }
+        #expect(asked == ["test", "test", "test"])
+        #expect(read[0].lines.map(\.text) == ["one", "two"])
+        #expect(read[1].isBinary)
+        #expect(read[2].isTooBig && !read[2].isBinary)
+        #expect(read.allSatisfy { !$0.unread })
+    }
+
     /// What a test's stand-in transport was asked.
     nonisolated private final class Asked: @unchecked Sendable {
         private let lock = NSLock()

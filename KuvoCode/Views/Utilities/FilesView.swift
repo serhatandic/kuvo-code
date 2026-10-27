@@ -483,6 +483,13 @@ private struct FileViewer: View {
         return text
     }
 
+    /// Whether a machine's file of this type can be shown here: a picture, or what reads as text
+    /// (an unknown kind too, which may well be).
+    nonisolated static func showsFromAMachine(_ type: UTType?) -> Bool {
+        guard let type, !type.isDynamic else { return true }
+        return [.image, .text, .sourceCode, .propertyList, .xml, .json].contains { type.conforms(to: $0) }
+    }
+
     /// Text up to 2 MB as text, pictures as pictures, the rest for Quick Look.
     /// `machine`: the box a machine's file is on, which sends it as it does a phone (`kuvo/file`).
     static func load(_ url: URL, from machine: BoxClient?) async -> Content {
@@ -491,6 +498,8 @@ private struct FileViewer: View {
             if !url.isFileURL {
                 // On a machine: pictures and text, from its box; nothing for Quick Look there.
                 guard let machine, let path = RemoteFolder.parse(url)?.path else { return .preview }
+                // What can't be shown here (a PDF, an archive, a video) isn't fetched to find out.
+                guard Self.showsFromAMachine(type) else { return .preview }
                 // Pictures whole; anything else only as far as it's shown as text.
                 let data: Data
                 do {

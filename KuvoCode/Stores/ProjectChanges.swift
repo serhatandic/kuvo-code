@@ -27,6 +27,8 @@ nonisolated struct ChangedFile: Identifiable, Hashable, Sendable {
     var root: String?
     var oldObject: String?
     var newObject: String?
+    /// A new file on a machine, listed but not read yet: its box sends it (`Git.readNew`).
+    var unread = false
 
     var id: String { path }
 
@@ -107,7 +109,7 @@ final class ProjectChanges {
         if let result {
             isRepository = true
             if hasUncommitted != uncommitted { hasUncommitted = uncommitted }
-            apply(result)
+            apply(await Git.readNew(result))
         } else {
             isRepository = false
             apply((fallback.isEmpty ? edits : fallback).map { DiffParser.file(from: $0, directory: directory) })
@@ -383,37 +385,57 @@ nonisolated enum Git {
         return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
     }
 
-    /// An untracked file, as all-new lines.
+    /// An untracked file, as all-new lines. A machine's is read afterwards, from its box
+    /// (`readNew`), as a phone reads it.
     private static func newFile(_ path: String, root: String) -> ChangedFile {
         let url = RemoteFolder.url(root).appending(path: path)
         var file = ChangedFile(path: path, status: .added, url: url)
         file.root = root
         // git names a repository inside this one by its folder: "web/".
         file.isFolder = path.hasSuffix("/")
-        let data: Data?
-        if url.isFileURL {
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            file.isTooBig = size > 2_000_000
-            data = file.isTooBig ? nil : try? Data(contentsOf: url)
-        } else {
-            let read = RemoteShell.read(url, limit: 2_000_001)
-            file.isTooBig = (read?.count ?? 0) > 2_000_000
-            data = file.isTooBig ? nil : read
+        guard url.isFileURL else {
+            file.unread = !file.isFolder
+            return file
         }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        file.isTooBig = size > 2_000_000
+        if !file.isTooBig { fill(&file, with: try? Data(contentsOf: url)) }
+        return file
+    }
+
+    /// A machine's new files, read from its box (`box`, by the machine's id): their lines, or binary
+    /// or too big, as this Mac's are.
+    static func readNew(_ files: [ChangedFile], box: (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
+        var read = files
+        for index in read.indices where read[index].unread {
+            read[index].unread = false
+            guard let (machine, path) = RemoteFolder.parse(read[index].url) else { continue }
+            do {
+                fill(&read[index], with: try await box(machine).file(path, max: 2_000_000))
+            } catch let refusal as BoxRefusal where refusal.status == 413 {
+                read[index].isTooBig = true
+            } catch {
+                read[index].isBinary = true
+            }
+        }
+        return read
+    }
+
+    /// A new file's lines from its bytes: binary when they aren't text, too big past what's read through.
+    private static func fill(_ file: inout ChangedFile, with data: Data?) {
         guard let data, !data.contains(0),
               let text = String(data: data, encoding: .utf8) else {
             file.isBinary = true
-            return file
+            return
         }
         var lines = DiffParser.lines(of: text).map(String.init)
         if lines.last == "" { lines.removeLast() }
         // Too big to read through, as a changed one is.
         if lines.count > DiffParser.maxLines || lines.contains(where: { $0.utf8.count > DiffParser.maxLineLength }) {
             file.isTooBig = true
-            return file
+            return
         }
         file.lines = lines.enumerated().map { DiffLine(kind: .added, newNumber: $0 + 1, text: $1) }
-        return file
     }
 
     static func relativePath(of directory: String, in root: String) -> String {
