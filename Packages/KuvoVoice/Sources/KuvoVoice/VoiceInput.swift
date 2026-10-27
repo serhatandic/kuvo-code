@@ -5,8 +5,8 @@ import Speech
 
 /// Voice input, as each way of showing it uses it (the composer listening, or the voice field):
 /// it listens on this device's microphone, writes what you say as you say it (`transcript`), says
-/// how loud you are (`level`, for the motion), and ends once you pause after speaking, or when you
-/// say done. Then `ended` gets the words, for the composer to take. Speech is recognized on the
+/// how loud you are (`level`, for the motion), and goes on, through any silence, until you say
+/// done. Then `ended` gets the words, for the composer to take. Speech is recognized on the
 /// device, with its own model for your language, downloaded the first time.
 @MainActor
 @Observable
@@ -54,9 +54,7 @@ public final class VoiceInput {
     public static let recentCount = 64
     /// When it started listening, for how long it's been.
     public private(set) var listeningSince: Date?
-    /// How long a pause after speaking ends it.
-    public var pauseSeconds: Double = 1.8
-    /// Told the words once it's ended by your pause or `finish` (none, when nothing was heard),
+    /// Told the words once `finish` has ended it (none, when nothing was heard),
     /// never after `cancel`.
     public var ended: ((String) -> Void)?
 
@@ -76,9 +74,8 @@ public final class VoiceInput {
     #if os(iOS)
     @ObservationIgnored private var interruption: (any NSObjectProtocol)?
     #endif
-    @ObservationIgnored private var pause = SpeechPause()
     /// Counts each start: what comes from an earlier one (a cancel, then a start) is dropped.
-    @ObservationIgnored private var run = 0
+    @ObservationIgnored private(set) var run = 0
 
     public init() {}
 
@@ -93,7 +90,6 @@ public final class VoiceInput {
         recentLevels = []
         listeningSince = nil
         meter = VoiceLevel()
-        pause = SpeechPause(seconds: pauseSeconds)
         phase = .preparing(progress: nil)
         listening = Task { await listen(locale: locale, run: run) }
     }
@@ -194,8 +190,8 @@ public final class VoiceInput {
             self.analyzer = analyzer
             inputs = continuation
             results = Task { [weak self] in await self?.read(transcriber, run: run) }
-            Self.tap(input, natural: natural, format: format, continuation: continuation) { [weak self] rms, time in
-                Task { @MainActor in self?.heard(rms: rms, at: time, run: run) }
+            Self.tap(input, natural: natural, format: format, continuation: continuation) { [weak self] rms in
+                Task { @MainActor in self?.heard(rms: rms, run: run) }
             }
             engine.prepare()
             try engine.start()
@@ -214,7 +210,6 @@ public final class VoiceInput {
             for try await result in transcriber.results {
                 guard self.run == run else { return }
                 transcript.take(String(result.text.characters), start: result.range.start.seconds, isFinal: result.isFinal)
-                pause.heardWords(at: result.range.end.seconds)
             }
         } catch {
             guard self.run == run, phase == .listening else { return }
@@ -222,13 +217,12 @@ public final class VoiceInput {
         }
     }
 
-    private func heard(rms: Float, at time: Double, run: Int) {
+    func heard(rms: Float, run: Int) {
         guard self.run == run, phase == .listening else { return }
         meter.take(rms: rms)
         level = meter.value
         recentLevels.append(meter.value)
         if recentLevels.count > Self.recentCount { recentLevels.removeFirst(recentLevels.count - Self.recentCount) }
-        if pause.take(level: meter.value, at: time) { finish() }
     }
 
     private func end(run: Int) {
@@ -270,9 +264,9 @@ public final class VoiceInput {
     /// analyzer (converted to `format`), and how loud it is to `level`. Done here, off the main
     /// actor: a tap installed from `listen` would be the main actor's, and Swift traps when the
     /// audio queue calls it.
-    nonisolated static func tap(_ node: AVAudioNode, natural: AVAudioFormat, format: AVAudioFormat, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float, Double) -> Void) {
+    nonisolated static func tap(_ node: AVAudioNode, natural: AVAudioFormat, format: AVAudioFormat, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float) -> Void) {
         let tap = Tap(format: format, converter: natural == format ? nil : AVAudioConverter(from: natural, to: format), continuation: continuation, level: level)
-        node.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, when in tap.take(buffer, at: when) }
+        node.installTap(onBus: 0, bufferSize: 1024, format: natural) { buffer, _ in tap.take(buffer) }
     }
 
     // MARK: Permission
@@ -308,19 +302,19 @@ private final class Tap: @unchecked Sendable {
     let format: AVAudioFormat
     let converter: AVAudioConverter?
     let continuation: AsyncStream<AnalyzerInput>.Continuation
-    let level: @Sendable (Float, Double) -> Void
+    let level: @Sendable (Float) -> Void
 
-    init(format: AVAudioFormat, converter: AVAudioConverter?, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float, Double) -> Void) {
+    init(format: AVAudioFormat, converter: AVAudioConverter?, continuation: AsyncStream<AnalyzerInput>.Continuation, level: @escaping @Sendable (Float) -> Void) {
         self.format = format
         self.converter = converter
         self.continuation = continuation
         self.level = level
     }
 
-    func take(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime) {
+    func take(_ buffer: AVAudioPCMBuffer) {
         if let samples = buffer.floatChannelData?[0] {
             let rms = VoiceLevel.rms(UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength)))
-            level(rms, Double(when.sampleTime) / max(when.sampleRate, 1))
+            level(rms)
         }
         guard let converter else {
             continuation.yield(AnalyzerInput(buffer: buffer))

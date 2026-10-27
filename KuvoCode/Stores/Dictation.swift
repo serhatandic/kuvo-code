@@ -87,11 +87,11 @@ final class Dictation {
     @ObservationIgnored private var shortcutMonitor: Any?
     /// When the shortcut started it, while it's held.
     @ObservationIgnored private var heldSince: Date?
-    /// Held longer than this, letting go finishes it; a tap leaves it listening until a pause.
+    /// Held longer than this, letting go finishes it; a tap leaves it listening until the next one.
     private static let hold: TimeInterval = 0.4
 
-    /// ⇧⌘Space in the composer you're typing in: held, it listens until you let go; tapped, until a
-    /// pause or another tap. For the composer you're writing in.
+    /// ⇧⌘Space in the composer you're typing in: held, it listens until you let go; tapped, until
+    /// another tap (or Done). For the composer you're writing in.
     func installShortcut() {
         guard shortcutMonitor == nil else { return }
         shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in

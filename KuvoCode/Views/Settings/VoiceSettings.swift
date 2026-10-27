@@ -31,7 +31,7 @@ struct VoiceSettings: View {
                     .background(.quaternary, in: .rect(cornerRadius: 6))
             } label: {
                 Text("Shortcut")
-                Text("Hold it to talk while it’s held, or press it once to talk until you pause.")
+                Text("Hold it to talk, or press it to start and again to stop.")
             }
         }
     }

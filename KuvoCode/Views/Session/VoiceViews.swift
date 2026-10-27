@@ -79,7 +79,7 @@ struct VoiceComposerRow: View {
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .disabled(voice.phase == .finishing)
-                .help("Put what you said in the message (Return). A pause does this too.")
+                .help("Put what you said in the message (Return)")
             }
         }
         .font(.system(size: 13))
@@ -89,8 +89,8 @@ struct VoiceComposerRow: View {
 }
 
 /// The voice field ("Voice Field"): the whole window steps back while you speak. How long it's
-/// been, what you say, large, a line moving with your voice, and Cancel and Done. A pause
-/// finishes it, and the words go into the composer.
+/// been, what you say, large, a line moving with your voice, and Cancel and Done, which puts the
+/// words in the composer. Silence never ends it: you may think between words.
 struct VoiceField: View {
     let voice: VoiceInput
     let cancel: () -> Void
@@ -144,11 +144,6 @@ struct VoiceField: View {
                             .buttonBorderShape(.capsule)
                     }
                 } else {
-                    if voice.phase == .listening {
-                        Text("A pause finishes it")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
                     Button(action: done) {
                         HStack(spacing: 6) {
                             Text("Done")
