@@ -97,8 +97,9 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
 ];
 
 // The handler LinkHost runs for each request. `hold`: the running bridge's notices held while
-// you're at a computer (none in `box route`, a command of its own).
-export function engineHandler(readEngine: () => EngineRecord = readEngineFile, info: RouteContext["info"] = {}, readBridge: () => BridgeRecord = readBridgeFile, phonesChanged: RouteContext["phonesChanged"] = () => {}, hold: NoticeHold | null = null): LinkHandler {
+// you're at a computer (none in `box route`, a command of its own). `info`: every box passes its
+// name; only a test's handler leaves it out (and its `kuvo/info` has none), so its `{}` is cast.
+export function engineHandler(readEngine: () => EngineRecord = readEngineFile, info: RouteContext["info"] = {} as RouteContext["info"], readBridge: () => BridgeRecord = readBridgeFile, phonesChanged: RouteContext["phonesChanged"] = () => {}, hold: NoticeHold | null = null): LinkHandler {
   // The agents' bridge, while it runs: its record, while the process it names is still it.
   const bridge = (): BridgeRecord | null => {
     try {

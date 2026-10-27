@@ -8,6 +8,7 @@ import type { Fields } from "../../shared/json";
 import { newID, plainName, stamp } from "../../shared/text";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
+import type { EngineSession } from "../engine/sessions";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
 import { botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
@@ -18,7 +19,7 @@ import { noteTold, toldDigest } from "./tell";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import type { MadeBot } from "../../shared/routes/bots";
-import type { JSONAnswer } from "../server/context";
+import type { JSONAnswer, OtherStatus } from "../server/context";
 import type { BotDescription } from "./here";
 import type { BotLooks, BotTemplate } from "./kit";
 
@@ -53,14 +54,14 @@ export const fitsLook = (looks: BotLooks, look: unknown): look is BotLook => Boo
 // would drop a message on it without a word; null when it can (or the engine doesn't say).
 export async function signInRefusal(model: BotModel, engine: Target, signal?: AbortSignal): Promise<string | null> {
   const ready = await call(engine, "GET", "/api/provider", undefined, signal).catch(() => undefined);
-  const ids = Array.isArray(ready) ? ready.map(each => each?.id) : [];
+  const ids = Array.isArray(ready) ? (ready as (Fields<"id"> | null)[]).map(each => each?.id) : [];
   return ids.length && !ids.includes(model.providerID) ? `${model.id} needs a sign-in on ${HERE}: sign in to it in Settings › Accounts, or choose another model.` : null;
 }
 
 // `POST kuvo/bots`, as the Mac's: the bot made here, its folder, conversation and instructions,
 // and the template's job for your composer, or else its greeting, so it writes first.
 export async function makeBot(given: GivenBot | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<MadeAnswer> {
-  const no = (status: number, message: string): MadeAnswer => ({ status, value: { message } });
+  const no = (status: OtherStatus, message: string): MadeAnswer => ({ status, value: { message } });
   const kit = readKit();
   if (!kit) return no(409, NO_KIT);
   if (!given || typeof given !== "object") return no(400, "That isn’t a bot to make.");
@@ -111,7 +112,8 @@ export async function makeBot(given: GivenBot | null | undefined, readEngine: ()
     fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
-    session = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal);
+    // (As the engine answers it: the session it made, whole.)
+    session = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules }, signal) as EngineSession;
     if (!session?.id) throw new Error("No conversation was made.");
     await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { kuvo: { bot: id } } }, signal).catch(() => {});
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);

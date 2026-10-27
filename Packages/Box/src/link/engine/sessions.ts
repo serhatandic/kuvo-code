@@ -2,10 +2,38 @@
 
 import crypto from "node:crypto";
 
-/** A session as the engine lists it, as far as a box reads it here. */
-interface SessionMetadata {
-  metadata?: { kuvo?: { engineFor?: unknown; seat?: unknown } } | null;
+/** A session as the engine answers for it (`api/session…`), and the coding agents' bridge in the
+ * same shape: what a box reads of it. The engine leaves out what a session hasn't got, never null. */
+export interface EngineSession {
+  id: string;
+  /** The session it works for, a subagent's. */
+  parentID?: string;
+  title?: string;
+  agent?: string;
+  model?: { id: string; providerID: string; variant?: string };
+  location: { directory: string };
+  /** Its folder said flat, which this reads too where `location` has none (the engine itself has it
+   * only in `location`). */
+  directory?: string;
+  time: { created: number; updated: number; idle?: number; viewed?: number; archived?: number };
+  permissions?: { action: string; resource: string; effect: "allow" | "deny" | "ask" }[];
+  /** An undo waiting to be kept: the conversation is back to before this message. */
+  revert?: { messageID: string };
+  metadata?: SessionNotes;
 }
+
+/** Clients' own notes on a session (any JSON object), as far as a box reads them: Kuvo Code's,
+ * whatever their values are until they're checked. */
+export interface SessionNotes {
+  kuvo?: { bot?: unknown; engineFor?: unknown; seat?: unknown; archived?: unknown; [more: string]: unknown };
+  "kuvo.archived"?: unknown;
+  kuvoAgent?: unknown;
+  "kuvo.carriedTo"?: unknown;
+  [note: string]: unknown;
+}
+
+/** A session, as far as telling a hidden run apart reads it. */
+type SessionMetadata = Pick<EngineSession, "metadata">;
 
 // Kept out of sight, as the Mac keeps them: an engine run a coding agents' session started (Auto on
 // one of the engine's models), whose news the agents' bridge tells as its session's; and a bot's

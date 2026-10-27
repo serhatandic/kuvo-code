@@ -7,6 +7,7 @@ import { processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Project, Projects } from "../../shared/routes/projects";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import type { EngineSession } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
 import { K } from "../home";
@@ -23,10 +24,9 @@ export interface OfferedProject {
   name: string;
 }
 
-/** A page of the engine's sessions (`api/session`): what this reads of each, and where the next
- * page starts. */
+/** A page of the engine's sessions (`api/session`), and where the next page starts. */
 interface SessionPage {
-  data?: { id: string; location?: { directory?: string }; time?: { archived?: number }; metadata?: Record<string, unknown> }[];
+  data?: EngineSession[];
   cursor?: { next?: string };
 }
 

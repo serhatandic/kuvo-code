@@ -166,7 +166,7 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
     id = typeof payload.seatID === "string" ? payload.seatID : null;
   } else if (isObject(payload.seatPart)) {
     // (Checked as a part there.)
-    const whole = assemble(seatParts, sender.key, payload.seatPart as unknown as DocPart);
+    const whole = assemble(seatParts, sender.key, payload.seatPart);
     if (!whole) return;
     try { mail = JSON.parse(Buffer.from(whole.d, "base64url").toString("utf8")); } catch { return; }
     id = whole.s || null;

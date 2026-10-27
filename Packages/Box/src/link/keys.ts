@@ -47,8 +47,8 @@ export async function keyNames({ prefix = "", suffix = "" }: { prefix?: string; 
   if (host) {
     const answer = await askHost(host, "keys/names", { ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) });
     // An answer without its list isn't "no keys" (a refresh would take every bot's servers away).
-    if (!Array.isArray(answer!.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
-    names = answer!.names;
+    if (!Array.isArray(answer.names)) throw new KeysUnavailable("This Mac's keys couldn't be read.");
+    names = answer.names;
   } else {
     names = [...listOf(BOX_KEYS).filter(name => !name.includes("__")), ...listOf(BOT_KEYS).filter(name => name.includes("__"))];
   }

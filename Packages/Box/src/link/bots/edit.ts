@@ -21,7 +21,7 @@ import { tellBot, toldNow } from "./tell";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
 import type { ChangedBot } from "../../shared/routes/bots";
-import type { JSONAnswer } from "../server/context";
+import type { JSONAnswer, OtherStatus } from "../server/context";
 import type { Job } from "./jobs";
 import type { GivenBot } from "./make";
 
@@ -47,7 +47,7 @@ interface BridgeGroups {
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
 // change in as it next connects (Bots.takeIn).
 export async function changeBot(id: string, given: BotChange | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<ChangedAnswer> {
-  const no = (status: number, message: string): ChangedAnswer => ({ status, value: { message } });
+  const no = (status: OtherStatus, message: string): ChangedAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);
@@ -87,7 +87,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
           let agents: Target | null = null;
           try { agents = readBridge(); } catch {}
           const carried = await carryToAgents(here.session, model, readEngine, agents, signal);
-          if (carried.status !== 200) return carried as JSONAnswer<{ message: string }>;
+          if (carried.status !== 200) return carried;
           Object.assign(here, botHere(id) ?? {});
         }
       } else {
@@ -195,7 +195,7 @@ function noteDeleted(id: string): void {
 // place in the group chats here and its conversation. It's noted for the Mac (`noteDeleted`) first,
 // so it lets the bot go too.
 export async function deleteBot(id: string, readEngine: () => Target, readBridge: () => Target | null, signal?: AbortSignal): Promise<DeletedAnswer> {
-  const no = (status: number, message: string): DeletedAnswer => ({ status, value: { message } });
+  const no = (status: OtherStatus, message: string): DeletedAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
   if (isMoving(here.folder)) return no(409, MOVING);

@@ -7,6 +7,7 @@ import { holdArchived } from "../areas/wakes";
 import { namedIn, namingHere } from "./naming";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 import type { EngineRecord, Target } from "../../shared/records";
+import type { EngineSession } from "../engine/sessions";
 import type { AnswerPiece, LinkRequest, RouteContext } from "./context";
 import type { Naming } from "./naming";
 
@@ -54,7 +55,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
   if (changed) {
     try {
       const before = await fetch(url, { headers, signal });
-      if (before.ok) wasArchived = (await before.json() as { data?: { metadata?: Record<string, unknown> } } | null)?.data?.metadata?.["kuvo.archived"] === true;
+      if (before.ok) wasArchived = (await before.json() as { data?: EngineSession } | null)?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
   let response: Response;

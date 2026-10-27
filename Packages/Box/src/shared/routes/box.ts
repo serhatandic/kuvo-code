@@ -80,6 +80,8 @@ export type BoxInfo = Infer<typeof INFO>;
 /** A machine's, as its link answers. */
 export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
+export type UpdateStep = Infer<typeof STEP>;
+export type LastUpdate = Infer<typeof LAST_UPDATE>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
 export type Credentials = Infer<typeof CREDENTIALS>;

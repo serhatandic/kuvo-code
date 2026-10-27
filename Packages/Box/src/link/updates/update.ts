@@ -16,12 +16,12 @@ import { isObject, parsed } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { alive, processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
-import type { Infer } from "../../shared/shape";
-import type { UPDATE } from "../../shared/routes/box";
+import type { LastUpdate, UpdateStatus, UpdateStep } from "../../shared/routes/box";
 import { quote } from "../../shared/text";
 import { sleep } from "../../shared/wait";
 import { ASKS_FILE } from "../areas/asks";
 import { asked, fetched, readBridgeFile, readEngineFile } from "../engine/client";
+import type { UncheckedAnswer } from "../engine/client";
 import { listOf, textOf, writePrivate } from "../files";
 import { K, RUN, UPDATES } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -94,26 +94,14 @@ export const boxVersion = (): string | null => {
   return versionOrder(version) ? version! : null;
 };
 
-/** What an update step says while it runs (`running`). */
-export type UpdateStep = "checking" | "downloading" | "downloading the engine" | "checking it" | "installing" | "starting";
-/** What an update came to (`update`'s `result`). */
-export type UpdateResult = "updated" | "current" | "waiting" | "busy" | "off" | "blocked" | "failed";
+/** What an update came to (`update`'s `result`), as `kuvo/update`'s `last` says it. */
+export type UpdateResult = LastUpdate["result"];
 
 /** What `update` says happened: its result, the version it's at or found, and why, in words. */
 export interface UpdateOutcome {
   result: UpdateResult;
   version?: string;
   message?: string;
-}
-
-/** How the last update went, when: what it came to, from and to which version (or what it said). */
-export interface UpdateLast {
-  at: number;
-  result: UpdateResult;
-  version?: string;
-  message?: string;
-  from?: string;
-  to?: string;
 }
 
 /** An update being tried (`trial`): from and to which version, since when, and whether it came up well. */
@@ -130,8 +118,10 @@ export interface UpdateState {
   latest?: string;
   checked?: number;
   trial?: UpdateTrial;
+  /** The step under way (shared/routes/box.ts, `STEP`). */
   running?: UpdateStep;
-  last?: UpdateLast;
+  /** How the last update went, when (shared/routes/box.ts, `LAST_UPDATE`). */
+  last?: LastUpdate;
   night?: string;
 }
 
@@ -179,7 +169,7 @@ async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBrid
     let target: Target | null = null;
     try { target = read(); } catch {}
     if (!target?.port || !target?.password) continue;
-    const active = (await asked(target, "GET", "api/session/active").catch(() => null))?.data;
+    const active = (await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer)?.data;
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length) return true;
   }
   try { if ((JSON.parse(fs.readFileSync(ASKS_FILE, "utf8")) ?? []).length) return true; } catch {}
@@ -569,9 +559,6 @@ export function updateNight(date = new Date(), zone: string | undefined = proces
   const hour = Number(parts.hour);
   return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
 }
-
-/** What `kuvo/update` answers (shared/routes/box.ts, `UPDATE`). */
-export type UpdateStatus = Infer<typeof UPDATE>;
 
 // What `kuvo/update` says: whether updates are set up, this version and the newest heard of, how
 // the last went, whether one runs now, and why not, when it can't.

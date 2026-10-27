@@ -6,10 +6,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
+import type { Fields } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { ListedWorktree, WorktreeRecordShape, Worktrees, WorktreesWhere } from "../../shared/routes/worktrees";
 import { call, engineGet } from "../engine/client";
+import type { EngineAnswer } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
+import type { EngineSession } from "../engine/sessions";
 import { writePrivate } from "../files";
 import { followed } from "../follow";
 import { gitIn, gitLater, sizeLater } from "../git";
@@ -18,16 +21,6 @@ import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
 import { BRANCH_PREFIX_FILE, branchPrefix, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 import type { WorktreeRecord } from "./worktree-records";
-
-/** A session as the engine lists it: what this reads of it. */
-interface EngineSession {
-  id: string;
-  title?: string;
-  parentID?: string;
-  directory?: string;
-  location?: { directory?: string };
-  metadata?: { kuvo?: { engineFor?: unknown; seat?: unknown } } | null;
-}
 
 /** Sessions by the folder they run in, and which are at work (their ids). */
 interface SessionsHere {
@@ -94,7 +87,7 @@ export function branchSlug(title: unknown, limit = 40): string {
 
 /** Its engine's project for a folder, as it names projects. */
 async function projectOf(engine: Target, folder: string, signal: AbortSignal | undefined): Promise<string> {
-  const located = await call(engine, "GET", "/api/location", undefined, signal, folder);
+  const located = await call(engine, "GET", "/api/location", undefined, signal, folder) as { project?: Fields<"id"> } | null;
   const id = located?.project?.id;
   if (typeof id !== "string") throw new Error("The engine didn't say which project that is.");
   return id;
@@ -106,6 +99,7 @@ async function sessionsHere(engine: Target | null, signal: AbortSignal | undefin
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` };
   try {
     const listed = await fetch(`http://127.0.0.1:${engine.port}/api/session?parentID=null&limit=200&order=desc`, { headers, signal: AbortSignal.timeout(10_000) });
+    // (As the engine answers it: its sessions, each whole.)
     const sessions = listed.ok ? ((await listed.json()) as { data?: EngineSession[] } | null)?.data ?? [] : [];
     const busy = await fetch(`http://127.0.0.1:${engine.port}/api/session/active`, { headers, signal: AbortSignal.timeout(10_000) });
     const active = new Set(Object.keys(busy.ok ? ((await busy.json()) as { data?: Record<string, unknown> } | null)?.data ?? {} : {}));
@@ -136,7 +130,7 @@ function renameWorktree(tree: WorktreeRecord, to: string): boolean {
  * not pushed. Its session is told the new name, as it was told the one before. */
 export async function nameWorktreeBranch(engine: Target, sessionID: unknown): Promise<void> {
   if (typeof sessionID !== "string") return;
-  const session: EngineSession | undefined = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`))?.data;
+  const session: EngineSession | undefined = (await engineGet(engine, `api/session/${encodeURIComponent(sessionID)}`) as EngineAnswer<EngineSession>)?.data;
   // Not after a subagent's title, nor an engine run's a coding agent's session started.
   if (!session || session.parentID || isHiddenRun(session)) return;
   const folder = session.location?.directory ?? session.directory;
@@ -164,7 +158,7 @@ async function nameDueWorktrees(engine: Target | null, signal: AbortSignal | und
  * told it works there, as a Mac tells one it makes. */
 export async function tellWorktree(target: Target, sessionID: unknown): Promise<void> {
   if (typeof sessionID !== "string") return;
-  const session: EngineSession | undefined = (await engineGet(target, `api/session/${encodeURIComponent(sessionID)}`))?.data;
+  const session: EngineSession | undefined = (await engineGet(target, `api/session/${encodeURIComponent(sessionID)}`) as EngineAnswer<EngineSession>)?.data;
   const folder = session?.location?.directory ?? session?.directory;
   const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
   if (!tree) return;
@@ -221,7 +215,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     let id: string | undefined, root: string | undefined;
     try {
       id = await projectOf(engine, project, signal);
-      root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal, project))?.directory;
+      root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal, project) as { directory?: string } | null)?.directory;
     } catch (error) {
       return { status: 502, value: message((error as Error | null)?.message ?? String(error)) };
     }

@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import { processRuns as runs } from "../../shared/platform";
+import type { Fields } from "../../shared/json";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import { BRIDGE_FILE, ENGINE_FILE } from "../home";
 
@@ -21,14 +22,26 @@ export function peerTargets(): Target[] {
   return targets;
 }
 
+/** An answer of the engine's (or the coding agents' bridge's) as their APIs always give one, with
+ * what was asked for under `data`, before that's checked: whatever came there (unknown), or null
+ * for an empty answer or none. */
+export type UncheckedAnswer = Fields<"data"> | null;
+
+/** An answer of the engine's (or the coding agents' bridge's) as their APIs always give one: what
+ * was asked for under `data`, in `T`, the shape they document for it. (As they answer it: a type
+ * that trusts them, for what's read without a check.) */
+export interface EngineAnswer<T> {
+  data: T;
+}
+
 // Asks the engine for `route` (a path under its API), as JSON.
-export function engineGet(engine: Target, route: string): Promise<any> {
+export function engineGet(engine: Target, route: string): Promise<unknown> {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) })
     .then(response => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
 
 /** `target`'s answer to `method route` (with `body` as JSON), as JSON, or null for an empty one; it throws for a status that isn't ok. */
-export async function asked(target: Target, method: string, route: string, body?: unknown): Promise<any> {
+export async function asked(target: Target, method: string, route: string, body?: unknown): Promise<unknown> {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {
     method,
     headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
@@ -45,7 +58,7 @@ export async function asked(target: Target, method: string, route: string, body?
  * answers: what's under `data`, or the whole answer; it throws with the answer's message for a
  * status that isn't ok. `folder`: the folder it's about, as the engine reads it.
  */
-export async function call(target: Target, method: string, route: string, body?: unknown, signal?: AbortSignal, folder?: string): Promise<any> {
+export async function call(target: Target, method: string, route: string, body?: unknown, signal?: AbortSignal, folder?: string): Promise<unknown> {
   const response = await fetch(`http://127.0.0.1:${target.port}${route}`, {
     method,
     headers: {
@@ -57,13 +70,15 @@ export async function call(target: Target, method: string, route: string, body?:
     body: body ? JSON.stringify(body) : undefined,
     signal,
   });
-  const value: any = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value?.message || `It answered ${response.status}.`);
+  // Whatever it answered, as JSON ({} for none), read for its `message` (why it failed, in words,
+  // as their APIs say it) and `data` where it has them.
+  const value = await response.json().catch(() => ({})) as Fields<"message" | "data"> | null;
+  if (!response.ok) throw new Error((value?.message as string | undefined) || `It answered ${response.status}.`);
   return value?.data ?? value;
 }
 
 // `url`'s body, at most `most` bytes, within `timeout` ms.
-export async function fetched(url: string, most: number, timeout: number) {
+export async function fetched(url: string, most: number, timeout: number): Promise<Buffer> {
   const response = await fetch(url, { signal: AbortSignal.timeout(timeout), redirect: "follow" });
   if (!response.ok) throw new Error(`It answered ${response.status}.`);
   const data = Buffer.from(await response.arrayBuffer());

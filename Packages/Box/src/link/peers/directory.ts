@@ -12,6 +12,7 @@ import { RUN } from "../home";
 import { readLink } from "../state";
 import { macsOf } from "./known";
 import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
+import type { EngineSession } from "../engine/sessions";
 import { type BotLook, LOOKS as LOOK_WORDS } from "../../shared/routes/bots";
 import type { LinkState } from "../state";
 import type { Peer } from "./known";
@@ -40,10 +41,7 @@ export interface GivenAgent {
 }
 
 /** A conversation as the engine (or the agents bridge) lists it, as far as whether it's put away. */
-export interface PutAwayable {
-  metadata?: { "kuvo.archived"?: unknown; kuvo?: { archived?: unknown } } | null;
-  time?: { archived?: unknown };
-}
+export type PutAwayable = Pick<Partial<EngineSession>, "metadata" | "time">;
 
 export const fitsAgent = (agent: unknown): agent is GivenAgent => isObject(agent) && typeof agent.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(agent.session)
   && typeof agent.name === "string" && (agent.kind === "bot" || agent.kind === "session");

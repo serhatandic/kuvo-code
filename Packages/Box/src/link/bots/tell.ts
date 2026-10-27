@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import type { Fields } from "../../shared/json";
 import { ownsSettings, readSettings } from "../areas/config";
 import { call } from "../engine/client";
 import { listOf, textOf } from "../files";
@@ -16,7 +17,7 @@ import { botInstructions, NO_KIT, readKit, readMacKit, zoneOf } from "./kit";
 import { listBots } from "./list";
 import type { Target } from "../../shared/records";
 import type { ChangedBot } from "../../shared/routes/bots";
-import type { JSONAnswer } from "../server/context";
+import type { JSONAnswer, OtherStatus } from "../server/context";
 import type { BotDescription, BotHere } from "./here";
 import type { BotKit, KitRule } from "./kit";
 
@@ -133,7 +134,7 @@ function settleFolder(here: BotHere, kit: BotKit | null): void {
 // here (where it runs, now). Done while its move still holds it, before its wake-ups go on, and
 // one at a time with its other tellings. `{status, value}`: 200 `{bot}`.
 export async function settleBot(id: string, readEngine: () => Target, readBridge: () => Target | null, machine?: string): Promise<SettledAnswer> {
-  const no = (status: number, message: string): SettledAnswer => ({ status, value: { message } });
+  const no = (status: OtherStatus, message: string): SettledAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
   return oneAtATime(here.session, async (): Promise<SettledAnswer> => {
@@ -230,7 +231,7 @@ async function repairRules(target: Target, here: BotHere, sessionID: string): Pr
   const id = here.described.id;
   let rules: unknown;
   try {
-    rules = (await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`))?.permissions;
+    rules = (await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`) as Fields<"permissions"> | null)?.permissions;
   } catch {
     return false;
   }

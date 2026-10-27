@@ -15,6 +15,7 @@ import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { changeSettings, ownsSettings, readSettings, SERVERS, valueAt } from "./config";
+import type { EngineCredential } from "./accounts";
 
 export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
 
@@ -33,14 +34,6 @@ interface EngineServer {
   name?: string;
   status?: { status?: string };
   integrationID?: string;
-}
-
-/** A sign-in as the engine keeps it (`api/credential`): what this reads of it. */
-interface EngineCredential {
-  id: string;
-  active?: boolean;
-  value?: { type?: string };
-  integrationID: string;
 }
 
 /** What `kuvo/integrations…` answers: the list, one just added, `{}` for done (or nothing to say),
@@ -73,9 +66,10 @@ async function integrationEntries(catalog: CatalogIntegration[], engine: EngineR
   let servers: EngineServer[] | null = null;
   let signedIn: Set<string> = new Set();
   if (engine) {
-    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
-    const credentials: EngineCredential[] = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-    signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
+    // (As the engine answers it: its MCP servers, a list.)
+    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null) as EngineServer[] | null;
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    signedIn = new Set((Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
   // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
@@ -165,7 +159,7 @@ export async function reconnectEverywhere(engine: Target, id: string): Promise<v
   const connect = `/api/experimental/mcp/${encodeURIComponent(id)}/connect`;
   await call(engine, "POST", connect).catch(() => {});
   const open = await call(engine, "GET", "/api/debug/location").catch(() => []);
-  const folders = new Set((Array.isArray(open) ? open : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
+  const folders = new Set((Array.isArray(open) ? open as ({ directory?: string } | null)[] : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
   for (const folder of folders) await call(engine, "POST", connect, undefined, undefined, folder).catch(() => {});
 }
 
@@ -218,7 +212,7 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
     // One there already is written again as it is (the engine reads its keys again).
     const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
-    if (changed.status !== 200) return { status: changed.status, value: { message: (changed as { message: string }).message } };
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a
     // moment later, with the new ones, in every folder the engine has open.
     if (newKeys) reconnectLater(engine, entry.id, later);
@@ -246,12 +240,12 @@ async function integrationsAnswer(method: string, requestPath: string, body: Bod
     }
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn: string | undefined;
-    if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.((each: EngineServer) => each?.name === entry.id)?.integrationID;
+    if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []) as EngineServer[]).find?.((each: EngineServer) => each?.name === entry.id)?.integrationID;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
-    if (changed.status !== 200) return { status: changed.status, value: { message: (changed as { message: string }).message } };
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     if (engine && signIn) {
       const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-      for (const each of Array.isArray(credentials) ? credentials : []) {
+      for (const each of Array.isArray(credentials) ? credentials as EngineCredential[] : []) {
         if (each?.integrationID === signIn) await call(engine, "DELETE", `/api/credential/${encodeURIComponent(each.id)}`, undefined, signal).catch(() => {});
       }
     }

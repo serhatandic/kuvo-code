@@ -14,6 +14,7 @@ import { readLink } from "../state";
 import { LETTERS_SEEN, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, composeLetter, cutText, placeOfSession } from "./letter";
 import { answered } from "./outbox";
 import type { ListedAgent, Target, ToldAgents } from "../../shared/records";
+import type { EngineAnswer } from "../engine/client";
 import type { Peer } from "../peers/known";
 import type { SessionPlace } from "./letter";
 import type { AnswerLetter, Delivered, OutboxLetter } from "./outbox";
@@ -84,13 +85,14 @@ async function answerTo(target: Target, session: string, id: string, wait = 2000
   let started = false;
   while (Date.now() - began < 600_000) {
     await sleep(wait);
-    const active: string[] | Record<string, unknown> = (await asked(target, "GET", "api/session/active").catch(() => null))?.data ?? {};
+    // (As the engine and the agents' bridge answer it: the sessions at work, as a list or by id.)
+    const active: string[] | Record<string, unknown> = (await asked(target, "GET", "api/session/active").catch(() => null) as EngineAnswer<string[] | Record<string, unknown>> | null)?.data ?? {};
     if (Array.isArray(active) ? active.includes(session) : active[session]) {
       started = true;
       continue;
     }
     if (!started && Date.now() - began < 3 * wait) continue;
-    const page: { data?: EngineMessage[] } | null = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null);
+    const page: { data?: EngineMessage[] } | null = await asked(target, "GET", `api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
     const replies = (page?.data ?? [])
       .filter(message => message.type === "assistant" && message.id > id)
       .reverse()

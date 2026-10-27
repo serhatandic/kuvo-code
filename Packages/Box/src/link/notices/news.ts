@@ -9,7 +9,10 @@ import { engineGet } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import { IS_MAC, K } from "../home";
 import { showsAll } from "./mask";
+import type { Fields } from "../../shared/json";
 import type { Target } from "../../shared/records";
+import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
+import type { EngineSession } from "../engine/sessions";
 import type { NoticeHold } from "./hold";
 import type { Notice, NoticeCategory, NoticeData } from "./notice";
 
@@ -66,23 +69,14 @@ export interface GroupEvent {
   };
 }
 
-/** A session as the engine gives it, as far as this reads it. */
-export interface EngineSession {
-  id: string;
-  title?: string;
-  parentID?: string;
-  location?: { directory?: string };
-  metadata?: { kuvo?: { bot?: unknown; engineFor?: unknown; seat?: unknown } } | null;
-}
-
 /** A message in a session, as far as this reads it: its blocks of text and tools. */
 interface EngineMessage {
   type: string;
   content?: { type: string; text?: string; name?: string; state?: { status?: string; input?: { code?: unknown } } }[];
 }
 
-/** Asks the engine `route`: its JSON. */
-export type EngineAsk = <T>(route: string) => Promise<T>;
+/** Asks the engine `route`: its JSON, whatever came. */
+export type EngineAsk = (route: string) => Promise<unknown>;
 
 // Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
 // quotes at a line's start, emphasis around words, code ticks, a link's address.
@@ -142,7 +136,8 @@ export function projectNameOf(directory: string | undefined): string | undefined
 // engine.
 export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Notice | null> {
   const data = event.data ?? {};
-  const session = async (id: string): Promise<EngineSession> => (await get<{ data: EngineSession }>(`api/session/${encodeURIComponent(id)}`)).data;
+  // (As the engine answers it: a session it has, whole; one it hasn't is an error.)
+  const session = async (id: string): Promise<EngineSession> => (await get(`api/session/${encodeURIComponent(id)}`) as EngineAnswer<EngineSession>).data;
   // A subagent's request shows in the session that started it.
   const shown = async (id: string): Promise<EngineSession> => {
     let current = await session(id);
@@ -153,12 +148,12 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
   // of its folder with a tool of that server under way, as the Mac finds it; null for none.
   const waitingOn = async (server: string | undefined, folder: string | undefined): Promise<string | null> => {
     if (!server) return null;
-    const active = (await get<{ data?: string[] | Record<string, unknown> }>("api/session/active").catch(() => null))?.data ?? {};
+    const active = (await get("api/session/active").catch(() => null) as EngineAnswer<string[] | Record<string, unknown>> | null)?.data ?? {};
     const name = String(server).replace(/[^\p{L}\p{N}_-]/gu, "_");
     for (const id of Array.isArray(active) ? active : Object.keys(active)) {
       const candidate = await session(id).catch(() => null);
       if (!candidate || (folder && candidate.location?.directory !== folder)) continue;
-      const page = await get<{ data?: EngineMessage[] }>(`api/session/${encodeURIComponent(id)}/message?limit=8&order=desc`).catch(() => null);
+      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=8&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
       const steps = (page?.data ?? []).filter(message => message.type === "assistant").flatMap(message => message.content ?? []);
       if (steps.some(block => block.type === "tool" && block.state?.status === "running"
         && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))) return id;
@@ -207,7 +202,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       if (event.type === "session.execution.failed") return about(ended, "failed", "Stopped with an error.");
       let reply = "";
       try {
-        const page = await get<{ data?: EngineMessage[] }>(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`);
+        const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`) as EngineAnswer<EngineMessage[]>;
         for (const message of page.data ?? []) {
           if (message.type !== "assistant") continue;
           reply = plain((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" "));
@@ -232,8 +227,8 @@ export async function settleHeld(engine: Target, hold: NoticeHold): Promise<void
     // A form an MCP server asks for is filed under no session ("global"), where the engine lists
     // none without its folder: one it can't tell about.
     if (!kind || typeof request !== "string" || typeof (requestSession ?? session) !== "string" || (requestSession ?? session) === "global") continue;
-    const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session!)}/${kind}`).catch(() => null))?.data;
-    if (Array.isArray(asked) && !asked.some(each => each?.id === request)) hold.resolve(request);
+    const asked = (await engineGet(engine, `api/session/${encodeURIComponent(requestSession ?? session!)}/${kind}`).catch(() => null) as UncheckedAnswer)?.data;
+    if (Array.isArray(asked) && !(asked as (Fields<"id"> | null)[]).some(each => each?.id === request)) hold.resolve(request);
   }
 }
 

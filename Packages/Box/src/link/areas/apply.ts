@@ -155,6 +155,6 @@ export function applySettings(body: Body<"changes" | "dry">, file = CONFIG_FILE,
     if (body!.dry === true || !result.made.length) return { status: 200, ...result, keys, applied, settings } satisfies { status: 200 } & ConfigApplied;
     const written = writeSettings(settings, result.made, file);
     if (written.status !== 200) return written;
-    return { status: 200, ...result, keys, applied, settings: (written as { settings: Settings }).settings } satisfies { status: 200 } & ConfigApplied;
+    return { status: 200, ...result, keys, applied, settings: written.settings } satisfies { status: 200 } & ConfigApplied;
   });
 }
