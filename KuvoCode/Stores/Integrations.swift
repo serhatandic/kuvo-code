@@ -251,8 +251,6 @@ nonisolated enum Integrations {
         var health: Health?
         /// The engine's integration its sign-in goes through.
         var signIn: String?
-        /// Needing a sign-in, it had one that ended (ran out or was taken back): Sign In Again.
-        var signInEnded: Bool?
         /// One used on its site: whether that computer's browser is signed in there, when its box
         /// can tell (this Mac's).
         var siteSignedIn: Bool?
