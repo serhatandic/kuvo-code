@@ -151,6 +151,9 @@ final class BrowserSession: NSObject {
         var file: URL?
         var state: State = .running
         var progress = 0.0
+        /// Bytes so far, and of how many when the server says.
+        var received: Int64 = 0
+        var expected: Int64?
 
         enum State: Equatable { case running, done, failed(String) }
     }
@@ -162,6 +165,8 @@ final class BrowserSession: NSObject {
     @ObservationIgnored var onAgentDownload: ((URL, String) -> Void)?
     /// Where each download is written until it's done, in the app's temporary folder.
     @ObservationIgnored private var writing: [UUID: URL] = [:]
+    /// When each download's bytes last went on screen.
+    @ObservationIgnored private var counted: [UUID: ContinuousClock.Instant] = [:]
 
     /// A new tab, or, with the configuration WebKit passes for a window a page opens, that window:
     /// it stays connected to the page that opened it, which sign-in popups need to report back.
@@ -181,7 +186,13 @@ final class BrowserSession: NSObject {
         observations = [
             webView.observe(\.title) { [weak self] view, _ in MainActor.assumeIsolated { self?.title = view.title ?? "" } },
             webView.observe(\.url) { [weak self] view, _ in MainActor.assumeIsolated { self?.url = view.url } },
-            webView.observe(\.isLoading) { [weak self] view, _ in MainActor.assumeIsolated { self?.isLoading = view.isLoading } },
+            webView.observe(\.isLoading) { [weak self] view, _ in
+                MainActor.assumeIsolated {
+                    // A new page starts from nothing, not from where the last one finished.
+                    if view.isLoading, self?.isLoading == false { self?.progress = view.estimatedProgress < 1 ? view.estimatedProgress : 0 }
+                    self?.isLoading = view.isLoading
+                }
+            },
             webView.observe(\.canGoBack) { [weak self] view, _ in MainActor.assumeIsolated { self?.canGoBack = view.canGoBack } },
             webView.observe(\.canGoForward) { [weak self] view, _ in MainActor.assumeIsolated { self?.canGoForward = view.canGoForward } },
             webView.observe(\.estimatedProgress) { [weak self] view, _ in MainActor.assumeIsolated { self?.progress = view.estimatedProgress } },
@@ -437,9 +448,20 @@ extension BrowserSession: WKDownloadDelegate {
     fileprivate func start(_ download: WKDownload) {
         download.delegate = self
         let entry = Download(name: download.originalRequest?.url?.lastPathComponent ?? "Download")
-        let progress = download.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
-            let fraction = progress.fractionCompleted
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.update(entry.id) { $0.progress = fraction } } }
+        // By the bytes, which come in whether or not the server said how many there are: on
+        // screen ten times a second at most (they come a chunk at a time), and exactly once done.
+        let progress = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
+            let (fraction, received, expected) = (progress.fractionCompleted, progress.completedUnitCount, progress.totalUnitCount)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    // Not once it's over: its end set the last count.
+                    guard let self, self.running.values.contains(where: { $0.id == entry.id }) else { return }
+                    let now = ContinuousClock.now
+                    if let last = self.counted[entry.id], now - last < .milliseconds(100), fraction < 1 { return }
+                    self.counted[entry.id] = now
+                    self.count(entry.id, received: received, expected: expected)
+                }
+            }
         }
         // The agent's when one is at work in the page, or was in the last two minutes (a link's
         // server can be slow to start sending), as a machine's browser decides it; not once you'd
@@ -468,6 +490,9 @@ extension BrowserSession: WKDownloadDelegate {
     func downloadDidFinish(_ download: WKDownload) {
         guard let entry = running.removeValue(forKey: ObjectIdentifier(download)), let source = writing.removeValue(forKey: entry.id) else { return }
         let id = entry.id
+        // The last bytes, which the ten-a-second count may have skipped.
+        counted[id] = nil
+        count(id, received: download.progress.completedUnitCount, expected: download.progress.totalUnitCount)
         Task {
             let moved: Result<URL, Error> = await Task.detached {
                 defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
@@ -524,9 +549,18 @@ extension BrowserSession: WKDownloadDelegate {
 
     func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
         guard let entry = running.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        counted[entry.id] = nil
         if let file = writing.removeValue(forKey: entry.id) { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         update(entry.id) { $0.state = .failed(error.localizedDescription) }
         agentNotes.append("A download failed: \(error.localizedDescription)")
+    }
+
+    private func count(_ id: UUID, received: Int64, expected: Int64) {
+        update(id) {
+            $0.received = received
+            $0.expected = expected > 0 ? expected : nil
+            $0.progress = expected > 0 ? min(1, Double(received) / Double(expected)) : 0
+        }
     }
 
     private func update(_ id: UUID, _ change: (inout Download) -> Void) {
@@ -720,17 +754,8 @@ private struct DownloadBar: View {
         BrowserDownloadBar(name: download.name, symbol: symbol, isRunning: download.state == .running, canHide: download.state != .running, hide: session.dismissDownloads) {
             switch download.state {
             case .running:
-                Capsule()
-                    .fill(Color.primary.opacity(0.1))
-                    .frame(height: 4)
-                    .overlay(alignment: .leading) {
-                        GeometryReader { proxy in
-                            Capsule()
-                                .fill(.tint)
-                                .frame(width: max(4, proxy.size.width * download.progress))
-                                .animation(.ui, value: download.progress)
-                        }
-                    }
+                // Beside the bar, so the row stays as tall as when it's done.
+                ProgressLine("Downloading", bytes: download.received, of: download.expected, layout: .inline)
             case .done:
                 Text(more > 0 ? "Downloaded, with \(more) more" : "Downloaded to Downloads")
             case .failed(let reason):

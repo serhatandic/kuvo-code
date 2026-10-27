@@ -24,6 +24,7 @@ import { Goals, type GoalPlaces } from "./goals"
 import { SideQuestions } from "./btw"
 import { Handoffs } from "./handoff"
 import { Reviews } from "./reviews"
+import { VoiceWords } from "./voice"
 import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
@@ -208,6 +209,8 @@ const goals = new Goals(join(home, "goals.json"), places)
 const sideQuestions = new SideQuestions(join(home, "side-questions.json"), places)
 const handoffs = new Handoffs(places)
 const reviews = new Reviews(join(home, "reviews.json"), places)
+// The project's words for voice input to listen for, in the same conversations.
+const voice = new VoiceWords(places)
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
@@ -258,7 +261,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews, artifacts, noted }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, reviews, voice, artifacts, noted }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

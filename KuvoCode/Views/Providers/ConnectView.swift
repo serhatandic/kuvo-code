@@ -21,6 +21,9 @@ struct ConnectView: View {
     /// Leaves without connecting. When set (in a sheet), every step but the last has a Cancel
     /// beside its own buttons.
     var onCancel: (() -> Void)? = nil
+    /// Only its API key: a plan an agent signs in to (ChatGPT's) is signed in to there, never here
+    /// too (the first launch's API Keys).
+    var keysOnly = false
 
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
@@ -302,10 +305,15 @@ struct ConnectView: View {
                     .padding(.top, 8)
                 }
             } else if gettingReady == nil {
-                HStack(spacing: 8) {
-                    Spinner(size: 16)
-                    Text(isCheckingCode ? "Checking the code…" : "Waiting for you to finish…")
-                        .foregroundStyle(.secondary)
+                // Checking a pasted code is a moment's wait here, not on you.
+                if isCheckingCode {
+                    HStack(spacing: 8) {
+                        Spinner(size: 16)
+                        Text("Checking the code…")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    HandoffWait("Waiting for you to finish…", to: .browser)
                 }
                 if attempt.acceptsCode == true, isPastingCode, !isCheckingCode {
                     VStack(alignment: .leading, spacing: 8) {
@@ -434,7 +442,11 @@ struct ConnectView: View {
     // MARK: Actions
 
     private var supportedMethods: [Integration.Method] {
-        integration?.offeredSignInMethods.filter(isSupported) ?? []
+        (integration?.offeredSignInMethods.filter(isSupported) ?? []).filter { method in
+            guard keysOnly else { return true }
+            if case .key = method { return true }
+            return false
+        }
     }
 
     private func chooseOnlyMethod() {

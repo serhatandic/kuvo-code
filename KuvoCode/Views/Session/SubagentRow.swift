@@ -103,6 +103,10 @@ struct SubagentRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            if let since = call.time?.created?.date {
+                // Counting while it works; once done, how long it took.
+                StepActivity.Elapsed(since: since, running: isWorking, until: call.time?.completed?.date)
+            }
             if session != nil {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
@@ -119,12 +123,11 @@ struct SubagentRow: View {
     }
 
     @ViewBuilder private var icon: some View {
-        if isWorking {
-            Spinner(size: 11)
-        } else if let failure, !failure.isInterruption {
+        if let failure, !failure.isInterruption {
             Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         } else {
-            Image(systemName: "person.2")
+            // One view working and done, so its ring closes as it finishes.
+            StepActivity(symbol: "person.2", running: isWorking, size: Self.iconWidth)
         }
     }
 

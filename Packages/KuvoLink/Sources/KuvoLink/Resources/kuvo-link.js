@@ -8214,12 +8214,17 @@ async function found({ engine, bridge, authFile = readFrom() }, signal) {
     const label = integration.metadata.account;
     return { id: integration.id, name: integration.name, installed: integration.metadata.installed !== false, signedIn, ...signedIn && typeof label === "string" && label ? { label } : {} };
   });
+  const working = (connection) => {
+    const status = isObject(connection.status) ? connection.status.status : undefined;
+    return connection.type !== "env" && (status === undefined || status === "connected");
+  };
   const opencode = readOpencode(authFile).map((entry) => {
     const known = byID.get(entry.integrationID);
-    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: (known?.connections.length ?? 0) > 0 };
+    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: known?.connections.some(working) ?? false };
   });
   const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
-  return { agents, opencode, shell };
+  const connected = engineList.filter((integration) => integration.connections.some(working)).map((integration) => integration.id);
+  return { agents, opencode, shell, connected };
 }
 async function useFound(id, { engine, authFile = readFrom() }, signal) {
   const entry = id.startsWith("opencode:") ? readOpencode(authFile).find((each) => `opencode:${each.integrationID}` === id) : undefined;
@@ -8726,7 +8731,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.90";
+var BRIDGE_VERSION = "0.9.92";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

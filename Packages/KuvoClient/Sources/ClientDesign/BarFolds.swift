@@ -63,10 +63,72 @@ public struct BarFolds<Bar: Hashable>: Equatable {
         openedByYou = false
     }
 
+    /// The bars showing went from `old` to `new`, or the card showed again (`old == new`), as both
+    /// apps' cards follow them. No longer full: each keeps what the card showed (`keep` hands it
+    /// its own way), rather than springing open. Then, shown again, the newest with something to
+    /// see (`news`) opens; changed, the newest that came, where `opens` says it's worth seeing.
+    public mutating func update(from old: [Bar], to new: [Bar], asking: Bool, own: (Bar) -> Bool, keep: (Bar, Bool) -> Void,
+                                news: (Bar) -> Bool, opens: (Bar) -> Bool) {
+        if old.count >= Self.full, new.count < Self.full {
+            for bar in new { keep(bar, isHidden(bar, among: old, asking: asking, own: own(bar))) }
+        }
+        if old == new {
+            start(new, opens: news)
+        } else {
+            bars(from: old, to: new, opens: opens)
+        }
+    }
+
+    /// What has something to see in each bar changed: the one that just got something opens.
+    /// Those that got something, for a tucked card to mark (`BarTuck`).
+    @discardableResult public mutating func news(from old: [Bar: Bool], to new: [Bar: Bool]) -> [Bar] {
+        let came = new.filter { $0.value && old[$0.key] != true }.map(\.key)
+        if let first = came.first { changed(first) }
+        return came
+    }
+
     /// Shown again (another conversation, and back): the newest of the bars with something to see
     /// opens, unless one is open already.
     public mutating func start(_ bars: [Bar], opens: (Bar) -> Bool) {
         guard open == nil, let bar = bars.last(where: opens) else { return }
         changed(bar)
+    }
+}
+
+/// The bars in the card over the composer tucked into one line (the Mac's and the phone's
+/// `BarStrip`), as you left them in a conversation: nothing brings them back by itself. What came
+/// or changed meanwhile is `marked`, until you bring them back. Once none are left, the next ones
+/// show.
+public struct BarTuck<Bar: Hashable>: Equatable {
+    public init() {}
+
+    private var hidden = false
+    /// What came, or changed in a way you'd want to see, since they were tucked.
+    public private(set) var marked: Set<Bar> = []
+
+    /// Whether they're tucked, among `bars` (none: nothing to tuck).
+    public func isOn(among bars: [Bar]) -> Bool { hidden && !bars.isEmpty }
+
+    public mutating func hide() {
+        hidden = true
+        marked = []
+    }
+
+    public mutating func show() {
+        hidden = false
+        marked = []
+    }
+
+    /// The bars went from `old` to `new`: while tucked, those that came are marked; none left,
+    /// it's over.
+    public mutating func bars(from old: [Bar], to new: [Bar]) {
+        if new.isEmpty { return show() }
+        guard hidden else { return }
+        marked.formUnion(new.filter { !old.contains($0) })
+    }
+
+    /// Something changed in `bar` that you'd want to see: marked, while tucked.
+    public mutating func changed(_ bar: Bar) {
+        if hidden { marked.insert(bar) }
     }
 }

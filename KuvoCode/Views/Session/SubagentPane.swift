@@ -158,15 +158,19 @@ struct SubagentPane: View {
     @State private var isMissing = false
 
     var body: some View {
-        Group {
+        // One over the other, so the placeholder and the conversation cross-fade.
+        ZStack {
             if let model {
                 SubagentConversation(model: model, parent: parent, open: open)
+                    .transition(.replacingPlaceholder)
             } else if isMissing {
                 ContentUnavailableView("Subagent Not Found", systemImage: "person.2", description: Text("Its session is gone, or its machine can't be reached. Close this tab."))
                     .frame(maxHeight: .infinity)
+                    .transition(.replacingPlaceholder)
             } else {
-                Spinner(size: 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Placeholder(.lines(count: 8), label: "Loading subagent")
+                    .padding(20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .task(id: id) {
@@ -212,7 +216,7 @@ private struct SubagentConversation: View {
                 .environment(\.isSubagentConversation, true)
                 .environment(\.isOffline, isOffline)
                 .frame(maxHeight: .infinity)
-                .safeAreaBar(edge: .bottom, spacing: 0) {
+                .conversationBar {
                     VStack(spacing: 10) {
                         if model.waitsForYou {
                             Label("It's asking you something in the conversation it works for.", systemImage: "hand.raised")
@@ -245,6 +249,9 @@ private struct SubagentConversation: View {
                     .padding(.bottom, 12)
                 }
         }
+        // Its row under the card's title stays put: the conversation scrolls under that row, not
+        // under the card's header.
+        .preference(key: CardTopIsFixed.self, value: true)
     }
 
     private var header: some View {

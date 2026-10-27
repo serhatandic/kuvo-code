@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import MetricKit
 import OpenCodeKit

@@ -60,3 +60,21 @@ private let readers = [flash, claude, sonnet, copilotSonnet]
     #expect(ReviewCommand(" with", readers: readers).searching == "")
     #expect(ReviewCommand(" with deep", readers: readers).reader == nil)
 }
+
+// A whole-project review, as the box keeps it while it reads in parts: what it reads and how far
+// along it is come through, and a scope goes to the box in its own words.
+@Test func aScopedReviewReadsAsTheBoxSaysIt() throws {
+    let kept = #"{"id":"rev_1","session":"ses_1","state":"reviewing","scope":{"kind":"project"},"focus":"security","progress":{"read":4,"of":9},"findings":[],"started":1}"#
+    let review = try JSONDecoder().decode(Review.self, from: Data(kept.utf8))
+    #expect(review.scope == .project)
+    #expect(review.progress?.read == 4 && review.progress?.of == 9)
+    // One of the changes not committed yet says no scope.
+    let plain = try JSONDecoder().decode(Review.self, from: Data(#"{"id":"rev_2","session":"ses_1","state":"done","findings":[],"started":1}"#.utf8))
+    #expect(plain.scope == nil && plain.progress == nil)
+
+    let said = { (scope: ReviewScope) in try JSONSerialization.jsonObject(with: JSONEncoder().encode(scope)) as? [String: String] }
+    #expect(try said(.branch(base: nil)) == ["kind": "branch"])
+    #expect(try said(.commits(from: "abc", to: "def")) == ["kind": "commits", "from": "abc", "to": "def"])
+    #expect(try said(.folder("src/auth")) == ["kind": "folder", "path": "src/auth"])
+    #expect(try JSONDecoder().decode(ReviewScope.self, from: JSONEncoder().encode(ReviewScope.commits(from: "abc", to: nil))) == .commits(from: "abc", to: nil))
+}

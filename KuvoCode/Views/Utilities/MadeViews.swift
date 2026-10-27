@@ -85,6 +85,7 @@ struct MadeButton: View {
                 .accessibilityValue(hasNew(things) ? "Something new" : "")
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     MadePopover(things: things, place: place) { isOpen = false }
+                    .popoverContent()
                         // The conversation card's own surface, edge to edge: the popover's see-through
                         // material showed the window under one part and the desktop under another.
                         .presentationBackground(Surface.cardFill(scheme, focused: true))
@@ -297,35 +298,43 @@ struct MadePopover: View {
 
     // MARK: Content
 
-    @ViewBuilder private var content: some View {
-        switch showsTimeline ? things.timelineState : things.state {
-        case .loading:
-            Spinner(size: 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("Loading")
-        case .failed(let why):
-            MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
-        case .loaded:
-            if showsTimeline {
-                if things.entries.isEmpty {
-                    empty
-                } else {
-                    TimelineList(things: things, colored: place.isGroup, open: open)
-                }
-            } else if shown.isEmpty {
-                empty
-            } else if place.isSession {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(shown) { artifact in
-                            MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+    private var content: some View {
+        // One over the other, so the placeholder and the list cross-fade.
+        ZStack {
+            switch showsTimeline ? things.timelineState : things.state {
+            case .loading:
+                Placeholder(.rows(count: 4))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            case .failed(let why):
+                MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show What Was Made", detail: why)
+                    .transition(.replacingPlaceholder)
+            case .loaded:
+                Group {
+                    if showsTimeline {
+                        if things.entries.isEmpty {
+                            empty
+                        } else {
+                            TimelineList(things: things, colored: place.isGroup, open: open)
                         }
+                    } else if shown.isEmpty {
+                        empty
+                    } else if place.isSession {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(shown) { artifact in
+                                    MadeRow(things: things, header: artifact.header, version: artifact.latest, versions: artifact.versions) { open(artifact.header) }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.bottom, 8)
+                        }
+                    } else {
+                        ShelfList(things: things, open: open)
                     }
-                    .padding(.vertical, 4)
-                    .padding(.bottom, 8)
                 }
-            } else {
-                ShelfList(things: things, open: open)
+                .transition(.replacingPlaceholder)
             }
         }
     }
@@ -650,13 +659,8 @@ struct MadeRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if header.pinned != nil, timeOnly {
-                            Text("Final")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tint)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(.tint.opacity(0.14), in: .capsule)
+                        if let pin = header.pinned, timeOnly || pin.by == "bot" {
+                            MarkBadge(text: ArtifactWords.mark(pin))
                         }
                     }
                     Text(subtitle)
@@ -865,6 +869,15 @@ struct ArtifactDetail: View {
             if let artifact, let version {
                 versionBar(artifact, version)
                     .padding(.bottom, 6)
+                // What its bot said as it marked it final.
+                if let note = artifact.pinned?.note, artifact.pinned?.by == "bot", !note.isEmpty {
+                    Label(note, systemImage: "checkmark.seal")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
                 if let restoring { confirm(artifact, restoring) }
                 if let problem {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -887,8 +900,9 @@ struct ArtifactDetail: View {
                 MadeNotice(symbol: "exclamationmark.triangle", title: "Can’t Show It", detail: failure)
             } else {
                 Divider()
-                Spinner(size: 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Placeholder(.lines(count: 10), label: "Loading \(header.name)", fadesOut: false)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .task(id: header.id) { await load() }
@@ -935,20 +949,48 @@ struct ArtifactDetail: View {
                 .help(version.before == true ? "Put it back as it was before" : "Put this version back in the file")
             }
             if let artifact {
-                Button {
-                    Task {
-                        do {
-                            try await things.pin(artifact.id, artifact.pinned == nil)
-                            await load()
-                        } catch {
-                            problem = error.localizedDescription
+                if let pin = artifact.pinned, pin.by == "bot" {
+                    // Its bot's mark, with its note below: not a button to undo by a stray click, but
+                    // a menu, so it can still go.
+                    Menu {
+                        Button("Stop Keeping", systemImage: "star.slash") {
+                            Task {
+                                do {
+                                    try await things.pin(artifact.id, false)
+                                    await load()
+                                } catch {
+                                    problem = error.localizedDescription
+                                }
+                            }
+                        }
+                    } label: {
+                        MarkBadge(text: ArtifactWords.mark(pin))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .help("Its bot marked it final")
+                } else {
+                    let words = artifact.pinned == nil ? ArtifactWords.keep : ArtifactWords.kept
+                    Button {
+                        Task {
+                            do {
+                                try await things.pin(artifact.id, artifact.pinned == nil)
+                                await load()
+                            } catch {
+                                problem = error.localizedDescription
+                            }
+                        }
+                    } label: {
+                        if artifact.pinned == nil {
+                            Label(words.title, systemImage: words.symbol)
+                        } else {
+                            Label(words.title, systemImage: words.symbol).foregroundStyle(.tint)
                         }
                     }
-                } label: {
-                    Label(artifact.pinned == nil ? "Pin" : "Unpin", systemImage: artifact.pinned == nil ? "pin" : "pin.slash")
+                    .buttonStyle(CardActionStyle())
+                    .help(words.help)
                 }
-                .buttonStyle(CardActionStyle())
-                .help(artifact.pinned == nil ? "Pin it to the top" : artifact.pinned?.by == "bot" ? "Unpin (its bot marked it final)" : "Unpin")
                 // The file: in the panel's Files (a machine's from its box), this Mac's in Finder, a
                 // machine's saved to this Mac. One that's gone opens as the record keeps it.
                 let onMac = things.box.box == BoxClient.mac
@@ -1201,47 +1243,59 @@ private struct VersionBody: View {
     }
 
     var body: some View {
-        Group {
+        // One over the other, so the placeholder and the version cross-fade.
+        ZStack {
             if version.status == .deleted {
-                notice("Deleted", symbol: "trash", "It was deleted in this version. Step back to see what it was.")
+                notice("Deleted", symbol: "trash", ArtifactWords.deleted(version, in: artifact.versions))
             } else if !version.kept, version.patch == nil {
                 notice(version.reason == .secret || version.reason == .ignored ? "Not Kept" : "No Copy", symbol: version.reason == .secret ? "lock" : "clock.arrow.circlepath",
                        version.reason?.words ?? (version.before == true ? "What it was before couldn’t be read." : ArtifactVersion.NoCopy.cleared.words))
             } else if let failure {
                 notice("Can’t Show It", symbol: "exclamationmark.triangle", failure)
-            } else {
-                switch loaded {
-                case nil:
-                    Spinner(size: 16).frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .changes(.words(let lines, _, _)):
-                    ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
-                case .changes(.lines(let patch, _, _)):
-                    ScrollView([.vertical, .horizontal]) { PatchText(patch: patch).padding(.vertical, 8) }
-                case .changes:
-                    notice("Can’t Compare", symbol: "doc", "Its changes can’t be shown for this kind of file.")
-                case .text(let text, let cut):
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
-                            Text(text)
-                                .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                    .transition(.replacingPlaceholder)
+            } else if let loaded {
+                Group {
+                    switch loaded {
+                    case .changes(.words(let lines, _, _)):
+                        ScrollView { ChangedWords(lines: lines).transcriptFont().lineSpacing(3).padding(16) }
+                    case .changes(.lines(let patch, _, _)):
+                        ScrollView([.vertical, .horizontal]) { PatchText(patch: patch).padding(.vertical, 8) }
+                    case .changes:
+                        notice("Can’t Compare", symbol: "doc", "Its changes can’t be shown for this kind of file.")
+                    case .text(let text, let cut):
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                                Text(text)
+                                    .font(artifact.kind == .code ? .system(size: 12, design: .monospaced) : nil)
+                                    .lineSpacing(3)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if cut { Text("The rest is in the file.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                            }
+                            .transcriptFont()
+                            .padding(16)
                         }
-                        .transcriptFont()
-                        .padding(16)
+                    case .image(let image, let before):
+                        pair(before.map { AnyView(Image(nsImage: $0).resizable().scaledToFit()) }, AnyView(Image(nsImage: image).resizable().scaledToFit()))
+                    case .pdf(let document, let before):
+                        pair(before.map { AnyView(PDFPreview(document: $0)) }, AnyView(PDFPreview(document: document)))
+                    case .quickLook(let url):
+                        QuickLookPreview(url: url)
+                    case .other:
+                        notice(artifact.name, symbol: ArtifactWords.symbol(kind: artifact.kind, type: artifact.type), ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file))
                     }
-                case .image(let image, let before):
-                    pair(before.map { AnyView(Image(nsImage: $0).resizable().scaledToFit()) }, AnyView(Image(nsImage: image).resizable().scaledToFit()))
-                case .pdf(let document, let before):
-                    pair(before.map { AnyView(PDFPreview(document: $0)) }, AnyView(PDFPreview(document: document)))
-                case .quickLook(let url):
-                    QuickLookPreview(url: url)
-                case .other:
-                    notice(artifact.name, symbol: ArtifactWords.symbol(kind: artifact.kind, type: artifact.type), ByteCountFormatter.string(fromByteCount: Int64(version.size), countStyle: .file))
                 }
+                .transition(.replacingPlaceholder)
+            } else if artifact.kind == .image || artifact.type.hasPrefix("image/") {
+                // Where the picture will sit, fitted in the middle.
+                Placeholder(.image, label: "Loading \(artifact.name)")
+                    .frame(maxWidth: 360, maxHeight: 270)
+                    .padding(12)
+            } else {
+                Placeholder(.lines(count: 10), label: "Loading \(artifact.name)")
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1380,5 +1434,19 @@ private struct QuickLookPreview: NSViewRepresentable {
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
         if (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
+    }
+}
+
+/// What's kept at the top, as a small tinted capsule: "Final" (its bot's mark) or "Kept" (yours).
+private struct MarkBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(.tint.opacity(0.14), in: .capsule)
     }
 }

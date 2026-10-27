@@ -1,3 +1,4 @@
+import ClientText
 import OpenCodeKit
 import AppKit
 import SwiftUI

@@ -37,6 +37,18 @@ import Testing
         #expect(shelf[5].artifacts.map(\.name) == ["thing", "app.ts"])
     }
 
+    /// What's kept at the top reads as one thing: what you keep is "Kept", what its bot marked final
+    /// is "Final", and the Shelf's first section, which holds both, is "Kept".
+    @Test func whatsKeptReadsAsKeptAndABotsMarkAsFinal() throws {
+        let shelf = ArtifactWords.shelf(try Self.list([
+            ("report.pdf", "document", #", "pinned": {"by": "bot", "at": 1, "note": "The one to send"}"#),
+            ("plan.md", "document", #", "pinned": {"by": "you", "at": 2}"#),
+        ]))
+        #expect(shelf.first?.section.rawValue == "Kept")
+        let marks = shelf[0].artifacts.compactMap { $0.pinned.map(ArtifactWords.mark) }
+        #expect(Set(marks) == ["Final", "Kept"])
+    }
+
     @Test func aCodingSessionShowsWhatItMadeButNotItsCodeOrWhatGitKeeps() throws {
         let made = try Self.list([
             ("app.ts", "code", ""),
@@ -70,6 +82,15 @@ import Testing
         #expect(ArtifactWords.name(memory[0].header, bot: "Ben") == "Ben’s memory")
         #expect(ArtifactWords.name(memory[0].header) == "Its memory")
         #expect(ArtifactWords.name(memory[1].header, bot: "Ben") == "notes.md")
+    }
+
+    @Test func aDeletionSaysWhetherThereIsAnythingToStepBackTo() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(ArtifactVersion.self, from: Data(json.utf8)) }
+        let made = try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "added", "at": 1, "via": ["shell"], "edits": 1, "size": 9, "hash": "sha256:a", "kept": true}"#)
+        let gone = try decode(#"{"n": 2, "by": {"kind": "agent"}, "status": "deleted", "at": 2, "via": ["shell"], "edits": 1, "size": 0, "hash": null, "kept": false}"#)
+        let alone = try decode(#"{"n": 1, "by": {"kind": "agent"}, "status": "deleted", "at": 2, "via": ["shell"], "edits": 1, "size": 0, "hash": null, "kept": false}"#)
+        #expect(ArtifactWords.deleted(gone, in: [made, gone]).contains("Step back"))
+        #expect(ArtifactWords.deleted(alone, in: [alone]) == "It was deleted in this version. No earlier copy of it was kept.")
     }
 
     @Test func eachVersionSaysWhatHappenedToIt() throws {

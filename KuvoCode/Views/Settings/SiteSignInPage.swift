@@ -105,12 +105,9 @@ struct SiteSignInPage: View {
                         engine.browser.load(address)
                     }
                 } else {
-                    VStack(spacing: 10) {
-                        Spinner(size: 18)
-                        Text("Opening \(service.title) on \(engine.machine.name)…")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Reaching the machine's browser; the page and its sign-in come after.
+                    ConnectingLink("Opening \(service.title) on \(engine.machine.name)…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else if let session = site.pages.top {
                 BrowserPane(session: session) { EmptyView() }

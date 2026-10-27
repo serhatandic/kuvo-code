@@ -121,8 +121,12 @@ private struct ImageLightbox: View {
                             }
                         }
                         .help("Pinch or double-click to zoom")
+                        .transition(.replacingPlaceholder)
                 } else {
-                    Spinner(size: 16)
+                    let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
+                    Placeholder(.image, label: "Loading picture")
+                        .frame(width: room.width, height: room.height)
+                        .environment(\.colorScheme, .dark)
                 }
                 if request.items.count > 1 {
                     HStack {
@@ -249,8 +253,10 @@ private struct ImageLightbox: View {
     }
 
     /// The picture's own shape, as large as fits, never enlarged past its pixels.
+    /// `size` scaled down to fit `room`, never up; a window smaller than its margins leaves no room.
     private func fit(_ size: CGSize, in room: CGSize) -> CGSize {
-        guard size.width > 0, size.height > 0, room.width > 0, room.height > 0 else { return CGSize(width: 200, height: 200) }
+        let room = CGSize(width: max(0, room.width), height: max(0, room.height))
+        guard size.width > 0, size.height > 0 else { return CGSize(width: min(200, room.width), height: min(200, room.height)) }
         let scale = min(room.width / size.width, room.height / size.height, 1)
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
     }

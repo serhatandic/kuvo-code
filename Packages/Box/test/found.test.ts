@@ -63,8 +63,8 @@ const agent = (id: string, name: string, installed: boolean, account?: string) =
   methods: [],
   connections: account ? [{ type: "agent", label: account, method: "oauth", status: { status: "connected", message: `Signed in as ${account}` } }] : [],
 });
-/** A sign-in the engine keeps, as it lists one. */
-const credential = { type: "credential", credentialID: "c1", label: "API key", method: "key", status: { status: "connected" } };
+/** A sign-in the engine keeps, as it lists one: a working one carries no status. */
+const credential = { type: "credential", id: "c1", label: "API key", method: "key" };
 
 test("a Mac with agents and an opencode of its own: each is offered for what it needs", async () => {
   const bridge = await serve([
@@ -77,6 +77,7 @@ test("a Mac with agents and an opencode of its own: each is offered for what it 
     { id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] },
     { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [] },
     { id: "openai", name: "OpenAI", methods: [], connections: [{ type: "env", name: "OPENAI_API_KEY" }] },
+    { id: "gitlab", name: "GitLab Duo", methods: [], connections: [{ type: "credential", id: "c4", label: "GitLab", method: "oauth" }] },
   ]);
   const authFile = opencode({
     anthropic: { type: "api", key: "sk-ant-1" },
@@ -100,13 +101,45 @@ test("a Mac with agents and an opencode of its own: each is offered for what it 
     { id: "opencode:openrouter", integrationID: "openrouter", name: "OpenRouter", kind: "key", connected: true },
   ]);
   expect(what.shell).toEqual([{ integrationID: "openai", name: "OpenAI", variable: "OPENAI_API_KEY" }]);
+  // Signed in to through the engine already (a key, a plan): a key in the shell isn't a sign-in.
+  expect(what.connected).toEqual(["openrouter", "gitlab"]);
   // No key leaves the box.
   expect(JSON.stringify(what)).not.toContain("sk-");
 });
 
+test("a plan whose sign-in has expired or failed isn't ready: only a working sign-in counts", async () => {
+  // The engine marks a sign-in that stopped working (`needs_auth`); a working one has no status.
+  const expired = (id: string) => ({ type: "credential", id, label: "GitHub", method: "oauth", status: { status: "needs_auth", message: "Sign in again" } });
+  const engine = await serve([
+    { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [expired("c2")] },
+    { id: "gitlab", name: "GitLab Duo", methods: [], connections: [{ ...expired("c3"), status: { status: "expired", message: "Expired" } }] },
+    { id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] },
+    // One that has stopped working next to one that works: the provider is still ready.
+    { id: "anthropic", name: "Anthropic", methods: [], connections: [expired("c0"), credential] },
+  ]);
+  const what = await found({ engine, bridge: null, authFile: join(root, "none.json") });
+  expect(what.connected).toEqual(["openrouter", "anthropic"]);
+});
+
+test("opencode's own sign-ins and keys are connected only when the engine's is working, not by a key in the shell", async () => {
+  const expired = { type: "credential", id: "c2", label: "GitHub", method: "oauth", status: { status: "needs_auth", message: "Sign in again" } };
+  const engine = await serve([
+    { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [expired] },
+    { id: "opencode", name: "OpenCode", methods: [], connections: [{ type: "env", name: "OPENCODE_API_KEY" }] },
+    { id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] },
+  ]);
+  const authFile = opencode({
+    "github-copilot": { type: "oauth", refresh: "gho_1", access: "x", expires: 1 },
+    opencode: { type: "api", key: "sk-zen-1" },
+    openrouter: { type: "api", key: "sk-or-1" },
+  });
+  const what = await found({ engine, bridge: null, authFile });
+  expect(what.opencode.map(item => [item.integrationID, item.connected])).toEqual([["github-copilot", false], ["opencode", false], ["openrouter", true]]);
+});
+
 test("a fresh computer: nothing to bring over, and nothing fails", async () => {
   const what = await found({ engine: await serve([]), bridge: await serve([]), authFile: join(root, "none.json") });
-  expect(what).toEqual({ agents: [], opencode: [], shell: [] });
+  expect(what).toEqual({ agents: [], opencode: [], shell: [], connected: [] });
 });
 
 test("with the engine and the agents not running yet, opencode's keys are still listed", async () => {

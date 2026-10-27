@@ -386,6 +386,13 @@ public enum ArtifactWords {
         return sentence.prefix(1).uppercased() + sentence.dropFirst()
     }
 
+    /// What a deletion's version says in place of the file: to step back where an earlier version's
+    /// copy is kept, and plainly that none was where it isn't (one made and removed before a copy).
+    public static func deleted(_ version: ArtifactVersion, in versions: [ArtifactVersion]) -> String {
+        let earlier = versions.contains { $0.n < version.n && $0.kept && $0.status != .deleted }
+        return earlier ? "It was deleted in this version. Step back to see what it was." : "It was deleted in this version. No earlier copy of it was kept."
+    }
+
     /// "Today, 9:00", "Yesterday, 18:40", "12 Oct, 9:00".
     public static func when(_ seconds: Double) -> String {
         day(Date(timeIntervalSince1970: seconds)) + ", " + time(seconds)
@@ -402,11 +409,22 @@ public enum ArtifactWords {
         return date.formatted(.dateTime.day().month(.abbreviated))
     }
 
-    /// A Shelf's sections, in order: what was marked final first, then memory, pages (and
-    /// documents wake-ups keep rewriting), documents, images, skills, downloads, and the rest last.
+    /// A Shelf's sections, in order: what's kept first (what you keep, and what its bot marked
+    /// final), then memory, pages (and documents wake-ups keep rewriting), documents, images,
+    /// skills, downloads, and the rest last.
     public enum Section: String, CaseIterable, Sendable {
-        case pinned = "Final", memory = "Memory", pages = "Pages", documents = "Documents", images = "Images", skills = "Skills", downloads = "Downloads", other = "Other Files"
+        case pinned = "Kept", memory = "Memory", pages = "Pages", documents = "Documents", images = "Images", skills = "Skills", downloads = "Downloads", other = "Other Files"
     }
+
+    /// What's kept reads as: "Final" for what its bot marked final (with its note), "Kept" for yours.
+    public static func mark(_ pin: Artifact.Pin) -> String {
+        pin.by == "bot" ? "Final" : "Kept"
+    }
+
+    /// Keeping something (`kuvo/artifacts/<id>/pin`): the button's words, its symbol and its help,
+    /// before and after.
+    public static let keep = (title: "Keep", symbol: "star", help: "Keep this and all its versions, at the top")
+    public static let kept = (title: "Kept", symbol: "star.fill", help: "Stop Keeping")
 
     public static func section(of artifact: ArtifactSummary) -> Section {
         if artifact.pinned != nil { return .pinned }

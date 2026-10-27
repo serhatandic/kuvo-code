@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import OpenCodeKit
 import SwiftUI
 import Textual
@@ -1434,6 +1435,7 @@ private struct TurnFiles: View {
             .font(.callout)
             .padding(8)
             .frame(width: 320)
+            .popoverContent()
         }
     }
 
@@ -1560,9 +1562,12 @@ private struct AgentSentRow: View {
             Text("To \(Text(address?.name ?? to).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
             if case .running = call.state, input?["wait"]?.bool == true {
-                Spinner(size: 11)
+                StepActivity(symbol: nil, running: true, size: 12)
                 Text("Waiting for its answer")
                     .foregroundStyle(.secondary)
+                if let since = call.time?.created?.date {
+                    StepActivity.Elapsed(since: since)
+                }
             }
             if case .failed = call.state {
                 Text("Didn't go")

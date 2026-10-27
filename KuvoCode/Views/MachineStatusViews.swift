@@ -65,12 +65,12 @@ struct MachineWaitingView: View {
             }
             switch engine.state {
             case .downloading(let progress) where progress > 0:
-                ProgressView(value: progress)
+                ProgressLine("Downloading the agent engine", fraction: progress)
                     .frame(width: 220)
             case .downloading, .starting:
-                Spinner(size: 16)
+                link
             case .failed where engine.isRetrying:
-                Spinner(size: 16)
+                link
             case .failed(let reason):
                 Text(reason)
                     .foregroundStyle(.secondary)
@@ -94,13 +94,19 @@ struct MachineWaitingView: View {
                     .buttonStyle(.glass)
                     .controlSize(.large)
             case .ready:
-                Spinner(size: 16)
+                link
             }
             Spacer()
             Spacer()
         }
         .padding(Metrics.gutter)
         .frame(maxWidth: .infinity)
+    }
+
+    /// On its way there: the title above says where.
+    private var link: some View {
+        ConnectingLink()
+            .accessibilityHidden(true)
     }
 
 }

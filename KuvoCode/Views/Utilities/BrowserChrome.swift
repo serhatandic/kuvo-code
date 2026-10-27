@@ -69,20 +69,15 @@ struct BrowserAddressField: View {
                 .font(.system(size: 13))
                 .focused(editing)
                 .onSubmit(submit)
+                // The line along its foot, in words; on the label, as the value is what's typed.
+                .accessibilityLabel(isLoading ? "Address, loading" : "Address")
         }
         .padding(.horizontal, 14)
         .frame(height: 34)
         .background(Color.primary.opacity(0.06), in: .capsule)
         .overlay(alignment: .bottom) {
-            if isLoading {
-                GeometryReader { proxy in
-                    Capsule().fill(.tint)
-                        .frame(width: proxy.size.width * (progress ?? 1), height: 2)
-                        .opacity(progress == nil ? 0.6 : 1)
-                }
-                .frame(height: 2)
+            LoadingEdge(isLoading: isLoading, progress: progress)
                 .padding(.horizontal, 16)
-            }
         }
         .contentShape(.capsule)
         .onTapGesture { editing.wrappedValue = true }
@@ -251,5 +246,67 @@ struct BrowserDownloadBar<Detail: View, Actions: View>: View {
                 .help("Hide")
             }
         }
+    }
+}
+
+/// A page loading, along the address field's lower edge: the line rushes to where the page says it
+/// is, slows as it gets near, never goes back, and when the page is in it finishes and fades.
+/// Without a figure from the page it eases most of the way and waits there. Each load draws a
+/// line of its own, from nothing, even one that starts while the last one's line is still fading.
+private struct LoadingEdge: View {
+    let isLoading: Bool
+    let progress: Double?
+    /// Which load the line is for.
+    @State private var load = 0
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        LoadingLine(isLoading: isLoading, progress: progress, still: reduceMotion)
+            .id(load)
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(false)
+            // The address field says it's loading.
+            .accessibilityHidden(true)
+            .onChange(of: isLoading, initial: true) { _, loading in
+                if loading {
+                    // A new line at once, over whatever the last one was doing.
+                    var now = Transaction()
+                    now.disablesAnimations = true
+                    withTransaction(now) {
+                        load += 1
+                        isVisible = true
+                    }
+                } else if isVisible {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3).delay(0.25)) { isVisible = false }
+                }
+            }
+    }
+}
+
+/// One load's line, which starts empty.
+private struct LoadingLine: View {
+    let isLoading: Bool
+    let progress: Double?
+    let still: Bool
+    @State private var shown = 0.0
+
+    var body: some View {
+        GeometryReader { proxy in
+            Capsule().fill(.tint)
+                .frame(width: proxy.size.width * shown, height: 2)
+        }
+        .frame(height: 2)
+        .onAppear(perform: advance)
+        .onChange(of: progress) { advance() }
+        .onChange(of: isLoading) { _, loading in
+            if !loading { withAnimation(still ? nil : .easeOut(duration: 0.2)) { shown = 1 } }
+        }
+    }
+
+    private func advance() {
+        guard isLoading else { return }
+        let target = max(shown, progress.map { min(0.92, max($0, 0.15)) } ?? 0.7)
+        withAnimation(still ? nil : .easeOut(duration: progress == nil ? 3 : 0.4)) { shown = target }
     }
 }

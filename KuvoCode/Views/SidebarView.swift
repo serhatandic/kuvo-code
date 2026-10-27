@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 import UsageKit
@@ -69,8 +70,17 @@ struct SidebarView: View {
     /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
     @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
-    @State private var conversationResults: [(session: Session, snippet: String)] = []
+    /// What each box found in its conversations, by the box: one's earlier finds stay until it
+    /// answers the newer search, as on the phone.
+    @State private var conversationFinds: [String: [(session: Session, snippet: String)]] = [:]
+    /// Everything found in conversations, the latest first.
+    private var conversationResults: [(session: Session, snippet: String)] {
+        Array(conversationFinds.values.flatMap(\.self).sorted { $0.session.time.updated > $1.session.time.updated }.prefix(20))
+    }
     @State private var isSearchingConversations = false
+    /// The computers asked for this search, and those that have answered: each says so in turn.
+    @State private var searchAsked: [String] = []
+    @State private var searchAnswered: Set<String> = []
 
     /// A project lists this many sessions until you ask for the rest.
     private static let sessionsPerProject = 5
@@ -217,16 +227,26 @@ struct SidebarView: View {
         .task(id: "\(search)\n\(workspace.isLoaded)") {
             let query = search.trimmingCharacters(in: .whitespaces)
             guard query.count >= 3 else {
-                conversationResults = []
+                conversationFinds = [:]
                 isSearchingConversations = false
                 return
             }
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             isSearchingConversations = true
-            let found = await workspace.searchConversations(query)
+            searchAsked = [BoxClient.mac] + workspace.connectedMachines.sorted()
+            searchAnswered = []
+            // Each box's as it answers: one that's slow or far holds none of the others up.
+            var answered: Set<String> = []
+            let found = await workspace.searchConversations(query) { box, finds in
+                guard !Task.isCancelled else { return }
+                answered.insert(box)
+                searchAnswered.insert(box)
+                conversationFinds[box] = finds
+            }
             guard !Task.isCancelled else { return }
-            conversationResults = found
+            // A box not asked this time (gone, not connected) keeps nothing from before.
+            conversationFinds = conversationFinds.filter { answered.contains($0.key) }
             isSearchingConversations = false
             Analytics.shared.track("conversations_searched", ["found": min(found.count, 20)])
         }
@@ -485,7 +505,14 @@ struct SidebarView: View {
         let unsearched = search.trimmingCharacters(in: .whitespaces).count >= 3 && !isSearchingConversations ? workspace.unsearched.sorted { $0.key < $1.key } : []
         if !inConversations.isEmpty || isSearchingConversations || !unsearched.isEmpty {
             SectionHeader(title: "In Conversations") {
-                if isSearchingConversations { Spinner(size: 11).padding(.trailing, 6) }
+                // One computer: its wait in the heading. More: each says so below as it answers.
+                if isSearchingConversations && searchAsked.count < 2 { Spinner(size: 11).padding(.trailing, 6) }
+            }
+            if isSearchingConversations && searchAsked.count > 1 {
+                ForEach(searchAsked, id: \.self) { box in
+                    SearchedComputer(name: box == BoxClient.mac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box,
+                                     found: searchAnswered.contains(box) ? (conversationFinds[box]?.count ?? 0) : nil)
+                }
             }
             ForEach(inConversations, id: \.found.id) { result in
                 let show = {
@@ -501,7 +528,7 @@ struct SidebarView: View {
                 }
             }
             ForEach(unsearched, id: \.key) { computer, why in
-                Text("\(computer) \(why), so its conversations weren’t searched.")
+                Text(why.line(for: computer))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -866,10 +893,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if let destination = app.moves.underWay[session.id] {
-                        Spinner(size: 12)
-                            .help("Moving to \(destination ?? "this Mac")…")
-                    } else if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if !search.isEmpty, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
@@ -882,15 +906,7 @@ struct SidebarView: View {
                             .help("Works in a worktree, on \(tree.branch)")
                     }
                     if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: Keyword.btw.symbol)
-                            Text("\(count)")
-                                .monospacedDigit()
-                        }
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .help(count.counting("side question") + ", kept out of the conversation: Control-click to open one")
-                        .accessibilityLabel(count.counting("side question"))
+                        SideQuestionsButton(count: count) { showSideQuestion(nil, of: session, in: place) }
                     }
                     let children = workspace.subSessions[session.id] ?? []
                     if !children.isEmpty {
@@ -903,33 +919,30 @@ struct SidebarView: View {
         }
         .contextMenu { menu(for: session, in: place) }
         .modifier(SubSessionsAction(count: workspace.subSessions[session.id]?.count ?? 0, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) })
+        .modifier(SideQuestionsAction(count: workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id] ?? 0) { showSideQuestion(nil, of: session, in: place) })
     }
 
     /// A conversation's side questions ("/btw"), each opening it with its answer over the composer.
-    @ViewBuilder private func sideQuestionsMenu(for session: Session) -> some View {
+    @ViewBuilder private func sideQuestionsMenu(for session: Session, in place: Place?) -> some View {
         let bridge = workspace.agents(forFolder: session.location.directory)
         if let count = bridge?.sideQuestionCounts[session.id], count > 0 {
             Menu("Side Questions") {
                 let questions = bridge?.sideQuestions[session.id] ?? []
                 if questions.isEmpty {
-                    Button("Open the Latest") { showSideQuestion(nil, of: session) }
+                    Button("Open the Latest") { showSideQuestion(nil, of: session, in: place) }
                 }
                 ForEach(questions.reversed()) { question in
-                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session) }
+                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session, in: place) }
                 }
             }
         }
     }
 
-    private func showSideQuestion(_ id: String?, of session: Session) {
+    /// `place`: the row it's opened from, highlighted as a click on it would be.
+    private func showSideQuestion(_ id: String?, of session: Session, in place: Place?) {
+        if let place { pickedIn[session.id] = place }
         selection = session.id
-        Task {
-            let bridge = workspace.agents(forFolder: session.location.directory)
-            await bridge?.loadSideQuestions(of: session.id)
-            guard let model = workspace.model(for: session.id) else { return }
-            model.shownSideQuestion = id ?? bridge?.sideQuestions[session.id]?.last?.id
-            model.hidesSideQuestion = false
-        }
+        Task { await workspace.model(for: session.id)?.showSideQuestion(id) }
     }
 
     /// Saves the conversation as a Markdown file where you choose.
@@ -979,7 +992,7 @@ struct SidebarView: View {
         if let openBeside, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
-        sideQuestionsMenu(for: session)
+        sideQuestionsMenu(for: session, in: place)
         // Moving to another computer: what would change it waits until it's there.
         let moving = app.moves.isMoving(session.id)
         if let place {
@@ -1131,18 +1144,24 @@ enum SidebarMetrics {
     static let iconWidth: CGFloat = 18
 }
 
-/// A row's highlight: accent glass under the open session, so it stands apart from the
-/// chrome around it, and a soft neutral fill under the pointer on the others. Neither
-/// moves or resizes the row.
+/// A row's highlight: a neutral fill under the open one, and a lighter one under the pointer, the
+/// same in the sidebar, Settings and the pickers. It starts where the row's own content does
+/// (`leading`), so the lines sub-sessions hang from stay in view beside it. The accent is left
+/// for what's new and what you set. Neither moves or resizes the row.
 struct RowHighlight: ViewModifier {
     let isSelected: Bool
+    var leading: CGFloat = 0
     @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 8)
+        let fill = isSelected ? (scheme == .dark ? 0.1 : 0.08) : isHovering ? (scheme == .dark ? 0.06 : 0.045) : 0
         content
-            .background(isHovering && !isSelected ? Color.primary.opacity(0.06) : .clear, in: shape)
-            .accentGlass(shape, isOn: isSelected)
+            .background(alignment: .leading) {
+                shape.fill(Color.primary.opacity(fill))
+                    .padding(.leading, leading)
+            }
             .contentShape(shape)
             .onHover { isHovering = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovering)
@@ -1190,7 +1209,8 @@ private struct SidebarRow<Icon: View, Title: View, Accessory: View>: View {
         }
         .padding(.horizontal, 10)
         .frame(height: SidebarMetrics.rowHeight)
-        .modifier(RowHighlight(isSelected: isSelected))
+        // An indented row's fill starts at its title, beside the project's line of sessions.
+        .modifier(RowHighlight(isSelected: isSelected, leading: indented && Icon.self == EmptyView.self ? 10 + SidebarMetrics.iconWidth : 0))
     }
 }
 
@@ -1349,7 +1369,7 @@ private struct GroupRow: View {
                         .help("Lives on \(app.machines.engine(machine)?.machine.name ?? machine)")
                 }
                 if isUnread {
-                    Circle().fill(.tint).frame(width: 7, height: 7)
+                    StatusMark(.new)
                         .help("New messages")
                 }
             }
@@ -1544,7 +1564,7 @@ private struct SectionHeader<Trailing: View>: View {
         .frame(height: 22)
         .padding(.leading, 10)
         .padding(.trailing, 4)
-        .padding(.top, 16)
+        .padding(.top, 20)
         .padding(.bottom, 4)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
@@ -1552,8 +1572,40 @@ private struct SectionHeader<Trailing: View>: View {
 
     private var label: some View {
         Text(title)
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.secondary)
+    }
+}
+
+/// A computer asked for a search of its conversations: its name, and, once it has answered, a
+/// check and how many it found; dots while it's being asked.
+private struct SearchedComputer: View {
+    let name: String
+    /// What it found, once it has answered.
+    let found: Int?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(name)
+                .foregroundStyle(.secondary)
+            if let found {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.green)
+                Spacer(minLength: 6)
+                Text(found == 0 ? "None" : "\(found) found")
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            } else {
+                AskingDots()
+                Spacer(minLength: 6)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(found.map { "\(name), \($0 == 0 ? "nothing" : "\($0)") found" } ?? "\(name), searching")
     }
 }
 
@@ -1700,7 +1752,33 @@ private struct MoveToComputerMenu: View {
     }
 }
 
-/// How a session is doing, at the end of its row.
+/// What a session's row and its tab show: one place decides, so the two always agree. A move to
+/// another computer is work; a machine that's getting there (connecting, installing) isn't away.
+@MainActor func statusMark(of session: Session, isNew: Bool, workspace: Workspace, app: AppModel) -> StatusMark.Kind? {
+    let id = session.id
+    let moving = app.moves.underWay[id] != nil
+    let working = workspace.isWorking(id) || moving
+    return ConversationState.kind(
+        needsYou: workspace.needsAttention(id),
+        working: working,
+        subagentsOnly: !moving && working && !workspace.running.contains(id) && workspace.helpersAtWork(in: id) > 0,
+        failed: session.outcome == .failed,
+        isNew: isNew,
+        offline: awayMachine(of: session, app: app) != nil,
+        wakes: app.wakeUps.wakes[id]?.isEmpty == false,
+        watching: app.wakeUps.watches[id]?.isEmpty == false)
+}
+
+/// The machine a session lives on, by name, while that machine isn't connected and isn't on its
+/// way to it.
+@MainActor func awayMachine(of session: Session, app: AppModel) -> String? {
+    guard let machine = RemoteFolder.machine(of: session.location.directory), let engine = app.machines.engine(machine),
+          !engine.isReady, !engine.connection.isUnderWay else { return nil }
+    return engine.machine.name
+}
+
+/// How a session is doing, at the end of its row. One mark stays in place while the state comes
+/// and goes, so a state arriving on screen plays its arrival.
 private struct SessionStatus: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
@@ -1710,33 +1788,22 @@ private struct SessionStatus: View {
     var isUnread: Bool?
 
     var body: some View {
-        if workspace.needsAttention(session.id) {
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.orange)
-                .help("Waiting for you")
-        } else if workspace.isWorking(session.id) {
-            Spinner(size: 12)
-                .help("Working")
-        } else if session.outcome == .failed {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.red)
-                .help("The last run failed")
-        } else if isUnread ?? session.isUnread {
-            Circle().fill(.tint).frame(width: 7, height: 7)
-                .help("Finished")
-        } else if let next = app.wakeUps.wakes[session.id]?.first {
-            // It wakes itself up later (a bot's row says so in words).
-            Image(systemName: "alarm")
-                .font(.system(size: 11))
-                .foregroundStyle(.tint)
-                .help("Wakes up " + next.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)))
-        } else if app.wakeUps.watches[session.id]?.isEmpty == false {
-            Image(systemName: "eye")
-                .font(.system(size: 11))
-                .foregroundStyle(.tint)
-                .help("Watching for a change")
+        let kind = statusMark(of: session, isNew: isUnread ?? session.isUnread, workspace: workspace, app: app)
+        StatusMark(showing: kind)
+            .help(kind.map(help) ?? "")
+    }
+
+    private func help(_ kind: StatusMark.Kind) -> String {
+        switch kind {
+        case .working:
+            app.moves.underWay[session.id].map { "Moving to \($0 ?? "this Mac")…" } ?? kind.words
+        case .subagents: workspace.helpersAtWork(in: session.id).counting("subagent") + " at work"
+        case .failed: "The last run failed"
+        case .new: "Finished"
+        case .offline: "\(awayMachine(of: session, app: app) ?? "Its machine") isn’t connected"
+        case .wake:
+            app.wakeUps.wakes[session.id]?.first.map { "Wakes up " + $0.due.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide)) } ?? kind.words
+        default: kind.words
         }
     }
 }
@@ -1860,7 +1927,8 @@ private struct SubSessionRow: View {
             .padding(.leading, inset)
             .padding(.trailing, 10)
             .frame(height: SidebarMetrics.rowHeight)
-            .modifier(RowHighlight(isSelected: isSelected))
+            // From just before its title: the line and its elbow stay in view.
+            .modifier(RowHighlight(isSelected: isSelected, leading: inset - 5))
         }
         .buttonStyle(.plain)
         .clickablePointer()
@@ -1878,20 +1946,57 @@ private struct SubSessionToggle: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 3) {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 9, weight: .semibold))
                 Text("\(count)")
                     .monospacedDigit()
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 9, weight: .semibold))
                     .rotationEffect(.degrees(isUnfolded ? 0 : -90))
             }
-            .font(.system(size: 11))
+            .font(.system(size: 12, weight: .medium))
         }
         .buttonStyle(TextButtonStyle())
         .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
         // The row it's in says so, with its action (see `SubSessionsAction`).
         .accessibilityHidden(true)
+    }
+}
+
+/// A conversation's side questions on its row: how many, opening the latest over its composer
+/// (the others are a menu away there, and in the row's menu).
+private struct SideQuestionsButton: View {
+    let count: Int
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 2) {
+                Image(systemName: Keyword.btw.symbol)
+                Text("\(count)")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11))
+        }
+        .buttonStyle(TextButtonStyle())
+        .help("Open the latest of \(count.counting("side question"))")
+        // The row it's in says so, with its action (see `SideQuestionsAction`).
+        .accessibilityHidden(true)
+    }
+}
+
+/// A row with side questions, for VoiceOver: how many, and the action that opens the latest, as
+/// the count inside it does.
+private struct SideQuestionsAction: ViewModifier {
+    let count: Int
+    let open: () -> Void
+
+    func body(content: Content) -> some View {
+        if count > 0 {
+            content
+                .accessibilityCustomContent("Side questions", "\(count)", importance: .high)
+                .accessibilityAction(named: "Open Side Questions", open)
+        } else {
+            content
+        }
     }
 }
 

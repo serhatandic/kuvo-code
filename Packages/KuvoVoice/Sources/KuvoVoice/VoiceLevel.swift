@@ -26,36 +26,3 @@ public struct VoiceLevel: Equatable, Sendable {
         return (sum / Float(samples.count)).squareRoot()
     }
 }
-
-/// When you've finished speaking: once you've said something, a pause of `seconds` without
-/// speech ends it, as stopping talking ends dictation. Silence before you start never does.
-public struct SpeechPause: Equatable, Sendable {
-    /// How long a pause ends it.
-    public var seconds: Double
-    /// A level at or above this is speech.
-    var speaking: Double = 0.22
-    private var heardSpeech = false
-    private var quietSince: Double?
-
-    public init(seconds: Double = 1.8) {
-        self.seconds = seconds
-    }
-
-    /// The level at `time` (seconds, the audio's own clock): whether you've finished.
-    public mutating func take(level: Double, at time: Double) -> Bool {
-        if level >= speaking {
-            heardSpeech = true
-            quietSince = nil
-            return false
-        }
-        guard heardSpeech else { return false }
-        if quietSince == nil { quietSince = time }
-        return time - quietSince! >= seconds
-    }
-
-    /// New words came: you're still at it.
-    public mutating func heardWords(at time: Double) {
-        heardSpeech = true
-        quietSince = nil
-    }
-}

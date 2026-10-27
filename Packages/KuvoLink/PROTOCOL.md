@@ -738,13 +738,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
-  - `GET kuvo/accounts/found` → `{agents, opencode, shell}`: what the computer already has, for
+  - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
     apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
     `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
-    sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
-    the shell the engine uses (`{integrationID, name, variable}`). Names only, never a key. `POST
+    sign each other out), and `connected` says the engine has a working one for it already (a key in the shell aside). `shell`: keys in
+    the shell the engine uses (`{integrationID, name, variable}`). `connected` (from bridge 0.9.91):
+    the engine's providers signed in and working, by integration (an expired sign-in or a key in the
+    shell aside). Names
+    only, never a key. `POST
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
     refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).
@@ -1439,21 +1442,42 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
   - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
-- **Reviews** (`reviews`, "/review"): the conversation's changes not committed yet (its folder's
-  own, in its git: tracked files' diffs, against nothing before the first commit, and new files
-  whole; a big new file is named with its size, and links and files that aren't text are left
-  out), read by a model with none of the
-  conversation's context: on the engine, its own model afresh, or `model` when given; with the
-  coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
-  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?}` → `{data: review}`,
-    `state` `reviewing`; `409` while one is under way. `focus` is what to look at especially, as
-    the user wrote it ("/review with <model> <focus>"). A review: `{id, session, state: "reviewing"
-    | "done" | "failed", model?, focus?, summary?, findings: [finding], error?, fix?, started,
-    ended?}`, its findings
-    bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
-    [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
-    says it all), and every place it's in, none when it's about the change as a whole (a missing
-    test). `fix` is what to send the agent, as your message, to fix them all.
+- **Reviews** (`reviews`, "/review"): what `scope` names in the conversation's folder, read by a
+  model with none of the conversation's context: on the engine, its own model afresh, or `model`
+  when given; with the coding agents, its own agent (another one you're signed in to when it
+  can't), `model` left out. A scope:
+  - `{"kind": "uncommitted"}`, the default: the changes not committed yet (the folder's own, in
+    its git: tracked files' diffs, against nothing before the first commit, and new files whole;
+    a big new file is named with its size, and links and files that aren't text are left out);
+  - `{"kind": "branch", "base"?}`: the branch's changes since it left `base` (when left out,
+    main or master, yours or origin's, whichever is newer, or origin's HEAD), with those not
+    committed yet;
+  - `{"kind": "commits", "from", "to"?}`: what the commits after `from`, up to `to` (HEAD when
+    left out), changed, git's `from..to`;
+  - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
+    the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
+    line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
+    but for links, lock files, `.env` files, big files and ones that aren't text.
+
+  One too big to read at once is read in parts, one after another (at most 30; more is left out,
+  and its summary says how many files), each by a fresh model.
+  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?, "scope"?}` →
+    `{data: review}`, `state` `reviewing`; `409` while one is under way, `400` for a scope that
+    makes no sense. `focus` is what to look at especially, as the user wrote it ("/review with
+    <model> <focus>"), or `security`, `performance` or `accessibility`, which the box spells out
+    for the reviewer. A review: `{id, session, state: "reviewing" | "done" | "failed", model?,
+    scope?, focus?, progress?: {read, of}, summary?, findings: [finding], error?, fix?, started,
+    ended?}`, its findings bugs first; `scope` is left out for the changes not committed yet, and
+    `progress` is there while one read in parts is under way (`read` of `of` parts), its findings
+    so far in `findings`. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
+    locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
+    when the title says it all), and every place it's in, none when it's about the change as a
+    whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
+  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut}}`:
+    how much a review of it would read, to show before asking for a big one; `422` with what's
+    wrong when it can't be read (not a repository, no such commit or folder).
+  - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
+    `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
     an agent, as your message, to fix them all or those it names, wherever you send it (this
     conversation, a new one, another); `404` when the review found nothing, or none of them is
@@ -1461,6 +1485,15 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
     conversation's; `DELETE …/kuvo/reviews/<session>` puts it away (one under way is let go: its answer isn't kept).
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
+
+The same bridge also gives voice input the words to listen for in a conversation (a speech model
+is prompted with them), for the engine's sessions and the coding agents' alike:
+`GET …/kuvo/voice/words/<session>` → `{data: {words: [string]}}`, at most 100, most useful first
+(ask when listening starts). They're the project's own names: its folder's (and its repository's),
+the names said in the conversation's newest messages, its packages', the files changed lately (each
+with and without its extension), then its other folders and files. Never anything of `.env`
+files, nor long hex or random-looking strings. `404` for a conversation that isn't there, `409`
+for one with no folder.
 
 ### Features
 

@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import Testing
 import UsageKit
 @testable import KuvoCode
@@ -24,6 +25,82 @@ import UsageKit
     final class Permissions {
         var allowed: Set<ScreenAccess.Permission> = []
         lazy var source = ScreenAccess.Source { [self] in allowed.contains($0) }
+    }
+
+    // MARK: Bring your subscriptions
+
+    /// Whether this Mac's box is still starting up.
+    nonisolated final class StartingUp: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = true
+        var isOn: Bool {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
+    }
+
+    /// This Mac's box answering `kuvo/accounts/found`: not yet while it starts, then nothing found.
+    private func foundBox(_ starting: StartingUp) -> BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            let now = starting.isOn
+            return AsyncThrowingStream { continuation in
+                if now {
+                    continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"message":"Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment."}"#.utf8)))
+                } else {
+                    continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"agents":[],"opencode":[],"shell":[],"connected":[]}"#.utf8)))
+                }
+                continuation.finish()
+            }
+        })
+    }
+
+    /// The first look comes a moment before this Mac's box answers: the step goes on looking, as
+    /// it does once the box is up, rather than saying it couldn't.
+    @Test func aBoxStillStartingIsStillLooking() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let starting = StartingUp()
+        let box = foundBox(starting)
+        await onboarding.look(in: box)
+        #expect(onboarding.lookFailure == nil, "not a failure: it's starting")
+        #expect(onboarding.found == nil)
+        starting.isOn = false
+        await onboarding.look(in: box)
+        #expect(onboarding.found != nil)
+    }
+
+    /// A box that answers but can't list them says why, with Try Again: only a box still starting
+    /// is still looked for.
+    @Test func aBoxThatFailsSaysWhy() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let box = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 500, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(#"{"message":"The engine’s list of sign-ins couldn’t be read."}"#.utf8)))
+                continuation.finish()
+            }
+        })
+        await onboarding.look(in: box)
+        #expect(onboarding.lookFailure == "The engine’s list of sign-ins couldn’t be read.")
+        #expect(onboarding.found == nil)
+    }
+
+    /// The coding agents' bridge never lists them (it didn't start, or answered with none): the
+    /// step stops looking for them and says so, rather than spinning on.
+    @Test func codingAgentsNeverListedSayItAndTryAgain() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let starting = StartingUp()
+        starting.isOn = false
+        let box = foundBox(starting)
+        // The bridge is still starting: looking.
+        await onboarding.look(in: box, agentsUp: false)
+        #expect(onboarding.agents(failure: nil) == .looking)
+        // It couldn't start: why, to try again.
+        #expect(onboarding.agents(failure: "It stopped.") == .failed("It stopped."))
+        // Up, and the box still lists none: not looking for ever.
+        await onboarding.look(in: box, agentsUp: true)
+        guard case .failed = onboarding.agents(failure: nil) else { Issue.record("still looking"); return }
     }
 
     // MARK: Moving on once a permission is granted

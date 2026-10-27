@@ -123,7 +123,7 @@ struct StorageSettings: View {
                         ForEach(Self.budgets, id: \.self) { Text(Self.format(Int64($0))).tag($0) }
                     } label: {
                         Text("Older versions keep up to")
-                        Text("Past it, the oldest go first. The newest version of each file, memory, skills and what’s pinned always stay.")
+                        Text("Past it, the oldest go first. The newest version of each file, memory, skills and what’s kept always stay.")
                     }
                     LabeledContent {
                         Button("Clear…") { confirmingOlder = true }
@@ -178,12 +178,12 @@ struct StorageSettings: View {
         .confirmationDialog("Keep less of older versions?", isPresented: Binding(get: { lowering != nil }, set: { if !$0 { lowering = nil } }), presenting: lowering) { budget in
             Button("Keep up to \(Self.format(Int64(budget)))", role: .destructive) { Task { await setBudget(budget) } }
         } message: { _ in
-            Text("Older versions take \(Self.format(Int64(made?.older ?? 0))) now, so the oldest of their copies go until they fit. The newest version of each file, memory, skills and what’s pinned stay.")
+            Text("Older versions take \(Self.format(Int64(made?.older ?? 0))) now, so the oldest of their copies go until they fit. The newest version of each file, memory, skills and what’s kept stay.")
         }
         .confirmationDialog("Clear older versions?", isPresented: $confirmingOlder) {
             Button("Clear", role: .destructive) { Task { await clearOlder() } }
         } message: {
-            Text("Their copies go; each stays listed, without one. The newest version of each file, memory, skills and what’s pinned stay.")
+            Text("Their copies go; each stays listed, without one. The newest version of each file, memory, skills and what’s kept stay.")
         }
         .confirmationDialog("Delete the logs?", isPresented: $confirmingLogs) {
             Button("Delete", role: .destructive) {

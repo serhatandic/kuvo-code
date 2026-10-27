@@ -12,6 +12,8 @@ struct GoalBar: View {
     @Binding var isHidden: Bool
     /// A change asked for is on its way: the buttons wait for it.
     var isChanging = false
+    /// Messages are waiting: stopping the agent holds them, paused, which Stop says.
+    var hasWaiting = false
     let pause: () -> Void
     let resume: () -> Void
     /// Takes the goal away, and stops the turn under way.
@@ -136,7 +138,9 @@ struct GoalBar: View {
                 stop()
             }
         } message: {
-            Text(goal.state == .working ? "The agent stops what it's doing, and the goal is taken away." : "The goal is taken away.")
+            Text(goal.state == .working
+                 ? "The agent stops what it's doing, and the goal is taken away." + (hasWaiting ? " Messages waiting stay paused." : "")
+                 : "The goal is taken away.")
         }
         // A goal that ended, or that can't be changed now, has nothing to stop: the question goes.
         .onChange(of: canStop) { _, can in

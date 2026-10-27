@@ -158,19 +158,8 @@ private struct LoaderStep: View {
             Group {
                 switch state {
                 case .working:
-                    VStack(spacing: 6) {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                            .frame(width: 220)
-                            .tint(.secondary)
-                        Text(progress, format: .percent.precision(.fractionLength(0)))
-                            .font(.callout)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Getting \(AppInfo.name) ready")
-                    .accessibilityValue("\(Int(progress * 100)) percent")
+                    ProgressLine("Getting \(AppInfo.name) ready", fraction: progress)
+                        .frame(width: 220)
                 case .failed, .offline:
                     Button("Try Again") { Task { await app.restart() } }
                         .buttonStyle(.glassProminent)

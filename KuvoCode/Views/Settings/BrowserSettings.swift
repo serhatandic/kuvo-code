@@ -98,7 +98,8 @@ struct BrowserSettings: View {
                         }
                     }
                 } else {
-                    Spinner(size: 16).frame(maxWidth: .infinity)
+                    Placeholder(.rows(count: 3), label: "Loading website data", fadesOut: false)
+                        .padding(.vertical, 6)
                 }
             } header: {
                 HStack {

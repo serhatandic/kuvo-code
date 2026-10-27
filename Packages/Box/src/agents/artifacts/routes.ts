@@ -116,7 +116,7 @@ export async function artifactRoutes(store: ArtifactStore | undefined, method: s
     const { pinned, note } = (await body()) ?? {}
     if (typeof pinned !== "boolean") return message(400, "Say whether it's pinned (pinned).")
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...(typeof note === "string" && note.trim() ? { note: note.trim() } : {}) } : null)
-    return changed ? json(clientArtifact(changed, store)) : message(409, "It couldn't be pinned now. Try again in a moment.")
+    return changed ? json(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.")
   }
 
   if (second === "restore") {

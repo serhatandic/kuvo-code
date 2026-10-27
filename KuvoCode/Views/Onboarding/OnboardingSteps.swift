@@ -10,9 +10,18 @@ struct SubscriptionsStep: View {
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
     @State private var signingIn: SignIn?
+    /// Add Another, open on a tab.
+    @State private var adding: Adding?
+    /// The API keys found here, shown on demand.
+    @State private var showsKeys = false
 
     private struct SignIn: Identifiable {
         var id: String
+    }
+
+    private struct Adding: Identifiable {
+        var tab: AddAnotherSheet.Tab
+        var id: AddAnotherSheet.Tab { tab }
     }
 
     private var onboarding: Onboarding { app.onboarding }
@@ -29,59 +38,85 @@ struct SubscriptionsStep: View {
                     Button("Not Now") { onboarding.advance() }
                         .buttonStyle(.glass)
                     if lookFailure != nil {
-                        Button("Try Again") { Task { await onboarding.look(in: box) } }
+                        Button("Try Again") { Task { await onboarding.look(in: box, agentsUp: app.agents.api != nil) } }
                             .buttonStyle(.glassProminent)
                             .keyboardShortcut(.defaultAction)
                     }
                 }
-            } else if offers.hasSomething {
-                OnboardingPage(title: "Bring your subscriptions", detail: "\(AppInfo.name) found these on your Mac. Pick the ones to use here; you can change them any time in Settings › Accounts.") {
+            } else {
+                OnboardingPage(title: "Bring your subscriptions", detail: "Use the plans you pay for. Everything else works with free models.") {
                     VStack(alignment: .leading, spacing: 6) {
-                        section("Coding Agents", offers.agents)
-                        section("From opencode", offers.opencode)
-                        section("From Your Shell", offers.shell)
+                        heading("Plans")
+                        switch onboarding.agents(failure: app.agents.failure) {
+                        case .listed: EmptyView()
+                        case .looking: AgentsPendingRow(failure: nil, again: lookAgain)
+                        case .failed(let why): AgentsPendingRow(failure: why, again: lookAgain)
+                        }
+                        ForEach(offers.plans) { row(for: $0) }
+                        heading("Free")
+                        FreeModelsRow()
+                        if showsKeys, !offers.keys.isEmpty {
+                            heading("API Keys")
+                            ForEach(offers.keys) { row(for: $0) }
+                        }
+                        links(offers)
                         if onboarding.offersUsage {
                             UsageRow(usage: onboarding.usage) { Task { await onboarding.turnOnUsage() } }
                                 .padding(.top, 14)
                         }
                         failure
                     }
+                    .animation(.ui, value: showsKeys)
                 } buttons: {
-                    Button("Connect Another Account…") { app.openSettings(.accounts) }
-                        .buttonStyle(.link)
                     Spacer()
                     Button("Continue") { onboarding.advance() }
-                        .buttonStyle(.glassProminent)
-                        .keyboardShortcut(.defaultAction)
-                }
-            } else {
-                OnboardingPage(title: "Nothing to bring over", detail: "You can start right away with free models, or sign in to a subscription you have.") {
-                    BotAvatar(look: BotGathering.crew[2], size: 48, mood: .idle)
-                        .accessibilityHidden(true)
-                } content: {
-                    VStack(spacing: 6) {
-                        ForEach(offers.suggestions) { row(for: $0) }
-                        failure
-                    }
-                } buttons: {
-                    Button("Other Accounts…") { app.openSettings(.accounts) }
-                        .buttonStyle(.link)
-                    Spacer()
-                    Button("Start with Free Models") { onboarding.advance() }
                         .buttonStyle(.glassProminent)
                         .keyboardShortcut(.defaultAction)
                 }
             }
         }
         // Again once this Mac's box and its engine are up, or back: the box names what it finds as
-        // the engine does, and can start a moment after it. (Back from Settings › Accounts, it's
-        // shown anew, and looks again.)
-        .task(id: [app.box.endpoint != nil, app.engine == .ready]) { await onboarding.look(in: box) }
+        // the engine does, and can start a moment after it.
+        // And once the coding agents' bridge is up: it lists them.
+        .task(id: [app.box.endpoint != nil, app.engine == .ready, app.agents.api != nil]) { await onboarding.look(in: box, agentsUp: app.agents.api != nil) }
+        #if DEBUG
+        // KUVO_DEMO_ADD_ANOTHER=plans|keys: Add Another open on that tab, for a look at it.
+        .task {
+            guard let tab = ProcessInfo.processInfo.environment["KUVO_DEMO_ADD_ANOTHER"] else { return }
+            adding = Adding(tab: tab == "keys" ? .keys : .plans)
+        }
+        // KUVO_DEMO_SHOW_KEYS: the API keys found, open in place.
+        .onAppear { if ProcessInfo.processInfo.environment["KUVO_DEMO_SHOW_KEYS"] != nil { showsKeys = true } }
+        #endif
         .sheet(item: $signingIn) { signIn in
             ConnectView(integrationID: signIn.id, onDone: { finishedSigningIn() }, onCancel: { signingIn = nil })
                 .frame(width: 480)
                 .frame(minHeight: 380)
         }
+        .sheet(item: $adding, onDismiss: lookAgain) { adding in
+            AddAnotherSheet(tab: adding.tab, offers: offers, failure: onboarding.useFailure, agents: onboarding.agents(failure: app.agents.failure), lookAgain: lookAgain, perform: perform, isBusy: isBusy, changed: lookAgain) { self.adding = nil }
+                .frame(width: 480, height: 540)
+        }
+    }
+
+    /// Add Another, and the keys: quiet, under the list.
+    private func links(_ offers: Offers) -> some View {
+        HStack(spacing: 18) {
+            Button("Add Another…") { adding = Adding(tab: .plans) }
+            // The keys found here, in place; with none, any provider's, in the sheet.
+            if !showsKeys {
+                Button("Use an API Key Instead…") {
+                    if offers.keys.isEmpty { adding = Adding(tab: .keys) } else { showsKeys = true }
+                }
+            } else {
+                Button("Another Provider’s Key…") { adding = Adding(tab: .keys) }
+            }
+            Spacer()
+        }
+        .buttonStyle(.link)
+        .font(.callout)
+        .padding(.horizontal, 4)
+        .padding(.top, 8)
     }
 
     /// Why the list couldn't be read; none while this Mac's box is still starting (it's looked for
@@ -103,13 +138,6 @@ struct SubscriptionsStep: View {
         }
     }
 
-    @ViewBuilder private func section(_ title: String, _ rows: [Offers.Row]) -> some View {
-        if !rows.isEmpty {
-            heading(title)
-            ForEach(rows) { row(for: $0) }
-        }
-    }
-
     private func heading(_ title: String) -> some View {
         Text(title)
             .font(.subheadline.weight(.semibold))
@@ -120,50 +148,89 @@ struct SubscriptionsStep: View {
     }
 
     private func row(for row: Offers.Row) -> some View {
-        OfferRow(row: row, logo: logo(row.integrationID), isBusy: onboarding.using.contains(row.id) || app.agents.installing.contains(row.integrationID)) { action in
-            switch action {
-            case .ready, .added: break
-            case .signIn(let id): signingIn = SignIn(id: id)
-            case .use(let item):
-                Task {
-                    // Its models in the picker, and its plan in the usage panel.
-                    guard await onboarding.use(item, in: box) else { return }
-                    await catalog.refresh()
-                    await app.usage.sync()
-                }
-            case .install(let id):
-                app.agents.install(id) { installed in
-                    await catalog.refreshAgents(fresh: true)
-                    await onboarding.look(in: box)
-                    if installed { signingIn = SignIn(id: id) }
-                }
+        OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { signingIn = SignIn(id: $0) } }
+    }
+
+    private func isBusy(_ row: Offers.Row) -> Bool {
+        onboarding.using.contains(row.id) || app.agents.installing.contains(row.integrationID)
+    }
+
+    /// What a row's button does; `signIn` opens a sign-in where the row is (here, or in Add Another).
+    private func perform(_ row: Offers.Row, signIn: @escaping (String) -> Void) {
+        switch row.action {
+        case .ready, .added: break
+        case .signIn(let id): signIn(id)
+        case .use(let item):
+            Task {
+                // Its models in the picker, and its plan in the usage panel.
+                guard await onboarding.use(item, in: box) else { return }
+                await catalog.refresh()
+                await app.usage.sync()
+            }
+        case .install(let id):
+            app.agents.install(id) { installed in
+                await catalog.refreshAgents(fresh: true)
+                await onboarding.look(in: box, agentsUp: app.agents.api != nil)
+                if installed { signIn(id) }
             }
         }
     }
 
-    private func logo(_ id: String) -> String {
-        OutsideAgents.order.contains(id) ? OutsideAgents.logo(id) : id
-    }
-
     private func finishedSigningIn() {
         signingIn = nil
+        lookAgain()
+    }
+
+    private func lookAgain() {
         Task {
             await catalog.refreshAgents(fresh: true)
-            await onboarding.look(in: box)
+            await onboarding.look(in: box, agentsUp: app.agents.api != nil)
+        }
+    }
+}
+
+/// The coding agents, while their bridge starts (looked for again once it's up), or why they
+/// can't be listed, to try again.
+private struct AgentsPendingRow: View {
+    let failure: String?
+    let again: () -> Void
+
+    var body: some View {
+        OnboardingRow(title: "Coding agents", detail: failure.map { "Couldn’t look for them: \($0)" } ?? "Looking for Claude Code, Codex, Cursor and the others…") {
+            Image(systemName: "terminal")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+        } trailing: {
+            if failure == nil {
+                Spinner(size: 12)
+            } else {
+                Button("Try Again", action: again)
+                    .buttonStyle(.glass)
+            }
+        }
+    }
+}
+
+/// OpenCode's free models: always there, no account.
+private struct FreeModelsRow: View {
+    var body: some View {
+        OnboardingRow(title: "OpenCode free models", detail: "No account needed. Always there.") {
+            ProviderLogo(id: "opencode", size: 18, colored: true)
+        } trailing: {
+            Done(text: "Included")
         }
     }
 }
 
 /// One thing found, with what it needs.
-private struct OfferRow: View {
+struct OfferRow: View {
     let row: Offers.Row
-    let logo: String
     let isBusy: Bool
     let act: (Offers.Row.Action) -> Void
 
     var body: some View {
         OnboardingRow(title: row.name, detail: detail) {
-            ProviderLogo(id: logo, size: 18, colored: true)
+            ProviderLogo(id: OutsideAgents.isAgent(row.integrationID) ? OutsideAgents.logo(row.integrationID) : row.integrationID, size: 18, colored: true)
         } trailing: {
             trailing
         }

@@ -327,6 +327,7 @@ when you're there to answer.
 | `KUVO_DEMO_ONBOARDING` | Show the first launch from a step: `loader`, `subscriptions` or `screenAccess` |
 | `KUVO_DEMO_LOADER` | With `KUVO_DEMO_ONBOARDING=loader`: hold the bots' loader at a share of the way (`0.4`), or `failed` or `offline` |
 | `KUVO_DEMO_SCREEN_ACCESS` | What macOS says of Screen Recording and Accessibility, for the first launch's last step: the allowed ones (`screenRecording,accessibility`), or `none` |
+| `KUVO_DEMO_ADD_ANOTHER` | With `KUVO_DEMO_ONBOARDING=subscriptions`: Add Another open, on `plans` or `keys`; `KUVO_DEMO_SHOW_KEYS` opens the API keys found in place instead |
 | `KUVO_DEMO_OPENCODE_AUTH` | An opencode `auth.json` of your own for the first launch to find, in place of `~/.local/share/opencode/auth.json` |
 | `KUVO_DEMO_SETTINGS` | Open Settings on a page, by its `SettingsPage` name: `general`, `appearance`, `storage`, `accounts`, `agents`, `mcp`, `git`, `browser`, `passwords` and so on; `permissions@<machine>` for a machine's |
 | `KUVO_DEMO_SETTINGS_TABS` | With `KUVO_DEMO_SETTINGS` and the tab bar on: these pages too, comma-separated, each in a tab of its own (`page@<machine>` for a machine's) |
@@ -348,6 +349,7 @@ when you're there to answer.
 | `KUVO_DEMO_OPEN_STEPS` | Every step in the conversation shows its details, opened, and so does the thinking |
 | `KUVO_DEMO_FOLDS` | Seconds: the conversation's lines of steps, and the bars over its composer and the usage panel's first bar, open and fold a few times, that far apart, to look at how they move (with `KUVO_DEMO_SLOW`) |
 | `KUVO_DEMO_BARS` | Sample bars in the card over the composer of the session in view: `all` a goal, a handoff, a review that found three things and an answered side question (a full card); `two` the review and the side question |
+| `KUVO_DEMO_TUCKED` | The bars in the card over the composer tucked into their line (with `KUVO_DEMO_BARS`); `new` marks the side question as changed |
 | `KUVO_DEMO_UNDO` | Undo's lines in the card, held so they don't go: the goal put away and a message removed (with `KUVO_DEMO_BARS` and `KUVO_DEMO_WAITING`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |

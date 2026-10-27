@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -17,8 +18,6 @@ struct SessionView: View {
     /// the window lays out only the one in view.
     @State private var hiddenSizes: [String: CGSize] = [:]
     @State private var size: CGSize = .zero
-    /// A list open over the composer (see `ComposerListShown`).
-    @State private var listShown = false
 
     var body: some View {
         ZStack {
@@ -40,7 +39,6 @@ struct SessionView: View {
                     .environment(\.isOffline, Self.offlineMachine(of: each, in: app) != nil)
             }
         }
-        .scrollEdgeEffectHidden(listShown, for: .bottom)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .onChange(of: model.id, initial: true) { old, new in
             kept = Array(([model] + kept.filter { $0.id != new }).prefix(Self.keptCount))
@@ -48,14 +46,11 @@ struct SessionView: View {
             hiddenSizes[new] = nil
             hiddenSizes = hiddenSizes.filter { id, _ in kept.contains { $0.id == id } }
         }
-        // A bar, not just an inset: the conversation scrolls on under the composer, softly
-        // blurred there by the scroll view's edge effect.
-        .safeAreaBar(edge: .bottom, spacing: 0) {
+        .conversationBar {
             BottomStack(model: model, lastModel: $lastModel)
                 // Room for the composer, the cards' own buttons and a little conversation.
                 .environment(\.cardRoom, max(160, height - 440))
         }
-        .onPreferenceChange(ComposerListShown.self) { shown in listShown = shown }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)
@@ -153,6 +148,59 @@ private struct BottomStack: View {
     private var folds: BarFolds<ComposerBar> {
         get { cards[model.id]?.folds ?? BarFolds() }
         nonmutating set { cards[model.id, default: Card()].folds = newValue }
+    }
+
+    /// Whether its bars are tucked into one line: as you left them in this conversation, until
+    /// you bring them back (nothing does by itself), or none are left.
+    private var tucked: Bool { model.tuck.isOn(among: liveBars) }
+
+    /// The bars but those put away, whose Undo shows in their place for a moment: what Hide
+    /// tucks away, and what its line names.
+    private var liveBars: [ComposerBar] {
+        bars.filter { bar in
+            switch bar {
+            case .goal: model.goal.map { model.putAways.text(.goal(started: $0.started)) == nil } ?? true
+            case .review: model.review.map { model.putAways.text(.review($0.id)) == nil } ?? true
+            default: true
+            }
+        }
+    }
+
+    /// Each bar in a few words, for the line they're tucked into.
+    private func stripItems(now: Date) -> [BarStripItem] {
+        liveBars.map { bar in
+            switch bar {
+            case .goal:
+                let state = model.goal?.state
+                let words = state == .met ? "Goal met" : state == .unmet ? "Goal can’t be met" : state == .paused ? "Goal paused" : "Goal"
+                return BarStripItem(bar: bar, symbol: state == .met ? "checkmark.circle.fill" : "scope", isDone: state == .met, words: words)
+            case .handoff:
+                let state = model.handoff?.state
+                return BarStripItem(bar: bar, symbol: state == .writing ? nil : Keyword.handoff.symbol, words: state == .writing ? "Handing off…" : state == .failed ? "Couldn’t hand off" : "Handed off")
+            case .review:
+                guard let review = model.review else { return BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review") }
+                switch review.state {
+                case .reviewing: return BarStripItem(bar: bar, symbol: nil, words: "Reviewing…")
+                case .failed: return BarStripItem(bar: bar, symbol: "exclamationmark.circle", words: "Review couldn’t be done")
+                case .done: return review.findings.isEmpty
+                    ? BarStripItem(bar: bar, symbol: "checkmark.circle.fill", isDone: true, words: "Nothing to fix")
+                    : BarStripItem(bar: bar, symbol: Keyword.review.symbol, words: "Review · \(review.findings.count)")
+                }
+            case .sideQuestion:
+                let answering = model.sideQuestions.first { $0.id == model.shownSideQuestion }?.state == .answering
+                return BarStripItem(bar: bar, symbol: answering ? nil : Keyword.btw.symbol, words: answering ? "Answering…" : "Side question")
+            case .subagents:
+                return BarStripItem(bar: bar, symbol: nil, words: subagentsAtWork.count == 1 ? "A subagent" : "\(subagentsAtWork.count) subagents")
+            case .background:
+                return BarStripItem(bar: bar, symbol: nil, words: "\(backgroundJobs.count) running")
+            case .wakes:
+                let owner = wakeOwner
+                let wakes = owner.map { app.wakeUps.wakes[$0.key] ?? [] } ?? []
+                let watches = owner.map { app.wakeUps.watches[$0.key] ?? [] } ?? []
+                let paused = owner.map { app.wakeUps.paused.contains($0.key) } ?? false
+                return BarStripItem(bar: bar, symbol: wakes.isEmpty ? "eye" : "alarm", words: WakeBar.headline(paused: paused, wakes: wakes, watches: watches, now: now))
+            }
+        }
     }
 
     /// What changed in the card, and in which conversation: another conversation's bars, news or
@@ -277,43 +325,63 @@ private struct BottomStack: View {
                         .modifier(ComposerSurface())
                         .transition(.opacity)
                 }
+                // Two bars or more: one tab, just over the card's edge (clear of its bars'
+                // buttons), tucks them all into a line.
+                if liveBars.count >= 2, !tucked {
+                    HStack {
+                        Spacer()
+                        HideBarsTab { model.tuck.hide() }
+                    }
+                    .padding(.trailing, 18)
+                    .padding(.bottom, -8)
+                    .transition(.opacity)
+                }
                 // The bars, what's waiting and the composer: one card.
                 VStack(spacing: 0) {
-                    if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
-                        let item = PutAway.goal(started: goal.started)
-                        UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
-                            .modifier(CardRow())
-                            .transition(.fold)
-                    } else if let goal = model.goal {
-                        GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
-                            model.changeGoal(.pause)
-                        } resume: {
-                            model.changeGoal(.resume)
-                        } stop: {
-                            model.stopGoal()
-                        } done: {
-                            model.putAwayGoal()
+                    if tucked {
+                        // Kept current: a wake-up's "in 2 minutes".
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            BarStrip(items: stripItems(now: context.date), marked: model.tuck.marked) { model.tuck.show() }
                         }
                         .modifier(CardRow())
                         .transition(.fold)
-                    }
-                    KeywordBars(model: model, hidden: hidden)
-                    if !subagentsAtWork.isEmpty {
-                        SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
+                    } else {
+                        if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
+                            let item = PutAway.goal(started: goal.started)
+                            UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
+                                .modifier(CardRow())
+                                .transition(.fold)
+                        } else if let goal = model.goal {
+                            GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil, hasWaiting: !model.waiting.isEmpty) {
+                                model.changeGoal(.pause)
+                            } resume: {
+                                model.changeGoal(.resume)
+                            } stop: {
+                                model.stopGoal()
+                            } done: {
+                                model.putAwayGoal()
+                            }
                             .modifier(CardRow())
                             .transition(.fold)
-                    }
-                    if !backgroundJobs.isEmpty {
-                        BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
-                            Task { await workspace.stopShellJob(job, in: model.id) }
                         }
-                        .modifier(CardRow())
-                        .transition(.fold)
-                    }
-                    if let owner = wakeOwner {
-                        WakeBar(owner: owner, isHidden: hidden(.wakes, $model.hidesWakes))
+                        KeywordBars(model: model, hidden: hidden)
+                        if !subagentsAtWork.isEmpty {
+                            SubagentsBar(subagents: subagentsAtWork, folder: model.session.location.directory, isHidden: hidden(.subagents, $model.hidesSubagents))
+                                .modifier(CardRow())
+                                .transition(.fold)
+                        }
+                        if !backgroundJobs.isEmpty {
+                            BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
+                                Task { await workspace.stopShellJob(job, in: model.id) }
+                            }
                             .modifier(CardRow())
                             .transition(.fold)
+                        }
+                        if let owner = wakeOwner {
+                            WakeBar(owner: owner, isHidden: hidden(.wakes, $model.hidesWakes))
+                                .modifier(CardRow())
+                                .transition(.fold)
+                        }
                     }
                     // What's waiting for the agent (and the message just removed, for Undo).
                     if !model.waiting.isEmpty || model.putAways.isPutAway(.message) {
@@ -367,33 +435,48 @@ private struct BottomStack: View {
                     )
                 }
                 .modifier(ComposerSurface())
+
             }
             .animation(.ui, value: model.permissions.map(\.id))
             .animation(.ui, value: model.forms.map(\.id))
             .animation(.ui, value: bars)
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
+            .animation(.ui, value: tucked)
+            #if DEBUG
+            // KUVO_DEMO_TUCKED: the bars tucked into their line once the sample ones are in (`new`:
+            // the side question marked).
+            .task(id: model.id) {
+                guard let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_TUCKED"] else { return }
+                try? await Task.sleep(for: .seconds(4))
+                model.tuck.hide()
+                if demo == "new" { model.tuck.changed(.sideQuestion) }
+            }
+            #endif
             .animation(.ui, value: model.waiting.count > 2)
+            // A goal put away and cleared: its line's record goes.
+            .onChange(of: model.goal?.started) { old, _ in
+                if let old { model.putAways.gone(.goal(started: old)) }
+            }
             // The newest change opens, where the card is full; shown again, what has something to see.
             .onChange(of: Seen(conversation: model.id, value: bars), initial: true) { was, now in
                 let new = now.value
                 if was.conversation != now.conversation { queueOpen = false }
-                // Another conversation shown: what came and went since it was last here.
-                let last = was.conversation == now.conversation ? was.value : cards[now.conversation]?.bars
+                // Another conversation shown: what came and went since it was last here (first
+                // shown: as it is).
+                let old = (was.conversation == now.conversation ? was.value : cards[now.conversation]?.bars) ?? new
                 cards[now.conversation, default: Card()].bars = new
-                // Shown again as it was, or for the first time: what has something to see.
-                guard let old = last, old != new else { return folds.start(new) { news[$0] == true } }
-                // No longer full: each keeps what the card showed, rather than springing open.
-                if old.count >= BarFolds<ComposerBar>.full, new.count < BarFolds<ComposerBar>.full {
-                    for bar in new { own(bar).wrappedValue = folds.isHidden(bar, among: old, asking: isAsking, own: own(bar).wrappedValue) }
-                }
-                folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
+                // While tucked, what came is marked; none left, the next ones show.
+                model.tuck.bars(from: old, to: new)
+                // A handoff has nothing under its line; a review at work, nothing yet.
+                folds.update(from: old, to: new, asking: isAsking, own: { own($0).wrappedValue }, keep: { own($0).wrappedValue = $1 },
+                             news: { news[$0] == true }, opens: { $0 != .handoff && news[$0] != false })
             }
             .onChange(of: Seen(conversation: model.id, value: news), initial: true) { was, now in
                 // Another conversation shown: what it had last time here (none yet: nothing came).
                 let old = was.conversation == now.conversation ? was.value : cards[now.conversation]?.news ?? now.value
                 cards[now.conversation, default: Card()].news = now.value
-                if let came = now.value.first(where: { $0.value && old[$0.key] != true })?.key { folds.changed(came) }
+                for bar in folds.news(from: old, to: now.value) { model.tuck.changed(bar) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
             .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in

@@ -162,6 +162,56 @@ public struct Handoff: Codable, Sendable, Hashable {
     }
 }
 
+/// What a review reads: the changes not committed yet, the branch's against its base (with those
+/// not committed yet), the commits after `from` up to `to` (git's `from..to`), or the files of a
+/// folder in the project or all of it.
+public enum ReviewScope: Codable, Sendable, Hashable {
+    case uncommitted
+    case branch(base: String?)
+    case commits(from: String, to: String?)
+    case folder(String)
+    case project
+
+    private enum Keys: String, CodingKey { case kind, base, from, to, path }
+
+    public init(from decoder: Decoder) throws {
+        let keys = try decoder.container(keyedBy: Keys.self)
+        switch try keys.decode(String.self, forKey: .kind) {
+        case "branch": self = .branch(base: try keys.decodeIfPresent(String.self, forKey: .base))
+        case "commits": self = .commits(from: try keys.decode(String.self, forKey: .from), to: try keys.decodeIfPresent(String.self, forKey: .to))
+        case "folder": self = .folder(try keys.decode(String.self, forKey: .path))
+        case "project": self = .project
+        default: self = .uncommitted
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var keys = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .uncommitted: try keys.encode("uncommitted", forKey: .kind)
+        case .branch(let base):
+            try keys.encode("branch", forKey: .kind)
+            try keys.encodeIfPresent(base, forKey: .base)
+        case .commits(let from, let to):
+            try keys.encode("commits", forKey: .kind)
+            try keys.encode(from, forKey: .from)
+            try keys.encodeIfPresent(to, forKey: .to)
+        case .folder(let path):
+            try keys.encode("folder", forKey: .kind)
+            try keys.encode(path, forKey: .path)
+        case .project: try keys.encode("project", forKey: .kind)
+        }
+    }
+}
+
+/// How much a review of a scope would read: its files, and the parts it reads them in.
+public struct ReviewSize: Codable, Sendable, Hashable {
+    public var files: Int
+    public var parts: Int
+    /// Files past what a review reads, left out.
+    public var leftOut: Int
+}
+
 /// A review of a conversation's changes with fresh eyes ("/review").
 public struct Review: Codable, Sendable, Hashable, Identifiable {
     public enum State: String, Codable, Sendable, Hashable { case reviewing, done, failed }
@@ -206,8 +256,16 @@ public struct Review: Codable, Sendable, Hashable, Identifiable {
     public var state: State
     public var model: ModelRef?
     public var summary: String?
-    /// What it was asked to look at especially.
+    /// What it reads; nil for the changes not committed yet.
+    public var scope: ReviewScope?
+    /// What it was asked to look at especially (or `security`, `performance`, `accessibility`).
     public var focus: String?
+    /// How far along one read in parts is, while it's under way.
+    public var progress: Progress?
+    public struct Progress: Codable, Sendable, Hashable {
+        public var read: Int
+        public var of: Int
+    }
     public var findings: [Finding]
     public var error: String?
     /// What to send the agent, as your message, to fix them.
@@ -260,11 +318,23 @@ extension OpenCodeAPI {
     }
 
     @discardableResult
-    /// Starts a review of `session`'s changes, read by `model` (its own when left out), looking
-    /// especially at `focus`.
-    public func startReview(session: String, model: ModelRef? = nil, focus: String? = nil) async throws -> Review {
-        struct Body: Encodable { var model: ModelRef?; var focus: String? }
-        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 })), as: DataEnvelope<Review>.self).data
+    /// Starts a review of what `scope` names in `session`'s folder (its changes not committed yet
+    /// when left out), read by `model` (its own when left out), looking especially at `focus`.
+    public func startReview(session: String, model: ModelRef? = nil, focus: String? = nil, scope: ReviewScope? = nil) async throws -> Review {
+        struct Body: Encodable { var model: ModelRef?; var focus: String?; var scope: ReviewScope? }
+        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 }, scope: scope)), as: DataEnvelope<Review>.self).data
+    }
+
+    /// How much a review of `scope` would read, to show before starting a big one.
+    public func measureReview(session: String, scope: ReviewScope) async throws -> ReviewSize {
+        struct Body: Encodable { var scope: ReviewScope }
+        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/measure", body: Body(scope: scope)), as: DataEnvelope<ReviewSize>.self).data
+    }
+
+    /// Ends a review under way where it is, keeping what it found so far.
+    @discardableResult
+    public func stopReview(session: String) async throws -> Review {
+        try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/stop"), as: DataEnvelope<Review>.self).data
     }
 
     /// What to send an agent, as your message, to fix a review's findings: all of them, or those

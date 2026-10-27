@@ -89,7 +89,8 @@ struct WorktreesSettings: View {
 
             Section {
                 if trees.isEmpty && reading {
-                    Spinner(size: 16).frame(maxWidth: .infinity)
+                    Placeholder(.rows(count: 2), label: "Loading worktrees", fadesOut: false)
+                        .padding(.vertical, 6)
                 } else if trees.isEmpty && unreached {
                     Text(box.machine == nil ? "This Mac’s worktrees show once its engine is running." : "\(app.name(of: box)) isn’t connected. Its worktrees show once it is.")
                         .foregroundStyle(.secondary)

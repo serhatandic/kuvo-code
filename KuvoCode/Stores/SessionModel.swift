@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientText
 import Foundation
 import OpenCodeKit
 import Textual
@@ -64,6 +65,8 @@ final class SessionModel {
     var hidesWakes = false
     /// The goal's bar shows only its line.
     var hidesGoal = false
+    /// The bars over the composer tucked into one line (`BarStrip`), as you left them here.
+    var tuck = BarTuck<ComposerBar>()
     /// What the card's ✕ put away, with Undo for a moment (`PutAways`).
     let putAways = PutAways<PutAway> { await SessionModel.undoMoment($0) }
 
@@ -1136,6 +1139,15 @@ final class SessionModel {
                 fail(error)
             }
         }
+    }
+
+    /// Shows a side question's answer over the composer, the latest asked (`id` nil) or the one
+    /// picked, its list read first if it isn't yet (opened from the sidebar).
+    func showSideQuestion(_ id: String?) async {
+        guard let bridge = goalBridge() else { return }
+        await bridge.loadSideQuestions(of: self.id)
+        shownSideQuestion = id ?? bridge.sideQuestions[self.id]?.last?.id
+        hidesSideQuestion = false
     }
 
     /// The side question bar's Ask Another: "/btw " in the composer, ready to finish.

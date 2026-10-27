@@ -69,17 +69,12 @@ struct ShellRow: View {
 
     private var header: some View {
         HStack(spacing: Self.iconGap) {
-            Group {
-                if shell.isRunning {
-                    Spinner(size: 11)
-                } else {
-                    Image(systemName: "terminal")
-                }
-            }
-            .frame(width: Self.iconWidth)
+            StepActivity(symbol: "terminal", running: shell.isRunning, size: Self.iconWidth)
             Text(AttributedString((shell.isRunning ? "Running " : "You ran ") + "`") + FindText.marked(AttributedString(shell.command), marks?[0]) + AttributedString("`"))
                 .lineLimit(1)
                 .truncationMode(.middle)
+            // Counting while it runs; once done, how long it took.
+            StepActivity.Elapsed(since: shell.time.created.date, running: shell.isRunning, until: shell.time.completed?.date)
             if let exit = shell.exit, exit != 0 {
                 Text("exit \(exit)")
                     .foregroundStyle(.red)
