@@ -445,7 +445,7 @@ private struct BottomStack: View {
             #if DEBUG
             // KUVO_DEMO_TUCKED: the bars tucked into their line once the sample ones are in (`new`:
             // the side question marked).
-            .task {
+            .task(id: model.id) {
                 guard let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_TUCKED"] else { return }
                 try? await Task.sleep(for: .seconds(4))
                 model.tuck.hide()
