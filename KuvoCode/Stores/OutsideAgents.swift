@@ -1,3 +1,4 @@
+import ClientAccounts
 import Foundation
 import OpenCodeKit
 import os
@@ -108,7 +109,7 @@ final class OutsideAgents {
 
     /// The agents' providers (their models' and accounts' IDs), as the bridge names them: an
     /// account you added is `<agent's>@<id>` ("claude-code@1f2e3d4c").
-    static let order = ["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"]
+    static let order = Plans.agents
     static let providers = Set(order)
     /// Auto's provider: a session on it runs down your list.
     static let autoProvider = "auto"
@@ -138,13 +139,7 @@ final class OutsideAgents {
 
     /// The mark an agent goes by: its maker's.
     static func logo(_ providerID: String) -> String {
-        switch base(providerID) {
-        case "claude-code": "anthropic"
-        case "codex-cli": "openai"
-        case "grok-cli": "xai"
-        case "antigravity": "google"
-        default: providerID
-        }
+        Plans.providers[base(providerID)] ?? providerID
     }
 
     /// One of your accounts with a coding agent.

@@ -1,3 +1,4 @@
+import ClientAccounts
 import Foundation
 import OpenCodeKit
 import os
@@ -138,8 +139,9 @@ final class Catalog {
             }
             for account in accounts {
                 let models = offered.filter { $0.providerID == account.id }.sorted { $0.time.released > $1.time.released }
-                // An agent you don't have and haven't signed in to stays out of the way.
-                if models.isEmpty, account.metadata?["installed"]?.bool == false, OutsideAgents.account(account.id) == nil { continue }
+                // An agent you don't have and haven't signed in to stays out of the way (as the first
+                // launch leaves it out).
+                if models.isEmpty, !Plans.shows(installed: account.metadata?["installed"]?.bool != false, signedIn: account.isConnected, providerID: account.id) { continue }
                 let why = models.isEmpty ? (account.isConnected ? "Its models are loading." : account.metadata?["message"]?.string ?? "Sign in to it in Settings › Accounts.") : nil
                 var outdated: String?
                 if account.metadata?["outdated"]?.bool == true, let latest = account.metadata?["latestVersion"]?.string {
@@ -495,7 +497,7 @@ final class Catalog {
 
     /// Plans you sign in to with an account, as you do a coding agent: shown with them in
     /// Accounts' Subscriptions, not among the providers.
-    static let planProviders = ["github-copilot", "gitlab", "poe", "opencode"]
+    static let planProviders = Plans.engine
 
     /// Shown first, in this order. Everything else follows alphabetically.
     /// (The outside agents have their own place, before these: `OutsideAgents.order`.)
