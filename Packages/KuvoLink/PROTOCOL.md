@@ -1432,8 +1432,12 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
     says it all), and every place it's in, none when it's about the change as a whole (a missing
     test). `fix` is what to send the agent, as your message, to fix them all.
+  - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
+    an agent, as your message, to fix them all or those it names, wherever you send it (this
+    conversation, a new one, another); `404` when the review found nothing, or none of them is
+    in it any more.
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
-    conversation's; `DELETE …/kuvo/reviews/<session>` puts it away.
+    conversation's; `DELETE …/kuvo/reviews/<session>` puts it away (one under way is let go: its answer isn't kept).
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
 
 ### Features

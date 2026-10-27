@@ -1154,14 +1154,64 @@ final class SessionModel {
         guard let bridge = goalBridge(), let api = bridge.api else { return }
         let session = id
         bridge.dropReview(session)
-        Task { try? await api.dismissReview(session: session) }
+        dismissingReview = Task { try? await api.dismissReview(session: session) }
     }
+
+    /// Putting the review away on its computer, while it goes (what a test waits on).
+    @ObservationIgnored private(set) var dismissingReview: Task<Void, Never>?
 
     /// The review's findings, sent to the agent as your message.
     func fixReview() {
         guard let fix = review?.fix else { return }
         dismissReview()
         send(fix, files: [], for: nil, queue: false)
+    }
+
+    /// What to send an agent to fix the review's findings, all or those of `findings` (their ids),
+    /// as its computer's box writes it; nil, saying why, when it can't be had.
+    func reviewFixText(_ findings: [String]?) async -> String? {
+        guard let bridge = goalBridge(), let api = bridge.api else {
+            failure = "The review’s computer can’t be reached now. Try again in a moment."
+            return nil
+        }
+        do {
+            return try await api.reviewFix(session: id, findings: findings)
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    /// A finished review put away with ✕: gone from the card at once, kept a few seconds for its
+    /// Undo, then put away on its computer.
+    private(set) var putAwayReview: Review?
+    @ObservationIgnored private var putAwayTask: Task<Void, Never>?
+    /// How long Undo is offered (a test makes it short).
+    @ObservationIgnored var reviewUndoSeconds = 5.0
+
+    /// The review the card shows: not one put away, waiting out its Undo.
+    var shownReview: Review? {
+        guard let review, review.id != putAwayReview?.id else { return nil }
+        return review
+    }
+
+    func putAwayReviewForNow() {
+        guard let review else { return }
+        putAwayReview = review
+        putAwayTask?.cancel()
+        let seconds = reviewUndoSeconds
+        putAwayTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled, let self, self.putAwayReview?.id == review.id else { return }
+            self.putAwayReview = nil
+            // Only that one: a review asked for since has taken its place on its computer.
+            if self.review?.id == review.id { self.dismissReview() }
+        }
+    }
+
+    func undoPutAwayReview() {
+        putAwayTask?.cancel()
+        putAwayReview = nil
     }
 
     private func keywordUnavailable(_ written: String) {

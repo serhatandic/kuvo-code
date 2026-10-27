@@ -4128,10 +4128,10 @@ function readFindings(list, { kept = false } = {}) {
 function placeText(at3) {
   return at3.file + (at3.line ? `:${at3.line}` : "") + (at3.endLine ? `-${at3.endLine}` : "");
 }
-function fixMessage(review) {
-  return `A review of the changes with fresh eyes found these. Fix the real problems (bugs first), say if you think one isn't, and run the tests after:
+function fixMessage(review, findings = review.findings) {
+  return `A review of the changes with fresh eyes found ${findings.length === 1 ? "this" : "these"}. Fix the real ${findings.length === 1 ? "problem" : "problems (bugs first)"}, say if you think ${findings.length === 1 ? "it" : "one"} isn't, and run the tests after:
 
-${review.findings.map((each) => {
+${findings.map((each) => {
     const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing";
     const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : "";
     const title = each.title.replace(/[.!?]+$/, "");
@@ -4149,6 +4149,18 @@ async function reviewRoutes(reviews, method, parts, body) {
       return method === "GET" ? json4({ data: reviews.list() }) : json4({ message: "Not allowed" }, 405);
     if (!/^ses_[A-Za-z0-9_]+$/.test(session))
       return json4({ message: "There's no such conversation here." }, 404);
+    if (parts[1] === "fix") {
+      if (method !== "POST")
+        return json4({ message: "Not allowed" }, 405);
+      const review = reviews.get(session);
+      if (!review?.findings.length)
+        return json4({ message: "That conversation's review found nothing to fix." }, 404);
+      const { findings: ids } = await body() ?? {};
+      const picked = Array.isArray(ids) ? review.findings.filter((each) => ids.includes(each.id)) : review.findings;
+      if (!picked.length)
+        return json4({ message: "Those findings aren't in its review any more." }, 404);
+      return json4({ data: { text: fixMessage(review, picked) } });
+    }
     if (method === "GET") {
       const review = reviews.get(session);
       return review ? json4({ data: review }) : json4({ message: "That conversation has no review." }, 404);
@@ -18508,4 +18520,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d22040d48c1b9216a364505b5d46c4285bf285768dd73b1d7782a5f42ef36a85
+// Built from Packages/Box/src/agents 5412663c4922054f247d2b43009bcf943561a34722afa13da52e8e27950e3075

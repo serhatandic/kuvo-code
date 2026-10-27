@@ -37,6 +37,45 @@ struct KeywordBars: View {
         return FileManager.default.fileExists(atPath: full) ? URL(filePath: full) : nil
     }
 
+    /// Where Fix… › Send To sends: the project's other conversations, newest first, then the bots.
+    private var sendTargets: [ReviewSendTarget] {
+        let folder = model.session.location.directory
+        let sessions = workspace.sessions
+            .filter { $0.location.directory == folder && $0.id != model.id && $0.parentID == nil && !app.bots.sessionIDs.contains($0.id) }
+            .sorted { $0.time.updated > $1.time.updated }
+            .prefix(6)
+            .map { ReviewSendTarget(id: $0.id, name: $0.title?.isEmpty == false ? $0.title! : "Untitled", isBot: false) }
+        let bots = app.bots.list.filter { $0.sessionID != model.id }.prefix(6).map { ReviewSendTarget(id: $0.sessionID, name: $0.name, isBot: true) }
+        return sessions + bots
+    }
+
+    /// Fix… for `findings` (nil: all): the box writes what to tell the agent, and it goes where
+    /// it was asked to.
+    private func fix(_ findings: [String]?, _ target: ReviewFixTarget) {
+        let model = model
+        Task {
+            guard let text = await model.reviewFixText(findings) else { return }
+            switch target {
+            case .here:
+                // All of them asked for here: the review's done with.
+                if findings == nil { model.dismissReview() }
+                model.send(text, files: [], for: nil, queue: false)
+            case .newSession:
+                do {
+                    let session = try await workspace.createSession(in: model.session.location.directory, model: model.session.model, agent: nil)
+                    app.open(.session(session.id))
+                    workspace.model(for: session.id)?.send(text, files: [], for: nil, queue: false)
+                } catch {
+                    model.failure = "A new session couldn’t be started: \(error.localizedDescription)"
+                }
+            case .session(let id):
+                workspace.model(for: id)?.send(text, files: [], for: nil, queue: false)
+            case .copy:
+                Clipboard.copy(text)
+            }
+        }
+    }
+
     var body: some View {
         if let handoff = shownHandoff {
             HandoffBar(handoff: handoff) {
@@ -47,16 +86,22 @@ struct KeywordBars: View {
             .modifier(CardRow())
             .transition(.fold)
         }
-        if let review = model.review {
-            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview)) {
-                model.fixReview()
-            } done: {
+        if let review = model.shownReview {
+            ReviewBar(review: review, isHidden: hidden(.review, $model.hidesReview), sendTargets: sendTargets) { findings, target in
+                fix(findings, target)
+            } putAway: {
+                model.putAwayReviewForNow()
+            } cancel: {
                 model.dismissReview()
             } open: { place in
                 if let url = Self.file(place.file, in: model.session.location.directory) { app.utilities.show(url) }
             }
             .modifier(CardRow())
             .transition(.fold)
+        } else if model.putAwayReview != nil {
+            BarUndoLine(mark: AnyView(Image(systemName: Keyword.review.symbol).font(.system(size: 13))), text: "Review put away") { model.undoPutAwayReview() }
+                .modifier(CardRow())
+                .transition(.fold)
         }
         if let question = shownSideQuestion {
             SideQuestionBar(question: question, all: model.sideQuestions, show: { model.shownSideQuestion = $0.id }, isHidden: hidden(.sideQuestion, $model.hidesSideQuestion)) {
@@ -172,25 +217,72 @@ struct SideQuestionBar: View {
     }
 }
 
-/// A review with fresh eyes: under way, then what it found, bugs first, each with its file and
-/// line. Ask the Agent to Fix sends the findings to the agent as your message; Done puts it away.
+/// Where a review's findings go to be fixed: the agent here, a new conversation that starts
+/// with them, another conversation or bot, or the clipboard as a list.
+enum ReviewFixTarget: Equatable {
+    case here
+    case newSession
+    case session(String)
+    case copy
+}
+
+/// A conversation or bot that findings can be sent to (Fix… › Send To).
+struct ReviewSendTarget: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var isBot: Bool
+}
+
+/// How a review's findings show: a list, each opening in place (the default), or one at a time.
+enum ReviewLayout: String {
+    case list, single
+
+    static let key = "reviewLayout"
+}
+
+/// A review with fresh eyes, in the card over the composer: under way, then what it found, bugs
+/// first. Its line counts them by how bad they are, with Fix… for them all; under it, each with
+/// what's wrong, why, and every place it's in, and its own Fix…. ✕ asks before it stops one
+/// under way; a finished one goes at once, with Undo for a few seconds.
 struct ReviewBar: View {
     let review: Review
     @Binding var isHidden: Bool
-    let fix: () -> Void
-    let done: () -> Void
+    let sendTargets: [ReviewSendTarget]
+    /// `findings`: their ids, nil for all of them.
+    let fix: (_ findings: [String]?, _ target: ReviewFixTarget) -> Void
+    let putAway: () -> Void
+    let cancel: () -> Void
     let open: (Review.Place) -> Void
+    @AppStorage(ReviewLayout.key) private var layout = ReviewLayout.list.rawValue
+    @State private var confirmsCancel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             BarLine(mark: AnyView(mark), title: title, progress: count, detail: review.summary.map { Text($0) },
-                    accessory: AnyView(actions), showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
-                    close: review.state == .reviewing ? nil : done, closeHelp: "Put the review away")
-            if !isHidden {
+                    accessory: review.state == .done && !review.findings.isEmpty ? AnyView(fixMenu(nil, label: "Fix…")) : nil,
+                    showHelp: "Show what the review found", hideHelp: "Hide it: this line stays", isHidden: $isHidden,
+                    opens: review.state != .reviewing,
+                    close: review.state == .reviewing ? { confirmsCancel = true } : putAway,
+                    closeHelp: review.state == .reviewing ? "Stop the review" : "Put the review away")
+                // Stopping one under way can't be undone: it asks first, by the ✕.
+                .overlay(alignment: .trailing) {
+                    Color.clear
+                        .frame(width: 24, height: 24)
+                        .padding(.trailing, 8)
+                        .popover(isPresented: $confirmsCancel, arrowEdge: .bottom) {
+                            StopReviewConfirmation {
+                                confirmsCancel = false
+                                cancel()
+                            } keep: {
+                                confirmsCancel = false
+                            }
+                        }
+                }
+            if !isHidden, review.state != .reviewing {
                 details
                     .padding(.leading, 42)
                     .padding(.trailing, 16)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 10)
                     .transition(.fold)
             }
         }
@@ -214,14 +306,15 @@ struct ReviewBar: View {
 
     private var title: String {
         switch review.state {
-        case .reviewing: "Reviewing the changes…"
+        case .reviewing: "Review"
         case .failed: "Review couldn’t be done"
         case .done: review.findings.isEmpty ? "Review found nothing to fix" : "Review"
         }
     }
 
-    /// "2 bugs · 1 risk · 3 nits".
+    /// "1 bug · 2 risks · 1 nit"; while it reads, who's reading.
     private var count: String? {
+        if review.state == .reviewing { return "Reading the changes…" }
         guard review.state == .done, !review.findings.isEmpty else { return nil }
         let names: [(Review.Severity, String)] = [(.bug, "bug"), (.risk, "risk"), (.nit, "nit")]
         return names.compactMap { severity, name in
@@ -230,79 +323,213 @@ struct ReviewBar: View {
         }.joined(separator: " · ")
     }
 
-    private var actions: some View {
-        HStack(spacing: 2) {
-            if review.state == .done, review.fix != nil {
-                Button("Ask the Agent to Fix", systemImage: "wrench.and.screwdriver", action: fix)
-                    .help("Send these findings to the agent as your message, to fix the real problems")
+    /// Fix… for `findings` (nil: all of them).
+    private func fixMenu(_ findings: [String]?, label: String) -> some View {
+        Menu {
+            Button("Fix in a New Session", systemImage: "plus.square") { fix(findings, .newSession) }
+            Button("Fix Here", systemImage: "text.bubble") { fix(findings, .here) }
+            Menu("Send To", systemImage: "arrow.right") {
+                if sendTargets.isEmpty {
+                    Text("No other conversations here yet")
+                }
+                ForEach(sendTargets) { target in
+                    Button(target.name, systemImage: target.isBot ? "face.smiling" : "bubble.left") { fix(findings, .session(target.id)) }
+                }
             }
+            Divider()
+            Button(findings?.count == 1 ? "Copy Finding" : "Copy Findings", systemImage: "doc.on.doc") { fix(findings, .copy) }
+        } label: {
+            Text(label)
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
-        .labelStyle(.titleOnly)
+        .fixedSize()
+        .help(findings == nil ? "Fix what it found: in a new session, here, or elsewhere" : "Fix this one: in a new session, here, or elsewhere")
     }
 
     @ViewBuilder private var details: some View {
         switch review.state {
         case .reviewing:
-            Text("A model without this conversation reads the changes not committed yet. It changes nothing.")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+            EmptyView()
         case .failed:
             Text(review.error ?? "It couldn’t be done. Try again.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
         case .done:
-            VStack(alignment: .leading, spacing: 8) {
-                if let summary = review.summary {
-                    Text(summary)
-                        .font(.system(size: 13))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let summary = review.summary {
+                        Text(summary)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                    if review.findings.count > 1 { layoutSwitch }
                 }
                 if !review.findings.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(review.findings) { finding in
-                                FindingRow(finding: finding, open: open)
+                    if layout == ReviewLayout.single.rawValue {
+                        SingleFinding(findings: review.findings, fixMenu: { fixMenu([$0.id], label: "Fix This…") }, open: open)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(review.findings) { finding in
+                                    FindingRow(finding: finding, fixMenu: { fixMenu([finding.id], label: "Fix…") }, open: open)
+                                }
                             }
                         }
+                        // About five, then it scrolls.
+                        .frame(maxHeight: 176)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, -8)
                     }
-                    .frame(maxHeight: 220)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+
+    /// The list, or one at a time: kept for the next review too.
+    private var layoutSwitch: some View {
+        HStack(spacing: 0) {
+            ForEach([ReviewLayout.list, .single], id: \.rawValue) { each in
+                Button(each == .list ? "As a List" : "One at a Time", systemImage: each == .list ? "list.bullet" : "square.stack") {
+                    withAnimation(.ui) { layout = each.rawValue }
+                }
+                .buttonStyle(IconButtonStyle(width: 22, height: 20))
+                .foregroundStyle(layout == each.rawValue ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                .help(each == .list ? "Show them as a list" : "Show them one at a time")
+                .accessibilityAddTraits(layout == each.rawValue ? .isSelected : [])
             }
         }
     }
 }
 
+/// How bad a finding is, as a dot by it: red for a bug, orange for a risk, grey for a small thing.
+private struct SeverityDot: View {
+    let severity: Review.Severity
+
+    var body: some View {
+        Circle()
+            .fill(severity == .bug ? AnyShapeStyle(.red) : severity == .risk ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+    }
+}
+
+private extension Review.Severity {
+    var name: String {
+        switch self {
+        case .bug: "Bug"
+        case .risk: "Risk"
+        case .nit: "Small thing"
+        }
+    }
+}
+
+/// One finding in the list: its dot, what's wrong and its first place; clicked, why and every
+/// place it's in, each opening in the side panel. Its Fix… shows under the pointer, in room kept
+/// for it, so nothing moves.
 private struct FindingRow: View {
     let finding: Review.Finding
+    let fixMenu: () -> AnyView
+    let open: (Review.Place) -> Void
+    @State private var isOpen = false
+    @State private var hovering = false
+
+    init(finding: Review.Finding, fixMenu: @escaping () -> some View, open: @escaping (Review.Place) -> Void) {
+        self.finding = finding
+        self.fixMenu = { AnyView(fixMenu()) }
+        self.open = open
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                SeverityDot(severity: finding.severity)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(finding.title)
+                    .font(.system(size: 13, weight: isOpen ? .semibold : .regular))
+                    .lineLimit(isOpen ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: isOpen)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !isOpen { firstPlace }
+                fixMenu()
+                    .opacity(hovering ? 1 : 0)
+            }
+            if isOpen {
+                VStack(alignment: .leading, spacing: 3) {
+                    if !finding.explanation.isEmpty {
+                        Text(finding.explanation)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    PlacesLine(places: finding.locations, open: open)
+                }
+                .padding(.leading, 15)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(hovering ? AnyShapeStyle(Pressable.hoverFill) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
+        .contentShape(.rect)
+        .onHover { hovering = $0 }
+        .onTapGesture { withAnimation(.ui) { isOpen.toggle() } }
+        .clickablePointer()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(finding.severity.name): \(finding.title)")
+        .accessibilityValue(isOpen ? finding.explanation : "")
+        .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityActions {
+            ForEach(finding.locations, id: \.self) { place in
+                Button("Open \(place.text)") { open(place) }
+            }
+        }
+    }
+
+    /// Its first place, and how many more; none for one about the change as a whole.
+    @ViewBuilder private var firstPlace: some View {
+        if let first = finding.locations.first {
+            Text(first.text + (finding.locations.count > 1 ? " +\(finding.locations.count - 1)" : ""))
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .frame(maxWidth: 220, alignment: .trailing)
+        } else {
+            Text("the change as a whole")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// A finding's places, each opening in the side panel; for one with none, that it's about the
+/// change as a whole.
+private struct PlacesLine: View {
+    let places: [Review.Place]
     let open: (Review.Place) -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(severity)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(finding.severity == .nit ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-                .frame(width: 30, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(finding.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !finding.explanation.isEmpty {
-                    Text(finding.explanation)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                ForEach(finding.locations, id: \.self) { place in
+        if places.isEmpty {
+            Text("About the change as a whole: no place in a file.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.tertiary)
+        } else {
+            FlowLine(spacing: 10) {
+                ForEach(places, id: \.self) { place in
                     Button { open(place) } label: {
                         Text(place.text)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(.system(size: 11.5, design: .monospaced))
                             .lineLimit(1)
                             .truncationMode(.head)
                     }
@@ -311,21 +538,148 @@ private struct FindingRow: View {
                 }
             }
         }
-        .accessibilityElement(children: .combine)
-        // Read as one, each of its places still opens.
-        .accessibilityActions {
-            ForEach(finding.locations, id: \.self) { place in
-                Button("Open \(place.text)") { open(place) }
-            }
+    }
+}
+
+/// Views side by side, onto the next line when there's no room.
+private struct FlowLine: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width { y += line + 2; x = 0; line = 0 }
+            x += size.width + spacing
+            line = max(line, size.height)
+            widest = max(widest, x - spacing)
         }
+        return CGSize(width: min(widest, width), height: y + line)
     }
 
-    private var severity: String {
-        switch finding.severity {
-        case .bug: "Bug"
-        case .risk: "Risk"
-        case .nit: "Nit"
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, line: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX { y += line + 2; x = bounds.minX; line = 0 }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            line = max(line, size.height)
         }
+    }
+}
+
+/// One finding at a time, in full: a strip of them all by how bad, arrows to step through, its places each on a line of its own, and its own Fix….
+private struct SingleFinding: View {
+    let findings: [Review.Finding]
+    let fixMenu: (Review.Finding) -> AnyView
+    let open: (Review.Place) -> Void
+    @State private var index = 0
+
+    init(findings: [Review.Finding], fixMenu: @escaping (Review.Finding) -> some View, open: @escaping (Review.Place) -> Void) {
+        self.findings = findings
+        self.fixMenu = { AnyView(fixMenu($0)) }
+        self.open = open
+    }
+
+    private var shown: Int { min(index, findings.count - 1) }
+
+    var body: some View {
+        let finding = findings[shown]
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button("Previous Finding", systemImage: "chevron.left") { index = max(0, shown - 1) }
+                    .buttonStyle(IconButtonStyle(width: 20, height: 20))
+                    .disabled(shown == 0)
+                Text("\(shown + 1) of \(findings.count)")
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Button("Next Finding", systemImage: "chevron.right") { index = min(findings.count - 1, shown + 1) }
+                    .buttonStyle(IconButtonStyle(width: 20, height: 20))
+                    .disabled(shown == findings.count - 1)
+                HStack(spacing: 4) {
+                    ForEach(Array(findings.enumerated()), id: \.element.id) { offset, each in
+                        Capsule()
+                            .fill(each.severity == .bug ? AnyShapeStyle(.red) : each.severity == .risk ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                            .opacity(offset == shown ? 1 : 0.3)
+                            .frame(maxWidth: 26)
+                            .frame(height: 4)
+                            .onTapGesture { index = offset }
+                    }
+                }
+                .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                SeverityDot(severity: finding.severity)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(finding.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("\(finding.severity.name): \(finding.title)")
+            }
+            if !finding.explanation.isEmpty {
+                Text(finding.explanation)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                if finding.locations.isEmpty {
+                    Text("About the change as a whole: no place in a file.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
+                }
+                ForEach(finding.locations, id: \.self) { place in
+                    Button { open(place) } label: {
+                        Label(place.text, systemImage: "doc")
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    .buttonStyle(TextButtonStyle(outset: true))
+                    .help("Open \(place.file) in the side panel")
+                }
+            }
+            HStack(spacing: 8) {
+                fixMenu(finding)
+                if shown < findings.count - 1 {
+                    Button("Next") { index = shown + 1 }
+                        .buttonStyle(TextButtonStyle())
+                        .font(.system(size: 13))
+                }
+            }
+            .padding(.top, 2)
+        }
+        .animation(.ui, value: shown)
+    }
+}
+
+/// Asked by a running review's ✕: stopping can't be undone (asked again, it reads from the start).
+private struct StopReviewConfirmation: View {
+    let stop: () -> Void
+    let keep: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Stop the review?")
+                .font(.system(size: 13, weight: .semibold))
+            Text("What it has read so far isn’t kept. Asked again, it reads from the start.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Keep Reading", action: keep)
+                    .keyboardShortcut(.cancelAction)
+                Button("Stop the Review", role: .destructive, action: stop)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 280)
     }
 }
 

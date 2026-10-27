@@ -335,9 +335,9 @@ export function placeText(at: Place): string {
   return at.file + (at.line ? `:${at.line}` : "") + (at.endLine ? `-${at.endLine}` : "")
 }
 
-/** What the agent is told to fix: the review's findings, as a message of yours. */
-export function fixMessage(review: Review): string {
-  return `A review of the changes with fresh eyes found these. Fix the real problems (bugs first), say if you think one isn't, and run the tests after:\n\n${review.findings
+/** What the agent is told to fix: the review's findings (or `findings` of them), as a message of yours. */
+export function fixMessage(review: Review, findings: Finding[] = review.findings): string {
+  return `A review of the changes with fresh eyes found ${findings.length === 1 ? "this" : "these"}. Fix the real ${findings.length === 1 ? "problem" : "problems (bugs first)"}, say if you think ${findings.length === 1 ? "it" : "one"} isn't, and run the tests after:\n\n${findings
     .map((each) => {
       const kind = each.severity === "bug" ? "Bug" : each.severity === "risk" ? "Risk" : "Small thing"
       const where = each.locations.length ? ` (${each.locations.map(placeText).join(", ")})` : ""
@@ -357,6 +357,17 @@ export async function reviewRoutes(reviews: Reviews | undefined, method: string,
   try {
     if (!session) return method === "GET" ? json({ data: reviews.list() }) : json({ message: "Not allowed" }, 405)
     if (!/^ses_[A-Za-z0-9_]+$/.test(session)) return json({ message: "There's no such conversation here." }, 404)
+    if (parts[1] === "fix") {
+      // What to tell an agent (here, in a new conversation, or another) to fix them: all of
+      // them, or those `findings` names.
+      if (method !== "POST") return json({ message: "Not allowed" }, 405)
+      const review = reviews.get(session)
+      if (!review?.findings.length) return json({ message: "That conversation's review found nothing to fix." }, 404)
+      const { findings: ids } = (await body()) ?? {}
+      const picked = Array.isArray(ids) ? review.findings.filter((each) => ids.includes(each.id)) : review.findings
+      if (!picked.length) return json({ message: "Those findings aren't in its review any more." }, 404)
+      return json({ data: { text: fixMessage(review, picked) } })
+    }
     if (method === "GET") {
       const review = reviews.get(session)
       return review ? json({ data: review }) : json({ message: "That conversation has no review." }, 404)

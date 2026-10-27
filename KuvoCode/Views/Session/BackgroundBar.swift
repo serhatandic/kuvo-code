@@ -190,6 +190,40 @@ struct BarLine: View {
     }
 }
 
+/// In a bar's place for a few seconds after its ✕ put it away ("Review put away"): what went,
+/// and Undo where the ✕ was, on the same line as the bars; then it folds away.
+struct BarUndoLine: View {
+    let mark: AnyView
+    /// What went: "Review put away".
+    let text: String
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            mark
+                .frame(width: 18)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button("Undo", action: undo)
+                .buttonStyle(TextButtonStyle(dimsAtRest: false))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.tint)
+                .help("Bring it back")
+                // Its end where the ✕'s is.
+                .padding(.trailing, 2)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .frame(height: 36)
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: "Undo", undo)
+    }
+}
+
 /// The end of a bar's line, one column down the whole card: the chevron that shows or hides
 /// what's under it (the line itself does too), then ✕ that puts the bar away, or their room.
 struct BarEnd: View {

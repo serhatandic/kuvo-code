@@ -267,6 +267,14 @@ extension OpenCodeAPI {
         return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)", body: Body(model: model, focus: focus.flatMap { $0.isEmpty ? nil : $0 })), as: DataEnvelope<Review>.self).data
     }
 
+    /// What to send an agent, as your message, to fix a review's findings: all of them, or those
+    /// of `findings` (their ids).
+    public func reviewFix(session: String, findings: [String]? = nil) async throws -> String {
+        struct Body: Encodable { var findings: [String]? }
+        struct Fix: Decodable { var text: String }
+        return try await client.send(try client.request("POST", "api/kuvo/reviews/\(session.pathEscaped)/fix", body: Body(findings: findings)), as: DataEnvelope<Fix>.self).data.text
+    }
+
     public func reviews() async throws -> [Review] {
         try await client.send(try client.request("GET", "api/kuvo/reviews"), as: DataEnvelope<[Review]>.self).data
     }

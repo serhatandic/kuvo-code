@@ -124,6 +124,44 @@ import Testing
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
         #expect(String(describing: sent.body).contains("The interval is never cleared (src/timer.ts:2, src/stop.ts). Clear it when the timer stops."))
         try await until { model.review == nil }
+        await model.dismissingReview?.value
+        #expect(try await bridge.api?.reviews().isEmpty == true)
+    }
+
+    @Test func aReviewPutAwayCanBeBroughtBackAndOneFindingCanBeFixedAlone() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        try repository.write("src/timer.ts", "export const tick = 1000\nsetInterval(tick)\n")
+        serve(directory: repository.path, answers: [#"{"summary": "Two.", "findings": [{"title": "The interval is never cleared", "explanation": "Clear it on stop.", "severity": "bug", "locations": [{"file": "src/timer.ts", "line": 2}]}, {"title": "No test covers stopping", "explanation": "", "severity": "risk", "locations": []}]}"#])
+        let model = try session(directory: repository.path)
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        model.draftText = "/review"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        let review = try #require(model.review)
+
+        // One of them alone: only it, for the agent.
+        let one = try #require(await model.reviewFixText([review.findings[1].id]))
+        #expect(one.contains("No test covers stopping"))
+        #expect(!one.contains("The interval is never cleared"))
+
+        // ✕ puts it away at once; Undo brings it back, still on its computer.
+        model.reviewUndoSeconds = 60
+        model.putAwayReviewForNow()
+        #expect(model.shownReview == nil)
+        model.undoPutAwayReview()
+        #expect(model.shownReview?.id == review.id)
+        #expect(try await bridge.api?.reviews().map(\.id) == [review.id])
+
+        // Left to go: gone from its computer too.
+        model.reviewUndoSeconds = 0
+        model.putAwayReviewForNow()
+        try await until { model.review == nil }
+        await model.dismissingReview?.value
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }
 
