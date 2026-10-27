@@ -165,7 +165,7 @@ When you add or change something people use:
 
 Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws with copies of the Mac's design
 files: `KuvoCode/Design/Surfaces.swift`, `Spinner.swift`, the code block
-style and CodeColors (`CodeBlockStyle.swift`, `CodeHighlighter.swift`) and the shared bits of
+style and highlighter (`CodeBlockStyle.swift`, `CodeHighlighter.swift`) and the shared bits of
 `Theme.swift`, in `KuvoCodeMobile/Design`. When you change one of those here, or how the
 conversation, cards, composer or sidebar look, change the phone's copy too (or tell the session
 working on the phone), so the two stay one app. The same goes for the app icon: the phone's

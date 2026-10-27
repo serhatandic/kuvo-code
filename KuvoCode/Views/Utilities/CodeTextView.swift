@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Code in a read-only text view: selectable across lines, numbered in a ruler, colored

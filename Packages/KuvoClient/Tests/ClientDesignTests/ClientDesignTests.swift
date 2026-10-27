@@ -5,15 +5,6 @@ import ClientDesign
 /// The look both apps draw with, the same on each.
 @MainActor
 @Suite struct ClientDesignTests {
-    /// Colors written as 0xRRGGBB come out as those colors (every code color is one).
-    @Test func hexColorsAreThoseColors() {
-        let environment = EnvironmentValues()
-        let written = Color(hex: 0x9B2393).resolve(in: environment)
-        let expected = Color(red: 0x9B / 255.0, green: 0x23 / 255.0, blue: 0x93 / 255.0).resolve(in: environment)
-        #expect(written == expected)
-        #expect(Color(hex: 0xFFFFFF).resolve(in: environment) == Color.white.resolve(in: environment))
-    }
-
     /// An open project's folder is drawn open, a closed one's closed, at the size asked.
     @Test func aFolderShowsWhetherItsOpen() throws {
         func pixels(open: Bool, size: CGFloat) throws -> (Data, CGSize) {

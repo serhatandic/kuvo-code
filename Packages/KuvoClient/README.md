@@ -28,6 +28,8 @@ phone's copies of the Mac's design files, a piece at a time.
 
 - `FolderIcon`: a project's folder, open or closed.
 - `Color(hex:)`: a color written as 0xRRGGBB.
+- `CodeColors`: the colors of code everywhere (diffs, files, replies), and Textual's theme of them.
+- `TerminalColors`: a command's output colored as a terminal shows it.
 
 ## What belongs here
 
