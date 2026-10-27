@@ -8,8 +8,7 @@ import { isObject } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { readEngineFile } from "../engine/client";
 import { writePrivate } from "../files";
-import { RUN } from "../home";
-import { LETTER_ID, SENDING } from "../letters/letter";
+import { SENDING } from "../letters/letter";
 import { macWaiting, sendOutbox } from "../letters/outbox";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
@@ -45,7 +44,6 @@ export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "
 // sent, while the link's up; its group chats' mail carried on it.
 export function runMacPeers(): void {
   const stop = new AbortController();
-  takeSeatLetters();
   watchSeats(() => macLink.host, stop.signal);
   refreshOwn(readEngineFile).catch(() => {});
   const rounds = [
@@ -102,24 +100,4 @@ export function macLetterAnswer(id: string, signal?: AbortSignal | null, most = 
     }
     macWaiting.set(id, waiter);
   });
-}
-
-// Group chats' letters an earlier Kuvo Code kept itself (`run/seat-letters.json`, its SeatRelay),
-// in the outbox now, as this box carries them.
-export function takeSeatLetters(file = path.join(RUN, "seat-letters.json")): void {
-  let kept: unknown;
-  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
-  try {
-    fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
-    for (const [id, letter] of Object.entries(isObject(kept) ? kept : {})) {
-      if (!LETTER_ID.test(id) || !isObject(letter) || typeof letter.peer !== "string" || typeof letter.seat !== "string") continue;
-      let seat: unknown = null;
-      try { seat = JSON.parse(Buffer.from(letter.seat, "base64").toString("utf8")); } catch {}
-      if (!isObject(seat)) continue;
-      writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ peer: letter.peer, seat, at: typeof letter.at === "number" ? letter.at : Date.now(),
-        ...(typeof letter.sentTo === "string" ? { sentTo: letter.sentTo } : {}), ...(letter.gaveUp === true ? { gaveUp: true } : {}),
-        ...(typeof letter.aged === "number" ? { aged: letter.aged } : {}) }));
-    }
-    fs.rmSync(file, { force: true });
-  } catch {}
 }

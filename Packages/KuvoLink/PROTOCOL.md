@@ -1534,8 +1534,7 @@ chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). The box passes a client's 
 on to that bridge, as a machine's does (bridge 0.9.65; the app did before), saying "Group chats on
 this Mac are starting" or "aren't answering" when it can't. The box carries its group chats' mail (`seat`, "Peers")
 on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
-their bots are (bridge 0.9.63). Before, the app's phone link did (`SeatRelay`); the box takes the
-letters it kept (`run/seat-letters.json`) into its outbox as it starts.
+their bots are (bridge 0.9.63).
 
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the

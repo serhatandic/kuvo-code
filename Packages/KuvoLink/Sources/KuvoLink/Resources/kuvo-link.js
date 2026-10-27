@@ -7317,7 +7317,6 @@ function macAttendPeers(body, given) {
 }
 function runMacPeers() {
   const stop = new AbortController;
-  takeSeatLetters();
   watchSeats(() => macLink.host, stop.signal);
   refreshOwn(readEngineFile).catch(() => {});
   const rounds = [
@@ -7370,36 +7369,6 @@ function macLetterAnswer(id, signal, most = LETTER_WAIT) {
     }
     macWaiting.set(id, waiter);
   });
-}
-function takeSeatLetters(file = path37.join(RUN, "seat-letters.json")) {
-  let kept;
-  try {
-    kept = JSON.parse(fs37.readFileSync(file, "utf8"));
-  } catch {
-    return;
-  }
-  try {
-    fs37.mkdirSync(SENDING, { recursive: true, mode: 448 });
-    for (const [id, letter] of Object.entries(isObject(kept) ? kept : {})) {
-      if (!LETTER_ID.test(id) || !isObject(letter) || typeof letter.peer !== "string" || typeof letter.seat !== "string")
-        continue;
-      let seat = null;
-      try {
-        seat = JSON.parse(Buffer.from(letter.seat, "base64").toString("utf8"));
-      } catch {}
-      if (!isObject(seat))
-        continue;
-      writePrivate(path37.join(SENDING, `${id}.json`), JSON.stringify({
-        peer: letter.peer,
-        seat,
-        at: typeof letter.at === "number" ? letter.at : Date.now(),
-        ...typeof letter.sentTo === "string" ? { sentTo: letter.sentTo } : {},
-        ...letter.gaveUp === true ? { gaveUp: true } : {},
-        ...typeof letter.aged === "number" ? { aged: letter.aged } : {}
-      }));
-    }
-    fs37.rmSync(file, { force: true });
-  } catch {}
 }
 
 // Packages/Box/src/link/mac/relay.ts
@@ -10515,7 +10484,6 @@ export {
   takePersonalitiesDocument,
   takePhones,
   takeSeat,
-  takeSeatLetters,
   tellSeatPeers,
   tellWorktree,
   toolRun,
