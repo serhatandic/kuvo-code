@@ -1,5 +1,10 @@
+import AppKit
 import ClientDesign
 import Foundation
+import KuvoVoice
+import OpenCodeKit
+import SwiftUI
+import os
 
 /// What the command palette opens with typed in it: KUVO_DEMO_PALETTE in debug builds, else nothing.
 enum DemoPalette {
@@ -11,10 +16,6 @@ enum DemoPalette {
 }
 
 #if DEBUG
-import AppKit
-import OpenCodeKit
-import os
-import SwiftUI
 
 /// Opens the app in a given state without clicking, for trying a change or taking screenshots,
 /// as the `KUVO_DEMO_*` launch variables in CONTRIBUTING.md ask: a project and a session with a
