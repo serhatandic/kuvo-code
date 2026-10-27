@@ -1,3 +1,6 @@
+import AVFoundation
+import Speech
+import Synchronization
 import Testing
 @testable import KuvoVoice
 
@@ -75,4 +78,38 @@ import Testing
     while voice.phase != .idle { await Task.yield() }
     #expect(told == ["Make the timer pause", ""])
     #expect(voice.listeningSince == nil)
+}
+
+// The microphone's samples come on the audio engine's own queue, as it calls its tap: taking them
+// there mustn't need the main actor (Swift traps when it does: voice input quit the app as soon as
+// it listened). A muted engine playing a tone stands in for the microphone, through the same tap,
+// converted to what the analyzer takes. It needs the Mac's audio output, so it runs here, not on CI.
+@MainActor
+@Test func theMicrophonesSamplesAreTakenOnTheAudioQueue() async throws {
+    let natural = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    let analyzed = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
+    let engine = AVAudioEngine()
+    let player = AVAudioPlayerNode()
+    engine.attach(player)
+    engine.connect(player, to: engine.mainMixerNode, format: natural)
+    engine.mainMixerNode.outputVolume = 0
+    let tone = AVAudioPCMBuffer(pcmFormat: natural, frameCapacity: 48_000)!
+    tone.frameLength = 48_000
+    for index in 0..<48_000 { tone.floatChannelData![0][index] = Float(sin(Double(index) / 10)) * 0.5 }
+
+    let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+    let levels = Mutex<Int>(0)
+    VoiceInput.tap(player, natural: natural, format: analyzed, continuation: continuation) { _, _ in levels.withLock { $0 += 1 } }
+    try engine.start()
+    player.scheduleBuffer(tone, at: nil, options: .loops, completionHandler: nil)
+    player.play()
+    var taken = 0
+    for await input in stream {
+        #expect(input.buffer.format.sampleRate == 16_000)
+        taken += 1
+        if taken == 3 { break }
+    }
+    player.removeTap(onBus: 0)
+    engine.stop()
+    #expect(levels.withLock { $0 } >= 3)
 }
