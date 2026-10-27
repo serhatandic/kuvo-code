@@ -8219,7 +8219,11 @@ async function found({ engine, bridge, authFile = readFrom() }, signal) {
     return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: (known?.connections.length ?? 0) > 0 };
   });
   const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
-  const connected = engineList.filter((integration) => integration.connections.some((connection) => connection.type !== "env")).map((integration) => integration.id);
+  const working = (connection) => {
+    const status = isObject(connection.status) ? connection.status.status : undefined;
+    return connection.type !== "env" && (status === undefined || status === "connected");
+  };
+  const connected = engineList.filter((integration) => integration.connections.some(working)).map((integration) => integration.id);
   return { agents, opencode, shell, connected };
 }
 async function useFound(id, { engine, authFile = readFrom() }, signal) {
