@@ -95,7 +95,8 @@ struct MachinesSettings: View {
         .confirmationDialog("Make This Mac \(takingHome?.machine.name ?? "")’s Home?", isPresented: Binding(get: { takingHome != nil }, set: { if !$0 { takingHome = nil } }), presenting: takingHome) { engine in
             Button("Make This Mac Its Home") { makeHome(engine) }
         } message: { engine in
-            Text("\(engine.homeName ?? "The Mac that runs it") stops running \(engine.machine.name) and this Mac runs it from now on, with this Mac’s accounts. Its sessions, bots and settings stay on \(engine.machine.name), and \(engine.homeName ?? "that Mac") still shows them.")
+            let home = Self.anotherMac(engine) ?? "Another Mac"
+            Text("\(home == "Another Mac" ? "The Mac that runs it" : home) stops running \(engine.machine.name) and this Mac runs it from now on, with this Mac’s accounts. Its sessions, bots and settings stay on \(engine.machine.name), and \(home == "Another Mac" ? "that Mac" : home) still shows them.")
         }
         .alert("\(homeFailure == nil ? "" : "Couldn’t Make This Mac Its Home")", isPresented: Binding(get: { homeFailure != nil }, set: { if !$0 { homeFailure = nil } })) {
             Button("OK") { homeFailure = nil }
@@ -110,14 +111,26 @@ struct MachinesSettings: View {
         }
     }
 
+    /// The Mac that runs it, by its name ("Another Mac" when its start didn't say), when it's not
+    /// this one; nil when this Mac runs it.
+    static func anotherMac(_ engine: MachineEngine) -> String? {
+        #if DEBUG
+        // KUVO_DEMO_MACHINE_HOME=<machine>|<Mac>: shown as that Mac's, for a look at the page.
+        if let demo = ProcessInfo.processInfo.environment["KUVO_DEMO_MACHINE_HOME"]?.split(separator: "|").map(String.init), demo.first == engine.machine.id {
+            return demo.count > 1 ? demo[1] : "Another Mac"
+        }
+        #endif
+        return engine.isAnotherMacsEngine ? engine.homeName ?? "Another Mac" : nil
+    }
+
     /// Another Mac runs it: what that means here, and the way to run it from this Mac instead.
-    private func anotherMacRuns(_ engine: MachineEngine) -> some View {
+    private func anotherMacRuns(_ engine: MachineEngine, home: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(engine.homeName ?? "Another Mac") runs it: its agents are reached from there.")
+                    Text("\(home) runs it: its agents are reached from there.")
                     Text("Agents on this Mac’s computers can’t write to them, and this Mac’s group chats can’t name them.")
                         .font(.caption)
                 }
@@ -169,8 +182,8 @@ struct MachinesSettings: View {
                     // (connecting sets it up too).
                     if let why = app.phoneLink.setupFailed[engine.machine.id] {
                         problem("Your phones and other computers can’t reach it yet.", why: why, again: engine)
-                    } else if engine.isAnotherMacsEngine, engine.isReady {
-                        anotherMacRuns(engine)
+                    } else if let home = Self.anotherMac(engine), engine.isReady {
+                        anotherMacRuns(engine, home: home)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
                         problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)
                     }
