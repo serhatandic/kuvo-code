@@ -84,7 +84,7 @@ import UsageKit
         #expect(onboarding.agents(failure: "It stopped.") == .failed("It stopped."))
         // Up, and the box still lists none: not looking for ever.
         await onboarding.look(in: box, agentsUp: true)
-        guard case .failed = onboarding.agents(failure: nil) else { return Issue.record("still looking") }
+        guard case .failed = onboarding.agents(failure: nil) else { Issue.record("still looking"); return }
     }
 
     // MARK: Moving on once a permission is granted
