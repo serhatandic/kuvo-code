@@ -9,9 +9,12 @@ let package = Package(
     platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
         .library(name: "ClientText", targets: ["ClientText"]),
+        .library(name: "ClientAccounts", targets: ["ClientAccounts"]),
     ],
     targets: [
         .target(name: "ClientText"),
         .testTarget(name: "ClientTextTests", dependencies: ["ClientText"]),
+        .target(name: "ClientAccounts"),
+        .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts"]),
     ]
 )

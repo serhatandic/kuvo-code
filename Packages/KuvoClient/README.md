@@ -15,6 +15,12 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 - `TypedEchoes`: a message field's own typing handed back to it late by a busy app, told apart from
   a change by the app, so no key is lost.
 
+## ClientAccounts
+
+"Bring your subscriptions": what a computer has that Kuvo Code can use, as its box answers
+`kuvo/accounts/found` (`Found`), and the rows offered from it, each with the one thing it needs
+(`Offers`). The Mac's first launch and the phone's sheet after pairing a computer offer the same.
+
 ## What belongs here
 
 Only what both apps call, with a small public surface: rules and formatting both clients follow,
