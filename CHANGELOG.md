@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.
 - An integration whose sign-in ended says **Sign In Again…** on its one button, and "Sign-in ended" under its name, rather than a Sign In button beside a Sign In Again in its menu.
 - Over the composer, what asks you something shows as solid cards, and the bars for what's under way, the messages waiting and the composer are one card. Each bar's chevron and ✕ sit at the end of its line; with three bars or more, each folds to its line but the newest change, and more than two waiting messages fold to one line. Stopping a goal asks first, since it stops the agent and takes the goal away.
 - A first launch of its own: Kuvo Code's bots gather while it gets ready (only this once; it carries on by itself if you were offline), then it finds what's already on your Mac to bring over (coding agents you're signed in to, keys from an opencode you use, keys in your shell), each with one click, and turns on the usage panel in the menu bar if you like. Last, it asks for Screen Recording and Accessibility for agents: drag Kuvo Code's icon from the small window beside System Settings into its list, and it moves on once macOS says yes. Each step can be skipped. The usage panel's own welcome window is gone.

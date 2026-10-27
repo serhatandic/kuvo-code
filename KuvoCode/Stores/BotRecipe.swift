@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import UniformTypeIdentifiers
 
 /// A bot to share: what makes it itself (its name, look, personality, and its job as its memory

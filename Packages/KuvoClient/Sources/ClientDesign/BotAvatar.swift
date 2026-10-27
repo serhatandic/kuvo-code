@@ -1,21 +1,22 @@
 import SwiftUI
 
-extension EnvironmentValues {
-    /// The bot whose conversation this is, if it's a bot's.
-    @Entry var bot: Bot?
-}
-
 /// How a bot looks: a color, a shape and a face, picked when it's made and changed any time.
-nonisolated struct BotLook: Codable, Hashable {
-    var color: Tint
-    var shape: Form
-    var face: Face
+nonisolated public struct BotLook: Codable, Hashable, Sendable {
+    public var color: Tint
+    public var shape: Form
+    public var face: Face
 
-    enum Tint: String, CaseIterable, Codable, Identifiable {
+    public init(color: Tint, shape: Form, face: Face) {
+        self.color = color
+        self.shape = shape
+        self.face = face
+    }
+
+    public enum Tint: String, CaseIterable, Codable, Identifiable, Sendable {
         case mint, sky, indigo, violet, pink, coral, orange, amber, lime, graphite
-        var id: String { rawValue }
+        public var id: String { rawValue }
 
-        var color: Color {
+        public var color: Color {
             switch self {
             case .mint: Color(red: 0.37, green: 0.78, blue: 0.72)
             case .sky: Color(red: 0.31, green: 0.61, blue: 0.96)
@@ -31,30 +32,30 @@ nonisolated struct BotLook: Codable, Hashable {
         }
 
         /// Deep colors get light eyes; the rest dark ones.
-        var isDeep: Bool { [.indigo, .violet, .graphite].contains(self) }
+        public var isDeep: Bool { [.indigo, .violet, .graphite].contains(self) }
 
-        var title: String { rawValue.capitalized }
+        public var title: String { rawValue.capitalized }
     }
 
-    enum Form: String, CaseIterable, Codable, Identifiable {
+    public enum Form: String, CaseIterable, Codable, Identifiable, Sendable {
         case round, squircle, pebble, gem, bloom
-        var id: String { rawValue }
-        var title: String { rawValue.capitalized }
+        public var id: String { rawValue }
+        public var title: String { rawValue.capitalized }
     }
 
-    enum Face: String, CaseIterable, Codable, Identifiable {
+    public enum Face: String, CaseIterable, Codable, Identifiable, Sendable {
         case calm, happy, sleepy, wink, curious, bright
-        var id: String { rawValue }
-        var title: String { rawValue.capitalized }
+        public var id: String { rawValue }
+        public var title: String { rawValue.capitalized }
     }
 
-    static func random() -> BotLook {
+    public static func random() -> BotLook {
         BotLook(color: Tint.allCases.randomElement()!, shape: Form.allCases.randomElement()!, face: Face.allCases.randomElement()!)
     }
 }
 
 /// What a bot is up to, which is how its avatar moves.
-enum BotMood: Hashable {
+public enum BotMood: Hashable, Sendable {
     /// Nothing to do: it breathes, blinks, looks around and fidgets now and then.
     case idle
     /// Running: it hops, its eyes scan, sparks circle it.
@@ -73,7 +74,7 @@ enum BotMood: Hashable {
 /// A bot's face on its shape, at any size: in the sidebar, on its tab, in its header and, large,
 /// where it's made. It moves with its mood; everything is worked out from the clock, so each
 /// frame is cheap, and it holds still with Reduce Motion on.
-struct BotAvatar: View {
+public struct BotAvatar: View {
     let look: BotLook
     var size: CGFloat = 26
     var mood: BotMood = .idle
@@ -84,7 +85,15 @@ struct BotAvatar: View {
     var animates = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    public init(look: BotLook, size: CGFloat = 26, mood: BotMood = .idle, noticed: Bool = false, animates: Bool = true) {
+        self.look = look
+        self.size = size
+        self.mood = mood
+        self.noticed = noticed
+        self.animates = animates
+    }
+
+    public var body: some View {
         if reduceMotion || (!animates && !noticed) || Self.stillForTesting {
             figure(BotPose.still(mood, noticed: noticed))
         } else {
@@ -247,12 +256,17 @@ struct BotAvatar: View {
 }
 
 /// On the corner of a bot's face: it lives on one of your machines, not this Mac.
-struct MachineBadge: View {
+public struct MachineBadge: View {
     let machine: String
     var size: CGFloat = 14
     @Environment(\.colorScheme) private var scheme
 
-    var body: some View {
+    public init(machine: String, size: CGFloat = 14) {
+        self.machine = machine
+        self.size = size
+    }
+
+    public var body: some View {
         Image(systemName: "server.rack")
             .font(.system(size: size * 0.48, weight: .bold))
             .foregroundStyle(.secondary)
@@ -266,17 +280,27 @@ struct MachineBadge: View {
 
 /// A group chat's picture: its bots together, like a group photo. Two stand side by side; three
 /// stand two at the back and the lead in front; more show as "+N" beside the first three.
-struct GroupAvatar: View {
-    struct Face: Equatable {
-        var look: BotLook
-        var mood: BotMood = .idle
+public struct GroupAvatar: View {
+    public struct Face: Equatable {
+        public var look: BotLook
+        public var mood: BotMood = .idle
+
+        public init(look: BotLook, mood: BotMood = .idle) {
+            self.look = look
+            self.mood = mood
+        }
     }
 
     let faces: [Face]
     /// The square they share.
     var size: CGFloat = 28
 
-    var body: some View {
+    public init(faces: [Face], size: CGFloat = 28) {
+        self.faces = faces
+        self.size = size
+    }
+
+    public var body: some View {
         let shown = Array(faces.prefix(3))
         let more = faces.count - shown.count
         ZStack {
