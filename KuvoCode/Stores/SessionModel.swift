@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientText
 import Foundation
 import OpenCodeKit
 import Textual
