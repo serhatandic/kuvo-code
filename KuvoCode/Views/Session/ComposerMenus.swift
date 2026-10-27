@@ -252,6 +252,7 @@ struct ModelChip<Label: View>: View {
                             default: app.openSettings(page)
                             }
                         })
+            .popoverContent()
         }
         .onAppear { LogoImages.shared.prefetch(catalog.models.flatMap { [$0.makerLogoID, $0.providerID] }) }
         #if DEBUG
