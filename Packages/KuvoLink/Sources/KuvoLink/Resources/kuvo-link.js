@@ -8378,7 +8378,7 @@ import fs41 from "node:fs";
 import path41 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.86";
+var BRIDGE_VERSION = "0.9.87";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -8398,8 +8398,10 @@ async function* infoRoute(context) {
   try {
     fs41.mkdirSync(chats, { recursive: true });
   } catch {}
+  const notes = engine.notes ?? {};
+  const home = typeof notes.mac === "string" ? { mac: notes.mac, ...typeof notes.macName === "string" ? { name: notes.macName } : {} } : undefined;
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info })) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...home ? { home } : {}, ...info })) };
   return;
 }
 

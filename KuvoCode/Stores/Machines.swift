@@ -70,6 +70,9 @@ final class MachineEngine {
     /// Start was pressed here: the next connection starts it if it's stopped, until one does (one
     /// that fails, the machine away, carries it to Try Again), or it's stopped or disconnected.
     var startWanted = false
+    /// Make This Mac Its Home: the next start takes the engine another Mac started there, starting
+    /// it again as this Mac's.
+    var takingHome = false
     /// The box there was set up by a newer Kuvo Code than this app (`BoxVersion`): its engine and
     /// files are left as they are.
     private(set) var boxIsNewer = false
@@ -309,6 +312,9 @@ final class MachineEngine {
         engine.notes["mac"].map { $0 != Self.macID } ?? false
     }
 
+    /// The Mac that runs the engine there, by its name, when it's another Mac that noted one.
+    var homeName: String? { server.flatMap { isAnotherMacs($0.engine) ? $0.engine.notes["macName"] : nil } }
+
     // COMPAT(0.7 engine-stop): an engine an older Mac started (no `notes.box`). Goes 3 months after 0.8.0.
     /// Started by a Kuvo Code from before boxes kept their own settings (0.7 and before, on this
     /// Mac or another), with that Mac's: replaced as this Mac's own older ones are, once nothing's
@@ -452,7 +458,10 @@ final class MachineEngine {
             try check()
             let api = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
             // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
-            if !boxIsNewer, isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+            // Taken from another Mac (Make This Mac Its Home): this Mac's from now on.
+            let takes = takingHome && isAnotherMacs(server.engine)
+            if !boxIsNewer, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+                takingHome = false
                 // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
                 try check()
                 server.disconnect()
@@ -547,7 +556,7 @@ final class MachineEngine {
     }
 
     private func launchEngine(_ launch: Launch, replace: Int? = nil, starting: Bool = false) async throws -> RemoteServer.Engine {
-        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "box": BoxVersion.mine],
+        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": PhoneLink.computerName, "box": BoxVersion.mine],
                                       withAgents: launch.agents != nil, replace: replace, start: starting)
     }
 

@@ -27,7 +27,10 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
   // there yet, so a phone can start the first one.
   const chats = path.join(K, "chats");
   try { fs.mkdirSync(chats, { recursive: true }); } catch {}
+  // The Mac that started it, as its start noted (and its name, from a Mac that notes it).
+  const notes = engine.notes ?? {};
+  const home = typeof notes.mac === "string" ? { mac: notes.mac, ...(typeof notes.macName === "string" ? { name: notes.macName } : {}) } : undefined;
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info } satisfies MachineInfo)) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...(home ? { home } : {}), ...info } satisfies MachineInfo)) };
   return;
 }

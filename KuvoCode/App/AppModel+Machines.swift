@@ -306,6 +306,24 @@ extension AppModel {
         if engine.isStopped { startEngine(engine) } else { connect(engine) }
     }
 
+    /// This Mac runs `engine`'s machine from now on (Make This Mac Its Home): the engine another Mac
+    /// started there starts again as this Mac's, with this Mac's accounts, and that Mac steps back
+    /// the next time it connects. Its sessions, bots and settings stay there. Not while its agents
+    /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
+    func makeHome(_ engine: MachineEngine) async -> String? {
+        guard engine.isAnotherMacsEngine else { return nil }
+        if engine.boxIsNewer { return "A newer Kuvo Code runs \(engine.machine.name). Update Kuvo Code on this Mac first." }
+        if let api = engine.api, (try? await api.activeSessions())?.isEmpty == false {
+            return "\(engine.machine.name)’s agents are at work. Try again once they’re done."
+        }
+        engine.disconnect()
+        workspace.forget(engine.machine.id)
+        engine.takingHome = true
+        await connect(engine).value
+        engine.takingHome = false
+        return engine.isAnotherMacsEngine ? "\(engine.machine.name) couldn’t be started from this Mac. Try again in a moment." : nil
+    }
+
     /// Connects to `engine`'s machine: the start, and what follows it there, which a test waits for.
     @discardableResult
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {

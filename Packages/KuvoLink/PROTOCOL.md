@@ -650,8 +650,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
   one there through the engine, as for a project). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
-  or a phone); a Mac also names `integrations`, each integration's name by its MCP server's
-  (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
+  or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
+  its start noted one); a Mac also names `integrations`, each integration's name by its MCP
+  server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
@@ -995,6 +996,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     sessions, bots, sign-ins and keys, and still in `kuvo/hosts`: `200 {}`. `POST
     kuvo/machines/<id>/uninstall` does as Uninstall from <machine> does: also stops its engine
     there and deletes the sign-ins and keys it keeps, and it leaves `kuvo/hosts`: `200 {}`.
+  - A machine another Mac runs has `anotherMac` (`{"name"?}`, that Mac's name where its start noted
+    one). `POST kuvo/machines/<id>/home` makes this Mac its home, as Make This Mac Its Home does:
+    the engine starts again there as this Mac's, with this Mac's accounts; its sessions, bots and
+    settings stay. `200 {"machine"}`, or `409 {"message"}` when this Mac runs it already, its
+    agents are at work, or its box was set up by a newer Kuvo Code.
   - `DELETE kuvo/machines/<id>/addresses/<address>` stops using one of its other addresses (`404`
     for its name, or one it doesn't have); `POST kuvo/machines/<id>/same-as {"other"}` makes it one
     of `other`'s addresses, as Same Computer As does: `200 {"machine"}`, the other; `404` when
