@@ -286,8 +286,8 @@ struct LiveRemoteEngineTests {
         let keepers = try await connection.run("pgrep -fc '[.]kuvo-code-test/bin/kuvo-start keep' || true")
         #expect(keepers.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
 
-        // One stopped on purpose stays stopped.
-        try await RemoteServer.stopEngine(on: connection)
+        // One stopped on purpose (an older Mac's Stop) stays stopped.
+        _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\" stop")
         _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\"")
         try await Task.sleep(for: .seconds(3))
         #expect(try await RemoteServer.find(on: connection) == .stopped)
@@ -304,8 +304,8 @@ struct LiveRemoteEngineTests {
         return nil
     }
 
-    /// The machine keeps its engine running by itself: one that crashes comes back; Stop keeps it
-    /// down, though its keeper runs on; Start brings it back.
+    /// The machine keeps its engine running by itself: one that crashes comes back; a stop (an
+    /// older Mac's Stop) keeps it down, though its keeper runs on; Start brings it back.
     @Test func itKeepsItselfRunningUntilStopped() async throws {
         let cache = FileManager.default.temporaryDirectory.appending(path: "opencodekit-remote-cache")
         defer { try? FileManager.default.removeItem(at: cache) }
@@ -317,7 +317,8 @@ struct LiveRemoteEngineTests {
         let back = try #require(try await runningSoon { $0.pid != first.pid }, "its keeper started it again")
         #expect(back.notes == ["mac": "test-mac", "settings": "abc"])
 
-        try await RemoteServer.stopEngine(on: connection)
+        // Stopped, as an older Mac's Stop did.
+        _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\" stop")
         #expect(try await RemoteServer.find(on: connection) == .stopped)
         try await Task.sleep(for: .seconds(20))
         #expect(try await RemoteServer.find(on: connection) == .stopped, "it stays stopped")

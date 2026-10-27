@@ -1183,13 +1183,6 @@ public final class RemoteServer: @unchecked Sendable {
         try await connection.run(stopScript)
     }
 
-    /// Stops the machine's engine until it's started again, from here or anywhere (Stop): its
-    /// keeper stays, with the phone link, so a phone can start it.
-    public static func stopEngine(on connection: SSHConnection) async throws {
-        try await installBoot(on: connection)
-        try await connection.run("sh \"$HOME/\(RemoteEngineInstaller.root)/bin/kuvo-start\" stop")
-    }
-
     // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts the machine's engine after a stop, as it was last started there (Start). False when
     /// it didn't come up.
