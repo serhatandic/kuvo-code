@@ -74,6 +74,12 @@ class HeavyTests(unittest.TestCase):
                 self.assertIn("started the old way", said)
         finally:
             job.let_go()
+        # Once the old lock's day is over, it holds nothing up.
+        job = Held(["lockf", "-k", old], self.env)
+        try:
+            self.assertEqual(self.run_heavy("mac", "true", KUVO_HEAVY_OLD_UNTIL="20000101")[0], 0)
+        finally:
+            job.let_go()
         # One run inside it (its test-app.sh) goes on at once.
         inside = subprocess.run(["lockf", "-k", old, HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), timeout=30)
         self.assertEqual(inside.returncode, 0)

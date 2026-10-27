@@ -73,8 +73,9 @@ fi
 if [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK" ] && held "$LOCK"; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
-    # A job started the old way, under the one lock for every kind: it finishes first.
-    if ! lockf -ks -t 0 "$OLD" true; then
+    # A job started the old way, under the one lock for every kind: it finishes first (until the
+    # 28th, by when every session takes turns this way).
+    if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261028}" ] && ! lockf -ks -t 0 "$OLD" true; then
         [ "$WAITS" = 0 ] && cannot_wait "A heavy job started the old way is running."
         echo "Waiting for a heavy job started the old way to finish…" >&2
         lockf -k "$OLD" true
