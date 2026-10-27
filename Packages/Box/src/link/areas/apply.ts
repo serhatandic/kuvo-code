@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import { isObject, sameJSON } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { locked } from "../files";
 import { CONFIG_LOCK, IS_MAC } from "../home";
 import type { ConfigApplied } from "../../shared/routes/settings";
@@ -35,7 +36,7 @@ export interface Translated {
 
 /** What `applySettings` answers: what was made (or would be, with `dry`), with the keys those name,
  * whether something was, and the settings now; or why nothing was. */
-export type SettingsApplied = ({ status: 200 } & ConfigApplied) | { status: number; message: string; problem?: string } | SettingsChanged;
+export type SettingsApplied = ({ status: 200 } & ConfigApplied) | SettingsChanged;
 
 // The engine's own agents, on every computer whether its settings name them or not.
 const BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
@@ -133,17 +134,18 @@ export function translateSettings(changes: ChangeMade[], settings: Settings, { m
 // as `translateSettings` makes them, in one write (none with `dry`). {status, made, leftOut, kept,
 // macOnly, keys, applied, settings}: `keys`, those `made` names, for a client to bring along first
 // where this box hasn't its own; `applied`, something was made, or every change was already so.
-export function applySettings(body: { changes?: ChangeMade[]; dry?: unknown } | null | undefined, file = CONFIG_FILE, lock = CONFIG_LOCK, options: { mac?: boolean; macOnly?: Set<string> } = {}): SettingsApplied {
+export function applySettings(body: Body<"changes" | "dry">, file = CONFIG_FILE, lock = CONFIG_LOCK, options: { mac?: boolean; macOnly?: Set<string> } = {}): SettingsApplied {
   const changes = body?.changes;
   const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every(change =>
     Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16
-    && change.path.every(key => typeof key === "string" && key.length >= 1 && key.length <= 200));
+    && change.path.every((key: unknown) => typeof key === "string" && key.length >= 1 && key.length <= 200));
   if (!fits) return { status: 400, message: "Send {\"changes\": [{\"path\": [keys…], \"before\": …, \"after\": …}]}." };
   return locked(lock, (): SettingsApplied => {
     // (Its settings are there whenever there's no problem.)
     const { settings, problem } = readSettings(file) as { settings: Settings; problem?: string };
     if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
-    const result = translateSettings(changes, settings, options);
+    // (Changes as `fits` checked them: each a path of keys.)
+    const result = translateSettings(changes as ChangeMade[], settings, options);
     if (result.made.some(change => change.path.slice(0, -1).some((_, at) => {
       const above = valueAt(settings, change.path.slice(0, at + 1));
       return above !== undefined && !isObject(above);
@@ -153,6 +155,6 @@ export function applySettings(body: { changes?: ChangeMade[]; dry?: unknown } | 
     if (body!.dry === true || !result.made.length) return { status: 200, ...result, keys, applied, settings } satisfies { status: 200 } & ConfigApplied;
     const written = writeSettings(settings, result.made, file);
     if (written.status !== 200) return written;
-    return { status: 200, ...result, keys, applied, settings: (written as { settings: Settings }).settings } satisfies { status: 200 } & ConfigApplied;
+    return { status: 200, ...result, keys, applied, settings: written.settings } satisfies { status: 200 } & ConfigApplied;
   });
 }

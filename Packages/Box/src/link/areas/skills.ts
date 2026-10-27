@@ -6,18 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { EngineRecord } from "../../shared/records";
+import type { DeletedSkill, SkillAbout, SkillCollection, SkillRepository as LibraryRepository, SkillLibrary, SkillNamed, Skills, SkillText, SkillTrash } from "../../shared/routes/skills";
 import { listOf, textOf } from "../files";
 import { ENGINE_CONFIG, IN_TEST_FOLDER, K } from "../home";
-import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+import type { AnswerPiece, JSONAnswer, OtherStatus, RouteContext } from "../server/context";
 
-/** A collection of skills on GitHub: its repository (`owner/name`), what it's called and is, and
- * the branch its skills are read from. */
-export interface SkillRepository {
-  id: string;
-  owner: string;
-  name: string;
-  title: string;
-  summary: string;
+/** A collection of skills on GitHub, as the library lists it, and the branch its skills are read
+ * from. */
+export interface SkillRepository extends LibraryRepository {
   branch: string;
 }
 
@@ -29,18 +25,6 @@ export interface RepositorySkill {
   files: string[];
 }
 
-/** What a skill's SKILL.md says it is, in its front matter. */
-export interface SkillAbout {
-  name?: string;
-  description?: string;
-}
-
-/** Where a skill installed from GitHub came from: its repository, and its folder there. */
-export interface SkillSource {
-  repository: string;
-  path: string;
-}
-
 /** A Recently Deleted entry's id read: the folder it goes back to, and when it was put away
  * (seconds since 1970). */
 export interface SkillTrashEntry {
@@ -48,14 +32,8 @@ export interface SkillTrashEntry {
   deleted: number;
 }
 
-/** A skill in Recently Deleted, as `kuvo/skill-trash` lists it: its entry's id and folder, what
- * its SKILL.md says it is, when it was put away and when it goes (seconds since 1970). */
-export interface DeletedSkill extends SkillTrashEntry {
-  id: string;
-  name: string;
-  description?: string;
-  goes: number;
-}
+/** What `answerSkills` answers: a skills route's value, as its shape has it, or why not. */
+export type SkillsAnswer = JSONAnswer<Skills | SkillText | SkillTrash | SkillNamed | SkillLibrary | SkillCollection | SkillAbout | Record<string, never>, { message: string } | Record<string, never>>;
 
 /** A skill the engine lists (`api/skill`): its name, and its SKILL.md's path. */
 interface EngineSkill {
@@ -103,8 +81,8 @@ export const SKILL_REPOSITORIES: SkillRepository[] = [
 ].map(([owner, name, title, summary]) => ({ id: `${owner}/${name}`, owner, name, title, summary, branch: "main" }));
 
 class SkillFailure extends Error {
-  declare status: number;
-  constructor(status: number, message: string) { super(message); this.status = status; }
+  declare status: OtherStatus;
+  constructor(status: OtherStatus, message: string) { super(message); this.status = status; }
 }
 const limited = () => new SkillFailure(503, "GitHub is limiting requests for now. Try again in a while.");
 
@@ -176,8 +154,8 @@ function skillTrashEntries(): DeletedSkill[] {
 }
 
 /** Skills installed from GitHub, by their folder's name, with where they came from. */
-function skillSources(): Record<string, SkillSource> {
-  const sources: Record<string, SkillSource> = {};
+function skillSources(): Skills["github"] {
+  const sources: Skills["github"] = {};
   for (const name of listOf(SKILLS)) {
     try {
       const source = JSON.parse(fs.readFileSync(path.join(SKILLS, name, SKILL_SOURCE), "utf8"));
@@ -349,7 +327,7 @@ async function installSkill(repository: SkillRepository, skill: RepositorySkill)
 }
 
 /** `kuvo/skills…`, `kuvo/skill-trash…` and `kuvo/skill-library…`, for this box's own folder. */
-export async function answerSkills(method: string, requestPath: string, body: SkillsBody | undefined, engine: EngineRecord | null = null): Promise<JSONAnswer> {
+export async function answerSkills(method: string, requestPath: string, body: SkillsBody | null | undefined, engine: EngineRecord | null = null): Promise<SkillsAnswer> {
   const [route, query = ""] = requestPath.split("?");
   const parts = route.split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
   if (parts.includes(null)) return { status: 400, value: { message: "That isn’t a path." } };
@@ -357,7 +335,7 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
   try {
     if (parts[1] === "skills" && parts.length === 2) {
       if (method !== "GET") return { status: 405, value: {} };
-      return { status: 200, value: { folder: SKILLS, folders: skillFolders(), github: skillSources() } };
+      return { status: 200, value: { folder: SKILLS, folders: skillFolders(), github: skillSources() } satisfies Skills };
     }
     if (parts[1] === "skills" && parts.length === 3) {
       const name = parts[2];
@@ -366,7 +344,7 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
       const file = path.join(folder, "SKILL.md");
       if (method === "GET") {
         const text = textOf(file);
-        return text === null ? { status: 404, value: {} } : { status: 200, value: { text } };
+        return text === null ? { status: 404, value: {} } : { status: 200, value: { text } satisfies SkillText };
       }
       if (method === "PUT") {
         const text = body?.text;
@@ -402,7 +380,7 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
       clearSkillTrash();
       if (parts.length === 2) {
         if (method !== "GET") return { status: 405, value: {} };
-        return { status: 200, value: { entries: skillTrashEntries() } };
+        return { status: 200, value: { entries: skillTrashEntries() } satisfies SkillTrash };
       }
       if (parts.length === 4 && parts[3] === "restore") {
         if (method !== "POST") return { status: 405, value: {} };
@@ -420,12 +398,12 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
         if (elsewhere) return { status: 409, value: message(`There’s a skill called ${name} ${skillPlace(elsewhere.path)}, so this one can’t be restored under that name.`) };
         fs.mkdirSync(SKILLS, { recursive: true });
         fs.renameSync(away, back);
-        return { status: 200, value: { name } };
+        return { status: 200, value: { name } satisfies SkillNamed };
       }
       return { status: 404, value: {} };
     }
     if (parts[1] === "skill-library") {
-      if (parts.length === 2 && method === "GET") return { status: 200, value: { repositories: SKILL_REPOSITORIES.map(({ branch, ...shown }) => shown) } };
+      if (parts.length === 2 && method === "GET") return { status: 200, value: { repositories: SKILL_REPOSITORIES.map(({ branch, ...shown }) => shown) } satisfies SkillLibrary };
       if (parts.length === 3 && parts[2] === "install" && method === "POST") {
         const [owner, name] = String(body?.repository ?? "").split("/");
         if (!owner || !name || typeof body?.path !== "string") return { status: 400, value: message('Send {"repository": "owner/name", "path": …}.') };
@@ -433,7 +411,7 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
         const skill = (await skillsIn(repository)).skills.find(each => each.path === body.path);
         if (!skill) return { status: 404, value: message(`There’s no skill at ${body.path} in ${repository.id}.`) };
         await installSkill(repository, skill);
-        return { status: 200, value: { name: skill.name } };
+        return { status: 200, value: { name: skill.name } satisfies SkillNamed };
       }
       if (parts.length === 4 && method === "GET") {
         const repository = await skillRepository(parts[2]!, parts[3]!);
@@ -441,7 +419,7 @@ export async function answerSkills(method: string, requestPath: string, body: Sk
         const { branch, ...shown } = repository;
         // Each with what its SKILL.md says it is, so a client shows them without asking for each.
         const described = await Promise.all(skills.map(async skill => ({ ...skill, about: await aboutSkill(repository, skill.path) })));
-        return { status: 200, value: { repository: shown, skills: described, partial } };
+        return { status: 200, value: { repository: shown, skills: described, partial } satisfies SkillCollection };
       }
       if (parts.length === 5 && parts[4] === "about" && method === "GET") {
         const repository = await skillRepository(parts[2]!, parts[3]!);
@@ -464,6 +442,6 @@ export async function* skillsRoute(context: RouteContext): AsyncGenerator<Answer
   const { request, readEngine, json } = context;
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
-  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  const { status, value } = await answerSkills(request.method.toUpperCase(), request.path, parsed(request.body) as SkillsBody | null | undefined, engine);
   return yield* json(status, value);
 }

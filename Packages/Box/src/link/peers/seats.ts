@@ -1,6 +1,6 @@
 // Group chats across your computers (PROTOCOL.md, "Peers": `seat`)
 // The coding agents' bridge here runs this box's group chats, and its bots' turns in chats on your
-// other computers (Agents/src/groups/peer.ts). This link carries what goes between them: what the
+// other computers (src/agents/groups/peer.ts). This link carries what goes between them: what the
 // bridge sends, now (a turn, how it goes) or until it's there (a part of the work, its report, what
 // a bot remembers, a seat gone: as letters go, resent each minute until `delivered`); in parts
 // when it's big, as documents go; and what comes, to the bridge. Who your other computers are and
@@ -21,34 +21,25 @@ import { readLink } from "../state";
 import { readPeerAgents } from "./directory";
 import { mailFor, peersOf } from "./known";
 import type { ToldAgents } from "../../shared/records";
-import type { BotLook } from "../../shared/routes/bots";
+import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shared/seats";
 import type { DocPart, PendingParts } from "../documents/parts";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
 
-// What the coding agents' bridge sends and takes, as this link handles it. The bridge defines them
-// (Agents/src/groups/peer.ts and post.ts); these follow its shapes as far as the link reads them.
+// The bridge's mail (`SeatMail`, src/agents/groups/peer.ts) as far as this link reads it; what
+// the two say to each other is src/shared/seats.ts.
 
-/** The kinds of mail between two computers' bridges for their group chats (the bridge's `SeatMail`). */
-export type SeatMailKind = "turn" | "state" | "result" | "steer" | "stop" | "drop" | "work" | "report" | "memory";
-
-/** A mail between two computers' bridges (the bridge's `SeatMail`): its kind, and for what a bot
- * remembers of a chat (`memory`), whose and which chat's. The rest goes as it is. */
+/** A mail between two computers' bridges: its kind, and for what a bot remembers of a chat
+ * (`memory`), whose and which chat's. The rest goes as it is. */
 export interface SeatMail {
   kind: SeatMailKind;
   memory?: { bot: string; chat: string; [field: string]: unknown };
   [field: string]: unknown;
 }
 
-/** One line of what the bridge sends (`GET /api/kuvo/peers/mail`, its `Line`): for the computer
- * `to` (its key), and whether it mustn't be lost (`durable`). */
-export interface SeatLine {
-  id: string;
-  to: string;
-  mail: SeatMail;
-  durable: boolean;
-}
+/** One line of what the bridge sends. */
+export type SeatLine = SharedLine<SeatMail>;
 
 /** A letter of seat mail that mustn't be lost (`run/outbox/sending/<id>.json`): for the computer
  * `peer`, when it was left, whom it was last sent to, whether it's given up, and how long it's
@@ -65,30 +56,6 @@ export interface SeatLetter {
 /** What goes in a mail for a seat: the mail whole (with its letter's id when it mustn't be lost),
  * or a part of it. */
 export type SeatPayload = { seat: SeatMail; seatID?: string } | { seatPart: DocPart };
-
-/** One of your other computers, as the bridge hears of it (`PUT /api/kuvo/peers`): whether it takes a chat's turns. */
-export interface SeatBox {
-  key: string;
-  name: string;
-  seats: boolean;
-}
-
-/** A bot on another of your computers, as the bridge hears of it (its `PeerBot`): its computer
- * (`box`, by key), its own conversation there, and how it looks. */
-export interface SeatBot {
-  id: string;
-  name: string;
-  job: string;
-  box: string;
-  session: string;
-  look?: BotLook;
-}
-
-/** Who can be in this box's group chats from your other computers, as the bridge hears it. */
-export interface SeatPeers {
-  boxes: SeatBox[];
-  bots: SeatBot[];
-}
 
 /** What sends a mail on the relay. */
 export type SeatHost = Pick<LinkHost, "send">;
@@ -166,7 +133,7 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
     id = typeof payload.seatID === "string" ? payload.seatID : null;
   } else if (isObject(payload.seatPart)) {
     // (Checked as a part there.)
-    const whole = assemble(seatParts, sender.key, payload.seatPart as unknown as DocPart);
+    const whole = assemble(seatParts, sender.key, payload.seatPart);
     if (!whole) return;
     try { mail = JSON.parse(Buffer.from(whole.d, "base64url").toString("utf8")); } catch { return; }
     id = whole.s || null;

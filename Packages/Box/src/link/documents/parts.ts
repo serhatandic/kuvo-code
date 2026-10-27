@@ -26,12 +26,16 @@ export interface AssembledDoc {
   s: string;
 }
 
+// Whatever a mail brings as a part, checked as one (`DocPart`, as it's sent).
+const fitsPart = (part: unknown): part is DocPart => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of)
+  && (part.of as number) >= 2 && (part.of as number) <= MOST_PARTS && (part.i as number) >= 0 && (part.i as number) < (part.of as number)
+  && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
+
 // A document too big for one mail comes in parts (`{whole, i, of, d, s}`: `whole`, its `d`'s hash),
 // put together here, at most four on their way from one box at a time. The document once all are
 // here, or null.
-export function assemble(parts: Map<string, PendingParts>, from: string, part: DocPart): AssembledDoc | null {
-  if (!isObject(part) || typeof part.whole !== "string" || !Number.isInteger(part.i) || !Number.isInteger(part.of) || part.of < 2 || part.of > MOST_PARTS
-    || part.i < 0 || part.i >= part.of || typeof part.d !== "string" || part.d.length > DOC_PART || typeof part.s !== "string") return null;
+export function assemble(parts: Map<string, PendingParts>, from: string, part: unknown): AssembledDoc | null {
+  if (!fitsPart(part)) return null;
   const key = `${from} ${part.whole}`;
   let pending = parts.get(key);
   if (!pending || pending.of !== part.of) {

@@ -20,7 +20,7 @@ export const MODEL = object({ id: string, providerID: string, "variant?": string
  * when none waits) and how many things it watches; whether it runs with the coding agents; its
  * personality's id and its model, left out when it has none; its folder, the project it works in
  * (left out for a folder of its own) and when it was made. `machine`: the machine's name, left out
- * on a Mac. `memoryJob`: its job as `?memory=1` asks for it, on a machine. */
+ * on a Mac. */
 export const BOT = object({
   id: string,
   session: string,
@@ -38,7 +38,6 @@ export const BOT = object({
   folder: string,
   "project?": string,
   "created?": string,
-  "memoryJob?": object({ line: string, section: string }),
 });
 /** The bots that live here, the first made first. */
 export const BOTS = object({ bots: list(BOT) });

@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import ClientDesign
 import Darwin
 import OpenCodeKit
 import os

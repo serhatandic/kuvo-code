@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// The quotes you're answering, each with your answer under it: as tall as they are up to a

@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// A folder on a machine, chosen as a folder panel chooses one on this Mac: where you are along

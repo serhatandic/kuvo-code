@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Appearance: light or dark, the accent color, the window, how messages read, with a preview of

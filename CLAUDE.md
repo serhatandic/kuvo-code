@@ -59,7 +59,7 @@ Each session runs at most 2 subagents at once: workers, reviewers, and any that 
   - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going);
   - each package's own suite (`swift test`);
   - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
-  - the coding agents bridge's, with `bun test` in `Agents`.
+  - the box's code (its link and the coding agents' bridge), with `bun test` in `Packages/Box`.
 
   Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
 
@@ -117,7 +117,7 @@ All paths on the right are in `../kuvo-web`.
 | `KuvoCode/Stores/BrowserAsks.swift`, `Views/BrowserAskCard.swift`, `Design/AgentPointer.swift` (sign-in, code and step cards, the agent's pointer) | `src/content/docs/code/browsing.md` (Signing in), `sessions.md` (cards above the composer), `privacy.md` (what's kept of a sign-in), `panel.md` (Passwords) |
 | `KuvoCode/Resources/kuvo-browser.js`, `Stores/MachineBrowser.swift`, `MachineBrowserInstaller.swift`, `Views/Utilities/MachineBrowserPane.swift`, `scripts/browser-runtime.py` (the browser on a machine: its keeper, tools, live view, downloads) | `src/content/docs/code/machines.md`, `browsing.md` (On a machine), `panel.md`, `privacy.md` (what it keeps in `~/.kuvo-code`, Chrome for Testing and Rocky Linux downloads), `uninstall.md`, `shortcuts.md`; this repo's `CONTRIBUTING.md` (The browser on a machine); bump `KEEPER` with every change to its host side |
 | `KuvoCode/Stores/Bots.swift`, `BotTemplates.swift`, `BotGroups.swift`, `Views/BotEditor.swift`, `Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift`, `Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json` (bots, templates, Kuvo Code's own personalities and what a bot is told, which every box reads; wake-ups, pausing, group chats) | `src/content/docs/code/bots.md`, `privacy.md` (the `bots` folders); a template change in `bot-words.json` also goes to kuvo-web's `src/lib/bots.ts`, which copies them |
-| `KuvoCode/Stores/Moves.swift`, `MachineGroups.swift`, `GroupChats.swift`, `Agents/src/groups/*` (Move to Computer for bots, chats and group chats; group chats that live on a machine and run in its agents bridge) | `src/content/docs/code/bots.md`, `machines.md`, `sessions.md` (Move to Computer), `privacy.md`, `uninstall.md`, `architecture.md`; this repo's `README.md` (How it works) and `CONTRIBUTING.md` (`scripts/group-vectors.sh` after changing the group chat rules on either side) |
+| `KuvoCode/Stores/Moves.swift`, `MachineGroups.swift`, `GroupChats.swift`, `Packages/Box/src/agents/groups/*` (Move to Computer for bots, chats and group chats; group chats that live on a machine and run in its agents bridge) | `src/content/docs/code/bots.md`, `machines.md`, `sessions.md` (Move to Computer), `privacy.md`, `uninstall.md`, `architecture.md`; this repo's `README.md` (How it works) and `CONTRIBUTING.md` (`scripts/group-vectors.sh` after changing the group chat rules on either side) |
 | `KuvoCode/Stores/Integrations.swift`, `IntegrationKeys.swift`, `Views/Settings/IntegrationsSettings.swift`, `Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/Launcher.swift` (integrations, their keys, `kuvo-npx`) | `src/content/docs/code/integrations.md`, `privacy.md` (keys, the `integrations` folder, connections), `uninstall.md` (Keychain items), `architecture.md` (third-party pieces), `settings.md` |
 | `KuvoCode/Views/Providers/*`, `Stores/Catalog.swift` (accounts, sign-in, models) | `src/content/docs/code/accounts.md`, `sessions.md` (Model and effort) |
 | `KuvoCode/Views/SettingsView.swift`, `Views/Settings/GeneralSettings.swift`, `AppearanceSettings.swift`, `StorageSettings.swift`, `GitSettings.swift`, `ArchivedSessionsSettings.swift`, `ShortcutsSettings.swift`, `KuvoCode/Design/Look.swift` (Settings' sidebar and pages, appearance, storage, git, worktrees, archived sessions) | `src/content/docs/code/settings.md`, and the page that covers a page: `accounts.md`, `customize.md` (Agents, Permissions, MCP Servers, Skills, Commands, Engine), `panel.md` (Panel, Browser, Passwords), `machines.md`, `usage.md`, `troubleshooting.md` (Engine), `shortcuts.md` |
@@ -164,16 +164,17 @@ When you add or change something people use:
 ### It shares the Mac's look
 
 Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws with copies of the Mac's design
-files: `KuvoCode/Design/Surfaces.swift`, `Spinner.swift`, `FolderIcon.swift`, the code block
-style and CodeColors (`CodeBlockStyle.swift`, `CodeHighlighter.swift`) and the shared bits of
-`Theme.swift`, in `KuvoCodeMobile/Design`. When you change one of those here, or how the
+files: `KuvoCode/Design/Spinner.swift`, the code block style (`CodeBlockStyle.swift`), and
+`Theme.swift`'s ShimmerText and DiffStat, in `KuvoCodeMobile/Design`. When you change one of those here, or how the
 conversation, cards, composer or sidebar look, change the phone's copy too (or tell the session
 working on the phone), so the two stay one app. The same goes for the app icon: the phone's
 `KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
 
 What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
-against from this checkout as it does OpenCodeKit. Today that's `ClientText`, the rules for what a
-message says (picture names, web links, the site a link is on); its README says what belongs there.
+against from this checkout as it does OpenCodeKit: `ClientText`, the rules for what a message says
+(picture names, web links, the site a link is on, a field's own typing), `ClientAccounts`, and
+`ClientDesign`, the look both draw with, moving there from the copies above a piece at a time. Its
+README says what belongs there.
 A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
 
 ## Upstreams stay up to date

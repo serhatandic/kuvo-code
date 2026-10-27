@@ -12,6 +12,8 @@ import { processRuns as runs } from "../../shared/platform";
 import type { EngineRecord } from "../../shared/records";
 import { pause } from "../../shared/wait";
 import { engineGet, readEngineFile } from "../engine/client";
+import type { EngineAnswer } from "../engine/client";
+import type { EngineSession } from "../engine/sessions";
 import { RUN } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { ListedAskShape } from "../../shared/routes/asks";
@@ -96,7 +98,7 @@ export function listedAsk(ask: BrowserAsk, machine: string, asker: string | null
 
 // A phone's answer (`POST kuvo/asks/<id>`) as the browser takes it, by the Mac's rules; null for
 // one that doesn't fit the ask, or names a saved password (the Mac's alone).
-export function askAnswer(ask: BrowserAsk, given: GivenAnswer | undefined): AskAnswer | null {
+export function askAnswer(ask: BrowserAsk, given: GivenAnswer | null | undefined): AskAnswer | null {
   const text = (value: unknown) => typeof value === "string" && value !== "" ? value : undefined;
   switch (given?.answer) {
     case "signIn": {
@@ -160,8 +162,9 @@ async function conversationOf(session: string | undefined, readEngine: () => Eng
   if (conversations.has(session)) return conversations.get(session)!;
   try {
     const engine = readEngine();
-    let current = (await engineGet(engine, `api/session/${encodeURIComponent(session)}`)).data;
-    for (let step = 0; step < 5 && current?.parentID; step++) current = (await engineGet(engine, `api/session/${encodeURIComponent(current.parentID)}`)).data;
+    // (As the engine answers it: a session it has, whole; one it hasn't is an error.)
+    let current = (await engineGet(engine, `api/session/${encodeURIComponent(session)}`) as EngineAnswer<EngineSession>).data;
+    for (let step = 0; step < 5 && current?.parentID; step++) current = (await engineGet(engine, `api/session/${encodeURIComponent(current.parentID)}`) as EngineAnswer<EngineSession>).data;
     const found = { id: current?.id ?? session, name: current?.title || null };
     if (conversations.size > 200) conversations.clear();
     conversations.set(session, found);
@@ -239,7 +242,7 @@ export async function* askAnswerRoute(context: RouteContext, answering: RegExpMa
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
   const ask = readAsks().find(each => each.id === decodeURIComponent(answering[1]));
   if (!ask) return yield* json(404, {});
-  const given = parsed(request.body);
+  const given = parsed(request.body) as GivenAnswer | null | undefined;
   const answer = askAnswer(ask, given);
   if (!answer) return yield* json(400, given?.saved != null ? { message: "Saved passwords are on your Mac: type this one." } : {});
   return yield* json((await answerAsk(ask.id, answer)) ? 200 : 503, {});

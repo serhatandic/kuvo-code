@@ -56,9 +56,9 @@ export interface PhoneEntry {
 
 // At most so many in one removal, and so many removals kept (the oldest go first).
 const MOST_AT_ONCE = 16;
-export const MOST_KEPT = 256;
+const MOST_KEPT = 256;
 
-export const removedAlready = (link: LinkState, key: string, pairing: string) => (link.removed ?? []).some(r => r.key === key && r.pairing === pairing);
+const removedAlready = (link: LinkState, key: string, pairing: string) => (link.removed ?? []).some(r => r.key === key && r.pairing === pairing);
 
 function noteRemoved(link: LinkState, key: string, pairing: string): void {
   link.removed ??= [];
@@ -72,7 +72,7 @@ export const fits = (entry: any, macs: string[]): entry is PhoneEntry => typeof 
 
 // `key`'s pairing `pairing` (the one it has here, when not given) taken off: one paired again
 // since, with another pairing, stays.
-export function takeOff(link: LinkState, key: string, pairing?: string | null): void {
+function takeOff(link: LinkState, key: string, pairing?: string | null): void {
   const current = (link.phones ?? []).find(phone => phone.key === key);
   const which = pairing == null ? (current?.pairing ?? "") : String(pairing);
   noteRemoved(link, key, which);

@@ -30,7 +30,8 @@ export type DigestEntry = [origin: string, kind: DocKind, n: number, h: string];
  * of what the sender has (`have`), as an answer to one (`reply`) or not. */
 export interface DocsMail {
   give?: SignedDoc[];
-  part?: DocPart;
+  /** A `DocPart` as it's sent; whatever came, where it comes, until `assemble` checks it. */
+  part?: unknown;
   have?: DigestEntry[];
   reply?: boolean;
 }
@@ -230,7 +231,7 @@ export function docMails(docs: DocsMail): DocsMail[] {
     if (length > 48_000) {
       const whole = crypto.createHash("sha256").update(envelope.d).digest("base64url");
       const of = Math.ceil(envelope.d.length / DOC_PART);
-      for (let i = 0; i < of; i++) mails.push({ part: { whole, i, of, d: envelope.d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: envelope.s } });
+      for (let i = 0; i < of; i++) mails.push({ part: { whole, i, of, d: envelope.d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: envelope.s } satisfies DocPart });
       continue;
     }
     if (size + length > 48_000 && give.length) {

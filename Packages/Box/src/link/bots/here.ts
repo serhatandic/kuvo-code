@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { textOf } from "../files";
+import type { Fields } from "../../shared/json";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import { BOTS } from "../home";
 
@@ -57,11 +58,15 @@ export function botHere(id: unknown): BotHere | null {
 export const isMoving = (folder: string): boolean => (textOf(path.join(folder, "paused")) ?? "").trim() === "moving";
 export const MOVING = "It’s moving to another computer. Try again once it’s there.";
 
-export const isModel = (model: Partial<BotModel> | null | undefined): model is BotModel => Boolean(model) && typeof model!.id === "string" && typeof model!.providerID === "string";
+/** A model as `isModel` checks it: its id and its account's are text; its variant, and anything
+ * else that came with it, aren't checked (`botModel` keeps a variant only when it's text). */
+export type GivenModel = Pick<BotModel, "id" | "providerID"> & Fields<"variant">;
+
+export const isModel = (model: unknown): model is GivenModel => Boolean(model) && typeof (model as Fields<"id">).id === "string" && typeof (model as Fields<"providerID">).providerID === "string";
 // A look and a model as a bot keeps them, made or changed: their own fields, nothing else that came
 // with them.
 export const botLook = (look: BotLook): BotLook => ({ color: look.color, shape: look.shape, face: look.face });
-export const botModel = (model: BotModel): BotModel => ({ id: model.id, providerID: model.providerID, ...(typeof model.variant === "string" ? { variant: model.variant } : {}) });
+export const botModel = (model: GivenModel): BotModel => ({ id: model.id, providerID: model.providerID, ...(typeof model.variant === "string" ? { variant: model.variant } : {}) });
 export const sameModel = (a: Partial<BotModel> | null | undefined, b: Partial<BotModel> | null | undefined): boolean => (a?.id ?? null) === (b?.id ?? null) && (a?.providerID ?? null) === (b?.providerID ?? null) && (a?.variant ?? null) === (b?.variant ?? null);
 
 // Those following this box's bots (`kuvo/bots/events`), told of a change made here at once (one

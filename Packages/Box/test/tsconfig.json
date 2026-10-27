@@ -8,6 +8,10 @@
   },
   "include": [
     ".",
-    "../src"
+    "../src/link",
+    "../src/shared"
+  ],
+  "exclude": [
+    "agents"
   ]
 }

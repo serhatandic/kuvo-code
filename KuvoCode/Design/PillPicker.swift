@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// A choice of a few, drawn as the title bar's tabs are: a glass track, the one chosen a raised

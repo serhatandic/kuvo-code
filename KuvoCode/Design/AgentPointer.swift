@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// The pointer that shows where the agent acts on a page it browses: it glides to the element,

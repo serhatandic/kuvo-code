@@ -166,11 +166,40 @@ public struct Handoff: Codable, Sendable, Hashable {
 public struct Review: Codable, Sendable, Hashable, Identifiable {
     public enum State: String, Codable, Sendable, Hashable { case reviewing, done, failed }
     public enum Severity: String, Codable, Sendable, Hashable { case bug, risk, nit }
-    public struct Finding: Codable, Sendable, Hashable {
+    /// Where a finding is: a file, a line in it, or lines `line` to `endLine`.
+    public struct Place: Codable, Sendable, Hashable {
         public var file: String
         public var line: Int?
+        public var endLine: Int?
+
+        public init(file: String, line: Int? = nil, endLine: Int? = nil) {
+            self.file = file
+            self.line = line
+            self.endLine = endLine
+        }
+
+        /// As people write it: `src/timer.ts:88-92`.
+        public var text: String {
+            file + (line.map { ":\($0)" } ?? "") + (endLine.map { "-\($0)" } ?? "")
+        }
+    }
+    public struct Finding: Codable, Sendable, Hashable, Identifiable {
+        public var id: String
+        /// What's wrong, in a line.
+        public var title: String
+        /// Why, and how to fix it ("" when the title says it all).
+        public var explanation: String
         public var severity: Severity
-        public var note: String
+        /// Every place it's in; none when it's about the change as a whole.
+        public var locations: [Place]
+
+        public init(id: String, title: String, explanation: String, severity: Severity, locations: [Place]) {
+            self.id = id
+            self.title = title
+            self.explanation = explanation
+            self.severity = severity
+            self.locations = locations
+        }
     }
     public var id: String
     public var session: String

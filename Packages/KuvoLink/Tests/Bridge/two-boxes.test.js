@@ -208,34 +208,30 @@ function phone() {
   };
 }
 
-test("this Mac's documents from before its box held them, and after, reach a machine; a phone the machine lets go reaches this Mac's app; a machine you remove lets this Mac go, and comes back when set up again", { timeout: 90_000 }, async t => {
+test("this Mac's documents reach a machine; a phone the machine lets go reaches this Mac's app; a machine you remove lets this Mac go, and comes back when set up again", { timeout: 90_000 }, async t => {
   signal = t.signal;
-  // Before the move: the Mac (its app, then) had signed who its computers are, and its phones up
-  // to version 7, and set the machine up with them.
-  const before = {
-    peers: link.signDoc(macSeed, "peers", 3, { boxes: [{ key: mac, sign: macSign, address: macAddress.toString("base64url"), name: "Studio Mac", kind: "mac" }], moved: [], left: [] }),
-    phones: link.signDoc(macSeed, "phones", 7, { phones: [], removed: [] }),
-  };
-  const lab = setUp([before.peers, before.phones]);
-  assert.ok(lab.key && lab.address && lab.sign, JSON.stringify(lab));
-  assert.equal(machineHas("phones"), 7);
-
-  // The move: this Mac's box on, given its machine, and taking the counts the app kept.
+  // This Mac's box on, and the machine set up over SSH with what the box gives it, then given to
+  // the box as its machine.
   assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: true, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" })).json?.state, "failed");
+  const setup = await ask("GET", "kuvo/link/setup");
+  assert.equal(setup.status, 200);
+  const lab = setUp(setup.json.docs);
+  assert.ok(lab.key && lab.address && lab.sign, JSON.stringify(lab));
+  const peersAtSetup = machineHas("peers");
+  const phonesAtSetup = machineHas("phones");
+  assert.ok(peersAtSetup >= 1 && phonesAtSetup >= 1, JSON.stringify({ peersAtSetup, phonesAtSetup }));
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
-  const counts = { peers: { n: 3, h: "", b: "" }, phones: { n: 7, h: "", b: "" } };
-  assert.equal((await ask("POST", "kuvo/link/phones/take", { phones: [], removed: [], documents: { own: counts, held: {}, views: {}, left: [] } })).status, 200);
   await arrived(() => relay.has(macAddress));
 
-  // Who its computers are now names the machine: past what it had from before.
-  await onTheMachine(() => machineHas("peers") > 3);
+  // Who its computers are now names the machine: past what it had from its setup.
+  await onTheMachine(() => machineHas("peers") > peersAtSetup);
 
-  // A phone paired on this Mac: in its next phones document, past version 7, which the machine takes.
+  // A phone paired on this Mac: in its next phones document, which the machine takes.
   const pairing = await ask("POST", "kuvo/phones/pair");
   const token = new URL(pairing.json.link).searchParams.get("token");
   const it = phone();
   assert.equal((await it.open({ key: link.publicOf(macKey), address: macAddress }, { pair: token })).kind, "mac");
-  await onTheMachine(() => machineHas("phones") > 7 && (machineLink()?.phones ?? []).some(each => each.key === it.public));
+  await onTheMachine(() => machineHas("phones") > phonesAtSetup && (machineLink()?.phones ?? []).some(each => each.key === it.public));
 
   // The phone removes itself on the machine: the machine's phones document says so, and this Mac's
   // box takes it (the app hears it).

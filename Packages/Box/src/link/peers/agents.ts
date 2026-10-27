@@ -20,23 +20,10 @@ import { mailFor, movedOf, peersOf } from "./known";
 import { tellSeatPeers } from "./seats";
 import type { BotKit } from "../bots/kit";
 import type { DigestEntry } from "../documents/work";
+import type { EngineSession } from "../engine/sessions";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
-import type { PutAwayable } from "./directory";
 import type { AgentsFile, BridgeRecord, ListedAgent, Target, ToldAgents } from "../../shared/records";
-
-/** A conversation as the engine (or the agents bridge) lists it (`api/session`), as far as which
- * of them this box tells its peers of: its parent, its title, its folder, and whether it's a group
- * chat's seat or put away. */
-export interface EngineSession extends PutAwayable {
-  id: string;
-  title?: string;
-  parentID?: string | null;
-  directory?: string;
-  location?: { directory?: string };
-  metadata?: { "kuvo.archived"?: unknown; kuvo?: { archived?: unknown; seat?: unknown } };
-  time?: { archived?: unknown; updated?: number };
-}
 
 /** What this box last told a peer of its agents (`announce`): all of them as JSON, when, and the
  * sessions that fit in that mail. */
@@ -69,6 +56,7 @@ export async function ownAgents(readEngine: () => Target, machine?: string, kit:
   const sessionsOf = async (target: Target): Promise<EngineSession[]> => {
     const response = await fetch(`http://127.0.0.1:${target.port}/api/session?parentID=null&limit=100&order=desc`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`It answered ${response.status}.`);
+    // (As the engine and the agents' bridge answer it: their sessions, each whole.)
     return ((await response.json()) as { data?: EngineSession[] } | null)?.data ?? [];
   };
   let sessions: EngineSession[];

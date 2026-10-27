@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import type { EngineRecord } from "../../shared/records";
 import type { BotKeyKept, BotKeys, BotKeyValues } from "../../shared/routes/bots";
 import { soon } from "../../shared/wait";
@@ -145,7 +146,7 @@ function reconnectForBot(engine: EngineRecord | null, id: string, bot: string, l
 
 /** `kuvo/bots/<id>/keys…`, for a bot that lives on this box. `later` runs what waits a moment (a
  * test's own). Where its keys are kept can't be reached (this Mac's app not answering): `503 {"message"}`. */
-export async function answerBotKeys(method: string, requestPath: string, body: { keys?: Record<string, unknown> } | null | undefined, engine: EngineRecord | null, file = INTEGRATIONS_FILE, later: Later = soon): Promise<BotKeysAnswer> {
+export async function answerBotKeys(method: string, requestPath: string, body: Body<"keys">, engine: EngineRecord | null, file = INTEGRATIONS_FILE, later: Later = soon): Promise<BotKeysAnswer> {
   try {
     return await keyWork(() => botKeysAnswer(method, requestPath, body, engine, file, later));
   } catch (error) {
@@ -154,7 +155,7 @@ export async function answerBotKeys(method: string, requestPath: string, body: {
   }
 }
 
-async function botKeysAnswer(method: string, requestPath: string, body: { keys?: Record<string, unknown> } | null | undefined, engine: EngineRecord | null, file: string, later: Later): Promise<BotKeysAnswer> {
+async function botKeysAnswer(method: string, requestPath: string, body: Body<"keys">, engine: EngineRecord | null, file: string, later: Later): Promise<BotKeysAnswer> {
   const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return null; } });
   const message = (text: string) => ({ message: text });
   // (A string, once it's a bot here.)
@@ -197,7 +198,7 @@ async function botKeysAnswer(method: string, requestPath: string, body: { keys?:
       return { status: 200, value: { keys } satisfies BotKeyValues };
     }
     case "PUT": {
-      const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
+      const given = body?.keys && typeof body.keys === "object" ? body.keys as Record<string, unknown> : {};
       if (!fields.every(name => typeof given[name] === "string" && given[name].trim())) {
         const labels = (entry.keys ?? []).map(key => key.label).join(" and ") || fields.join(" and ");
         return { status: 400, value: message(`${entry.title} needs ${labels}: send them as {"keys": {"${fields[0]}": …}}.`) };
@@ -245,6 +246,6 @@ export async function* botKeysRoute(context: RouteContext): AsyncGenerator<Answe
   const { request, readEngine, json } = context;
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
-  const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body), engine);
+  const { status, value } = await answerBotKeys(request.method.toUpperCase(), request.path, parsed(request.body) as Body<"keys">, engine);
   return yield* json(status, value);
 }

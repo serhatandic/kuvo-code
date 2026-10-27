@@ -45,6 +45,8 @@ final class TestBox {
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
+        // Never the opencode sign-ins of whoever runs the tests (`kuvo/accounts/found`): none.
+        environment["KUVO_DEMO_OPENCODE_AUTH"] = BoxProcess.home.appending(path: "opencode-auth.json").path
         // Where its host interface answers, in its folder (`run/host.json`), as the app tells it.
         try await host.start()
         MachineBox.writeMacCatalog()
@@ -59,6 +61,18 @@ final class TestBox {
     func client(engine: String, password: String = "test") -> BoxClient {
         let base = URL(string: engine.hasSuffix("/") ? engine : engine + "/")!
         return BoxClient(box: BoxClient.mac, transport: LocalBox { PhoneLink.respond(to: $0, link: nil, engine: base, password: password, agents: nil) })
+    }
+
+    /// Phones paired with this Mac before, as its box keeps them (`run/link.json`, which it reads
+    /// each time): each a `key` (its public key, base64url), a `name` and its `pairing`, paired at
+    /// `added`.
+    func paired(_ phones: [(key: String, name: String, pairing: String)], added: Date = Date(timeIntervalSinceReferenceDate: 700_000_000)) throws {
+        let file = BoxProcess.run.appending(path: "link.json")
+        var link = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any] ?? [:]
+        link["phones"] = phones.map { ["key": $0.key, "name": $0.name, "added": added.timeIntervalSince1970, "from": "pair", "pairing": $0.pairing] }
+        link["removed"] = link["removed"] ?? []
+        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: link).write(to: file, options: .atomic)
     }
 
     /// Started again after it stopped (`BoxProcess.startAgain`), at a port of its own.

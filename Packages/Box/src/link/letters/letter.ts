@@ -6,20 +6,14 @@
 
 import path from "node:path";
 import type { Target } from "../../shared/records";
+import type { EngineSession } from "../engine/sessions";
 import { RUN } from "../home";
 
-/** A session as the engine (or the agents' bridge) answers for it, as far as a letter's checks read it. */
-export interface PlacedSession {
-  parentID?: string;
-  metadata?: { kuvo?: Record<string, unknown>; [name: string]: unknown } | null;
-  time?: { archived?: number; [name: string]: unknown };
-  [field: string]: unknown;
-}
-
-/** Where a session runs here, and what it is (`placeOfSession`). */
+/** Where a session runs here, and what it is (`placeOfSession`): the session as the engine (or the
+ * agents' bridge) answers for it, or nothing of it (`{}`) when their answer had none. */
 export interface SessionPlace {
   target: Target;
-  data: PlacedSession;
+  data: Partial<EngineSession>;
 }
 
 export const OUTBOX = path.join(RUN, "outbox");
@@ -52,7 +46,8 @@ export async function placeOfSession(session: string, targets: Target[]): Promis
   for (const target of targets) {
     try {
       const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
-      if (response.ok) return { target, data: (await (response.json() as Promise<{ data?: PlacedSession } | null>).catch(() => null))?.data ?? {} };
+      // (As the engine and the agents' bridge answer it: a session they have, whole.)
+      if (response.ok) return { target, data: (await (response.json() as Promise<{ data?: EngineSession } | null>).catch(() => null))?.data ?? {} };
       if (response.status !== 404) unsure = new Error(`It answered ${response.status}.`);
     } catch (error) {
       unsure = error;

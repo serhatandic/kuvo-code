@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import { isObject } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { botHere, isMoving } from "../bots/here";
 import { readKit } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
@@ -29,7 +30,7 @@ export async function takePersonalities(given: GivenLibrary | null | undefined, 
 // Another computer's copy, given by the app beside this box (`kuvo/personalities/take`), met with
 // this one's by the same rules as a peer's: `[status, value]`, with the ids that changed here. Their
 // bots here are told (not waited for), and the other boxes, as after a change through the routes.
-export function takePersonalitiesDocument(body: { document?: unknown } | null | undefined, readEngine: () => Target = readEngineFile, readBridge: () => Target | null = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK): PersonalitiesAnswer {
+export function takePersonalitiesDocument(body: Body<"document">, readEngine: () => Target = readEngineFile, readBridge: () => Target | null = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK): PersonalitiesAnswer {
   const given = body?.document;
   if (!isObject(given) || !Array.isArray(given.personalities) || (given.removed !== undefined && !Array.isArray(given.removed))) {
     return [400, { message: "Send a library of personalities: {document: {personalities, removed}}." }];
@@ -57,7 +58,7 @@ export async function retellBots(ids: string[], readEngine: () => Target = readE
 }
 
 // What a phone asks of the library (`kuvo/personalities`): `[status, value]`.
-export function answerPersonalities(method: string, id: string | undefined, body: { name?: unknown; description?: unknown } | null | undefined, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK): PersonalitiesAnswer {
+export function answerPersonalities(method: string, id: string | undefined, body: Body<"name" | "description">, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK): PersonalitiesAnswer {
   const now = Date.now();
   const incomplete: PersonalitiesAnswer = [400, { message: "A personality needs a name and a description." }];
   const full: PersonalitiesAnswer = [400, { message: FULL_LIBRARY }];

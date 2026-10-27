@@ -99,6 +99,8 @@ export async function hostTrash(folder: string): Promise<void> {
 }
 
 /** One of the app's host calls (`keys/names`, `sites/signed-in`…): its answer's JSON, or null for a 404 when `missing` is fine. */
+export function askHost(host: HostAddress, call: string, body: unknown, missing?: false): Promise<HostAnswer>;
+export function askHost(host: HostAddress, call: string, body: unknown, missing: boolean): Promise<HostAnswer | null>;
 export async function askHost(host: HostAddress, call: string, body: unknown, missing = false): Promise<HostAnswer | null> {
   await proveHost(host);
   let response;

@@ -175,9 +175,7 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   Mac's signing key (from the app, in memory only), takes its machines' and passes them on, and
   mails them on its relay connection, as a machine's bridge does; its peers are the machines its
   app set up (`kuvo/link/peers`, "This Mac's box: the relay"). It takes `peers` only of its own (a
-  copy it lost count of), and `phones` and `personalities` from its machines and itself. Before,
-  the app did this itself, with its counts in `phone-link.json`; the box takes them as it starts,
-  and its app writes the box's back there, so going back to an older Kuvo Code goes on from them.
+  copy it lost count of), and `phones` and `personalities` from its machines and itself.
 - **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
   pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
   lets in its own and its Macs' phones, less every pairing removed in any phones document it
@@ -289,7 +287,7 @@ connection.
   document's parts, but `d` is the base64url of the mail's JSON in UTF-8, so each part fits whatever
   the words are; `s` the `seatID`, or empty). One that would take more parts than a document may
   isn't sent at all, and the link's log says so. The coding agents' bridge on each box writes and
-  reads the mail (`Agents/src/groups/peer.ts`), and the box's link carries it. The bridge sends no
+  reads the mail (`Packages/Box/src/agents/groups/peer.ts`), and the box's link carries it. The bridge sends no
   mail over 512 KB (its JSON in UTF-8): a turn that big goes without `fresh`, then with what the bot
   hasn't heard cut to its latest messages within 160 KB (the last always), and only one that still
   doesn't fit fails, the chat saying the chat is too big to send to that computer; a part that big
@@ -738,6 +736,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
+  - `GET kuvo/accounts/found` → `{agents, opencode, shell}`: what the computer already has, for
+    the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
+    installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
+    apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
+    `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
+    sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
+    the shell the engine uses (`{integrationID, name, variable}`). Names only, never a key. `POST
+    kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
+    `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
+    refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).
   What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
 - On a Mac, `kuvo/hosts`: the machines this phone may reach directly, with their addresses
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
@@ -1088,8 +1096,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set_job tool (`{summary, details}`), and Edit Bot can change it (`PATCH` with `job`); its memory
     is its own to write as it likes. A job from before that is taken once from where it was: the
     Job section of its memory (left there as it is; its details without its line), or else what
-    Edit Bot wrote before memories kept jobs. `?memory=1` adds `memoryJob` (`{line, section}`, the
-    same job), which no released Kuvo Code asks for.
+    Edit Bot wrote before memories kept jobs.
   - A box keeps each of its bots told what it is (its instructions, from its kit's words): at once
     when it's made or changed, and otherwise when what its conversation is told now isn't what it
     would be told (new words in an update or a personality's, or words an older Mac gave it): as
@@ -1396,9 +1403,11 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
   - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
     `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
-    "failed", model?, summary?, findings: [{file, line?, severity: "bug" | "risk" | "nit", note}],
-    error?, fix?, started, ended?}`, its findings bugs first. `fix` is what to send the agent, as
-    your message, to fix them.
+    "failed", model?, summary?, findings: [finding], error?, fix?, started, ended?}`, its findings
+    bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
+    [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
+    says it all), and every place it's in, none when it's about the change as a whole (a missing
+    test). `fix` is what to send the agent, as your message, to fix them all.
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
     conversation's; `DELETE …/kuvo/reviews/<session>` puts it away.
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
@@ -1417,6 +1426,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | Name | What it answers |
 | --- | --- |
 | `accounts.credentials` | `kuvo/accounts/credentials` |
+| `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |
@@ -1536,8 +1546,7 @@ chats under `kuvo.groups` (`KUVO_GROUPS_MEMORY_KEY`). The box passes a client's 
 on to that bridge, as a machine's does (bridge 0.9.65; the app did before), saying "Group chats on
 this Mac are starting" or "aren't answering" when it can't. The box carries its group chats' mail (`seat`, "Peers")
 on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
-their bots are (bridge 0.9.63). Before, the app's phone link did (`SeatRelay`); the box takes the
-letters it kept (`run/seat-letters.json`) into its outbox as it starts.
+their bots are (bridge 0.9.63).
 
 Its engine settings (`kuvo/config`, `kuvo/config/apply`, `kuvo/mcp/catalog`) are where the app's
 engine has always read them, `opencode/config/opencode/opencode.json` in the app's folder: the
@@ -1648,12 +1657,6 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `POST kuvo/link/phones/take {"phones", "removed", "documents"?}`: phones an older Kuvo Code kept
-  (`phone-link.json`), met with the box's: each in unless its pairing was removed, each removal
-  taking off what it removes; and how far this Mac's documents had come (`documents`, `{own, held,
-  views, left}`, as `phone-link.json` keeps them: the box's counts only ever go up). The app keeps
-  `phone-link.json` in step with the box (`kuvo/link/phones` carries `documents` too), so going back
-  to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
 - `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
   one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
   key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a
@@ -1684,7 +1687,8 @@ For the app only (anyone else gets `403`):
   machine's setup answer gave of documents (`from`, its key), taken as if by mail; `404` for one
   that isn't one of this Mac's machines.
 - `GET kuvo/link/documents` → `{"own", "held", "views", "left", "have"}`: this Mac's documents as the
-  box keeps them, its own brought up to date first, and its digest.
+  box keeps them, its own brought up to date first, and its digest, for looking at them (the app
+  doesn't read it; the bridge's tests do).
 
 The app's `kuvo/phones/pair` makes a pairing link of its own (Settings › Phone's), apart from one a
 phone asks for, so neither ends the other; with the phone link off it's `409 {"message": "The phone

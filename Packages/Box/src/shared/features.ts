@@ -4,7 +4,7 @@
 // and the Mac's own routes besides.
 
 export const FEATURES = [
-  "accounts.credentials", "accounts.ended", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "btw", "config", "config.apply",
+  "accounts.credentials", "accounts.ended", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "btw", "config", "config.apply",
   "engine.restart", "engine.start", "file", "folders", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys",
   "mcp.catalog", "named", "personalities", "plugins.search", "personalities.events", "phones", "phones.pair", "projects", "reviews", "sessions.agents", "shell.stop", "sign-in.return",
   "skills", "skills.trash", "update", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where", "bots.events", "bots.job",

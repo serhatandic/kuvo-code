@@ -9,9 +9,19 @@ let package = Package(
     platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
         .library(name: "ClientText", targets: ["ClientText"]),
+        .library(name: "ClientAccounts", targets: ["ClientAccounts"]),
+        .library(name: "ClientDesign", targets: ["ClientDesign"]),
+    ],
+    // Textual draws the replies' code blocks in both apps; ClientDesign gives it their colors.
+    dependencies: [
+        .package(path: "../Textual"),
     ],
     targets: [
         .target(name: "ClientText"),
         .testTarget(name: "ClientTextTests", dependencies: ["ClientText"]),
+        .target(name: "ClientAccounts"),
+        .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts"]),
+        .target(name: "ClientDesign", dependencies: [.product(name: "Textual", package: "textual")]),
+        .testTarget(name: "ClientDesignTests", dependencies: ["ClientDesign"]),
     ]
 )

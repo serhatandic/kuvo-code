@@ -76,13 +76,27 @@ export const ENDED = object({ providers: list(string) });
 /** This box's sign-ins. */
 export const CREDENTIALS = object({ credentials: list(object({ id: string, integrationID: string, label: string, active: bool })) });
 
+/** What this computer already has that Kuvo Code can use, for the first launch (names only, never a
+ * key): the coding agents' programs and their sign-ins; the keys (`key`, brought over with
+ * `kuvo/accounts/found/use`) and sign-ins (`signIn`, done again here) of an opencode used apart
+ * from Kuvo Code, `connected` when the engine has one for it already; and the keys in the shell
+ * the engine uses. */
+export const FOUND = object({
+  agents: list(object({ id: string, name: string, installed: bool, signedIn: bool, "label?": string })),
+  opencode: list(object({ id: string, integrationID: string, name: string, kind: words("key", "signIn"), connected: bool })),
+  shell: list(object({ integrationID: string, name: string, variable: string })),
+});
+
 export type BoxInfo = Infer<typeof INFO>;
 /** A machine's, as its link answers. */
 export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
+export type UpdateStep = Infer<typeof STEP>;
+export type LastUpdate = Infer<typeof LAST_UPDATE>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
 export type Credentials = Infer<typeof CREDENTIALS>;
+export type Found = Infer<typeof FOUND>;
 
 export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },
@@ -101,6 +115,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/accounts/ended", answers: { 200: ENDED } },
   { route: "POST kuvo/accounts/:provider/forget", answers: { 200: NOTHING } },
   { route: "GET kuvo/accounts/credentials", answers: { 200: CREDENTIALS } },
+  { route: "GET kuvo/accounts/found", answers: { 200: FOUND } },
+  { route: "POST kuvo/accounts/found/use", answers: { 200: NOTHING } },
   { route: "POST kuvo/engine/:control", answers: { 202: NOTHING } },
   { route: "POST kuvo/shell/:id/stop", answers: { 200: object({ stopped: words("signal", "removed") }) } },
 ];

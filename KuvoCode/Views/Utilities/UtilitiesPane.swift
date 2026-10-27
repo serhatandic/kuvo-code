@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// The right panel: a card whose header is a strip of tabs (Changes, files, terminals,

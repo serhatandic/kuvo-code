@@ -16,6 +16,8 @@ import Testing
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneAttentionTests {
     let folder: URL
+    /// A phone paired with this Mac, which hasn't said where it is yet.
+    let phone = LinkKey()
 
     init() throws {
         TestEnvironment.prepare()
@@ -23,10 +25,6 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         UserDefaults.standard.set(true, forKey: "phoneLink")
         UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
-        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
-        // A phone paired with this Mac, which hasn't said where it is yet.
-        let phone = #"{"key":"\#(LinkKey().publicBytes.base64URL)","name":"iPhone","added":700000000,"pairing":"p-1"}"#
-        try Data(#"{"phones":[\#(phone)],"removed":[],"machines":{}}"#.utf8).write(to: folder.appending(path: "phone-link.json"))
     }
 
     private func done(_ box: SettingsBox, _ link: PhoneLink) {
@@ -35,12 +33,13 @@ import Testing
         link.stop()
         box.stop()
         try? FileManager.default.removeItem(at: folder)
-        for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    /// This Mac's link, as the app starts it, once its box has been told the phone link's on and
-    /// has taken your phone (its relay is one nobody answers here).
+    /// This Mac's link, as the app starts it, once its box (which has your phone) has been told the
+    /// phone link's on (its relay is one nobody answers here).
     private func linked(on box: SettingsBox) async throws -> PhoneLink {
+        try box.box.paired([(phone.publicBytes.base64URL, "iPhone", "p-1")])
         let link = PhoneLink(file: folder.appending(path: "phone-link.json"), identity: (LinkKey(), RelaySecret()))
         let client = box.client
         link.box = { client }
@@ -138,7 +137,7 @@ import Testing
         }
         defer {
             try? FileManager.default.removeItem(at: folder)
-            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+            for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
         }
         let (attention, _) = atTheMac(link)
         defer { attention.stop() }

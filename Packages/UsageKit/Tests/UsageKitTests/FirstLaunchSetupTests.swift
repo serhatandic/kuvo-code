@@ -2,7 +2,7 @@ import Security
 import XCTest
 @testable import UsageKit
 
-/// The welcome screen: what it finds without asking, and how Connect turns providers on.
+/// Turning the panel on the first time: what it finds without asking, and how Connect turns providers on.
 @MainActor
 final class FirstLaunchSetupTests: XCTestCase {
     override func setUp() {
@@ -32,9 +32,6 @@ final class FirstLaunchSetupTests: XCTestCase {
         await setup.detect()
 
         XCTAssertEqual(setup.selectedIDs, ["claude"])
-        XCTAssertEqual(setup.visibleChoices.map(\.id), ["claude"])
-        setup.showAll = true
-        XCTAssertEqual(setup.visibleChoices.map(\.id), ["claude", "codex"])
     }
 
     func testDetectionAsksEveryDashboardCard() async {

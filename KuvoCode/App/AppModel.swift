@@ -67,6 +67,11 @@ final class AppModel {
     /// The coding agents you already have (Claude Code, Codex, Cursor, Grok, Antigravity), run by
     /// the agents bridge beside the engine.
     let agents = OutsideAgents()
+    /// The first launch: the bots while it gets ready, your subscriptions, screen access. Not for
+    /// a copy that's run before, and not for tests, demos and measurements (they start where they
+    /// say; `KUVO_DEMO_ONBOARDING` shows it).
+    let onboarding = Onboarding(launchedBefore: AppInfo.isHostingTests || !Analytics.shared.isFirstLaunch
+        || ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" })
     /// This Mac's box (`kuvo-link.js serve`), which answers the areas that have moved onto it.
     let box = BoxProcess()
     /// What this Mac's box asks the app for (your Keychain's keys).

@@ -4,15 +4,15 @@ import AppKit
 /// OpenUsage's app delegate, without the parts that belong to a standalone menu-bar app — the
 /// single-instance lock, updates, analytics, the local API and activation-policy changes.)
 ///
-/// On first run the welcome screen waits until the user clicks the menu bar item, so Kuvo Code's own
-/// first launch isn't interrupted and nothing asks for Keychain access before the user picks providers.
+/// On first run nothing asks for Keychain access until the user turns the panel on: in the host's
+/// own first launch (`turnOnFirstLaunch`), or with a first click on the menu bar item. (Fork change:
+/// OpenUsage's welcome window is gone; the host's first launch has its row.)
 @MainActor
 public final class UsageMenuBar {
     public static let shared = UsageMenuBar()
 
     private(set) var container: AppContainer?
     private var statusItemController: StatusItemController?
-    private var welcome: FirstLaunchWindowController?
     private var openHost: (@MainActor () -> Void)?
     private var started = false
 
@@ -127,7 +127,7 @@ public final class UsageMenuBar {
         controller.onShow = { [weak self] in self?.onPanelShown?() }
         statusItemController = controller
         if showsWelcome {
-            controller.clickInterceptor = { [weak self] in self?.showWelcome() ?? false }
+            controller.clickInterceptor = { [weak self] in self?.turnOnFromClick() ?? false }
         } else {
             startRefreshing(container)
         }
@@ -149,31 +149,72 @@ public final class UsageMenuBar {
         container.startRefreshing()
     }
 
-    /// While the welcome is pending, a click on the menu bar item opens it instead of the panel.
-    private func showWelcome() -> Bool {
-        guard let container, FirstLaunchSetup.isPending() else { return false }
-        if welcome == nil {
-            let setup = FirstLaunchSetup(
-                providers: ProviderCatalog.make().map(\.provider),
-                cards: container.providers,
-                enablement: container.enablement,
-                dataStore: container.dataStore,
-                isConnected: { [availability = container.availability] in availability.isConnected($0) }
-            )
-            // The hop lets the clicked button's action return before its window is torn down.
-            welcome = FirstLaunchWindowController(setup: setup) { [weak self] in
-                Task { self?.finishWelcome(container) }
-            } onClose: { [weak self] in
-                self?.welcome = nil
-            }
+    /// Whether the panel waits to be turned on: a fresh install, before the host's first launch or a
+    /// click on the menu bar item turned it on.
+    public var isWaitingForFirstLaunch: Bool { FirstLaunchSetup.isPending() }
+
+    /// What turning the panel on found: the providers it follows now, by name, or why one couldn't
+    /// be read (the first such, in words to show).
+    public struct FirstLaunchResult: Sendable, Equatable {
+        public var following: [String]
+        public var failure: String?
+
+        public init(following: [String], failure: String? = nil) {
+            self.following = following
+            self.failure = failure
         }
-        welcome?.show()
-        return true
     }
 
-    private func finishWelcome(_ container: AppContainer) {
-        welcome?.finish()
-        welcome = nil
+    /// Turns the panel on, as the welcome's Connect did: the providers whose sign-ins are on this
+    /// Mac and connected in the host, refreshed one at a time (macOS may ask to let the host read
+    /// each one's saved sign-in). Nil while the panel is still starting. Accounts connected later
+    /// are turned on as they come, as always. Asked again while it runs, it's the same run.
+    public func turnOnFirstLaunch() async -> FirstLaunchResult? {
+        guard let container else { return nil }
+        guard FirstLaunchSetup.isPending() else { return FirstLaunchResult(following: following(container)) }
+        if let turningOn { return await turningOn.value }
+        let run = Task { await turnOn(container) }
+        turningOn = run
+        defer { turningOn = nil }
+        return await run.value
+    }
+
+    private var turningOn: Task<FirstLaunchResult, Never>?
+
+    private func turnOn(_ container: AppContainer) async -> FirstLaunchResult {
+        let setup = FirstLaunchSetup(
+            providers: ProviderCatalog.make().map(\.provider),
+            cards: container.providers,
+            enablement: container.enablement,
+            dataStore: container.dataStore,
+            isConnected: { [availability = container.availability] in availability.isConnected($0) }
+        )
+        await setup.detect()
+        await setup.connectSelected()
+        finishFirstLaunch(container)
+        let failure = setup.choices.lazy.compactMap { choice -> String? in
+            guard case .failed(let message) = choice.connection else { return nil }
+            // Said where there's no Retry beside it.
+            return message == FirstLaunchSetup.accessDeniedMessage ? "A sign-in couldn’t be read, so its usage doesn’t show yet." : message
+        }.first
+        return FirstLaunchResult(following: following(container), failure: failure)
+    }
+
+    /// The providers the panel shows, by name.
+    private func following(_ container: AppContainer) -> [String] {
+        ProviderCatalog.make().map(\.provider)
+            .filter { provider in container.providers.contains { ProviderAccountID.family(of: $0.provider.id) == provider.id && container.enablement.isEnabled($0.provider.id) } }
+            .map(\.displayName)
+    }
+
+    /// A first click on the menu bar item while it waits opens it and turns it on, the bars coming
+    /// in as each plan is read.
+    private func turnOnFromClick() -> Bool {
+        if FirstLaunchSetup.isPending() { Task { _ = await turnOnFirstLaunch() } }
+        return false
+    }
+
+    private func finishFirstLaunch(_ container: AppContainer) {
         KeychainAccessGuard.allowPopups()
         FirstLaunchSetup.clearPending()
         statusItemController?.clickInterceptor = nil
@@ -182,6 +223,5 @@ public final class UsageMenuBar {
             container.onboarding.dismissCustomizeHint()
         }
         startRefreshing(container)
-        MenuBarPopover.showHandler?()
     }
 }

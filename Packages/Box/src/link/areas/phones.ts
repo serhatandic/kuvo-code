@@ -2,6 +2,7 @@
 // pair another.
 
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import type { PAIRING } from "../../shared/routes/box";
 import type { Infer } from "../../shared/shape";
 import { noteDocsChanged } from "../documents/changed";
@@ -28,7 +29,7 @@ export async function* phonesRoute(context: RouteContext): AsyncGenerator<Answer
 export async function* phonesRemoveRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, phone, phonesChanged, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
-  const given = parsed(request.body);
+  const given = parsed(request.body) as Body<"phones">;
   // This Mac's app removes as the Mac does (Settings › Phone, or a removal a machine's
   // document brought).
   const asMac = IS_MAC && request.fromApp;

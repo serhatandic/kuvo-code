@@ -34,7 +34,10 @@ if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' -
 fi
 
 TEMP="${TMPDIR:-/tmp}"
-BUILD="${TEMP%/}/KuvoCodeTests-build"
+# Built in this user's cache folder, kept from run to run: macOS clears files the temporary folder
+# hasn't used for a few days, which left builds there missing parts of their packages.
+CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "$TEMP/")"
+BUILD="${CACHE%/}/KuvoCodeTests-build"
 BUNDLE=run.kuvo.code.tests
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \

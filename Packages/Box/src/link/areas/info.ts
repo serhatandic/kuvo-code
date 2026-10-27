@@ -28,6 +28,6 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
   const chats = path.join(K, "chats");
   try { fs.mkdirSync(chats, { recursive: true }); } catch {}
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...(info as { name: string }) } satisfies MachineInfo)) };
+  yield { body: Buffer.from(JSON.stringify({ kind: "machine", bridge: BRIDGE_VERSION, engine: engine.version ?? null, started, running, stopped, agents: Boolean(bridge()), chats, features: FEATURES, ...info } satisfies MachineInfo)) };
   return;
 }

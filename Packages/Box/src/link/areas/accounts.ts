@@ -10,6 +10,8 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import { engineGet } from "../engine/client";
+import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
+import type { EngineSession } from "../engine/sessions";
 import { writePrivate } from "../files";
 import { RUN } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -36,12 +38,15 @@ interface EngineConnection {
   credentialID?: string;
 }
 
-/** A credential as its engine lists it (`api/credential`). */
-interface EngineCredential {
-  id?: unknown;
-  integrationID?: unknown;
-  label?: unknown;
-  active?: unknown;
+/** A sign-in (or a key) as the engine keeps it and lists it (`api/credential`): the integration
+ * it's for, its label, whether it's the one in use, and its value, whose `type` says what it is
+ * (`oauth` for a sign-in). */
+export interface EngineCredential {
+  id: string;
+  integrationID: string;
+  label: string;
+  active: boolean;
+  value: { type: string; [field: string]: unknown };
 }
 
 /** A sign-in as `kuvo/credentials` lists it. */
@@ -73,7 +78,8 @@ export async function noteSignIn(event: SignInEvent, source: Target): Promise<vo
   if (ended && (event.data?.error?.type !== "provider.auth" || !String(event.data?.error?.message ?? "").startsWith("Request failed"))) return;
   const id = event.data?.sessionID;
   if (typeof id !== "string") return;
-  const provider = (await engineGet(source, `api/session/${encodeURIComponent(id)}`))?.data?.model?.providerID;
+  // (As the engine answers it: a session it has, whole; one it hasn't is an error.)
+  const provider = (await engineGet(source, `api/session/${encodeURIComponent(id)}`) as EngineAnswer<EngineSession>)?.data?.model?.providerID;
   if (typeof provider !== "string") return;
   if (!ended) return void changeEndedSignIns(each => each.delete(provider));
   const active = await activeCredential(source, provider);
@@ -82,8 +88,8 @@ export async function noteSignIn(event: SignInEvent, source: Target): Promise<vo
 
 // `provider`'s sign-in in use, as its engine lists it.
 async function activeCredential(engine: Target, provider: string): Promise<EngineConnection | null> {
-  const integrations: EngineIntegration[] | undefined = (await engineGet(engine, "api/integration"))?.data;
-  return (Array.isArray(integrations) ? integrations : []).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
+  const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
+  return (Array.isArray(integrations) ? integrations as EngineIntegration[] : []).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
 }
 
 // The plans whose sign-in in use ended.
@@ -98,11 +104,11 @@ export async function endedProviders(engine: Target): Promise<string[]> {
 // Signs this box out of one of your plans (Settings › Accounts' Disconnect): its sign-ins and keys,
 // never an integration's server. False for what isn't a plan here.
 export async function forgetPlan(engine: Target, id: string): Promise<boolean> {
-  const integrations: EngineIntegration[] | undefined = (await engineGet(engine, "api/integration"))?.data;
-  const plan = (Array.isArray(integrations) ? integrations : []).find(each => each?.id === id);
+  const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
+  const plan = (Array.isArray(integrations) ? integrations as EngineIntegration[] : []).find(each => each?.id === id);
   if (!plan || plan.metadata?.source === "mcp") return false;
-  const entries: EngineCredential[] | undefined = (await engineGet(engine, "api/credential"))?.data;
-  for (const entry of Array.isArray(entries) ? entries : []) {
+  const entries = (await engineGet(engine, "api/credential") as UncheckedAnswer)?.data;
+  for (const entry of Array.isArray(entries) ? entries as EngineCredential[] : []) {
     if (entry?.integrationID !== id || typeof entry.id !== "string") continue;
     await fetch(`http://127.0.0.1:${engine.port}/api/credential/${encodeURIComponent(entry.id)}`, {
       method: "DELETE",

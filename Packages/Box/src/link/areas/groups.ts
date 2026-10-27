@@ -3,7 +3,7 @@
 import { IS_MAC } from "../home";
 import { listedAgents, nameMissing, refreshOwnShared } from "../server/naming";
 import type { Target } from "../../shared/records";
-import type { AnswerPiece, JSONAnswer, LinkRequest, RouteContext } from "../server/context";
+import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
 
 // What a client asks of them (PROTOCOL.md, `kuvo/groups`): the list and one chat (read, or followed
 // as they change), who can be in one, and what it does (makes, changes or deletes one, writes to it,
@@ -12,9 +12,9 @@ import type { AnswerPiece, JSONAnswer, LinkRequest, RouteContext } from "../serv
 // rule of what can be: passed on as it answers.
 export const GROUP_ROUTE = /^kuvo\/groups(?:\/(events|joinable|grp_[a-z0-9]+(?:\/(?:events|stop|keep-going|viewed|undo|start))?))?$/;
 
-// What the bridge's own group chat API (`/api/kuvo/groups…`, Agents/src/groups/routes.ts) answers
-// is the asker's to say (`Value`); anything that isn't JSON comes as {}.
-export async function askGroups<Value = unknown>(target: Target, method: string, route: string, body: unknown, signal: AbortSignal | undefined): Promise<JSONAnswer<Value>> {
+// What the bridge's own group chat API (`/api/kuvo/groups…`, src/agents/groups/routes.ts) answers
+// is the asker's to say (`Value`), with its status as it came; anything that isn't JSON comes as {}.
+export async function askGroups<Value = unknown>(target: Target, method: string, route: string, body: unknown, signal: AbortSignal | undefined): Promise<{ status: number; value: Value }> {
   const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/groups${route}`, {
     method,
     headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },

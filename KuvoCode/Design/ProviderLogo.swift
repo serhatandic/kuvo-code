@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// A provider's mark, from the same logo set opencode's own apps use

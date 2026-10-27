@@ -10,7 +10,9 @@ import { oneLine } from "../../shared/text";
 import { sleep } from "../../shared/wait";
 import { isMoving, MOVING } from "../bots/here";
 import { engineGet } from "../engine/client";
+import type { EngineAnswer } from "../engine/client";
 import { messageID } from "../engine/sessions";
+import type { EngineSession } from "../engine/sessions";
 import { listOf, textOf } from "../files";
 import { followed, watchFolders } from "../follow";
 import { BOTS, RUN, SESSION_WAKES, WAKE_COMMAND } from "../home";
@@ -225,20 +227,13 @@ const LETTERS = /^[A-Za-z0-9]+$/;
 // The most wake-ups a conversation keeps waiting, as the Mac's (Wakes.limit).
 const WAKE_LIMIT = 50;
 
-/** A session as the engine (or the coding agents' bridge) answers for it, as far as a wake-up's
- * folder reads it: the folder it works in, and whether it's archived. */
-interface FoundSession {
-  location?: { directory?: string };
-  directory?: string;
-  metadata?: Record<string, unknown>;
-}
-
 // A folder for a session's wake-ups here, made as a Mac makes one (WakeUps.makeFolder): its
 // session, its folder, whether the coding agents run it, and held while it's archived. Null when
 // it isn't a conversation here.
 async function wakeFolderFor(session: string, readEngine: () => EngineRecord, bridge: () => BridgeRecord | null): Promise<string | null> {
   if (!/^ses_[A-Za-z0-9]+$/.test(session)) return null;
-  const ask = async (target: Target | null): Promise<FoundSession | null> => target ? (await engineGet(target, `api/session/${encodeURIComponent(session)}`).catch(() => null))?.data ?? null : null;
+  // (As the engine and the agents' bridge answer it: a session they have, whole.)
+  const ask = async (target: Target | null): Promise<EngineSession | null> => target ? (await engineGet(target, `api/session/${encodeURIComponent(session)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data ?? null : null;
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
   let found = await ask(engine), agents = false;

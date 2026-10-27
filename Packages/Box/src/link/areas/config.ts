@@ -30,7 +30,7 @@ export interface SettingChange {
 
 /** The settings as a change left them, or why it wasn't made (with a file's `problem`, for one
  * left alone). */
-export type SettingsChanged = { status: number; settings: Settings } | { status: number; message: string; problem?: string };
+export type SettingsChanged = { status: 200; settings: Settings } | { status: 400 | 409 | 500; message: string; problem?: string };
 
 // COMPAT(0.7 settings): the routes answer 409 until a Mac adopts the settings an older Mac's start left. Goes 3 months after 0.8.0.
 export const ownsSettings = (mark: string | null = OWN_MARK): boolean => mark === null || fs.existsSync(mark);
@@ -78,24 +78,25 @@ export function settingAt(object: Settings, keys: string[], value: unknown): Set
 }
 
 // `PATCH kuvo/config`'s changes ({path, value, was?}), made in one write: {status, settings} or
-// {status, message}, as the Mac answers.
-export function changeSettings(changes: SettingChange[], file = CONFIG_FILE, lock = CONFIG_LOCK): SettingsChanged {
+// {status, message}, as the Mac answers. (Whatever a client sent, checked here.)
+export function changeSettings(changes: unknown, file = CONFIG_FILE, lock = CONFIG_LOCK): SettingsChanged {
   const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every(change =>
     Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16
-    && change.path.every(key => typeof key === "string" && key.length >= 1 && key.length <= 200) && "value" in change);
+    && change.path.every((key: unknown) => typeof key === "string" && key.length >= 1 && key.length <= 200) && "value" in change);
   if (!fits) return { status: 400, message: "Send {\"changes\": [{\"path\": [keys…], \"value\": …}]}." };
   return locked(lock, () => {
     const { settings, problem } = readSettings(file);
     if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
     // Keys go through objects only: one through a list or a plain value would replace it whole.
-    if (changes.some(change => change.path.slice(0, -1).some((_, at) => {
+    // (Changes as `fits` checked them: each a path of keys and a value.)
+    if ((changes as SettingChange[]).some(change => change.path.slice(0, -1).some((_, at) => {
       const above = valueAt(settings, change.path.slice(0, at + 1));
       return above !== undefined && !isObject(above);
     }))) return { status: 400, message: "A path goes through objects only; send a list whole, at its own path." };
-    if (changes.some(change => "was" in change && sortedJSON(valueAt(settings, change.path) ?? null) !== sortedJSON(change.was))) {
+    if ((changes as SettingChange[]).some(change => "was" in change && sortedJSON(valueAt(settings, change.path) ?? null) !== sortedJSON(change.was))) {
       return { status: 409, message: "It changed since you read it." };
     }
-    return writeSettings(settings!, changes, file);
+    return writeSettings(settings!, changes as SettingChange[], file);
   });
 }
 

@@ -57,4 +57,86 @@ import Testing
         field().update(view, coordinator: coordinator)
         #expect(view.string == "")
     }
+
+    /// A field redrawn before what holds it (a quote's answer, in the list of quotes) is handed
+    /// the words from before its first key, and later the same older words twice: none of them
+    /// takes the keys back ("Yes" came out "Y" on the phone).
+    @Test func wordsFromBeforeTheFirstKeyAndRepeatsAreKept() {
+        let draft = Draft()
+        let font = NSFont.systemFont(ofSize: 13)
+        func field(showing shown: String? = nil) -> MessageField {
+            MessageField(text: Binding(get: { shown ?? draft.text }, set: { draft.text = $0 }), placeholder: "Your answer to this…", font: font)
+        }
+        let coordinator = field().makeCoordinator()
+        let view = MessageTextView()
+        view.delegate = coordinator
+        field().update(view, coordinator: coordinator)
+        func type(_ key: String) {
+            view.insertText(key, replacementRange: view.selectedRange())
+            if draft.text != view.string { coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view)) }
+        }
+
+        type("Y")
+        field(showing: "").update(view, coordinator: coordinator)
+        #expect(view.string == "Y", "the words from before the first key don't take it back")
+        type("e")
+        type("s")
+        field(showing: "Y").update(view, coordinator: coordinator)
+        field(showing: "Y").update(view, coordinator: coordinator)
+        #expect(view.string == "Yes", "the same older words twice don't take the keys since")
+        #expect(draft.text == "Yes")
+
+        // Caught up, then the message sent: the field empties.
+        field().update(view, coordinator: coordinator)
+        draft.text = ""
+        field().update(view, coordinator: coordinator)
+        #expect(view.string == "")
+    }
+
+    /// A key and Return straight after, while busy ("y" to an agent's question): the message goes
+    /// and the field empties, though it had no words before the key either. And an earlier message
+    /// brought back with ↑ shows, though it was typed a moment ago.
+    @Test func aKeyAndReturnWhileBusySendsAndEmpties() throws {
+        let draft = Draft()
+        var sent: [String] = []
+        let font = NSFont.systemFont(ofSize: 13)
+        func field(showing shown: String? = nil) -> MessageField {
+            MessageField(text: Binding(get: { shown ?? draft.text }, set: { draft.text = $0 }), placeholder: "Message", font: font, onKey: { key in
+                switch key.name {
+                case .return: sent.append(draft.text); draft.text = ""
+                case .up: draft.text = sent.last ?? ""
+                default: return false
+                }
+                return true
+            })
+        }
+        let coordinator = field().makeCoordinator()
+        let view = MessageTextView()
+        view.delegate = coordinator
+        field().update(view, coordinator: coordinator)
+        func type(_ key: String) {
+            view.insertText(key, replacementRange: view.selectedRange())
+            if draft.text != view.string { coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view)) }
+        }
+        func press(_ code: UInt16, _ characters: String) throws {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                      characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+            view.keyDown(with: event)
+        }
+
+        type("y")
+        field(showing: "").update(view, coordinator: coordinator)
+        try press(36, "\r")
+        field().update(view, coordinator: coordinator)
+        #expect(sent == ["y"])
+        #expect(view.string == "", "the message sent leaves the field")
+
+        // "y" typed and taken out again, then ↑: the message sent before is back in the field.
+        type("y")
+        view.deleteBackward(nil)
+        if draft.text != view.string { coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view)) }
+        try press(126, "\u{F700}")
+        field().update(view, coordinator: coordinator)
+        #expect(view.string == "y", "the message brought back shows")
+    }
 }

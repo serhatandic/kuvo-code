@@ -61,7 +61,8 @@ final class Analytics {
 
     private let target: URL?
     private let installID: String
-    private let isFirstLaunch: Bool
+    /// No copy of Kuvo Code had run here before this launch.
+    let isFirstLaunch: Bool
     /// When this install first ran; nil for one from before it was noted.
     private let installDate: Date?
     private let launchedAt = Date.now

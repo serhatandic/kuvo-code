@@ -3,7 +3,7 @@
 // reaches the machine's, and its answer comes back to the one waiting, or, once it stopped
 // waiting, as a message; a letter from the machine reaches this Mac's; this Mac's group chats' mail
 // reaches the machine's and is said to be there; and what an earlier Kuvo Code kept itself (its
-// letters on their way, its group chats' letters) goes on from the box. This Mac's box is `serve`'s
+// letters on their way) goes on from the box. This Mac's box is `serve`'s
 // link, here; the machine is `kuvo-link.js run`, a process of its own, set up as the app sets one up
 // over SSH. Only the relay, the app, the engines and the coding agents' bridges are stand-ins.
 //
@@ -204,8 +204,6 @@ const run = file => path.join(machineHome, "run", file);
 const read = file => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } };
 const sending = home => { try { return fs.readdirSync(path.join(home, "run", "outbox", "sending")).filter(name => name.endsWith(".json")); } catch { return []; } };
 
-// A group chat's letter an earlier Kuvo Code kept itself (its SeatRelay), as it wrote it.
-const kept = { kind: "turn", chat: "grp_before", text: "From before." };
 let lab = null;
 
 before(async () => {
@@ -221,8 +219,6 @@ before(async () => {
   });
   assert.equal(result.status, 0, result.stderr);
   lab = JSON.parse(result.stdout.trim().split("\n").at(-1));
-  // What the earlier Kuvo Code kept, there as its box starts.
-  write(path.join(macHome, "run", "seat-letters.json"), { seat_before1: { peer: lab.key, seat: Buffer.from(JSON.stringify(kept)).toString("base64"), at: Date.now() } });
   assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
   link.runMacLink();
   link.runMacPeers();
@@ -307,12 +303,10 @@ test("a letter from the machine's conversation reaches this Mac's", { timeout: 6
   await eventually(() => !sending(machineHome).includes("ltr_fromlab1.json"));
 });
 
-test("this Mac's group chats' mail reaches the machine's, and what mustn't be lost is said to be there; what an earlier Kuvo Code kept goes too", { timeout: 60_000 }, async t => {
+test("this Mac's group chats' mail reaches the machine's, and what mustn't be lost is said to be there", { timeout: 60_000 }, async t => {
   signal = t.signal;
   // The bridge is told who your other computers are: the machine, taking chats' turns.
   await arrived(() => macBridge.seen.peers.some(peers => peers.boxes?.some(box => box.key === lab.key && box.seats)));
-  // What the earlier Kuvo Code kept: there.
-  await arrived(() => labBridge.seen.mail.some(each => each.from === mac && each.mail.chat === "grp_before"));
   // Followed by this Mac's box: what it sends now goes.
   await arrived(() => macBridge.seen.streams.size > 0);
   macBridge.give({ id: "seat_turn1", to: lab.key, mail: { kind: "turn", chat: "grp_1", text: "Your turn." }, durable: true });
@@ -321,8 +315,7 @@ test("this Mac's group chats' mail reaches the machine's, and what mustn't be lo
   // The link has it to deliver (the bridge hears so), and once the machine says it's there, it's
   // no longer on its way.
   await arrived(() => macBridge.seen.sent.includes("seat_turn1"));
-  await eventually(() => !sending(macHome).includes("seat_turn1.json") && !sending(macHome).includes("seat_before1.json"));
-  assert.ok(!fs.existsSync(path.join(macHome, "run", "seat-letters.json")), "the earlier Kuvo Code's copy, taken");
+  await eventually(() => !sending(macHome).includes("seat_turn1.json"));
 });
 
 test("letters an earlier Kuvo Code had on their way go on from this Mac's box, and those it delivered aren't delivered twice", { timeout: 60_000 }, async t => {

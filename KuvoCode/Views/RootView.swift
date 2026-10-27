@@ -1,3 +1,4 @@
+import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
@@ -9,31 +10,33 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            switch app.engine {
-            case .ready:
+            // Settings are there before the workspace is: for the engine's own page while it isn't
+            // running, and from the menus during the first launch.
+            if app.showsSettings, app.onboarding.isActive || app.engine != .ready {
+                SettingsView { withAnimation(.ui) { app.showsSettings = false } }
+                    .padding(.horizontal, Metrics.paneGap)
+                    .padding(.bottom, Metrics.paneGap)
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            SettingsBackButton { withAnimation(.ui) { app.showsSettings = false } }
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+                    .toolbar(removing: .title)
+                    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                    .transition(.opacity)
+            } else if app.onboarding.isActive {
+                OnboardingView()
+                    .transition(.opacity)
+            } else if app.engine == .ready {
                 MainView()
                     .transition(.opacity)
-            default:
-                // Settings are there before the engine is, for its own page among others.
-                if app.showsSettings {
-                    SettingsView { withAnimation(.ui) { app.showsSettings = false } }
-                        .padding(.horizontal, Metrics.paneGap)
-                        .padding(.bottom, Metrics.paneGap)
-                        .toolbar {
-                            ToolbarItem(placement: .navigation) {
-                                SettingsBackButton { withAnimation(.ui) { app.showsSettings = false } }
-                            }
-                            .sharedBackgroundVisibility(.hidden)
-                        }
-                        .toolbar(removing: .title)
-                        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-                        .transition(.opacity)
-                } else {
-                    EngineSetupView()
-                        .transition(.opacity.combined(with: .scale(0.98)))
-                }
+            } else {
+                EngineSetupView()
+                    .transition(.opacity.combined(with: .scale(0.98)))
             }
         }
+        .animation(.ui, value: app.onboarding.isActive)
         .animation(.ui, value: app.engine == .ready)
         .animation(.ui, value: app.showsSettings)
         // What an agent asks you for while it browses, when no conversation shows it.

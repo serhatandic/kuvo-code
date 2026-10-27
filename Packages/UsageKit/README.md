@@ -13,8 +13,9 @@ here.
 ## What's different from upstream
 
 - **Embedded, not a standalone app.** `UsageMenuBar` replaces OpenUsage's app delegate. It never
-  changes the activation policy or quits the app, and the first-run welcome opens on the first
-  click of the menu bar item instead of at launch. It tells the host when the panel opens (`UsageMenuBar.onPanelShown`), for the host's own counts.
+  changes the activation policy or quits the app, and OpenUsage's first-run welcome window is gone:
+  the host's own first launch turns the panel on (`UsageMenuBar.turnOnFirstLaunch`), or a first click on the
+  menu bar item does, and nothing asks for Keychain access before that. It tells the host when the panel opens (`UsageMenuBar.onPanelShown`), for the host's own counts.
 - **Removed:** Sparkle updates, PostHog analytics, the local HTTP API on port 6736, the `openusage`
   command-line tool, iCloud sync, single-instance handling and OpenUsage's own logo.
 - **The host's identity.** Names, the user agent, logs (`~/Library/Logs/<app>/Usage.log`) and
@@ -46,11 +47,13 @@ here.
 - **A Bars style for the dashboard**, the default (`Views/UsageBarsView.swift`): one compact bar
   per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and today's spend
   as one bar on top, the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
-  (`Views/UsageBarDetail.swift`), not the card, folding open and closed with the panel (`FoldTransition` in `Support/Animations.swift`).
+  (`Views/UsageBarDetail.swift`), not the card. It folds open and closed with the panel: laid out with the window's own height while the
+  panel moves, so the bars below never run under the footer (`Fold` in `UsageBarsView`, `PanelHeightChange`), and the panel is drawn
+  with each new frame (`PanelHeightController`).
   Settings › Style switches back to the cards.
 - **Only the host's accounts** (`Stores/ProviderAvailability.swift`): the panel follows the providers whose accounts are connected in
   Kuvo Code (`HostAccounts.setConnectedProviders`), turning on newly connected ones, and leaves out tools signed in elsewhere on the
-  Mac (its welcome warns about permission dialogs only when there's a provider to connect). Of those, one whose refresh finds no login, or no usage for its account, stays off the dashboard, the menu bar and Total
+  Mac. Of those, one whose refresh finds no login, or no usage for its account, stays off the dashboard, the menu bar and Total
   Spend too, and Customize (which lists only connected providers) says why. Only those are refreshed, whatever's turned on, so a
   tool's own login (Claude Code's, the Codex CLI's) is never read or renewed for a provider that isn't connected; and
   `PlanLimits` leaves out readings past the Outdated age and limits whose reset time has passed.

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { Integration, IntegrationAdded, IntegrationHealth, Integrations } from "../../shared/routes/integrations";
 import { soon } from "../../shared/wait";
@@ -14,6 +15,7 @@ import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { changeSettings, ownsSettings, readSettings, SERVERS, valueAt } from "./config";
+import type { EngineCredential } from "./accounts";
 
 export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
 
@@ -32,14 +34,6 @@ interface EngineServer {
   name?: string;
   status?: { status?: string };
   integrationID?: string;
-}
-
-/** A sign-in as the engine keeps it (`api/credential`): what this reads of it. */
-interface EngineCredential {
-  id: string;
-  active?: boolean;
-  value?: { type?: string };
-  integrationID: string;
 }
 
 /** What `kuvo/integrations…` answers: the list, one just added, `{}` for done (or nothing to say),
@@ -72,9 +66,10 @@ async function integrationEntries(catalog: CatalogIntegration[], engine: EngineR
   let servers: EngineServer[] | null = null;
   let signedIn: Set<string> = new Set();
   if (engine) {
-    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null);
-    const credentials: EngineCredential[] = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-    signedIn = new Set((Array.isArray(credentials) ? credentials : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
+    // (As the engine answers it: its MCP servers, a list.)
+    servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null) as EngineServer[] | null;
+    const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
+    signedIn = new Set((Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
   // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
@@ -164,13 +159,13 @@ export async function reconnectEverywhere(engine: Target, id: string): Promise<v
   const connect = `/api/experimental/mcp/${encodeURIComponent(id)}/connect`;
   await call(engine, "POST", connect).catch(() => {});
   const open = await call(engine, "GET", "/api/debug/location").catch(() => []);
-  const folders = new Set((Array.isArray(open) ? open : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
+  const folders = new Set((Array.isArray(open) ? open as ({ directory?: string } | null)[] : []).map(each => each?.directory).filter(folder => typeof folder === "string" && folder));
   for (const folder of folders) await call(engine, "POST", connect, undefined, undefined, folder).catch(() => {});
 }
 
 /** `kuvo/integrations…`, for this box's own, its keys where it keeps them (a machine's files, this
  * Mac's Keychain through its app). `later` runs what waits a moment (a test's own). */
-export async function answerIntegrations(method: string, requestPath: string, body: { keys?: Record<string, unknown> } | null | undefined, engine: EngineRecord | null, signal: AbortSignal | undefined, file = INTEGRATIONS_FILE, later = soon): Promise<IntegrationsAnswer> {
+export async function answerIntegrations(method: string, requestPath: string, body: Body<"keys">, engine: EngineRecord | null, signal: AbortSignal | undefined, file = INTEGRATIONS_FILE, later = soon): Promise<IntegrationsAnswer> {
   try {
     return await integrationsAnswer(method, requestPath, body, engine, signal, file, later);
   } catch (error) {
@@ -179,7 +174,7 @@ export async function answerIntegrations(method: string, requestPath: string, bo
   }
 }
 
-async function integrationsAnswer(method: string, requestPath: string, body: { keys?: Record<string, unknown> } | null | undefined, engine: EngineRecord | null, signal: AbortSignal | undefined, file: string, later: typeof soon): Promise<IntegrationsAnswer> {
+async function integrationsAnswer(method: string, requestPath: string, body: Body<"keys">, engine: EngineRecord | null, signal: AbortSignal | undefined, file: string, later: typeof soon): Promise<IntegrationsAnswer> {
   const parts = requestPath.split("?")[0].split("/").map(part => { try { return decodeURIComponent(part); } catch { return ""; } });
   const catalog = integrationCatalog(file);
   if (parts.length === 2) {
@@ -196,7 +191,7 @@ async function integrationsAnswer(method: string, requestPath: string, body: { k
   if (method === "POST") {
     if (entry.way === "browser" || !entry.settings) return { status: 409, value: { message: `The agent uses ${entry.title} on its site: sign in to it in the browser on ${IS_MAC ? "this Mac" : "this machine"}.` } };
     const variables = entry.variables ?? {};
-    const given = body?.keys && typeof body.keys === "object" ? body.keys : {};
+    const given = body?.keys && typeof body.keys === "object" ? body.keys as Record<string, unknown> : {};
     const names = Object.keys(variables);
     if (!Object.values(variables).every(variable => typeof variable === "string" && STORED_KEY.test(variable))) {
       return { status: 409, value: { message: `${entry.title} can't be added here: its keys aren't named as Kuvo Code names them.` } };
@@ -217,7 +212,7 @@ async function integrationsAnswer(method: string, requestPath: string, body: { k
     // One there already is written again as it is (the engine reads its keys again).
     const value = added ? valueAt(settings, [...SERVERS, entry.id]) : entry.settings;
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value }]);
-    if (changed.status !== 200) return { status: changed.status, value: { message: (changed as { message: string }).message } };
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     // The engine reads its keys as it reads its settings again: its server connects again a
     // moment later, with the new ones, in every folder the engine has open.
     if (newKeys) reconnectLater(engine, entry.id, later);
@@ -245,12 +240,15 @@ async function integrationsAnswer(method: string, requestPath: string, body: { k
     }
     // Its sign-in as the engine has it, asked before it leaves the settings.
     let signIn: string | undefined;
-    if (engine) signIn = (await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => [])).find?.((each: EngineServer) => each?.name === entry.id)?.integrationID;
+    if (engine) {
+      const servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => []);
+      signIn = (Array.isArray(servers) ? servers as EngineServer[] : []).find(each => each?.name === entry.id)?.integrationID;
+    }
     const changed = changeSettings([{ path: [...SERVERS, entry.id], value: null }]);
-    if (changed.status !== 200) return { status: changed.status, value: { message: (changed as { message: string }).message } };
+    if (changed.status !== 200) return { status: changed.status, value: { message: changed.message } };
     if (engine && signIn) {
       const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-      for (const each of Array.isArray(credentials) ? credentials : []) {
+      for (const each of Array.isArray(credentials) ? credentials as EngineCredential[] : []) {
         if (each?.integrationID === signIn) await call(engine, "DELETE", `/api/credential/${encodeURIComponent(each.id)}`, undefined, signal).catch(() => {});
       }
     }
@@ -276,6 +274,6 @@ export async function* integrationsRoute(context: RouteContext): AsyncGenerator<
   if (!ownsSettings()) return yield* json(409, { message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." });
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
-  const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
+  const { status, value } = await answerIntegrations(request.method.toUpperCase(), request.path, parsed(request.body) as Body<"keys">, engine, signal);
   return yield* json(status, value);
 }

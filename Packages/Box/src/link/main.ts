@@ -70,7 +70,6 @@ import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
-import type { SettingChange } from "./areas/config";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -145,8 +144,8 @@ export { ownRefreshed } from "./server/naming";
 export { FROM_PHONE, fromPhone } from "./server/forward";
 export { stopMacLink } from "./mac/link";
 export { macNoticeHold, macTell } from "./mac/notices";
-export { LETTER_WAIT, runMacPeers, stopMacPeers, takeSeatLetters } from "./mac/peers";
-export { setMacPeers, takeMacDocuments, takePhones } from "./mac/routes";
+export { LETTER_WAIT, runMacPeers, stopMacPeers } from "./mac/peers";
+export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
 export { connectOnce, fromRelay } from "./relay/connection";
 export { MAC_BOX_ROUTES, macAnswers, macFront, runMacLink } from "./mac/relay";
@@ -366,7 +365,7 @@ async function box(command: string): Promise<void> {
       let given: { changes?: unknown } | null = {};
       try { given = JSON.parse(await input()); } catch {}
       // (Checked there.)
-      return say(ownsSettings() ? changeSettings(given?.changes as SettingChange[]) : { status: 409, message: "This machine's settings aren't its own yet." });
+      return say(ownsSettings() ? changeSettings(given?.changes) : { status: 409, message: "This machine's settings aren't its own yet." });
     }
     case "key": {
       const name = process.argv[4];

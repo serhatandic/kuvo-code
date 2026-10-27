@@ -31,6 +31,8 @@ struct DashboardView: View {
     /// Whether `animatedHeight` has been seeded for this open. Until then the first measurement (or a
     /// reopen) establishes it without animation; afterwards, changes spring.
     @State private var didEstablishHeight = false
+    /// While a part of the dashboard opens or folds with the panel: its measurement waits.
+    @State private var holdsHeight = false
     /// Popover auto-fit height computation: per-screen measured pieces summed into each screen's clamped
     /// morph target (`heightCoordinator.measuredIdeal` / `.target(for:)`). Written from the geometry
     /// actions below. The animation itself — `animatedHeight`, the slide, the `withAnimation` spring —
@@ -229,7 +231,7 @@ struct DashboardView: View {
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
-                } else if !isSliding, abs(target - animatedHeight) > 1 {
+                } else if !isSliding, !holdsHeight, abs(target - animatedHeight) > 1 {
                     withAnimation(Motion.spring) { animatedHeight = target }
                 }
             }
@@ -240,6 +242,30 @@ struct DashboardView: View {
             // Reaches `modeBody`, the `PopoverSurface` background, and every card: drives whether surfaces
             // paint their opaque base or clear to the behind-window vibrancy backdrop.
             .environment(\.popoverSurfaceTreatment, transparency.surfaceTreatment)
+            // A part of the dashboard opening or folding moves the window in its own animation.
+            .environment(\.panelHeightChange, PanelHeightChange { opening, closing, done in
+                guard opening != closing, didEstablishHeight, !isSliding, layout.screen == .dashboard,
+                      let ideal = heightCoordinator.measuredIdeal[.dashboard],
+                      let content = heightCoordinator.scrollContent(for: .dashboard) else { return nil }
+                let clamp = { (height: CGFloat) in MenuBarPopover.clampHeight?(height) ?? height }
+                let target = ideal - closing + opening
+                // At its tallest or shortest it can't move by as much: the parts fold on their own.
+                guard abs(clamp(ideal) - ideal) < 1, abs(clamp(target) - target) < 1 else { return nil }
+                // Its measurement follows the parts, which follow the window: it waits.
+                holdsHeight = true
+                withAnimation(Motion.spring, completionCriteria: .logicallyComplete) {
+                    animatedHeight = target
+                } completion: {
+                    holdsHeight = false
+                    done()
+                    // Unless another page has taken over the panel since.
+                    guard layout.screen == .dashboard, !isSliding else { return }
+                    if let settled = heightCoordinator.target(for: .dashboard), abs(settled - animatedHeight) > 1 {
+                        withAnimation(Motion.spring) { animatedHeight = settled }
+                    }
+                }
+                return content - closing
+            })
             // The easter egg's visuals: the readable party (gradient backdrop + glowing rim, text crisp
             // on frosted cards) for the secret code, or the woozy, barely-readable pink-glass drunk mode
             // for "Drunk Mode". No-op for the normal/increased styles. Controls stay clickable (overlays
@@ -262,6 +288,7 @@ struct DashboardView: View {
         HoverPopoverState.dismissAll()
         if layout.screen != .dashboard { layout.screen = .dashboard }
         reorderLift = nil
+        holdsHeight = false
         layout.cancelDrag()
         // A "Copied to clipboard" pill mid-countdown would otherwise reappear stale on the next open,
         // since the layout store survives the popover and only the timer clears it.

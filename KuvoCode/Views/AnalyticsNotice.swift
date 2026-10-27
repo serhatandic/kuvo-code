@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// A one-time note at the bottom of the sidebar: Kuvo Code shares anonymous usage, what that

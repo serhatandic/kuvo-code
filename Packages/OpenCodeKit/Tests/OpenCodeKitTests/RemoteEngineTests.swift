@@ -153,13 +153,13 @@ struct RemoteEngineTests {
 /// with its keys (it installs the engine in that machine's ~/.kuvo-code-test, apart from the app's):
 ///
 ///     KUVO_TEST_SSH_HOST=my-server swift test --filter LiveRemoteEngineTests
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] != nil), .serialized)
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] != nil), .serialized, OwnMachineFolder())
 struct LiveRemoteEngineTests {
     let connection = SSHConnection(destination: ProcessInfo.processInfo.environment["KUVO_TEST_SSH_HOST"] ?? "")
 
-    init() {
-        // A folder of its own, so the tests never stop an engine the app runs there.
-        RemoteEngineInstaller.root = ".kuvo-code-test"
+    init() throws {
+        // Never the app's own folder there, whose engine these would stop.
+        try #require(RemoteEngineInstaller.root == ".kuvo-code-test", "the live tests run in a folder of their own")
     }
 
     @Test func runsOnItsOwnAndIsFoundAgain() async throws {
@@ -286,8 +286,8 @@ struct LiveRemoteEngineTests {
         let keepers = try await connection.run("pgrep -fc '[.]kuvo-code-test/bin/kuvo-start keep' || true")
         #expect(keepers.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
 
-        // One stopped on purpose stays stopped.
-        try await RemoteServer.stopEngine(on: connection)
+        // One stopped on purpose (an older Mac's Stop) stays stopped.
+        _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\" stop")
         _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\"")
         try await Task.sleep(for: .seconds(3))
         #expect(try await RemoteServer.find(on: connection) == .stopped)
@@ -304,8 +304,8 @@ struct LiveRemoteEngineTests {
         return nil
     }
 
-    /// The machine keeps its engine running by itself: one that crashes comes back; Stop keeps it
-    /// down, though its keeper runs on; Start brings it back.
+    /// The machine keeps its engine running by itself: one that crashes comes back; a stop (an
+    /// older Mac's Stop) keeps it down, though its keeper runs on; Start brings it back.
     @Test func itKeepsItselfRunningUntilStopped() async throws {
         let cache = FileManager.default.temporaryDirectory.appending(path: "opencodekit-remote-cache")
         defer { try? FileManager.default.removeItem(at: cache) }
@@ -317,7 +317,8 @@ struct LiveRemoteEngineTests {
         let back = try #require(try await runningSoon { $0.pid != first.pid }, "its keeper started it again")
         #expect(back.notes == ["mac": "test-mac", "settings": "abc"])
 
-        try await RemoteServer.stopEngine(on: connection)
+        // Stopped, as an older Mac's Stop did.
+        _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\" stop")
         #expect(try await RemoteServer.find(on: connection) == .stopped)
         try await Task.sleep(for: .seconds(20))
         #expect(try await RemoteServer.find(on: connection) == .stopped, "it stays stopped")
@@ -500,5 +501,15 @@ struct LiveRemoteEngineTests {
 
         try await RemoteServer.stop(on: connection)
         _ = try await connection.run("pkill -f '[/]\\.kuvo-code-test/' || true; rm -rf \"$HOME/.kuvo-code-test\"")
+    }
+}
+
+/// A folder of the live tests' own on the machine, so they never stop an engine the app runs
+/// there: for their tasks alone (the suite's, whose tests run within it), so the tests that run the
+/// scripts on this Mac meanwhile keep the app's.
+struct OwnMachineFolder: SuiteTrait, TestScoping {
+
+    func provideScope(for test: Test, testCase: Test.Case?, performing function: @Sendable () async throws -> Void) async throws {
+        try await RemoteEngineInstaller.$scopedRoot.withValue(".kuvo-code-test") { try await function() }
     }
 }

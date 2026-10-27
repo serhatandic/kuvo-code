@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 // What's around a page in the panel's browser, the same for this Mac's pages and a machine's:

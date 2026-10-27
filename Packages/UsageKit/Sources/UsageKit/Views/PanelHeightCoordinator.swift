@@ -52,6 +52,11 @@ final class PanelHeightCoordinator {
         measuredIdeal[screen] = ideal
     }
 
+    /// A screen's measured scroll content height (fork addition).
+    func scrollContent(for screen: PopoverScreen) -> CGFloat? {
+        measuredScrollContent[screen]
+    }
+
     /// The clamped target height for a screen, or `nil` until it's been measured.
     func target(for screen: PopoverScreen) -> CGFloat? {
         measuredIdeal[screen].map(clamped)

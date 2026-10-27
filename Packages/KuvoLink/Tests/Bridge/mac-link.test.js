@@ -380,33 +380,13 @@ test("the app's own notices go out on the box's connection", async () => {
   assert.equal((await ask("POST", "kuvo/attention/notice", { notice: { title: "x" } }, { fromApp: false })).status, 403);
 });
 
-test("phones from before are taken, a removal winning; the app removes as the Mac; the link's routes are the app's alone", async () => {
-  const a = link.publicOf(link.newKey()).toString("base64url");
-  const b = link.publicOf(link.newKey()).toString("base64url");
-  const taken = await ask("POST", "kuvo/link/phones/take", {
-    phones: [{ key: a, name: "Old iPhone", added: 1_700_000_000, pairing: "p1" }, { key: b, name: "Lost iPhone", added: 1_700_000_000, pairing: "" }],
-    removed: [{ key: b, pairing: "" }],
-  });
-  assert.equal(taken.status, 200);
-  assert.ok(taken.json.phones.some(each => each.key === a && each.name === "Old iPhone" && each.pairing === "p1"));
-  assert.ok(!taken.json.phones.some(each => each.key === b), "removed before: stays out");
-  assert.equal((await ask("POST", "kuvo/phones/remove", { phones: [{ key: a, pairing: "p1" }] })).status, 200);
-  assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === a));
-  // An older copy that still has it: it stays removed.
-  await ask("POST", "kuvo/link/phones/take", { phones: [{ key: a, name: "Old iPhone", pairing: "p1" }], removed: [] });
-  assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === a));
+test("the app removes a phone as the Mac; the link's routes are the app's alone", async () => {
+  const { it } = await paired();
+  assert.ok((await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
+  assert.equal((await ask("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] })).status, 200);
+  assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
   for (const p of ["kuvo/link/status", "kuvo/link/phones", "kuvo/link/config"]) assert.equal((await ask("GET", p, undefined, { fromApp: false })).status, 403, p);
   assert.equal((await ask("PUT", "kuvo/link/config", { phones: true, machines: false, relay: "https://example.com" })).status, 400);
-});
-
-test("a phone taken from before keeps where it is only when that's an address: never a list holding one", async () => {
-  const a = link.publicOf(link.newKey()).toString("base64url");
-  const b = link.publicOf(link.newKey()).toString("base64url");
-  const where = link.addressOf(crypto.randomBytes(32)).toString("base64url");
-  await ask("POST", "kuvo/link/phones/take", { phones: [{ key: a, name: "iPhone", pairing: "", address: where }, { key: b, name: "iPad", pairing: "", address: [where] }], removed: [] });
-  const phones = (await ask("GET", "kuvo/link/phones")).json.phones;
-  assert.equal(phones.find(each => each.key === a).address, where);
-  assert.ok(!("address" in phones.find(each => each.key === b)), "a list isn't where it is");
 });
 
 test("with the phone link off, phones are let go and refused, and no pairing link is made", async () => {

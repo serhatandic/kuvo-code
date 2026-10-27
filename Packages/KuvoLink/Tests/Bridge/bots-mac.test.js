@@ -149,10 +149,9 @@ test("this Mac's bots are its own: listed without a machine, made here with this
   t.after(fake.close);
   const handle = link.engineHandler(fake.read, { name: "Mac" }, () => null);
   bot("bot_scout00001");
-  const listed = await ask(handle, "GET", "kuvo/bots?memory=1");
+  const listed = await ask(handle, "GET", "kuvo/bots");
   assert.equal(listed.json.bots[0].id, "bot_scout00001");
   assert.equal("machine" in listed.json.bots[0], false, "a Mac leaves machine out for its own");
-  assert.equal("memoryJob" in listed.json.bots[0], false, "a Mac reads no machine's memories");
 
   // What New Bot offers here: this Mac's starting model, by the name a Mac's has.
   const offered = await ask(handle, "GET", "kuvo/bots/templates");

@@ -3,6 +3,7 @@
 
 import path from "node:path";
 import { parsed } from "../../shared/json";
+import type { Body } from "../../shared/json";
 import { followed } from "../follow";
 import { PERSONALITIES_FILE, personalitiesDocument, personalityFollowers, readPersonalities } from "../personalities/library";
 import { answerPersonalities, retellBots, takePersonalitiesDocument } from "../personalities/take";
@@ -26,7 +27,7 @@ export async function* personalitiesDocumentRoute(context: RouteContext): AsyncG
   const method = request.method.toUpperCase();
   if (route === "kuvo/personalities/document") return yield* method === "GET" ? json(200, personalitiesDocument()) : json(405, {});
   if (method !== "POST") return yield* json(405, {});
-  const [status, value] = takePersonalitiesDocument(parsed(request.body), readEngine, readBridge);
+  const [status, value] = takePersonalitiesDocument(parsed(request.body) as Body<"document">, readEngine, readBridge);
   return yield* json(status, value);
 }
 
@@ -35,7 +36,7 @@ export async function* personalityRoute(context: RouteContext, personality: RegE
   const { request, readEngine, readBridge, json } = context;
   let id: string | undefined;
   try { id = personality[1] === undefined ? undefined : decodeURIComponent(personality[1]); } catch { return yield* json(404, {}); }
-  const [status, value] = answerPersonalities(request.method.toUpperCase(), id, parsed(request.body));
+  const [status, value] = answerPersonalities(request.method.toUpperCase(), id, parsed(request.body) as Body<"name" | "description">);
   // Its bots with it are told what it is now, or that it's gone.
   if (status === 200 && id !== undefined) retellBots([id], readEngine, readBridge).catch(() => {});
   return yield* json(status, value);
