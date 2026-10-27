@@ -1278,26 +1278,6 @@ nonisolated enum RemoteShell {
         let path = result.outputText
         return path.hasPrefix("/") ? path : nil
     }
-
-    /// A folder typed on `machine` (`~` for its home), as the full path it is there, or nil when
-    /// there's no such folder.
-    static func resolve(_ typed: String, on machine: String) -> String? {
-        let typed = typed.trimmingCharacters(in: .whitespaces)
-        guard !typed.isEmpty else { return nil }
-        let target: String
-        if typed == "~" {
-            target = "\"$HOME\""
-        } else if typed.hasPrefix("~/") {
-            target = "\"$HOME\"/" + SSHConnection.quoted(String(typed.dropFirst(2)))
-        } else if typed.hasPrefix("/") {
-            target = SSHConnection.quoted(typed)
-        } else {
-            target = "\"$HOME\"/" + SSHConnection.quoted(typed)
-        }
-        guard let data = run("cd \(target) && pwd -P", on: machine) else { return nil }
-        let path = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.hasPrefix("/") ? path : nil
-    }
 }
 
 nonisolated extension RemoteFolder {

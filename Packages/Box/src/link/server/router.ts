@@ -22,6 +22,8 @@ import { namedRoute } from "../areas/named";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { pluginSearchRoute } from "../areas/plugins";
+import { programsRoute } from "../areas/programs";
+import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
 import { settingsRoute } from "../areas/settings";
 import { skillsRoute } from "../areas/skills";
@@ -55,6 +57,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: route => route === "kuvo/folders", answer: foldersRoute },
   { when: route => route === "kuvo/plugins/search", answer: pluginSearchRoute },
+  { when: route => route === "kuvo/programs", answer: programsRoute },
+  { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
   { when: route => route === "kuvo/phones", answer: phonesRoute },

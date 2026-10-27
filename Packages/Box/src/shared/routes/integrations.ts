@@ -16,7 +16,8 @@ export const INTEGRATION_HEALTH = words("connected", "starting", "waitsForCode",
  * added; `keys`, `help`, `redirect`, `by` and `macOnly` where its way has them), then whether it's
  * added here, whether this box keeps its keys (left out while they can't be reached), and, added,
  * how it's doing (left out while its engine can't say) and the engine's integration it signs in
- * through. `siteSignedIn`: one used on its site, whether this box's browser is signed in there,
+ * through, and, one that needs signing in, whether the sign-in it had ended (`signInEnded`: Sign In
+ * Again, not Sign In). `siteSignedIn`: one used on its site, whether this box's browser is signed in there,
  * where it can tell (this Mac's). */
 export const INTEGRATION = object({
   id: string,
@@ -37,6 +38,7 @@ export const INTEGRATION = object({
   "siteSignedIn?": bool,
   "health?": INTEGRATION_HEALTH,
   "signIn?": string,
+  "signInEnded?": bool,
 });
 
 /** Every integration this box offers, in the page's order; `engineDown` while its engine isn't

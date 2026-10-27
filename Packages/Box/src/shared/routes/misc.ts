@@ -1,5 +1,6 @@
 // A box's folders to choose one from (PROTOCOL.md, `kuvo/folders`), npm's plugins its engine can
-// load (`kuvo/plugins/search`), and a sign-in's return loaded on the computer it's for
+// load (`kuvo/plugins/search`), an MCP server's program (`kuvo/programs`), a provider of your
+// own's models (`kuvo/providers/models`), and a sign-in's return loaded on the computer it's for
 // (`kuvo/sign-in/return`).
 
 import { bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
@@ -24,17 +25,29 @@ export const PLUGIN_SEARCH = object({
   "missing?": string,
 });
 
+/** A program an MCP server's command names, and where this box runs it from (null: it hasn't it,
+ * or, `unknown`, it can't tell from here). */
+export const PROGRAM_FOUND = object({ name: string, path: nullable(string), "unknown?": bool });
+
+/** A provider of your own's models, as it lists them to this box: `reached` and the models, or
+ * `needsKey` when it asks for its key first; not reached, what's wrong. */
+export const PROVIDER_MODELS = object({ reached: bool, "models?": list(string), "needsKey?": bool, "message?": string });
+
 /** The status the computer's own address answered a sign-in's return with (2xx or 3xx: it took it). */
 export const SIGN_IN_RETURNED = object({ status: number });
 
 export type FolderList = Infer<typeof FOLDER_LIST>;
 export type FolderMade = Infer<typeof FOLDER_MADE>;
 export type PluginSearch = Infer<typeof PLUGIN_SEARCH>;
+export type ProgramFound = Infer<typeof PROGRAM_FOUND>;
+export type ProviderModels = Infer<typeof PROVIDER_MODELS>;
 export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
 
 export const MISC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST } },
   { route: "POST kuvo/folders", answers: { 200: FOLDER_MADE } },
   { route: "GET kuvo/plugins/search", answers: { 200: PLUGIN_SEARCH } },
+  { route: "GET kuvo/programs", answers: { 200: PROGRAM_FOUND } },
+  { route: "POST kuvo/providers/models", answers: { 200: PROVIDER_MODELS } },
   { route: "POST kuvo/sign-in/return", answers: { 200: SIGN_IN_RETURNED } },
 ];
