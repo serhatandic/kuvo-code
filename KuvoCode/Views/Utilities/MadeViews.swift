@@ -943,7 +943,7 @@ struct ArtifactDetail: View {
                     // Its bot's mark, with its note below: not a button to undo by a stray click, but
                     // a menu, so it can still go.
                     Menu {
-                        Button("Stop Keeping", systemImage: "bookmark.slash") {
+                        Button("Stop Keeping", systemImage: "star.slash") {
                             Task {
                                 do {
                                     try await things.pin(artifact.id, false)
