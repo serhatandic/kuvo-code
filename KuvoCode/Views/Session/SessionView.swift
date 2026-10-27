@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -351,7 +352,7 @@ private struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                         } else if let goal = model.goal {
-                            GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil) {
+                            GoalBar(goal: goal, isHidden: hidden(.goal, $model.hidesGoal), isChanging: model.isChangingGoal || offlineMachine != nil, hasWaiting: !model.waiting.isEmpty) {
                                 model.changeGoal(.pause)
                             } resume: {
                                 model.changeGoal(.resume)
@@ -453,30 +454,29 @@ private struct BottomStack: View {
             }
             #endif
             .animation(.ui, value: model.waiting.count > 2)
+            // A goal put away and cleared: its line's record goes.
+            .onChange(of: model.goal?.started) { old, _ in
+                if let old { model.putAways.gone(.goal(started: old)) }
+            }
             // The newest change opens, where the card is full; shown again, what has something to see.
             .onChange(of: Seen(conversation: model.id, value: bars), initial: true) { was, now in
                 let new = now.value
                 if was.conversation != now.conversation { queueOpen = false }
-                // Another conversation shown: what came and went since it was last here.
-                let last = was.conversation == now.conversation ? was.value : cards[now.conversation]?.bars
+                // Another conversation shown: what came and went since it was last here (first
+                // shown: as it is).
+                let old = (was.conversation == now.conversation ? was.value : cards[now.conversation]?.bars) ?? new
                 cards[now.conversation, default: Card()].bars = new
                 // While tucked, what came is marked; none left, the next ones show.
-                model.tuck.bars(from: last ?? new, to: new)
-                // Shown again as it was, or for the first time: what has something to see.
-                guard let old = last, old != new else { return folds.start(new) { news[$0] == true } }
-                // No longer full: each keeps what the card showed, rather than springing open.
-                if old.count >= BarFolds<ComposerBar>.full, new.count < BarFolds<ComposerBar>.full {
-                    for bar in new { own(bar).wrappedValue = folds.isHidden(bar, among: old, asking: isAsking, own: own(bar).wrappedValue) }
-                }
-                folds.bars(from: old, to: new) { $0 != .handoff && news[$0] != false }
+                model.tuck.bars(from: old, to: new)
+                // A handoff has nothing under its line; a review at work, nothing yet.
+                folds.update(from: old, to: new, asking: isAsking, own: { own($0).wrappedValue }, keep: { own($0).wrappedValue = $1 },
+                             news: { news[$0] == true }, opens: { $0 != .handoff && news[$0] != false })
             }
             .onChange(of: Seen(conversation: model.id, value: news), initial: true) { was, now in
                 // Another conversation shown: what it had last time here (none yet: nothing came).
                 let old = was.conversation == now.conversation ? was.value : cards[now.conversation]?.news ?? now.value
                 cards[now.conversation, default: Card()].news = now.value
-                let came = now.value.filter { $0.value && old[$0.key] != true }.map(\.key)
-                if let first = came.first { folds.changed(first) }
-                for bar in came { model.tuck.changed(bar) }
+                for bar in folds.news(from: old, to: now.value) { model.tuck.changed(bar) }
             }
             // Another side question shown (picked in the sidebar, or just asked): its bar opens, unless a card asks.
             .onChange(of: Seen(conversation: model.id, value: model.shownSideQuestion)) { old, shown in

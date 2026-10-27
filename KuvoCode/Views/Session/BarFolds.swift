@@ -24,6 +24,8 @@ struct UndoLine: View {
     let undo: (() -> Void)?
     /// A bar's line, or a row in a bar's list.
     var isRow = false
+    /// VoiceOver comes to it, as the ✕ it was on is gone.
+    @AccessibilityFocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -51,8 +53,11 @@ struct UndoLine: View {
         .frame(height: isRow ? nil : 36)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
-        .accessibilityActions {
-            if let undo { Button("Undo", action: undo) }
-        }
+        // Undo, as the line's own action while it's offered.
+        .accessibilityAddTraits(undo == nil ? [] : .isButton)
+        .accessibilityHint(undo == nil ? "" : "Undo")
+        .accessibilityAction { undo?() }
+        .accessibilityFocused($isFocused)
+        .onAppear { if undo != nil { isFocused = true } }
     }
 }

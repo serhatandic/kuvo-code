@@ -82,6 +82,37 @@ import Testing
         folds.opened(.sideQuestion)
         #expect(open(folds, bars, asking: true) == [.sideQuestion])
     }
+
+    /// A bar going from a full card: the two left keep what the card showed (the open one open,
+    /// the folded one folded), rather than both springing open.
+    @Test func aCardNoLongerFullKeepsWhatItShowed() {
+        var folds = BarFolds()
+        let full: [ComposerBar] = [.goal, .review, .wakes]
+        folds.changed(.review)
+        var own: [ComposerBar: Bool] = [:]
+        folds.update(from: full, to: [.review, .wakes], asking: false, own: { own[$0] ?? false }, keep: { own[$0] = $1 },
+                     news: { _ in false }, opens: { _ in true })
+        #expect(own == [.review: false, .wakes: true])
+        #expect(open(folds, [.review, .wakes], own: own) == [.review])
+    }
+
+    /// Shown again, the bar with something to see opens; a bar that came opens where it's worth
+    /// seeing; something new in a bar opens it.
+    @Test func whatHasSomethingToSeeOpens() {
+        let bars: [ComposerBar] = [.goal, .review, .sideQuestion]
+        var shown = BarFolds()
+        shown.update(from: bars, to: bars, asking: false, own: { _ in false }, keep: { _, _ in }, news: { $0 == .goal }, opens: { _ in true })
+        #expect(open(shown, bars) == [.goal])
+
+        var came = BarFolds()
+        came.update(from: [.goal, .review], to: bars + [.wakes], asking: false, own: { _ in false }, keep: { _, _ in },
+                    news: { _ in false }, opens: { $0 != .wakes })
+        #expect(open(came, bars + [.wakes]) == [.sideQuestion], "the newest that came and is worth seeing")
+
+        var news = BarFolds()
+        news.news(from: [.review: false, .goal: true], to: [.review: true, .goal: true])
+        #expect(open(news, bars) == [.review])
+    }
 }
 
 // The bars tucked into one line: they stay tucked as you left them, whatever comes; what came or
