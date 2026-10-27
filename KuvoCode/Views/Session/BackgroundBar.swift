@@ -168,6 +168,8 @@ struct BarLine: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        // Before the space after it: all the room left, not half.
+                        .layoutPriority(0.5)
                 } else if isHidden, let detail {
                     ViewThatFits(in: .horizontal) {
                         detail
@@ -181,6 +183,7 @@ struct BarLine: View {
                             .frame(minWidth: 90, idealWidth: 90, maxWidth: .infinity, alignment: .leading)
                         Color.clear.frame(width: 0, height: 0)
                     }
+                    .layoutPriority(0.5)
                 }
                 Spacer(minLength: 8)
             }

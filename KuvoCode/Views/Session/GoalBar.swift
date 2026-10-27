@@ -18,6 +18,11 @@ struct GoalBar: View {
     let stop: () -> Void
     /// Puts away a goal that's over.
     let done: () -> Void
+    /// Stop asked for: it waits for a yes, as it can't be undone.
+    @State private var confirmsStop = false
+
+    /// Under way or paused, and free to change.
+    private var canStop: Bool { !isChanging && (goal.state == .working || goal.state == .paused) }
 
     var body: some View {
         // Kept current: how long it has been at it.
@@ -109,12 +114,12 @@ struct GoalBar: View {
             case .working:
                 Button("Pause", systemImage: "pause", action: pause)
                     .help("Let the turn under way finish, then hold the goal")
-                Button("Stop", systemImage: "stop.circle", action: stop)
+                Button("Stop", systemImage: "stop.circle") { confirmsStop = true }
                     .help("Stop the agent and take the goal away")
             case .paused:
                 Button("Resume", systemImage: "play", action: resume)
                     .help("Check what it last did, and carry on unless that met the goal")
-                Button("Stop", systemImage: "stop.circle", action: stop)
+                Button("Stop", systemImage: "stop.circle") { confirmsStop = true }
                     .help("Take the goal away")
             case .met, .unmet:
                 EmptyView()
@@ -123,6 +128,20 @@ struct GoalBar: View {
         .buttonStyle(TextButtonStyle())
         .font(.system(size: 13))
         .disabled(isChanging)
+        // Stopping it can't be undone: the turn under way ends, and the goal goes.
+        .confirmationDialog("Stop the goal?", isPresented: $confirmsStop) {
+            Button("Stop the Goal", role: .destructive) {
+                // Only a goal still under way: one met meanwhile stays to be read.
+                guard canStop else { return }
+                stop()
+            }
+        } message: {
+            Text(goal.state == .working ? "The agent stops what it's doing, and the goal is taken away." : "The goal is taken away.")
+        }
+        // A goal that ended, or that can't be changed now, has nothing to stop: the question goes.
+        .onChange(of: canStop) { _, can in
+            if !can { confirmsStop = false }
+        }
     }
 
     // MARK: Under the line
