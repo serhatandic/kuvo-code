@@ -1440,14 +1440,15 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `{"kind": "uncommitted"}`, the default: the changes not committed yet (the folder's own, in
     its git: tracked files' diffs, against nothing before the first commit, and new files whole;
     a big new file is named with its size, and links and files that aren't text are left out);
-  - `{"kind": "branch", "base"?}`: the branch's changes since it left `base` (main, master or
-    origin's HEAD when left out), with those not committed yet;
+  - `{"kind": "branch", "base"?}`: the branch's changes since it left `base` (when left out,
+    main or master, yours or origin's, whichever is newer, or origin's HEAD), with those not
+    committed yet;
   - `{"kind": "commits", "from", "to"?}`: what the commits after `from`, up to `to` (HEAD when
     left out), changed, git's `from..to`;
   - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
     the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
     line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
-    but for links, lock files, big files and ones that aren't text.
+    but for links, lock files, `.env` files, big files and ones that aren't text.
 
   One too big to read at once is read in parts, one after another (at most 30; more is left out,
   and its summary says how many files), each by a fresh model.

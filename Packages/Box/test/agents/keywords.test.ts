@@ -9,7 +9,7 @@ import type { GoalPlaces } from "../../src/agents/goals"
 import { server } from "../../src/agents/groups/api"
 import { handoffMarker, handoffRoutes, Handoffs } from "../../src/agents/handoff"
 import { run } from "../../src/agents/proc"
-import { gitChanges, readScope, reviewRoutes, Reviews } from "../../src/agents/reviews"
+import { gitChanges, readScope, reviewRoutes, Reviews, type Parts } from "../../src/agents/reviews"
 import type { ServerEvent } from "../../src/agents/wire"
 import { StandIn } from "./support/standin"
 
@@ -382,7 +382,8 @@ describe("a review with fresh eyes", () => {
       const told = (event.data as any)?.review?.progress
       if (event.type === "kuvo.review.updated" && told) progress.push(`${told.read}/${told.of}`)
     }
-    expect(progress).toEqual(["0/3", "1/3", "2/3", "3/3"])
+    expect(progress).toEqual(["0/3", "1/3", "2/3"])
+    expect(review.progress).toBeUndefined()
 
     // The branch against its base, and a range of commits, go as they're asked.
     for (const scope of [{ kind: "branch", base: "main" }, { kind: "commits", from: "abc123", to: "def456" }, { kind: "folder", path: "src/auth" }]) {
@@ -515,7 +516,7 @@ describe("a review with fresh eyes", () => {
     writeFileSync(join(folder, "icon.png"), "\0\x01binary")
     writeFileSync(join(root, "private.txt"), "the key\n")
     symlinkSync(join(root, "private.txt"), join(folder, "src", "linked.txt"))
-    const project = (await readScope(folder, { kind: "project" })) as string[]
+    const project = ((await readScope(folder, { kind: "project" })) as Parts).parts
     expect(project).toHaveLength(1)
     expect(project[0]).toContain("=== src/auth/login.ts ===\n1  check(password)\n2  log(password)\n")
     expect(project[0]).toContain("=== README.md ===")
@@ -527,13 +528,75 @@ describe("a review with fresh eyes", () => {
     expect(await measure({ kind: "project" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
     expect(await measure({ kind: "branch" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
     reviews.stopAll()
-    const auth = (await readScope(folder, { kind: "folder", path: "src/auth" })) as string[]
+    const auth = ((await readScope(folder, { kind: "folder", path: "src/auth" })) as Parts).parts
     expect(auth.join("")).toContain("=== src/auth/login.ts ===")
     expect(auth.join("")).not.toContain("README")
     // Never out of the project, through a link either.
     symlinkSync(root, join(folder, "outside"))
     await expect(readScope(folder, { kind: "folder", path: "outside" })).rejects.toThrow("isn't in this project")
     await expect(readScope(folder, { kind: "folder", path: "missing" })).rejects.toThrow("There's no missing in this project.")
+
+    // A folder named like a pattern is that folder alone (Next.js's app/[id]), and a branch named
+    // like a folder is the branch.
+    mkdirSync(join(folder, "app", "[id]"), { recursive: true })
+    writeFileSync(join(folder, "app", "[id]", "page.tsx"), "page\n")
+    writeFileSync(join(folder, "app", "d"), "not in it\n")
+    const page = (await readScope(folder, { kind: "folder", path: "app/[id]" })) as any
+    expect(JSON.stringify(page)).toContain("=== app/[id]/page.tsx ===")
+    expect(JSON.stringify(page)).not.toContain("not in it")
+    mkdirSync(join(folder, "docs"))
+    writeFileSync(join(folder, "docs", "a.md"), "doc\n")
+    await git("branch", "docs", first)
+    expect(JSON.stringify(await readScope(folder, { kind: "commits", from: "docs" }))).toContain("+log(password)")
+  })
+
+  test("a branch is compared with main as origin has it, when that's newer than your own main", async () => {
+    const folder = join(root, "fetched")
+    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
+    await run("git", ["init", "-q", "-b", "main", folder])
+    writeFileSync(join(folder, "a.txt"), "one\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "first")
+    // Someone else's work reached origin's main, fetched but not pulled into yours.
+    await git("checkout", "-qb", "theirs")
+    writeFileSync(join(folder, "theirs.txt"), "their work\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "theirs")
+    await git("update-ref", "refs/remotes/origin/main", "HEAD")
+    await git("checkout", "-q", "main")
+    await git("branch", "-qD", "theirs")
+    // Your branch, with origin's main merged in.
+    await git("checkout", "-qb", "feature")
+    await git("merge", "-q", "--no-edit", "origin/main")
+    writeFileSync(join(folder, "mine.txt"), "my work\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "mine")
+    const branch = JSON.stringify(await readScope(folder, { kind: "branch" }))
+    expect(branch).toContain("+my work")
+    expect(branch).not.toContain("their work")
+  })
+
+  test("a project bigger than a review reads says how much it left out, and one stopped before reading says so", async () => {
+    const folder = join(root, "huge")
+    mkdirSync(folder)
+    for (let each = 0; each < 40; each++) writeFileSync(join(folder, `f${String(each).padStart(2, "0")}.ts`), "x\n".repeat(30_000))
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    reviews.onEnded = beat
+    await reviews.start("ses_work", undefined, undefined, { kind: "project" })
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(review.summary).toMatch(/^It read \d+ files\. .* (\d+) more files were left out: that's more than a review reads\.$/)
+    expect(review.progress).toBeUndefined()
+
+    const held = new Reviews(join(root, "held.json"), places(), changes("+x\n"))
+    held.onEnded = beat
+    engine.holdingChecks = true
+    await held.start("ses_work")
+    await until(() => engine.checks.length === 31)
+    expect(held.stop("ses_work").summary).toBe("Stopped before it read anything.")
+    engine.answerChecks()
+    held.stopAll()
   })
 
   test("a big project is read in parts, and a folder that isn't a repository still has its files read", async () => {
@@ -541,7 +604,7 @@ describe("a review with fresh eyes", () => {
     mkdirSync(join(folder, "node_modules"), { recursive: true })
     writeFileSync(join(folder, "node_modules", "dep.js"), "theirs\n")
     for (let each = 0; each < 6; each++) writeFileSync(join(folder, `file${each}.ts`), `const line = ${each}\n`.repeat(2_000))
-    const parts = (await readScope(folder, { kind: "project" })) as string[]
+    const { parts } = (await readScope(folder, { kind: "project" })) as Parts
     expect(parts.length).toBeGreaterThan(1)
     expect(parts.every((part) => part.length <= 81_000)).toBe(true)
     const all = parts.join("")

@@ -7,6 +7,7 @@
 // coding agents' alike (PROTOCOL.md, "Reviews").
 
 import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type Dirent } from "node:fs"
+import { lstat, readFile } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { emit } from "./events"
 import type { GoalPlaces } from "./goals"
@@ -71,6 +72,19 @@ export type Scope =
   | { kind: "folder"; path: string }
   | { kind: "project" }
 
+/** What a review reads, in parts a model reads in one go, and how many files were left out. */
+export interface Parts {
+  parts: string[]
+  leftOut: number
+}
+
+/** A diff, or files already in parts, as parts. */
+function partsOf(read: string | string[] | Parts): Parts {
+  if (typeof read === "string") return inParts(read.trim() ? diffUnits(read) : [])
+  if (Array.isArray(read)) return { parts: read.filter((each) => each.trim()), leftOut: 0 }
+  return read
+}
+
 /** What a model reads in one go, at most; more is read in parts, one after another. */
 const partLimit = 80_000
 /** The parts a review reads, at most (the rest is left out, and it says so). */
@@ -106,7 +120,7 @@ export class Reviews {
     private readonly places: GoalPlaces,
     /** What `scope` names in the folder: a diff, or the files already in parts (git's, in tests a
      * stand-in's). */
-    private readonly changes: (directory: string, scope: Scope) => Promise<string | string[]> = readScope,
+    private readonly changes: (directory: string, scope: Scope) => Promise<string | string[] | Parts> = readScope,
     private readonly now: () => number = Date.now,
   ) {
     try {
@@ -189,7 +203,7 @@ export class Reviews {
       throw new ReviewError(422, error?.message ?? String(error))
     })
     const files = scope.kind === "folder" || scope.kind === "project"
-    const { parts, leftOut } = Array.isArray(read) ? { parts: read.filter((each) => each.trim()), leftOut: Number(read.at(-1)?.match(/\[…(\d+) more files? left out\]\n$/)?.[1] ?? 0) } : inParts(read.trim() ? diffUnits(read) : [])
+    const { parts, leftOut } = partsOf(read)
     return { files: countFiles(parts, files), parts: parts.length, leftOut }
   }
 
@@ -217,7 +231,9 @@ export class Reviews {
     if (review.state !== "reviewing") throw new ReviewError(409, "That review is over already.")
     const read = review.progress?.read ?? 0
     const of = review.progress?.of
-    Object.assign(review, { state: "done", summary: `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`, ended: this.now() })
+    const summary = read === 0 && !review.findings.length ? "Stopped before it read anything." : `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`
+    Object.assign(review, { state: "done", summary, ended: this.now() })
+    delete review.progress
     if (review.findings.length) review.fix = fixMessage(review)
     this.changed(review)
     return review
@@ -236,7 +252,7 @@ export class Reviews {
     const going = () => !this.stopped && this.kept.get(review.session) === review && review.state === "reviewing"
     try {
       const read = await this.changes(info.directory!, scope)
-      const { parts, leftOut } = Array.isArray(read) ? { parts: read.filter((each) => each.trim()), leftOut: 0 } : inParts(read.trim() ? diffUnits(read) : [])
+      const { parts, leftOut } = partsOf(read)
       if (!going()) return
       if (!parts.length) {
         Object.assign(review, { state: "done", summary: nothingIn(scope), ended: this.now() })
@@ -274,16 +290,18 @@ export class Reviews {
         // Over many parts, each one's summary is of its part: in all, what it read and found.
         if (many) {
           const count = countFiles(parts, files)
-          summary = `It read ${count === 1 ? "1 file" : `${count} files`}${files ? "" : "' changes"}. ${found(review.findings.length)}`
+          summary = `It read ${files ? "" : "the changes to "}${count === 1 ? "1 file" : `${count} files`}. ${found(review.findings.length)}`
         }
         if (failed) summary += ` ${failed === 1 ? "1 part" : `${failed} parts`} couldn't be read.`
         if (leftOut) summary += ` ${leftOut === 1 ? "1 more file was" : `${leftOut} more files were`} left out: that's more than a review reads.`
         Object.assign(review, { state: "done", summary, ended: this.now() })
+        delete review.progress
         if (review.findings.length) review.fix = fixMessage(review)
       }
     } catch (error: any) {
       if (!going()) return
       Object.assign(review, { state: "failed", error: `The review couldn't be done: ${error?.message ?? error}`, ended: this.now() })
+      delete review.progress
     }
     this.changed(review)
   }
@@ -309,7 +327,7 @@ export class Reviews {
 }
 
 /** What `scope` names in `directory`: the changes as a diff, or the files, in parts. */
-export async function readScope(directory: string, scope: Scope): Promise<string | string[]> {
+export async function readScope(directory: string, scope: Scope): Promise<string | Parts> {
   if (scope.kind === "uncommitted") return gitChanges(directory)
   if (scope.kind === "folder" || scope.kind === "project") return readFiles(directory, scope.kind === "folder" ? scope.path : undefined)
   const git = gitIn(directory)
@@ -323,7 +341,7 @@ export async function readScope(directory: string, scope: Scope): Promise<string
   for (const each of [scope.from, scope.to ?? "HEAD"]) {
     if ((await git(["rev-parse", "--verify", "-q", `${each}^{commit}`])).code !== 0) throw new Error(`There's no commit ${each} here.`)
   }
-  const diff = await git(["diff", scope.from, scope.to ?? "HEAD", "--relative", "--no-color", "--no-ext-diff"])
+  const diff = await git(["diff", "--relative", "--no-color", "--no-ext-diff", scope.from, scope.to ?? "HEAD", "--"])
   if (diff.code !== 0) throw new Error(diff.stderr.trim().split("\n")[0] || "git couldn't read the changes.")
   return diff.stdout
 }
@@ -341,10 +359,17 @@ async function mustBeRepository(git: ReturnType<typeof gitIn>) {
   if (inside.code !== 0 || inside.stdout.trim() !== "true") throw new Error("This folder isn't a git repository, so there are no changes to review.")
 }
 
-/** The branch a branch is compared with when none is named: main, master, or the one origin's
- * HEAD names. */
+/** The branch a branch is compared with when none is named: main or master, yours or origin's,
+ * whichever is newer (a fetch moves origin's, not yours), or the one origin's HEAD names. */
 async function defaultBase(git: ReturnType<typeof gitIn>): Promise<string> {
-  for (const name of ["main", "master"]) if ((await git(["rev-parse", "--verify", "-q", `refs/heads/${name}`])).code === 0) return name
+  const has = async (ref: string) => (await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`])).code === 0
+  for (const name of ["main", "master"]) {
+    const [mine, origin] = [`refs/heads/${name}`, `refs/remotes/origin/${name}`]
+    const [hasMine, hasOrigin] = [await has(mine), await has(origin)]
+    if (hasMine && hasOrigin) return (await git(["merge-base", "--is-ancestor", mine, origin])).code === 0 ? `origin/${name}` : name
+    if (hasMine) return name
+    if (hasOrigin) return `origin/${name}`
+  }
   const origin = await git(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"])
   if (origin.code === 0 && origin.stdout.trim()) return origin.stdout.trim()
   throw new Error("There's no main branch here to compare this one with.")
@@ -373,7 +398,7 @@ export async function gitChanges(directory: string, from?: string): Promise<stri
       const kind = lstatSync(path)
       // A link isn't followed (it could lead out of the folder, to something private).
       if (!kind.isFile()) continue
-      const named = `\n--- /dev/null\n+++ b/${file}\n`
+      const named = `\ndiff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n`
       if (kind.size > newFileLimit || text.length + kind.size > readLimit) {
         text += named + `[a new file of ${Math.max(1, Math.round(kind.size / 1024))} KB, not shown]\n`
         continue
@@ -392,7 +417,7 @@ export async function gitChanges(directory: string, from?: string): Promise<stri
  * ignore), or, out of a repository, all but hidden ones and `node_modules`. Links aren't followed,
  * and files that aren't text, big ones and ones tools write (lock files) aren't read.
  */
-export async function readFiles(directory: string, path?: string): Promise<string[]> {
+export async function readFiles(directory: string, path?: string): Promise<Parts> {
   const top = realpathSync(directory)
   const start = path ? join(top, path) : top
   let real: string
@@ -403,25 +428,50 @@ export async function readFiles(directory: string, path?: string): Promise<strin
   }
   // Not out of the project through a link.
   if (real !== top && !real.startsWith(top + sep)) throw new Error(`${path} isn't in this project.`)
-  const git = gitIn(top)
-  const listed = await git(["ls-files", "-co", "--exclude-standard", "-z", "--", ...(path ? [path] : [])])
-  const names = listed.code === 0 ? [...new Set(listed.stdout.split("\0").filter(Boolean))].sort() : walk(top, path ?? "")
+  const names = await listFiles(top, path)
   const units: string[] = []
-  for (const name of names) {
-    if (madeByTools.test(name)) continue
+  let size = 0
+  for (const [index, name] of names.entries()) {
+    // Past what a review reads, the rest aren't read at all: named as left out.
+    if (size > readLimit) return withLeftOut(inParts(units), names.length - index)
+    if (madeByTools.test(name) || secrets.test(name)) continue
     try {
-      const kind = lstatSync(join(top, name))
+      const kind = await lstat(join(top, name))
       if (!kind.isFile() || kind.size > newFileLimit) continue
-      const words = readFileSync(join(top, name), "utf8")
+      const words = await readFile(join(top, name), "utf8")
       if (!words.trim() || words.includes("\0")) continue
       const lines = words.split("\n")
       if (lines.at(-1) === "") lines.pop()
-      units.push(`=== ${name} ===\n` + lines.map((line, index) => `${index + 1}  ${line}`).join("\n") + "\n")
+      const unit = `=== ${name} ===\n` + lines.map((line, index) => `${index + 1}  ${line}`).join("\n") + "\n"
+      units.push(unit)
+      size += unit.length
     } catch {}
   }
-  const { parts, leftOut } = inParts(units)
-  if (leftOut) parts[parts.length - 1] += `\n[…${leftOut === 1 ? "1 more file" : `${leftOut} more files`} left out]\n`
-  return parts
+  return inParts(units)
+}
+
+function withLeftOut(read: Parts, more: number): Parts {
+  return { parts: read.parts, leftOut: read.leftOut + more }
+}
+
+/** Files named for secrets (`.env`, `.env.local`): not sent to a model, even when git doesn't
+ * ignore them. */
+const secrets = /(^|\/)\.env(\.[^/]*)?$/
+
+/**
+ * The files in the project, or in its folder `path`: those git keeps or would (`path` as it's
+ * written, never a pattern), or, out of a repository (or without git), all but hidden ones and
+ * `node_modules`. git failing in a repository is said, rather than reading what it ignores.
+ */
+async function listFiles(top: string, path?: string): Promise<string[]> {
+  const git = gitIn(top)
+  const listed = await git(["--literal-pathspecs", "ls-files", "-co", "--exclude-standard", "-z", "--", ...(path ? [path] : [])]).catch(() => undefined)
+  if (listed?.code === 0) return [...new Set(listed.stdout.split("\0").filter(Boolean))].sort()
+  if (listed) {
+    const inside = await git(["rev-parse", "--is-inside-work-tree"])
+    if (inside.code === 0 && inside.stdout.trim() === "true") throw new Error(listed.stderr.trim().split("\n")[0] || "git couldn't list the project's files.")
+  }
+  return walk(top, path ?? "")
 }
 
 /** The files under `under` in `top`, out of a repository: all but hidden ones and `node_modules`. */
@@ -449,7 +499,7 @@ function walk(top: string, under: string): string[] {
 
 /** A diff, a file's changes each (git's `diff --git` ones, and new files' ones). */
 export function diffUnits(diff: string): string[] {
-  return diff.split(/\n(?=diff --git |--- \/dev\/null\n\+\+\+ )/).filter((each) => each.trim())
+  return diff.split(/\n(?=diff --git )/).filter((each) => each.trim())
 }
 
 /**
@@ -475,12 +525,18 @@ export function inParts(units: string[]): { parts: string[]; leftOut: number } {
       current += unit.endsWith("\n") ? unit : unit + "\n"
       continue
     }
-    for (let at = 0; at < unit.length && parts.length < partsLimit; at += partLimit) {
+    let at = 0
+    for (; at < unit.length && parts.length < partsLimit; at += partLimit) {
       const head = at ? `${unit.slice(0, unit.indexOf("\n"))} (continued)\n` : ""
       parts.push(head + unit.slice(at, at + partLimit))
     }
+    // Cut short by the last part: it and the rest are left out (it, only partly).
+    if (at < unit.length) {
+      leftOut = units.length - index
+      break
+    }
   }
-  if (parts.length < partsLimit) close()
+  close()
   return { parts, leftOut }
 }
 
@@ -488,7 +544,7 @@ export function inParts(units: string[]): { parts: string[]; leftOut: number } {
 function countFiles(parts: string[], files: boolean): number {
   const named = new Set<string>()
   for (const part of parts) {
-    for (const line of part.matchAll(files ? /^=== (.+?) ===$/gm : /^\+\+\+ (?:b\/)?(.+)$/gm)) named.add(line[1])
+    for (const line of part.matchAll(files ? /^=== (.+?) ===$/gm : /^diff --git a\/(.+?) b\//gm)) named.add(line[1])
   }
   return named.size
 }

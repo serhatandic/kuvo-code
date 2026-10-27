@@ -3986,7 +3986,15 @@ async function handoffRoutes(handoffs, method, parts, body) {
 
 // Packages/Box/src/agents/reviews.ts
 import { lstatSync, readdirSync as readdirSync6, readFileSync as readFileSync11, realpathSync, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
+import { lstat, readFile } from "fs/promises";
 import { join as join11, sep as sep8 } from "path";
+function partsOf(read) {
+  if (typeof read === "string")
+    return inParts(read.trim() ? diffUnits(read) : []);
+  if (Array.isArray(read))
+    return { parts: read.filter((each) => each.trim()), leftOut: 0 };
+  return read;
+}
 var partLimit = 80000;
 var partsLimit = 30;
 var readLimit2 = partLimit * partsLimit;
@@ -4084,7 +4092,7 @@ class Reviews {
       throw new ReviewError(422, error?.message ?? String(error));
     });
     const files = scope.kind === "folder" || scope.kind === "project";
-    const { parts, leftOut } = Array.isArray(read) ? { parts: read.filter((each) => each.trim()), leftOut: Number(read.at(-1)?.match(/\[\u2026(\d+) more files? left out\]\n$/)?.[1] ?? 0) } : inParts(read.trim() ? diffUnits(read) : []);
+    const { parts, leftOut } = partsOf(read);
     return { files: countFiles(parts, files), parts: parts.length, leftOut };
   }
   async folderOf(session) {
@@ -4111,7 +4119,9 @@ class Reviews {
       throw new ReviewError(409, "That review is over already.");
     const read = review.progress?.read ?? 0;
     const of = review.progress?.of;
-    Object.assign(review, { state: "done", summary: `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`, ended: this.now() });
+    const summary2 = read === 0 && !review.findings.length ? "Stopped before it read anything." : `Stopped after ${of ? `${read} of ${of} parts` : "starting"}. ${found(review.findings.length)}`;
+    Object.assign(review, { state: "done", summary: summary2, ended: this.now() });
+    delete review.progress;
     if (review.findings.length)
       review.fix = fixMessage(review);
     this.changed(review);
@@ -4128,7 +4138,7 @@ class Reviews {
     const going = () => !this.stopped && this.kept.get(review.session) === review && review.state === "reviewing";
     try {
       const read = await this.changes(info.directory, scope);
-      const { parts, leftOut } = Array.isArray(read) ? { parts: read.filter((each) => each.trim()), leftOut: 0 } : inParts(read.trim() ? diffUnits(read) : []);
+      const { parts, leftOut } = partsOf(read);
       if (!going())
         return;
       if (!parts.length) {
@@ -4169,13 +4179,14 @@ class Reviews {
           throw lastError;
         if (many) {
           const count = countFiles(parts, files);
-          summary2 = `It read ${count === 1 ? "1 file" : `${count} files`}${files ? "" : "' changes"}. ${found(review.findings.length)}`;
+          summary2 = `It read ${files ? "" : "the changes to "}${count === 1 ? "1 file" : `${count} files`}. ${found(review.findings.length)}`;
         }
         if (failed)
           summary2 += ` ${failed === 1 ? "1 part" : `${failed} parts`} couldn't be read.`;
         if (leftOut)
           summary2 += ` ${leftOut === 1 ? "1 more file was" : `${leftOut} more files were`} left out: that's more than a review reads.`;
         Object.assign(review, { state: "done", summary: summary2, ended: this.now() });
+        delete review.progress;
         if (review.findings.length)
           review.fix = fixMessage(review);
       }
@@ -4183,6 +4194,7 @@ class Reviews {
       if (!going())
         return;
       Object.assign(review, { state: "failed", error: `The review couldn't be done: ${error?.message ?? error}`, ended: this.now() });
+      delete review.progress;
     }
     this.changed(review);
   }
@@ -4222,7 +4234,7 @@ async function readScope(directory, scope) {
     if ((await git(["rev-parse", "--verify", "-q", `${each}^{commit}`])).code !== 0)
       throw new Error(`There's no commit ${each} here.`);
   }
-  const diff = await git(["diff", scope.from, scope.to ?? "HEAD", "--relative", "--no-color", "--no-ext-diff"]);
+  const diff = await git(["diff", "--relative", "--no-color", "--no-ext-diff", scope.from, scope.to ?? "HEAD", "--"]);
   if (diff.code !== 0)
     throw new Error(diff.stderr.trim().split(`
 `)[0] || "git couldn't read the changes.");
@@ -4242,9 +4254,17 @@ async function mustBeRepository(git) {
     throw new Error("This folder isn't a git repository, so there are no changes to review.");
 }
 async function defaultBase(git) {
-  for (const name of ["main", "master"])
-    if ((await git(["rev-parse", "--verify", "-q", `refs/heads/${name}`])).code === 0)
+  const has = async (ref) => (await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`])).code === 0;
+  for (const name of ["main", "master"]) {
+    const [mine, origin2] = [`refs/heads/${name}`, `refs/remotes/origin/${name}`];
+    const [hasMine, hasOrigin] = [await has(mine), await has(origin2)];
+    if (hasMine && hasOrigin)
+      return (await git(["merge-base", "--is-ancestor", mine, origin2])).code === 0 ? `origin/${name}` : name;
+    if (hasMine)
       return name;
+    if (hasOrigin)
+      return `origin/${name}`;
+  }
   const origin = await git(["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"]);
   if (origin.code === 0 && origin.stdout.trim())
     return origin.stdout.trim();
@@ -4268,6 +4288,8 @@ async function gitChanges(directory, from) {
       if (!kind.isFile())
         continue;
       const named = `
+diff --git a/${file} b/${file}
+new file mode 100644
 --- /dev/null
 +++ b/${file}
 `;
@@ -4297,36 +4319,53 @@ async function readFiles(directory, path) {
   }
   if (real !== top && !real.startsWith(top + sep8))
     throw new Error(`${path} isn't in this project.`);
-  const git = gitIn(top);
-  const listed = await git(["ls-files", "-co", "--exclude-standard", "-z", "--", ...path ? [path] : []]);
-  const names = listed.code === 0 ? [...new Set(listed.stdout.split("\x00").filter(Boolean))].sort() : walk3(top, path ?? "");
+  const names = await listFiles(top, path);
   const units = [];
-  for (const name of names) {
-    if (madeByTools.test(name))
+  let size = 0;
+  for (const [index, name] of names.entries()) {
+    if (size > readLimit2)
+      return withLeftOut(inParts(units), names.length - index);
+    if (madeByTools.test(name) || secrets.test(name))
       continue;
     try {
-      const kind = lstatSync(join11(top, name));
+      const kind = await lstat(join11(top, name));
       if (!kind.isFile() || kind.size > newFileLimit)
         continue;
-      const words2 = readFileSync11(join11(top, name), "utf8");
+      const words2 = await readFile(join11(top, name), "utf8");
       if (!words2.trim() || words2.includes("\x00"))
         continue;
       const lines2 = words2.split(`
 `);
       if (lines2.at(-1) === "")
         lines2.pop();
-      units.push(`=== ${name} ===
-` + lines2.map((line3, index) => `${index + 1}  ${line3}`).join(`
+      const unit = `=== ${name} ===
+` + lines2.map((line3, index2) => `${index2 + 1}  ${line3}`).join(`
 `) + `
-`);
+`;
+      units.push(unit);
+      size += unit.length;
     } catch {}
   }
-  const { parts, leftOut } = inParts(units);
-  if (leftOut)
-    parts[parts.length - 1] += `
-[\u2026${leftOut === 1 ? "1 more file" : `${leftOut} more files`} left out]
-`;
-  return parts;
+  return inParts(units);
+}
+function withLeftOut(read, more) {
+  return { parts: read.parts, leftOut: read.leftOut + more };
+}
+var secrets = /(^|\/)\.env(\.[^/]*)?$/;
+async function listFiles(top, path) {
+  const git = gitIn(top);
+  const listed = await git(["--literal-pathspecs", "ls-files", "-co", "--exclude-standard", "-z", "--", ...path ? [path] : []]).catch(() => {
+    return;
+  });
+  if (listed?.code === 0)
+    return [...new Set(listed.stdout.split("\x00").filter(Boolean))].sort();
+  if (listed) {
+    const inside = await git(["rev-parse", "--is-inside-work-tree"]);
+    if (inside.code === 0 && inside.stdout.trim() === "true")
+      throw new Error(listed.stderr.trim().split(`
+`)[0] || "git couldn't list the project's files.");
+  }
+  return walk3(top, path ?? "");
 }
 function walk3(top, under) {
   const found = [];
@@ -4355,7 +4394,7 @@ function walk3(top, under) {
   return found;
 }
 function diffUnits(diff) {
-  return diff.split(/\n(?=diff --git |--- \/dev\/null\n\+\+\+ )/).filter((each) => each.trim());
+  return diff.split(/\n(?=diff --git )/).filter((each) => each.trim());
 }
 function inParts(units) {
   const parts = [];
@@ -4379,21 +4418,25 @@ function inParts(units) {
 `;
       continue;
     }
-    for (let at3 = 0;at3 < unit.length && parts.length < partsLimit; at3 += partLimit) {
+    let at3 = 0;
+    for (;at3 < unit.length && parts.length < partsLimit; at3 += partLimit) {
       const head = at3 ? `${unit.slice(0, unit.indexOf(`
 `))} (continued)
 ` : "";
       parts.push(head + unit.slice(at3, at3 + partLimit));
     }
+    if (at3 < unit.length) {
+      leftOut = units.length - index;
+      break;
+    }
   }
-  if (parts.length < partsLimit)
-    close();
+  close();
   return { parts, leftOut };
 }
 function countFiles(parts, files) {
   const named = new Set;
   for (const part of parts) {
-    for (const line3 of part.matchAll(files ? /^=== (.+?) ===$/gm : /^\+\+\+ (?:b\/)?(.+)$/gm))
+    for (const line3 of part.matchAll(files ? /^=== (.+?) ===$/gm : /^diff --git a\/(.+?) b\//gm))
       named.add(line3[1]);
   }
   return named.size;
@@ -12225,7 +12268,7 @@ function outsidePaths(ask, directory, attached, own = ownPlaces()) {
 function outsideAsk(ask, paths) {
   return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join21(dirname7(path), "*")))], unclassified: false };
 }
-function partsOf(ask) {
+function partsOf2(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
 }
 function isShell(action) {
@@ -13599,7 +13642,7 @@ ${live.agentPrompt}` : ""
     return going.length > 0;
   }
   checkPermission(live, session, ask, plan) {
-    const parts = partsOf(ask);
+    const parts = partsOf2(ask);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
       return "deny";
     if (plan && changes2.has(ask.action))
@@ -13646,7 +13689,7 @@ ${live.agentPrompt}` : ""
   }
   async askPermission(id, live, turn, ask, plan) {
     const session = this.record(id).session;
-    const parts = partsOf(ask);
+    const parts = partsOf2(ask);
     if (live.blocks === undefined && this.policies) {
       const blocks = await this.policies(session.location.directory).catch(() => {
         return;
@@ -18959,4 +19002,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3d389c241a623b3125350b8c2ca0e451b1473e3854b7c26544e182b2b15861b3
+// Built from Packages/Box/src/agents 34bc9d8c7fbc4829a6afb5fcea107d4febaec6664cb90fbc27233e66b7966593
