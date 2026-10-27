@@ -21,6 +21,17 @@ const clockSlack = 2000
 const walkLimit = 20_000
 const fileLimit = 200
 
+/**
+ * Kuvo Code's own folders on this computer (the box's, with the files sent with messages, its run
+ * state and records): never what an agent made, though a session working in the home folder walks
+ * over them. On a machine they're `~/.kuvo-code`; on a Mac, the app's support folder, which holds
+ * the bridge's and the box's.
+ */
+function ownFolders(): string[] {
+  const agents = process.env.KUVO_AGENTS_HOME
+  return [process.env.KUVO_HOME, agents ? dirname(agents) : undefined].filter((folder): folder is string => !!folder)
+}
+
 /** The git repository `folder` is in, or none. */
 function repositoryOf(folder: string): string | undefined {
   for (let at = folder; ; at = dirname(at)) {
@@ -35,12 +46,14 @@ function repositoryOf(folder: string): string | undefined {
  */
 export function changedSince(folder: string, since: number, keep: (relative: string) => boolean = () => true): string[] {
   const top = repositoryOf(folder)
-  const candidates = top ? fromGit(top, folder) : walk(folder)
+  // Kuvo Code's own, where they're inside it (not a bot's folder, which is in them).
+  const own = ownFolders().filter((inside) => inside.startsWith(folder + sep))
+  const candidates = top ? fromGit(top, folder) : walk(folder, own)
   const found: string[] = []
   for (const path of candidates) {
     if (found.length >= fileLimit) break
     const relative = path.slice(folder.length + 1)
-    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part))) continue
+    if (!keep(relative) || relative.split(sep).some((part) => skipped.has(part)) || own.some((inside) => path.startsWith(inside + sep))) continue
     try {
       const stat = statSync(path)
       if (stat.isFile() && stat.mtimeMs >= since - clockSlack) found.push(path)
@@ -70,8 +83,8 @@ function fromGit(top: string, folder: string): string[] {
   return paths.filter((path) => path.startsWith(folder + sep))
 }
 
-/** Every file under `folder`, but in skipped folders, up to the walk's limit. */
-function walk(folder: string): string[] {
+/** Every file under `folder`, but in skipped folders and `own`, up to the walk's limit. */
+function walk(folder: string, own: string[] = []): string[] {
   const files: string[] = []
   let looked = 0
   const visit = (at: string) => {
@@ -91,7 +104,9 @@ function walk(folder: string): string[] {
       } catch {
         continue
       }
-      if (stat.isDirectory()) visit(path)
+      if (stat.isDirectory()) {
+        if (!own.includes(path)) visit(path)
+      }
       else if (stat.isFile()) files.push(path)
     }
   }

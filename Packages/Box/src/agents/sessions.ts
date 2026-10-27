@@ -2409,13 +2409,14 @@ function promptFile(file: { uri: string; name?: string }): PromptFile {
 }
 
 /**
- * Your words in a message, without the blocks the app adds at its end (the agents you named with
- * "&", your comments on the changes, the note of attached files), as the app's SentMessage reads it.
+ * Your words in a message, without the blocks the app adds at its end (that it's from your phone,
+ * the note of attached files, your comments on the changes, the agents you named with "&", the
+ * widget it answers, the keyword it was sent with), as the app's SentMessage reads it.
  */
 export function ownWords(message: string): string {
   let text = message.trimEnd()
   for (;;) {
-    const tag = ["attached-files", "review-comments", "named-agents"].find((name) => text.endsWith(`\n</${name}>`))
+    const tag = ["from-phone", "attached-files", "review-comments", "named-agents", "from-widget", "sent-with"].find((name) => text.endsWith(`\n</${name}>`))
     if (!tag) return text
     const open = text.lastIndexOf(`<${tag}>\n`, text.length - tag.length - 4)
     if (open < 0 || (open > 0 && text[open - 1] !== "\n")) return text

@@ -1,6 +1,7 @@
 // What a Mac asks a machine's box over SSH (`box route`) for what its agents made: a route that
 // follows something answers with what it says now (its first line) and ends, rather than never
-// answering; and a picture's bytes come back whole, not mangled as text.
+// answering; and a picture's bytes come back whole, not mangled as text, as do bytes that
+// aren't text, whatever kind they were sent as.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,6 +25,11 @@ const bridge = http.createServer((request, response) => {
   }
   if (url.pathname === "/api/kuvo/link/artifacts/art_0123456789abcdef01234567/versions/1") {
     response.writeHead(200, { "content-type": "image/png", "content-length": String(picture.length) });
+    return response.end(picture);
+  }
+  // A kept file whose kind the bridge doesn't know (a .deb, say) goes as text, whatever its bytes.
+  if (url.pathname === "/api/kuvo/link/artifacts/art_0123456789abcdef01234567/versions/2") {
+    response.writeHead(200, { "content-type": "text/plain", "content-length": String(picture.length) });
     return response.end(picture);
   }
   response.writeHead(404, { "content-type": "application/json" });
@@ -61,4 +67,10 @@ test("a picture's bytes come back whole", async () => {
   assert.equal(answer.status, 200);
   assert.equal(answer.type, "image/png");
   assert.deepEqual(Buffer.from(answer.bodyBase64, "base64"), picture);
+});
+
+test("bytes sent as text that aren't text come back whole too", async () => {
+  const answer = await route({ method: "GET", path: "kuvo/artifacts/art_0123456789abcdef01234567/versions/2" });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(Buffer.from(answer.bodyBase64 ?? "", "base64"), picture);
 });

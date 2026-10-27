@@ -8417,7 +8417,7 @@ function ownWords(written) {
   let words = written.trim();
   const kept = [];
   for (;; ) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-phone>", "</from-phone>"]].find(([, end]) => words.endsWith(`
+    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"], ["<sent-with>", "</sent-with>"], ["<from-widget>", "</from-widget>"], ["<from-phone>", "</from-phone>"]].find(([, end]) => words.endsWith(`
 ` + end));
     const open = block ? words.lastIndexOf(block[0] + `
 `) : -1;
@@ -8726,7 +8726,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.89";
+var BRIDGE_VERSION = "0.9.90";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -10531,7 +10531,7 @@ async function box(command) {
         }
       }
       const body = Buffer.concat(chunks);
-      const text = !type || type.startsWith("text/") || type.includes("json");
+      const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
     case "reconnect": {
@@ -10681,6 +10681,14 @@ async function setup() {
     sign: ownSign(link),
     docs: setupDocs(link)
   }));
+}
+function isUTF8(bytes) {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function setupDocs(link) {
   const state = { link, library: readPersonalities() };

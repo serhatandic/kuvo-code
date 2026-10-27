@@ -816,6 +816,34 @@ describe("titles and one-off answers", () => {
     expect(sessions.get(fourth).title).toBeFalsy()
     delete (b as any).generate
   })
+
+  test("a first message sent with a keyword, or from the phone, is named from your words alone", async () => {
+    const prompts: string[] = []
+    ;(a as any).generate = async (prompt: string) => {
+      prompts.push(prompt)
+      return "Plan the parser fix"
+    }
+    const id = create()
+    send(id, [
+      "the parser drops the last line",
+      "",
+      "<sent-with>",
+      "The user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:",
+      "/plan",
+      "</sent-with>",
+      "",
+      "<from-phone>",
+      "The user sent this from Kuvo Code on their iPhone.",
+      "</from-phone>",
+    ].join("\n"))
+    await settled(id, 1)
+    await until(() => sessions.get(id).title === "Plan the parser fix")
+    const told = prompts.find((prompt) => prompt.includes("<message>")) ?? ""
+    expect(told).toContain("the parser drops the last line")
+    expect(told).not.toContain("keyword")
+    expect(told).not.toContain("iPhone")
+    delete (a as any).generate
+  })
 })
 
 describe("steering", () => {

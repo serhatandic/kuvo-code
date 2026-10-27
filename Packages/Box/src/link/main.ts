@@ -413,8 +413,9 @@ async function box(command: string): Promise<void> {
         }
       }
       const body = Buffer.concat(chunks);
-      // Bytes that aren't text (a picture, a PDF) go as base64, whole.
-      const text = !type || type.startsWith("text/") || type.includes("json");
+      // Bytes that aren't text (a picture, a PDF, a file sent as text that isn't UTF-8) go as
+      // base64, whole.
+      const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
     case "reconnect": {
@@ -604,6 +605,16 @@ async function setup(): Promise<void> {
 }
 
 // What setup gives back of documents: those this box keeps, and its own as they are now.
+/** Whether `bytes` read as UTF-8 text, every one of them. */
+function isUTF8(bytes: Buffer): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function setupDocs(link: LinkState): SignedDoc[] {
   const state = { link, library: readPersonalities() };
   const own = ownDocs(state);

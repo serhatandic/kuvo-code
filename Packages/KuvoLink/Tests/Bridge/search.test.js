@@ -103,13 +103,18 @@ test("not a subagent's, a group chat seat's or a coding agent's turn, nor what K
     session("ses_seat", "Seat", 20, { metadata: { kuvo: { seat: "grp_1" } } }),
     session("ses_turn", "Turn", 10, { metadata: { kuvo: { engineFor: "ses_here" } } }),
   ] }, {
-    ses_here: [{ id: "msg_1", type: "user", text: "Check the release notes\n\n<sent-with>\nThe user sent this with a keyword, which Kuvo Code ran as they typed it:\n/plan\n</sent-with>" }],
+    ses_here: [
+      { id: "msg_1", type: "user", text: "Check the release notes\n\n<sent-with>\nThe user sent this with a keyword, which Kuvo Code ran as they typed it:\n/plan\n</sent-with>" },
+      { id: "msg_2", type: "user", text: "Picked the second\n\n<from-widget>\nThe user sent this from a widget shown in this conversation (show_widget), titled:\nRelease checklist\n</from-widget>" },
+    ],
     ses_sub: conversation("sub", "release notes", "release notes"),
     ses_seat: conversation("seat", "release notes", "release notes"),
     ses_turn: conversation("turn", "release notes", "release notes"),
   });
   assert.deepEqual((await box.search("release notes")).found, ["ses_here"]);
   assert.deepEqual((await box.search("keyword")).found, [], "the keyword's note isn't what was said");
+  assert.deepEqual((await box.search("show_widget")).found, [], "nor a widget's");
+  assert.deepEqual((await box.search("picked the second")).found, ["ses_here"]);
 });
 
 test("a conversation is read again only once its session changed, and asking with nothing says so", async t => {
@@ -162,3 +167,18 @@ test("in any language, without case or accents, and a long conversation's latest
   assert.ok((await box.search("검색")).body.results[0].snippet.includes("한국어 검색"));
 });
 
+
+test("a session deleted takes its words with it, from the box's search folder too", async t => {
+  const sessions = { list: [session("ses_kept", "Login", 30), session("ses_gone", "Theme", 20)] };
+  const box = await engine(t, sessions, {
+    ses_kept: conversation("kept", "The sign-in form forgets the email", "Fixed."),
+    ses_gone: conversation("gone", "Add a dark theme", "Done."),
+  });
+  const kept = id => fs.readdirSync(path.join(home, "search")).some(file => file.includes(id));
+  await box.search("theme");
+  assert.ok(kept("ses_kept") && kept("ses_gone"));
+  sessions.list = [session("ses_kept", "Login", 30)];
+  await box.search("email");
+  assert.ok(kept("ses_kept"));
+  assert.ok(!kept("ses_gone"));
+});
