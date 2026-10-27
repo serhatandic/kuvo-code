@@ -135,6 +135,28 @@ import ClientAccounts
         #expect(offers.plans.contains { $0.integrationID == "opencode" })
     }
 
+    @Test func aKeyTheShellAlreadyGivesIsReadyOnceNotOfferedAgain() {
+        // OpenCode Zen's key in opencode and in the shell, and Nvidia's too: the engine uses the
+        // shell's already, so each is one row, ready.
+        let zen = Found.Opencode(id: "opencode:opencode", integrationID: "opencode", name: "OpenCode", kind: .key, connected: false)
+        let nvidia = Found.Opencode(id: "opencode:nvidia", integrationID: "nvidia", name: "Nvidia", kind: .key, connected: false)
+        let offers = Offers(found: found(agents: bridge, opencode: [zen, nvidia], shell: [
+            .init(integrationID: "opencode", name: "OpenCode", variable: "OPENCODE_API_KEY"),
+            .init(integrationID: "nvidia", name: "Nvidia", variable: "NVIDIA_API_KEY"),
+        ]))
+        let all = offers.plans + offers.keys + offers.more
+        #expect(all.filter { $0.integrationID == "opencode" }.map(\.detail) == ["From OPENCODE_API_KEY in your shell"])
+        #expect(all.filter { $0.integrationID == "nvidia" }.map(\.detail) == ["From NVIDIA_API_KEY in your shell"])
+        #expect(all.filter { ["opencode", "nvidia"].contains($0.integrationID) }.allSatisfy { $0.action == .ready })
+    }
+
+    @Test func aPlansKeyBroughtOverStillSaysWhatItIs() {
+        let poe = Found.Opencode(id: "opencode:poe", integrationID: "poe", name: "Poe", kind: .key, connected: false)
+        let row = Offers(found: found(agents: bridge, opencode: [poe]), used: ["opencode:poe"]).plans.first { $0.integrationID == "poe" }
+        #expect(row?.action == .added)
+        #expect(row?.detail == "Your key from opencode")
+    }
+
     @Test func everyPlanAnAgentSignsInToHasOnlyThatWayIn() {
         // opencode signed in to Anthropic, xAI and Google too: each is its agent's row.
         let offers = Offers(found: found(agents: bridge, opencode: ["anthropic", "xai", "google", "openai"].map {

@@ -8214,15 +8214,15 @@ async function found({ engine, bridge, authFile = readFrom() }, signal) {
     const label = integration.metadata.account;
     return { id: integration.id, name: integration.name, installed: integration.metadata.installed !== false, signedIn, ...signedIn && typeof label === "string" && label ? { label } : {} };
   });
-  const opencode = readOpencode(authFile).map((entry) => {
-    const known = byID.get(entry.integrationID);
-    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: (known?.connections.length ?? 0) > 0 };
-  });
-  const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
   const working = (connection) => {
     const status = isObject(connection.status) ? connection.status.status : undefined;
     return connection.type !== "env" && (status === undefined || status === "connected");
   };
+  const opencode = readOpencode(authFile).map((entry) => {
+    const known = byID.get(entry.integrationID);
+    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: known?.connections.some(working) ?? false };
+  });
+  const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
   const connected = engineList.filter((integration) => integration.connections.some(working)).map((integration) => integration.id);
   return { agents, opencode, shell, connected };
 }
