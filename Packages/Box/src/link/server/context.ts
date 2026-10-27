@@ -14,6 +14,8 @@ export interface LinkRequest {
   body?: Buffer;
   /** From this Mac's own app (`x-kuvo-from: app`), not a phone. */
   fromApp?: boolean;
+  /** From Kuvo Code on another computer (the Mac reaching a machine's box, `box route`), not a phone. */
+  fromMac?: boolean;
 }
 
 /** Who asks: a phone, by its static key and where it is on the relay; nothing for this Mac's app. */

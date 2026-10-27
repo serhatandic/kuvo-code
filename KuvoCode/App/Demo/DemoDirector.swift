@@ -406,6 +406,15 @@ enum DemoDirector {
         // KUVO_DEMO_SESSION=<id>: that session's tab, in view (one on a machine waits for it).
         if let id = environment["KUVO_DEMO_SESSION"] {
             app.tabs.open(TabKey(id))
+            // KUVO_DEMO_VOICE=composer|field: voice input listening for it, with sample words, in
+            // the composer or the voice field (without the microphone, which would ask).
+            if let style = environment["KUVO_DEMO_VOICE"].flatMap(VoiceStyle.init(rawValue:)) {
+                Task {
+                    guard await DemoWait.until("\(id) to load (KUVO_DEMO_VOICE)", limit: .seconds(30), { workspace.model(for: id)?.isLoaded == true }) else { return }
+                    await DemoWait.pause(.beat)
+                    app.dictation.showSample(for: id, style: style)
+                }
+            }
             // KUVO_DEMO_FIND=<words>: Find in it, looking for those (once it's read, on a machine).
             if let words = environment["KUVO_DEMO_FIND"] {
                 Task {

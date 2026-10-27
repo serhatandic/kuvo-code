@@ -141,3 +141,34 @@ import ClientText
         #expect(field.text == "Earlier words!", "words brought back become where the next typing starts")
     }
 }
+
+/// A file named for the box as its disk has it: "ş" stays one letter, as a Linux machine's disk
+/// spells it, not "s" and a mark, which is another name there.
+@Suite struct FileAddressesTests {
+    @Test func aNameWithLettersBeyondASCIIKeepsThemAsWritten() {
+        let uri = FileAddresses.uri("/home/alex/notes/şeker.md")
+        #expect(uri == "file:///home/alex/notes/%C5%9Feker.md")
+        #expect(!uri.contains("%CC%A7"), "ş should not come apart into s and a combining mark")
+    }
+
+    /// The routes the box reads back to each file (its own test reads the same vectors).
+    @Test func theRoutesTheBoxReads() throws {
+        struct Vectors: Decodable {
+            struct Address: Decodable { var name: String; var encoded: String }
+            var addresses: [Address]
+        }
+        let file = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../KuvoLink/Vectors/routes/file-addresses.json").standardized
+        let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: file))
+        #expect(!vectors.addresses.isEmpty)
+        for address in vectors.addresses {
+            #expect(FileAddresses.route("/folder/" + address.name) == "kuvo/file?uri=file:///folder/" + address.encoded, "\(address.name)")
+        }
+    }
+
+    @Test func spacesAndQueryCharactersStayInsideTheRoute() {
+        #expect(FileAddresses.uri("/tmp/a b#1.txt") == "file:///tmp/a%20b%231.txt")
+        // "&" is a path's own letter, but would end the query's value.
+        #expect(FileAddresses.route("/tmp/a&b.txt", max: 100) == "kuvo/file?uri=file:///tmp/a%26b.txt&max=100")
+    }
+}

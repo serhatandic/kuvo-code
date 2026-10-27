@@ -88,6 +88,26 @@ cd Packages/Box && bun install && bun run check && bun test
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
+Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+waits for jobs of the same kind (they share build folders) and runs the other
+kinds alongside:
+
+```sh
+scripts/heavy.sh mac xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild" …
+scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
+```
+
+- `mac`: the Mac app's builds and tests (`KuvoShared-MacBuild`, `KuvoCodeTests-build`), and the
+  packages' `swift build` and `swift test`;
+- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`);
+- `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
+
+A job also waits while the Mac is busy (its load over the last minute above 40;
+`KUVO_HEAVY_LOAD` sets another). Until 2026-10-28, while other checkouts still take
+the old single lock, jobs also take it as they run, so kinds take turns as before. Both apps' `scripts/test-app.sh` take their turn
+this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
+tries the helper.
+
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
 after. The app hosting them starts nothing (no window, engine or menu bar item),
@@ -385,6 +405,7 @@ when you're there to answer.
 | `KUVO_DEMO_MAKE_HOME` | `<machine>`, with `KUVO_DEMO_SETTINGS=machines`: once it's connected, makes this Mac its home, as Make This Mac Its Home… does (to try a move between two demo copies) |
 | `KUVO_DEMO_MACHINE_ROOT` | A folder of its own in machines' home folders (like `.kuvo-code-demo`), so the demo copy's engine and browser there never touch your own copy's. What it starts there stops when it quits, except in `.kuvo-code-demo` while its phone link is on, so a phone tried with it reaches its bots with the Mac shut |
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
+| `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |

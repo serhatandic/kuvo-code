@@ -3,7 +3,7 @@
 // own's models (`kuvo/providers/models`), and a sign-in's return loaded on the computer it's for
 // (`kuvo/sign-in/return`).
 
-import { bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
+import { any, bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
 
 /** The folders in one of this box's folders: its path, the home folder, the one it's in (null for
  * the top), and the folders in it, ordered as Finder orders names (`repository`: a git
@@ -43,6 +43,13 @@ export type ProgramFound = Infer<typeof PROGRAM_FOUND>;
 export type ProviderModels = Infer<typeof PROVIDER_MODELS>;
 export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
 
+/** Sessions whose conversation has what a search asked for, the latest first (`kuvo/search`):
+ * each one's ID, the words around the first mention, and the session as the engine lists it
+ * (`info`), for a client that doesn't list it (an older one, archived). */
+export const SEARCH_FOUND = object({ results: list(object({ session: string, snippet: string, info: any })) });
+
+export type SearchFound = Infer<typeof SEARCH_FOUND>;
+
 export const MISC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST } },
   { route: "POST kuvo/folders", answers: { 200: FOLDER_MADE } },
@@ -50,4 +57,5 @@ export const MISC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/programs", answers: { 200: PROGRAM_FOUND } },
   { route: "POST kuvo/providers/models", answers: { 200: PROVIDER_MODELS } },
   { route: "POST kuvo/sign-in/return", answers: { 200: SIGN_IN_RETURNED } },
+  { route: "GET kuvo/search", answers: { 200: SEARCH_FOUND } },
 ];

@@ -6,6 +6,7 @@
 import { processRuns as runs } from "../../shared/platform";
 import { accountsRoute, credentialsRoute } from "../areas/accounts";
 import { foundRoute } from "../areas/found";
+import { searchRoute } from "../areas/search";
 import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
 import { botKeysRefreshRoute, botKeysRoute } from "../areas/bot-keys";
@@ -68,6 +69,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/attention/notice" || route === "kuvo/attention/answered", answer: appNoticeRoute },
   { when: route => route === "kuvo/attention", answer: attentionRoute },
   { when: route => route === "kuvo/named", answer: namedRoute },
+  { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route === "kuvo/asks" || route === "kuvo/asks/events", answer: asksRoute },
   { when: route => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: route => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },

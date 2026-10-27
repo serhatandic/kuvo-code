@@ -10,6 +10,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# A heavy job of the Mac's (scripts/heavy.sh): it builds in KuvoCodeTests-build, so it waits for
+# the Mac's other builds, and for a busy Mac, unless whoever started it took that turn already.
+if ! scripts/heavy.sh --holds mac; then
+    exec scripts/heavy.sh mac /bin/sh "$PWD/scripts/test-app.sh"
+fi
+
 # One run at a time, whoever starts it: every run shares the test copy's settings and caches in
 # ~/Library and its folders in the temporary folder, and cleans them before and after. So each
 # run waits for the one before it, on a lock in this user's own temporary folder (getconf's, not

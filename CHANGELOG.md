@@ -8,6 +8,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### Highlights
 
+- **Voice input**: click the microphone in the composer, or hold ⇧⌘Space, to talk instead of typing; nothing is sent until you send it. <!-- symbol: mic -->
 - **Goals that keep going**: write `/goal all tests pass`, and the agent works turn after turn until a check says it's met. <!-- symbol: target -->
 - **What your agents made**: a bot's Shelf keeps its pages, pictures and memory, with every change on its Timeline. <!-- symbol: tray.full -->
 - **Answers you can try**: agents show charts, diagrams and things to click right in the conversation. <!-- symbol: chart.xyaxis.line -->
@@ -15,8 +16,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
 - A machine another Mac runs says which in **Settings › Machines** ("runs from Studio"), with **Make This Mac Its Home…** to run it from this Mac instead: its engine starts again with this Mac's accounts, and its sessions, bots and settings stay. Your phone can do the same from the machine's settings.
 - A session's subagents show under it in the sidebar, folded until you click the count beside it: on a line under the session, each with its status, opening its own conversation with the way back. A subagent you open no longer takes a tab in the side panel.
+- In a session on a remote machine, the files you attach go to the machine with your message and stay there for two weeks for the agent to open, whatever the model can read; one over 50 MB stays on your Mac, and the message says so.
 - After an update with new features, **What's New** shows its highlights once, each with **Try It** where it opens something; **Help › What's New** shows them again. New keywords in the **/** list carry a small **New** until you use them.
 - Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.
 - An integration whose sign-in ended says **Sign In Again…** on its one button, and "Sign-in ended" under its name, rather than a Sign In button beside a Sign In Again in its menu.
@@ -28,7 +31,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Settings › Storage shows how much the older versions of what your agents made take on each computer, lets you choose how much they may take, and clears them. Likely secrets and files git ignores are never copied.
 - A group chat's side panel no longer offers Changes and Files for a project it doesn't have: it opens on a new tab instead.
 - Every key you type in the composer and in your answers to quotes stays, also while Kuvo Code is busy, rather than one now and then going missing.
-- New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. The engine's own review is now **/review-quick**. <!-- new: keyword/loop, keyword/plan, keyword/review, keyword/btw, keyword/handoff, keyword/compact -->
+- New keywords after **/**, listed first with what each does: **/loop** sends a message again on a schedule (pick how often from a list), **/plan** switches to Plan, **/review** has a model that hasn't seen the conversation look over your uncommitted changes and lists what it finds, **/btw** asks a side question that adds nothing to the conversation, **/handoff** carries a long conversation on in a fresh one from a handoff note, and **/compact** makes room. A keyword you type shows with its mark, and a line under the message says what it will do. A message sent with /plan or /loop keeps the keyword in its bubble, as you typed it, on the Mac and the phone. After /review, **Who reads it** picks the model that reads your changes (the one you picked last is first), and what you write after it is what to look at. The engine's own review is now **/review-quick**. <!-- new: keyword/loop, keyword/plan, keyword/review, keyword/btw, keyword/handoff, keyword/compact -->
 - **Help › Report a Problem…** opens a short sheet: say what happened, see the versions that go with it, and open a new GitHub issue filled in with both, to read over and post. It says up front that issues are public.
 - With machines, the sidebar switches computers by name: a line of names at the top that follows your two-finger swipe and wraps around, from the last back to the first, with a dot on a computer that needs you or has something new. Settings' pages switch the same way.
 - Adding a project's folder on a machine, in New Project or Edit Project, shows the machine's own folders to pick from, as on your phone, rather than a box to type its path in.

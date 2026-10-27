@@ -42,6 +42,8 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// Voice input, for whichever composer listens.
+    let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
     /// Your group chats, wherever they live: each computer's coding agents' bridge runs its own,
     /// this Mac's too (what an older version kept here moves into it first, `GroupMigration`).
@@ -198,6 +200,8 @@ final class AppModel {
         // This Mac's box up (at the engine's start, late, or again): its settings read, and
         // brought up to date.
         box.onStarted = { [weak self] in Task { await self?.prepareSettings() } }
+        // Hold ⇧⌘Space to talk instead of typing.
+        if !AppInfo.isHostingTests { dictation.installShortcut() }
     }
 
     /// Shows the main window, with `request` open in it.

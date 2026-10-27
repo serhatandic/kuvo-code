@@ -65,11 +65,33 @@ import Testing
     /// On a machine, which can't read this Mac's files: what the model reads goes inline, a
     /// folder as its listing.
     @Test func onAMachineWhatItReadsGoesInline() throws {
-        let prepared = Attachments.prepare([url("notes.txt"), url("src")], for: try model(input: ["text"]), machine: "box")
-        #expect(prepared.files.count == 2)
+        let prepared = Attachments.prepareForMachine([url("notes.txt"), url("src")])
+        #expect(prepared.files.map(\.name) == ["notes.txt", "src (list of its files).txt"])
         #expect(prepared.files.allSatisfy { $0.uri.hasPrefix("data:") })
         let notes = try #require(prepared.files.first { $0.name == "notes.txt" })
         #expect(Data(base64Encoded: String(notes.uri.split(separator: ",").last ?? "")) == Data("let x = 1\n".utf8))
         #expect(prepared.unsent.isEmpty && prepared.paths.isEmpty)
+    }
+
+    /// On a machine, every file goes inline, the ones its model can't read too: the machine's box
+    /// keeps them there for the agent and gives the model what it reads, as it does a phone's.
+    /// Nothing is copied over this Mac's SSH, and the note is the box's.
+    @Test func onAMachineTheBoxSortsThem() throws {
+        let prepared = Attachments.prepareForMachine([url("spec.pdf"), url("shot.png"), url("blob.bin")])
+        #expect(prepared.files.map(\.name) == ["spec.pdf", "shot.png", "blob.bin"])
+        #expect(prepared.files.allSatisfy { $0.uri.hasPrefix("data:") })
+        let pdf = try #require(prepared.files.first)
+        #expect(pdf.uri.hasPrefix("data:application/pdf;base64,"))
+        #expect(prepared.paths.isEmpty && prepared.unsent.isEmpty && prepared.included.isEmpty)
+    }
+
+    /// One bigger than a model takes stays on this Mac, and the message says so.
+    @Test func onAMachineAHugeFileStaysHere() throws {
+        let huge = url("huge.log")
+        try Data(count: Attachments.maxBytes + 1).write(to: huge)
+        defer { try? FileManager.default.removeItem(at: huge) }
+        let prepared = Attachments.prepareForMachine([url("notes.txt"), huge])
+        #expect(prepared.files.map(\.name) == ["notes.txt"])
+        #expect(prepared.unsent == [huge.path])
     }
 }

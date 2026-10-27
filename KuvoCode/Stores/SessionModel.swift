@@ -858,11 +858,13 @@ final class SessionModel {
 
     /// `withComments`: your review comments go with it; a message the app writes for you leaves
     /// them for yours.
-    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true) {
+    /// `typed`: the keyword it's sent with, as typed ("/plan"), which its bubble shows.
+    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true, typed: String? = nil) {
         let written = text
         let comments = withComments ? reviewComments : []
-        // The agents named with "&" said who they are, then the comments.
-        let named = AgentReferences.text(text.trimmingCharacters(in: .whitespacesAndNewlines), excluding: session.id, here: RemoteFolder.machine(of: session.location.directory))
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The keyword it came with, the agents named with "&" said who they are, then the comments.
+        let named = AgentReferences.text(typed.map { SentWithKeyword.message(words, typed: $0) } ?? words, excluding: session.id, here: RemoteFolder.machine(of: session.location.directory))
         let text = ReviewComments.text(named, adding: comments)
         guard !text.isEmpty || !files.isEmpty else { return }
         if withComments { reviewComments = [] }
@@ -922,9 +924,9 @@ final class SessionModel {
             await previous?.value
             do {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
-                // can't read this Mac's files: they go to it inline, or copied there.
+                // can't read this Mac's files: they go to its box with their contents.
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine.map { Attachments.prepare(files, for: model, machine: $0) } ?? Attachments.prepare(files, for: model) }.value
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
                 let message = Attachments.text(text, for: prepared)
                 await waitForTools()
                 // Removed meanwhile: it doesn't go.
@@ -934,7 +936,12 @@ final class SessionModel {
                 // Held while it was on its way: to the queue, not the next step.
                 let asked: InboxItem.Delivery = outgoing[id]?.heldAt != nil ? .queue : delivery
                 update(id) { $0.request = asked }
-                try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
+                if let machine, !prepared.files.isEmpty {
+                    try await MachineBox.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked,
+                                                withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                } else {
+                    try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
+                }
                 restoredFailed = ""
                 await requestDone(id)
             } catch {
@@ -1056,7 +1063,7 @@ final class SessionModel {
             break
         case .plan:
             selectAgent("plan")
-            if !rest.isEmpty { send(rest, files: files, for: model, queue: queue) } else if !files.isEmpty { restore(text: "", files: files) }
+            if !rest.isEmpty { send(rest, files: files, for: model, queue: queue, typed: Keyword.plan.typed) } else if !files.isEmpty { restore(text: "", files: files) }
         case .compact:
             compact()
         case .loop:
@@ -1067,7 +1074,9 @@ final class SessionModel {
         case .handoff:
             startHandoff(next: rest, written: written)
         case .review:
-            startReview(written: written)
+            // A coding agent's conversation is read by its own agent: "with" names no other.
+            let readers = OutsideAgents.isAgentSession(session) ? [] : catalog()?.reviewReaders ?? []
+            startReview(ReviewCommand(rest, readers: readers, preferring: Catalog.lastReviewer), written: written)
         }
         Analytics.shared.track("keyword_run", ["keyword": keyword.rawValue])
     }
@@ -1097,7 +1106,7 @@ final class SessionModel {
         Task {
             do {
                 try await wakeUps.add(to: owner, at: schedule.firstWake(now: now), every: schedule.every, note: command.message)
-                if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false) }
+                if !schedule.keepsTimeOfDay { send(command.message, files: files, for: model, queue: false, typed: Keyword.loop.typed + " " + command.scheduleText) }
             } catch {
                 restore(text: written, files: files)
                 fail(error)
@@ -1166,12 +1175,28 @@ final class SessionModel {
     /// Its latest review with fresh eyes ("/review"), until it's put away.
     var review: Review? { goalBridge()?.reviews[id] }
 
-    private func startReview(written: String) {
+    /// The catalog of the engine it runs on, whose models can read a review: the app's (a test
+    /// gives its own).
+    @ObservationIgnored var reviewCatalog: (() -> Catalog?)?
+    private func catalog() -> Catalog? {
+        if let reviewCatalog { return reviewCatalog() }
+        guard let app = AgentMail.shared.app else { return nil }
+        return RemoteFolder.machine(of: session.location.directory).flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
+    }
+
+    /// "/review [with <model>] [what to look at]": read by that model (the conversation's own
+    /// without one), looking especially there. A name it can't find comes back to the composer.
+    private func startReview(_ command: ReviewCommand, written: String) {
+        if let searching = command.searching {
+            restore(text: written)
+            failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "Finish the model’s name, or pick it from the list."
+            return
+        }
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id
         Task {
             do {
-                bridge.took(try await api.startReview(session: session))
+                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focus))
             } catch {
                 restore(text: written)
                 fail(error)
@@ -1183,14 +1208,50 @@ final class SessionModel {
         guard let bridge = goalBridge(), let api = bridge.api else { return }
         let session = id
         bridge.dropReview(session)
-        Task { try? await api.dismissReview(session: session) }
+        dismissingReview = Task { try? await api.dismissReview(session: session) }
     }
+
+    /// Putting the review away on its computer, while it goes (what a test waits on).
+    @ObservationIgnored private(set) var dismissingReview: Task<Void, Never>?
 
     /// The review's findings, sent to the agent as your message.
     func fixReview() {
         guard let fix = review?.fix else { return }
         dismissReview()
         send(fix, files: [], for: nil, queue: false)
+    }
+
+    /// What to send an agent to fix the review's findings, all or those of `findings` (their ids),
+    /// as its computer's box writes it; nil, saying why, when it can't be had.
+    func reviewFixText(_ findings: [String]?) async -> String? {
+        guard let bridge = goalBridge(), let api = bridge.api else {
+            failure = "The review’s computer can’t be reached now. Try again in a moment."
+            return nil
+        }
+        do {
+            return try await api.reviewFix(session: id, findings: findings)
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    /// The review the card shows: not one put away, waiting out its Undo.
+    var shownReview: Review? {
+        guard let review, !putAways.isPutAway(.review(review.id)) else { return nil }
+        return review
+    }
+
+    /// A finished review put away with ✕: its line says so, with Undo, for a moment; then it's
+    /// put away on its computer too.
+    func putAwayReview() {
+        guard let review, review.state != .reviewing else { return }
+        let item = PutAway.review(review.id)
+        putAways.put(item, text: "Review put away", lingers: true, done: { [weak self] in
+            // Only that one: a review asked for since has taken its place on its computer.
+            if self?.review?.id == review.id { self?.dismissReview() }
+            self?.putAways.gone(item)
+        })
     }
 
     private func keywordUnavailable(_ written: String) {
@@ -1311,9 +1372,14 @@ final class SessionModel {
             await previous?.value
             do {
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine.map { Attachments.prepare(files, for: model, machine: $0) } ?? Attachments.prepare(files, for: model) }.value
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
                 if Moves.isFrozen(id) { throw Moves.Failure.moving }
-                try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
+                if let machine, !prepared.files.isEmpty {
+                    try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,
+                                                 withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                } else {
+                    try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
+                }
             } catch {
                 runningCommands.removeAll { $0.id == running.id }
                 notRun(written, files: files, because: error)

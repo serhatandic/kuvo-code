@@ -54,6 +54,7 @@ struct GeneralSettings: View {
                     }
                 }
             }
+            VoiceSettings()
             Section("While Agents Work") {
                 Toggle(isOn: Binding(get: { openAtLogin.isOn }, set: { openAtLogin.set($0) })) {
                     Text("Open at login, in the background")

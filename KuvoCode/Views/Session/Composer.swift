@@ -1,6 +1,7 @@
 import ClientNews
 import ClientDesign
 import ClientText
+import KuvoVoice
 import OpenCodeKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -119,6 +120,13 @@ struct Composer: View {
     /// "/loop"'s "How often" was closed with Escape, or Custom… is open in its place.
     @State private var dismissedLoop = false
     @State private var customLoop = false
+    @State private var reviewerIndex = 0
+    /// "/review"'s "Who reads it" was closed with Escape, or answered with the conversation's own.
+    @State private var dismissedReviewer = false
+    /// The model picked last there (`Model.key`), offered first next time.
+    @AppStorage(Catalog.lastReviewerKey) private var lastReviewer = ""
+    /// Your starred models (the model picker's), offered there after it.
+    @AppStorage("favoriteModels") private var starredModels = ""
     /// "&" and the bots and sessions it names.
     @State private var agents = AgentPicker()
 
@@ -146,6 +154,9 @@ struct Composer: View {
                 .preference(key: ComposerListShown.self, value: true)
             } else if let loopChoices {
                 LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
+                    .preference(key: ComposerListShown.self, value: true)
+            } else if let reviewerChoices {
+                ReviewerList(choices: reviewerChoices, selected: min(reviewerIndex, reviewerChoices.count - 1)) { pickReviewer($0) }
                     .preference(key: ComposerListShown.self, value: true)
             } else if let mention {
                 MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
@@ -195,46 +206,65 @@ struct Composer: View {
                               fieldFocused(focused)
                           }, onPaste: pasteAttachments)
             }
-            MessageField(
-                text: $text,
-                placeholder: placeholder,
-                font: isShell ? .monospacedSystemFont(ofSize: messageFont.size - 0.5, weight: .regular) : messageFont.field,
-                focus: fieldFocus,
-                blur: blurRequest,
-                marks: !isShell,
-                images: imageFiles.count,
-                token: token,
-                example: example,
-                onKey: key,
-                onFocus: { focused in
-                    if focused { fieldFocus = nil }
-                    fieldFocused(focused)
-                },
-                onPaste: pasteAttachments,
-                handle: field
-            )
-            // Editing a recalled message makes it a new one; the arrows move the cursor again.
-            .onChange(of: text) { _, new in
-                if let index = historyIndex {
-                    let history = history()
-                    if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
+            ZStack(alignment: .topLeading) {
+                MessageField(
+                    text: $text,
+                    placeholder: placeholder,
+                    font: isShell ? .monospacedSystemFont(ofSize: messageFont.size - 0.5, weight: .regular) : messageFont.field,
+                    focus: fieldFocus,
+                    blur: blurRequest,
+                    marks: !isShell,
+                    images: imageFiles.count,
+                    token: token,
+                    example: example,
+                    onKey: key,
+                    onFocus: { focused in
+                        if focused { fieldFocus = nil }
+                        fieldFocused(focused)
+                    },
+                    onPaste: pasteAttachments,
+                    handle: field,
+                    isEditable: !isDictating
+                )
+                // Editing a recalled message makes it a new one; the arrows move the cursor again.
+                .onChange(of: text) { _, new in
+                    if let index = historyIndex {
+                        let history = history()
+                        if !history.indices.contains(index) || new != history[index] { historyIndex = nil }
+                    }
+                    mentionTyped(in: new)
+                    agents.textChanged(new)
+                    if SlashCommands.query(in: new) == nil {
+                        commandIndex = 0
+                        if new.isEmpty { dismissedCommands = false }
+                    }
+                    // Not /review any more, or "with" written after it: "Who reads it" can open again.
+                    if !new.hasPrefix(Keyword.review.typed) || new.lowercased().hasPrefix(Keyword.review.typed + " with") {
+                        reviewerIndex = 0
+                        dismissedReviewer = false
+                    }
+                    if !new.hasPrefix(Keyword.loop.typed) {
+                        loopIndex = 0
+                        dismissedLoop = false
+                        customLoop = false
+                    } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
+                        // Typed in the field meanwhile: Custom… has nothing left to ask.
+                        customLoop = false
+                    }
                 }
-                mentionTyped(in: new)
-                agents.textChanged(new)
-                if SlashCommands.query(in: new) == nil {
-                    commandIndex = 0
-                    if new.isEmpty { dismissedCommands = false }
-                }
-                if !new.hasPrefix(Keyword.loop.typed) {
-                    loopIndex = 0
-                    dismissedLoop = false
-                    customLoop = false
-                } else if customLoop, LoopCommand(String(new.dropFirst(Keyword.loop.typed.count))).schedule != nil {
-                    // Typed in the field meanwhile: Custom… has nothing left to ask.
-                    customLoop = false
+                .onChange(of: session) { agents.reset() }
+                // Listening ("In the Composer"): what's written, then what you're saying, as it comes,
+                // in the field's place (it stays, unseen, as it was).
+                .opacity(listening == nil ? 1 : 0)
+                .accessibilityHidden(listening != nil)
+                if let voice = listening {
+                    VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "", before: text)
+                        // A long draft shows its end, where the words come.
+                        .lineLimit(8)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
                 }
             }
-            .onChange(of: session) { agents.reset() }
             if keywordHint != nil {
                 // Read again each minute: /loop's says when it first sends.
                 TimelineView(.everyMinute) { _ in
@@ -242,46 +272,63 @@ struct Composer: View {
                 }
             }
 
-            HStack(spacing: 4) {
-                if isShell {
-                    ShellModeLabel(folder: folders.first)
-                        .transition(.opacity)
-                } else {
-                    Group {
-                        Button(action: chooseFiles) {
-                            Image(systemName: "paperclip")
-                                .font(.system(size: 14, weight: .medium))
-                                .frame(width: 30, height: 28)
-                                .hoverHighlight(in: Capsule(), mutesInk: true)
-                        }
-                        .buttonStyle(.plain)
-                        .clickablePointer()
-                        .help("Attach Files… You can also drop files here, or paste them.")
-                        // Set on the engine: not while it's out of reach.
-                        if showsMode {
-                            ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
-                                .disabled(isOffline)
-                        }
-                        ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
-                            .disabled(isOffline)
-                        if let worktree {
-                            WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
-                        }
-                    }
+            if let voice = listening {
+                // The chips make way for the voice: how long, how loud, Cancel and Done.
+                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                     .transition(.opacity)
+            } else {
+                HStack(spacing: 4) {
+                    if isShell {
+                        ShellModeLabel(folder: folders.first)
+                            .transition(.opacity)
+                    } else {
+                        Group {
+                            Button(action: chooseFiles) {
+                                Image(systemName: "paperclip")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .frame(width: 30, height: 28)
+                                    .hoverHighlight(in: Capsule(), mutesInk: true)
+                            }
+                            .buttonStyle(.plain)
+                            .clickablePointer()
+                            .help("Attach Files… You can also drop files here, or paste them.")
+                            // Set on the engine: not while it's out of reach.
+                            if showsMode {
+                                ModeChip(agent: agent, approval: approval, onSelectAgent: onSelectAgent, onSelectApproval: onSelectApproval)
+                                    .disabled(isOffline)
+                            }
+                            ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse)
+                                .disabled(isOffline)
+                            if let worktree {
+                                WorkplaceChip(worktree: worktree, attempts: attempts, onSelect: onSelectWorktree, onSelectAttempts: onSelectAttempts)
+                            }
+                        }
+                        .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                    if !isShell { voiceButton }
+                    actionButton
                 }
-                Spacer(minLength: 0)
-                actionButton
+                .animation(.easeOut(duration: 0.15), value: isShell)
+                // The pills are flat, so their text lines up with the message field above;
+                // their hover fill reaches past it.
+                .padding(.leading, -8)
             }
-            .animation(.easeOut(duration: 0.15), value: isShell)
-            // The pills are flat, so their text lines up with the message field above;
-            // their hover fill reaches past it.
-            .padding(.leading, -8)
         }
+        .animation(.ui, value: listening != nil)
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 7)
         .modifier(ComposerSurface(isOn: drawsSurface))
+        .overlay {
+            // Listening here: the card's edge in the accent.
+            if listening != nil {
+                RoundedRectangle(cornerRadius: drawsSurface ? Metrics.composerRadius : 12)
+                    .strokeBorder(.tint, lineWidth: 1.5)
+                    .padding(drawsSurface ? 0 : 4)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay {
             if isTargeted {
                 // Its own card's edge; inside the card it shares, a ring of its own in it.
@@ -298,7 +345,9 @@ struct Composer: View {
         .onChange(of: focusRequest) { focusAtEnd() }
         // A quote just added: its answer takes the keyboard.
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
-        .onChange(of: session) {
+        .onChange(of: session) { old, _ in
+            // Listening for the session it showed: that stops, rather than going on unseen.
+            if app.dictation.isListening(for: old ?? "new:" + (folders.first ?? "")) { app.dictation.cancel() }
             historyIndex = nil
             mentionFiles = []
             mentionFilesRead = nil
@@ -309,6 +358,8 @@ struct Composer: View {
             loopIndex = 0
             dismissedLoop = false
             customLoop = false
+            reviewerIndex = 0
+            dismissedReviewer = false
             isTargeted = false
             // The keyboard goes to this session's message, not a quote it was answering before.
             answerFocus = nil
@@ -335,7 +386,19 @@ struct Composer: View {
     /// The field or an answer took the keyboard, or let it go: where you type is where you work,
     /// so the window's commands follow.
     private func fieldFocused(_ focused: Bool) {
-        if focused { composerFocused?() }
+        if focused {
+            composerFocused?()
+            // The shortcut's voice input goes where you type.
+            let text = $text
+            if !isOffline {
+                app.dictation.offer(voiceOwner) { [focusAtEnd] words in
+                    text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+                    focusAtEnd()
+                }
+            }
+        } else if !isDictating {
+            app.dictation.withdraw(voiceOwner)
+        }
     }
 
     /// An input method is composing in the field that has the keyboard (Japanese, Chinese,
@@ -350,8 +413,21 @@ struct Composer: View {
     /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
     /// through what was sent before.
     private func key(_ key: MessageField.Key) -> Bool {
+        // Listening (here, or in the voice field): Return is Done, Escape is Cancel, and nothing
+        // else goes to the field.
+        if isDictating {
+            switch key.name {
+            case .return: app.dictation.finish()
+            case .escape:
+                app.dictation.cancel()
+                focusAtEnd()
+            default: break
+            }
+            return true
+        }
         if agents.key(key, text: $text, excluding: session) { return true }
         if let loopChoices, loopKey(key, loopChoices) { return true }
+        if let reviewerChoices, reviewerKey(key, reviewerChoices) { return true }
         switch key.name {
         case .return:
             if let commandMatches, key.modifiers.isEmpty {
@@ -436,6 +512,49 @@ struct Composer: View {
         return agent == "plan" ? "Ask the agent to plan something…" : "Ask the agent to build, fix or explain something…"
     }
 
+    /// Where what's said goes: this composer's session, or a new session's draft.
+    private var voiceOwner: String { session ?? "new:" + (folders.first ?? "") }
+
+    /// Listening for this composer, here or in the voice field.
+    private var isDictating: Bool { app.dictation.isListening(for: voiceOwner) }
+
+    /// Listening here, in the composer ("In the Composer"); the voice field shows itself.
+    private var listening: VoiceInput? {
+        guard app.dictation.isListening(for: voiceOwner), app.dictation.style == .composer else { return nil }
+        return app.dictation.voice
+    }
+
+    /// Talk instead of typing: what you say goes after what's written, and nothing is sent.
+    private var voiceButton: some View {
+        Button(action: startVoice) {
+            Image(systemName: "mic")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 28)
+                .hoverHighlight(in: Capsule(), mutesInk: true)
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .disabled(isOffline)
+        .help("Talk Instead of Typing (⇧⌘Space)")
+        .accessibilityLabel("Voice Input")
+    }
+
+    private func startVoice() {
+        // The keyboard here: Return finishes, Escape cancels, nothing else types.
+        focusAtEnd()
+        let text = $text
+        app.dictation.start(for: voiceOwner) { [focusAtEnd] words in
+            text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+            focusAtEnd()
+        }
+    }
+
+    /// Privacy & Security, on what wasn't allowed: the microphone, or speech recognition.
+    static func openPrivacySettings(for phase: VoiceInput.Phase) {
+        let pane = phase == .failed(.speechDenied) ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane)!)
+    }
+
     private var actionButton: some View {
         SendStopButton(
             stops: isRunning, canSend: canSend,
@@ -499,7 +618,7 @@ struct Composer: View {
     /// The keyword drawn as a token: /loop's with its schedule once it reads one.
     private var token: MessageField.Token? {
         guard let (keyword, rest) = typedKeyword else { return nil }
-        let schedule = keyword == .loop ? LoopCommand(rest).scheduleLength : 0
+        let schedule = keyword == .loop ? LoopCommand(rest).scheduleLength : keyword == .review ? reviewCommand(rest).readerLength : 0
         return MessageField.Token(length: keyword.typed.utf16.count + schedule, symbol: keyword.symbol, orange: keyword.isPlan)
     }
 
@@ -510,6 +629,10 @@ struct Composer: View {
         if keyword == .loop {
             let command = LoopCommand(rest)
             return command.schedule != nil && command.message.isEmpty ? keyword.argument : nil
+        }
+        if keyword == .review {
+            let command = reviewCommand(rest)
+            return command.reader != nil && command.focus.isEmpty ? "what to look at (or nothing)" : nil
         }
         return rest.allSatisfy(\.isWhitespace) ? keyword.argument : nil
     }
@@ -530,11 +653,87 @@ struct Composer: View {
             let attached = files.isEmpty ? "" : schedule.keepsTimeOfDay ? " · attachments stay here" : " · attachments go with the first one only"
             return ("\(schedule.title) · \(schedule.firstPhrase(now: .now)) · \(place)\(attached)", false)
         case .review:
-            let reader = currentModel?.name ?? "The conversation’s model"
-            return ("\(reader) reads the changes not committed yet with fresh eyes, without this conversation, and lists what it finds.", false)
+            if reviewerChoices != nil { return ("Pick who reads the changes, then add what to look at if you like.", false) }
+            let command = reviewCommand(rest)
+            if let searching = command.searching {
+                return (searching.isEmpty ? "Write a model’s name after “with”." : "Finish the model’s name, or pick it from the list.", false)
+            }
+            let reader = command.reader?.name ?? currentModel?.name ?? "The conversation’s model"
+            let looking = command.focus.isEmpty ? "" : ", looking especially at what you wrote"
+            return ("\(reader) reads the changes not committed yet with fresh eyes, without this conversation\(looking), and lists what it finds.", false)
         default:
             return (keyword.hint, false)
         }
+    }
+
+    /// "/review"'s reading of what follows it, against this conversation's models.
+    private func reviewCommand(_ rest: String) -> ReviewCommand {
+        ReviewCommand(rest, readers: isAgentConversation ? [] : catalog.reviewReaders, preferring: Catalog.lastReviewer)
+    }
+
+    /// A coding agent's conversation: its own agent reads a review, no other model.
+    private var isAgentConversation: Bool {
+        if let session, let known = workspace.session(session) { return OutsideAgents.isAgentSession(known) }
+        return currentModel.map { OutsideAgents.runsInBridge($0.providerID) } ?? false
+    }
+
+    /// "/review "'s "Who reads it": before anything follows it, the conversation's own model, the
+    /// one picked last, your starred ones and Other Model…; after "with ", the models whose names
+    /// have what's typed.
+    private var reviewerChoices: [ReviewerChoice]? {
+        guard !dismissedReviewer, !isAgentConversation, historyIndex == nil, let (keyword, rest) = typedKeyword, keyword == .review,
+              rest.first?.isWhitespace == true else { return nil }
+        let readers = catalog.reviewReaders
+        let command = reviewCommand(rest)
+        if let reader = command.reader {
+            // A name that starts longer ones ("GPT-5" of "GPT-5 Mini"), while it's being typed.
+            let longer = command.focus.isEmpty ? ReviewCommand.longer(than: rest, readers: readers) : []
+            return longer.isEmpty ? nil : ([reader] + longer.filter { $0 != reader }).prefix(6).map { .reader($0, note: $0.provider) }
+        }
+        if let searching = command.searching {
+            let matches = ReviewCommand.search(searching, in: readers).prefix(6)
+            return matches.isEmpty ? nil : matches.map { .reader($0, note: $0.provider) }
+        }
+        guard rest.allSatisfy(\.isWhitespace) else { return nil }
+        let own = currentModel?.key
+        let last = readers.first { $0.ref.providerID + "/" + $0.ref.id == lastReviewer && $0.ref.providerID + "/" + $0.ref.id != own }
+        let starred = starredModels.split(separator: ",").map(String.init).compactMap { key in
+            readers.first { $0.ref.providerID + "/" + $0.ref.id == key && key != own && key != lastReviewer }
+        }
+        return [.same(currentModel?.name)] + (last.map { [.reader($0, note: "picked last time")] } ?? [])
+            + starred.prefix(last == nil ? 3 : 2).map { .reader($0, note: $0.provider) } + [.other]
+    }
+
+    /// Picked from "Who reads it": its name written after "/review with ", or "with " to look
+    /// for one; the conversation's own model starts it, as Return did before there was a list.
+    private func pickReviewer(_ choice: ReviewerChoice) {
+        reviewerIndex = 0
+        switch choice {
+        case .same:
+            dismissedReviewer = true
+            text = Keyword.review.typed
+            onSend()
+            return
+        case .reader(let reader, _):
+            lastReviewer = reader.ref.providerID + "/" + reader.ref.id
+            text = Keyword.review.typed + " " + ReviewCommand.phrase(reader) + " "
+        case .other:
+            text = Keyword.review.typed + " with "
+        }
+        focusAtEnd()
+    }
+
+    /// "Who reads it"'s keys while it's open: ↑ ↓ choose, Return and Tab pick, Escape closes it.
+    private func reviewerKey(_ key: MessageField.Key, _ choices: [ReviewerChoice]) -> Bool {
+        switch key.name {
+        case .return, .tab:
+            guard key.modifiers.isEmpty else { return false }
+            pickReviewer(choices[min(reviewerIndex, choices.count - 1)])
+        case .escape: dismissedReviewer = true
+        case .up: reviewerIndex = max(0, min(reviewerIndex, choices.count - 1) - 1)
+        case .down: reviewerIndex = min(choices.count - 1, reviewerIndex + 1)
+        }
+        return true
     }
 
     /// "/loop "'s "How often", until one is picked or typed.

@@ -390,6 +390,9 @@ struct MainView: View {
 
     var body: some View {
         followingSessions
+        // Voice input in the voice field: over all of it.
+        .overlay { VoiceFieldCover() }
+        .animation(.ui, value: app.dictation.voice == nil)
         .task(id: activeDirectory) {
             if let activeDirectory { await workspace.loadBranch(for: activeDirectory) }
         }
