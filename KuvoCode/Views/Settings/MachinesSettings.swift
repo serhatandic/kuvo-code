@@ -11,8 +11,8 @@ struct MachinesSettings: View {
     @State private var notSame: (String, String)?
     /// A machine another Mac runs, to make this Mac its home once you say so.
     @State private var takingHome: MachineEngine?
-    /// The machines being moved to this Mac now.
-    @State private var movingHome: Set<String> = []
+    /// The machines being moved to this Mac now, with the Mac each is moving from.
+    @State private var movingHome: [String: String] = [:]
     /// Why one couldn't be moved here.
     @State private var homeFailure: String?
 
@@ -136,7 +136,7 @@ struct MachinesSettings: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
-                if movingHome.contains(engine.machine.id) {
+                if movingHome[engine.machine.id] != nil {
                     HStack(spacing: 6) {
                         Spinner(size: 12)
                         Text("Starting it from this Mac…")
@@ -155,10 +155,10 @@ struct MachinesSettings: View {
 
     private func makeHome(_ engine: MachineEngine) {
         let id = engine.machine.id
-        movingHome.insert(id)
+        movingHome[id] = Self.anotherMac(engine) ?? "Another Mac"
         Task {
             let why = await app.makeHome(engine)
-            movingHome.remove(id)
+            movingHome[id] = nil
             homeFailure = why
         }
     }
@@ -176,13 +176,13 @@ struct MachinesSettings: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    MachineStatus(engine: engine)
+                    MachineStatus(engine: engine, namesHome: true)
                     // Set up for your phones and other computers: one that couldn't finish says so.
                     // A line, the reason behind it below, and Set Up Again while it’s connected
                     // (connecting sets it up too).
                     if let why = app.phoneLink.setupFailed[engine.machine.id] {
                         problem("Your phones and other computers can’t reach it yet.", why: why, again: engine)
-                    } else if let home = Self.anotherMac(engine), engine.isReady {
+                    } else if let home = movingHome[engine.machine.id] ?? (engine.isReady ? Self.anotherMac(engine) : nil) {
                         anotherMacRuns(engine, home: home)
                     } else if let (line, why) = app.phoneLink.peerProblem(of: engine.machine.id) {
                         problem(line, why: why, again: app.phoneLink.machineIsAnotherMacs(engine.machine.id) ? nil : engine)

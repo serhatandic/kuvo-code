@@ -5,12 +5,14 @@ import SwiftUI
 /// connecting, orange when it couldn't (the reason on hover).
 struct MachineStatus: View {
     let engine: MachineEngine
+    /// Says which other Mac runs it (Settings › Machines), not everywhere the status shows.
+    var namesHome = false
 
     var body: some View {
         HStack(spacing: 5) {
             MachineIndicator(connection: engine.connection, size: 7)
             // Another Mac runs it: which one, where its start said.
-            Text(MachinesSettings.anotherMac(engine).map { engine.statusText + " · runs from " + ($0 == "Another Mac" ? "another Mac" : $0) } ?? engine.statusText)
+            Text((namesHome ? MachinesSettings.anotherMac(engine) : nil).map { engine.statusText + " · runs from " + ($0 == "Another Mac" ? "another Mac" : $0) } ?? engine.statusText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

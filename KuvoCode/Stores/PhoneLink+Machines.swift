@@ -39,7 +39,7 @@ extension PhoneLink {
             return (200, Self.json(["machine": Self.machineEntry(engine)]))
         // Make This Mac Its Home: this Mac runs it from now on, in place of the Mac that does.
         case ("POST", "home", 4):
-            guard engine.isAnotherMacsEngine else { return (409, Self.message("This Mac runs \(machine.name) already.")) }
+            guard !engine.isReady || engine.isAnotherMacsEngine else { return (409, Self.message("This Mac runs \(machine.name) already.")) }
             if let why = await app.makeHome(engine) { return (409, Self.message(why)) }
             return (200, Self.json(["machine": Self.machineEntry(engine)]))
         case ("POST", "same-as", 4):

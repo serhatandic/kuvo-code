@@ -285,6 +285,10 @@ final class MachineEngine {
     }
 
     /// This Mac, as the engines it starts on machines note it.
+    /// This Mac's name as the launch notes keep it: without braces, quotes or backslashes, which the
+    /// machine's keeper reads the notes past.
+    static var noteName: String { PhoneLink.computerName.filter { !"{}\"\\".contains($0) } }
+
     static let macID: String = {
         let key = "machineClientID"
         if let id = UserDefaults.standard.string(forKey: key) { return id }
@@ -310,6 +314,11 @@ final class MachineEngine {
 
     private func isAnotherMacs(_ engine: RemoteServer.Engine) -> Bool {
         engine.notes["mac"].map { $0 != Self.macID } ?? false
+    }
+
+    /// The engine there is newer than this app's (another Mac's, which this one mustn't put back).
+    var engineIsNewer: Bool {
+        server.map { $0.engine.version.compare(OpenCodeEngine.version, options: .numeric) == .orderedDescending } ?? false
     }
 
     /// The Mac that runs the engine there, by its name, when it's another Mac that noted one.
@@ -556,7 +565,7 @@ final class MachineEngine {
     }
 
     private func launchEngine(_ launch: Launch, replace: Int? = nil, starting: Bool = false) async throws -> RemoteServer.Engine {
-        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": PhoneLink.computerName, "box": BoxVersion.mine],
+        try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": Self.noteName, "box": BoxVersion.mine],
                                       withAgents: launch.agents != nil, replace: replace, start: starting)
     }
 

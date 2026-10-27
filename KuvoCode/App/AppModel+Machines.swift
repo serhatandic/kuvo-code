@@ -311,17 +311,24 @@ extension AppModel {
     /// the next time it connects. Its sessions, bots and settings stay there. Not while its agents
     /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
     func makeHome(_ engine: MachineEngine) async -> String? {
+        let name = engine.machine.name
+        guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
         guard engine.isAnotherMacsEngine else { return nil }
-        if engine.boxIsNewer { return "A newer Kuvo Code runs \(engine.machine.name). Update Kuvo Code on this Mac first." }
-        if let api = engine.api, (try? await api.activeSessions())?.isEmpty == false {
-            return "\(engine.machine.name)’s agents are at work. Try again once they’re done."
+        if engine.boxIsNewer || engine.engineIsNewer { return "A newer Kuvo Code runs \(name). Update Kuvo Code on this Mac first." }
+        let atWork = { [self] () async -> Bool in
+            if workspace.isRunning(on: engine.machine.id) { return true }
+            return (try? await engine.api?.activeSessions())?.isEmpty == false
         }
+        if await atWork() { return "\(name)’s agents are at work. Try again once they’re done." }
         engine.disconnect()
         workspace.forget(engine.machine.id)
         engine.takingHome = true
         await connect(engine).value
         engine.takingHome = false
-        return engine.isAnotherMacsEngine ? "\(engine.machine.name) couldn’t be started from this Mac. Try again in a moment." : nil
+        // Connected again: as this Mac's, or still the other one's (its agents began meanwhile).
+        guard engine.isReady else { return engine.failure.map { "\(name) couldn’t be reached: \($0)" } ?? "\(name) couldn’t be reached. Try again in a moment." }
+        guard engine.isAnotherMacsEngine else { return nil }
+        return await atWork() ? "\(name)’s agents are at work. Try again once they’re done." : "\(name) couldn’t be started from this Mac. Try again in a moment."
     }
 
     /// Connects to `engine`'s machine: the start, and what follows it there, which a test waits for.
