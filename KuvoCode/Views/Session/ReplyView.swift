@@ -133,7 +133,7 @@ final class ReplyPieceView: NSView {
             case .math(let latex):
                 let drawn = MathText.drawable(latex) ?? latex
                 let view = existing as? NSHostingView<AnyView> ?? NSHostingView(rootView: AnyView(EmptyView()))
-                view.rootView = AnyView(MathBlockView(latex: drawn).environment(\.messageFont, MessageFont(size: style.size)))
+                view.rootView = AnyView(MathBlockView(latex: drawn, textSize: style.size))
                 views.append(view)
             case .diagram(let source):
                 let view = existing as? MermaidView ?? MermaidView()
@@ -577,7 +577,7 @@ final class ReplyCodeView: NSView {
     private func clearsCorner(width: CGFloat) -> Bool {
         let codeWidth = width - numbersWidth()
         let advance = style.code.maximumAdvancement.width
-        let lineWidth = CopyableCodeBlockStyle.width(of: firstLine, advance: advance)
+        let lineWidth = CodeLine.width(of: firstLine, advance: advance)
         return !firstLine.isEmpty && 14 + lineWidth + 8 > codeWidth - cornerSize().width
     }
 
