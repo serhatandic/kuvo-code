@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync16, readdirSync as readdirSync13, readFileSync as readFileSync26, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
-import { join as join24 } from "path";
+import { mkdirSync as mkdirSync16, readdirSync as readdirSync14, readFileSync as readFileSync26, renameSync as renameSync12, rmSync as rmSync13, writeFileSync as writeFileSync18 } from "fs";
+import { join as join25 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -4652,6 +4652,291 @@ async function reviewRoutes(reviews, method, parts, body) {
   }
 }
 
+// Packages/Box/src/agents/voice.ts
+import { readdirSync as readdirSync7 } from "fs";
+import { readFile as readFile2, stat } from "fs/promises";
+import { basename as basename4, dirname as dirname3, join as join12 } from "path";
+var wordLimit = 100;
+var wordLength = 40;
+var fileLimit2 = 4000;
+var messageLimit = 30;
+var manifestLimit = 256000;
+
+class VoiceError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+class VoiceWords {
+  places;
+  constructor(places) {
+    this.places = places;
+  }
+  place(session) {
+    return this.places.isBridge(session) ? this.places.bridge : this.places.engine;
+  }
+  async words(session) {
+    const { api } = this.place(session);
+    const info = await sessionInfo(api, session).catch((error) => {
+      throw new VoiceError(error?.status === 404 ? 404 : 503, error?.status === 404 ? "There's no such conversation here." : "The conversation can't be reached now.");
+    });
+    if (!info.directory)
+      throw new VoiceError(409, "That conversation has no folder.");
+    const [said, project] = await Promise.all([messages(api, session, messageLimit).catch(() => []), readProject(info.directory)]);
+    return pickWords(info.directory, said, project);
+  }
+}
+async function git(directory, args) {
+  const ran = await run("git", ["-C", directory, ...args], { timeout: 5000 }).catch(() => {
+    return;
+  });
+  return ran && ran.code === 0 && !ran.timedOut ? ran.stdout : undefined;
+}
+async function readProject(directory) {
+  const [listed, uncommitted, committed, common] = await Promise.all([
+    git(directory, ["ls-files", "-co", "--exclude-standard", "-z"]),
+    git(directory, ["diff", "--name-only", "--relative", "-z", "HEAD"]),
+    git(directory, ["log", "-n", "15", "--name-only", "--relative", "--format=", "-z"]),
+    git(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+  ]);
+  const split = (out) => (out ?? "").split(/[\0\n]/).filter(Boolean);
+  const files = (listed !== undefined ? [...new Set(split(listed))] : walk4(directory)).filter((file) => !secret.test(file)).slice(0, fileLimit2);
+  const changed = [...new Set([...split(uncommitted), ...split(committed)])].filter((file) => !secret.test(file));
+  const top = common?.trim();
+  const repository = top && basename4(top) === ".git" ? basename4(dirname3(top)) : undefined;
+  const { packages, dependencies } = await readManifests(directory, files);
+  return { files, changed, repository, packages, dependencies };
+}
+function walk4(top) {
+  const found2 = [];
+  let level = [""];
+  for (let depth = 0;depth < 5 && level.length && found2.length < fileLimit2; depth++) {
+    const next = [];
+    for (const folder of level) {
+      let entries;
+      try {
+        entries = readdirSync7(join12(top, folder), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : 1)) {
+        if (found2.length >= fileLimit2)
+          break;
+        if (entry.name.startsWith(".") || entry.name === "node_modules")
+          continue;
+        const name = folder ? `${folder}/${entry.name}` : entry.name;
+        if (entry.isDirectory())
+          next.push(name);
+        else if (entry.isFile())
+          found2.push(name);
+      }
+    }
+    level = next;
+  }
+  return found2;
+}
+var secret = /(^|\/)\.env(\.[^/]*)?$/;
+async function readManifests(directory, files) {
+  const packages = [];
+  const dependencies = [];
+  const manifests = files.filter((file) => /(^|\/)(package\.json|Package\.swift|Cargo\.toml)$/.test(file) && file.split("/").length <= 3 && !file.includes("node_modules/"));
+  manifests.sort((a, b) => a.split("/").length - b.split("/").length);
+  for (const file of manifests.slice(0, 8)) {
+    const path = join12(directory, file);
+    const text2 = await stat(path).then((kind) => kind.isFile() && kind.size <= manifestLimit ? readFile2(path, "utf8") : undefined).catch(() => {
+      return;
+    });
+    if (!text2)
+      continue;
+    if (file.endsWith("package.json")) {
+      try {
+        const json5 = JSON.parse(text2);
+        if (typeof json5?.name === "string")
+          packages.push(json5.name);
+        for (const key of ["dependencies", "devDependencies", "peerDependencies"])
+          if (json5?.[key] && typeof json5[key] === "object")
+            dependencies.push(...Object.keys(json5[key]));
+      } catch {}
+    } else if (file.endsWith("Package.swift")) {
+      for (const match of text2.matchAll(/\bname:\s*"([^"]{1,60})"/g))
+        if (!/Tests$/.test(match[1]))
+          packages.push(match[1]);
+      for (const match of text2.matchAll(/\.package\(\s*url:\s*"[^"]*\/([^"/]+?)(?:\.git)?"/g))
+        dependencies.push(match[1]);
+    } else {
+      let section = "";
+      for (const line3 of text2.split(`
+`)) {
+        const header2 = line3.match(/^\s*\[([^\]]+)\]/);
+        if (header2) {
+          section = header2[1].trim();
+          continue;
+        }
+        const entry = line3.match(/^\s*([A-Za-z0-9_-]+)\s*=/);
+        if (!entry)
+          continue;
+        if (section === "package" && entry[1] === "name")
+          packages.push(line3.split("=")[1].trim().replace(/^["']|["']$/g, ""));
+        if (/(^|\.)(dev-|build-)?dependencies$/.test(section))
+          dependencies.push(entry[1]);
+      }
+    }
+  }
+  return { packages: packages.flatMap(packageForms), dependencies: dependencies.flatMap(packageForms) };
+}
+function packageForms(name) {
+  const scoped = name.match(/^@([^/]+)\/(.+)$/);
+  return scoped ? [scoped[2], scoped[1]] : [name];
+}
+var extensions = new Set("ts tsx js jsx mjs cjs json md mdx swift rs py go rb java kt kts c h m mm cpp hpp cs css scss html vue svelte yml yaml toml sh zsh sql xml plist txt lock gradle php ex exs dart lua zig astro".split(" "));
+function looksSecret(word) {
+  if (/^(sk|pk|rk|ghp|gho|ghs|ghu|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_]?[A-Za-z0-9]/.test(word) && word.length >= 16)
+    return true;
+  if (/[0-9a-f]{12,}/i.test(word) && /\d/.test(word.match(/[0-9a-f]{12,}/i)[0]))
+    return true;
+  const digits = word.replace(/\D/g, "").length;
+  if (word.length >= 20 && digits >= 3 && /[A-Z]/.test(word) && /[a-z]/.test(word))
+    return true;
+  return /[A-Za-z0-9+/]{24,}={0,2}$/.test(word) && digits >= 2;
+}
+function isIdentifier(word) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(word) && (/[a-z][A-Z]/.test(word) || /[A-Za-z0-9]_[A-Za-z0-9]/.test(word));
+}
+function namesIn(text2) {
+  const names = [];
+  const plain2 = text2.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, " ").replace(/[^\s`'"()<>[\]{},;]*[/\\]([^\s`'"()<>[\]{},;/\\]*)/g, " $1");
+  for (const match of plain2.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
+    const token = match[0].replace(/[.-]+$/, "");
+    if (!token)
+      continue;
+    const dot = token.lastIndexOf(".");
+    if (dot > 0 && extensions.has(token.slice(dot + 1).toLowerCase()) && /[A-Za-z]/.test(token.slice(0, dot)) && dot >= 2) {
+      names.push(token);
+      continue;
+    }
+    for (const part of token.split("."))
+      if (isIdentifier(part))
+        names.push(part);
+  }
+  return names;
+}
+function textsOf(message) {
+  if (message?.type === "user")
+    return [String(message.text ?? "")];
+  if (message?.type !== "assistant")
+    return [];
+  const texts = [];
+  for (const part of message.content ?? []) {
+    if (part?.type === "text" && typeof part.text === "string")
+      texts.push(part.text);
+    if (part?.type === "tool") {
+      const input = Object.values(part.state?.input ?? {}).filter((value) => typeof value === "string").join(`
+`);
+      if (!/(^|[\s/"'])\.env\b/.test(input))
+        texts.push(input.slice(0, 2000));
+    }
+  }
+  return texts;
+}
+function fileForms(path) {
+  const name = basename4(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? [name, name.slice(0, dot)] : [name];
+}
+function pickWords(directory, said, project) {
+  const picked = [];
+  const seen = new Set;
+  const add = (word) => {
+    const trimmed = word.trim();
+    const key = trimmed.toLowerCase();
+    if (picked.length >= wordLimit || trimmed.length < 2 || trimmed.length > wordLength || trimmed.startsWith(".") || seen.has(key))
+      return;
+    if (secret.test(trimmed) || looksSecret(trimmed) || !/[A-Za-z]/.test(trimmed))
+      return;
+    seen.add(key);
+    picked.push(trimmed);
+  };
+  add(basename4(directory));
+  if (project.repository)
+    add(project.repository);
+  const byName = new Map;
+  const byStem = new Map;
+  for (const file of project.files) {
+    const [name, stem] = fileForms(file);
+    byName.set(name.toLowerCase(), [...byName.get(name.toLowerCase()) ?? [], file]);
+    if (stem)
+      byStem.set(stem.toLowerCase(), [...byStem.get(stem.toLowerCase()) ?? [], file]);
+  }
+  const counts = new Map;
+  const words2 = said.flatMap(textsOf).flatMap(namesIn);
+  for (const [index, word] of words2.entries()) {
+    const key = word.toLowerCase();
+    const known = counts.get(key);
+    counts.set(key, { word: known?.word ?? word, count: (known?.count ?? 0) + 1, last: index });
+  }
+  for (const match of said.flatMap(textsOf).join(" ").matchAll(/[A-Za-z][A-Za-z0-9_-]{2,}/g)) {
+    const key = match[0].toLowerCase();
+    if (!counts.has(key) && byStem.has(key))
+      counts.set(key, { word: match[0], count: 1, last: -1 });
+  }
+  for (const { word } of [...counts.values()].sort((a, b) => b.count - a.count || b.last - a.last)) {
+    add(word);
+    const files = byName.get(word.toLowerCase()) ?? byStem.get(word.toLowerCase()) ?? [];
+    for (const file of files.slice(0, 2))
+      for (const form of fileForms(file))
+        add(form);
+  }
+  for (const name of project.packages.slice(0, 20))
+    add(name);
+  for (const file of project.changed.slice(0, 30))
+    for (const form of fileForms(file))
+      add(form);
+  const folders = new Map;
+  for (const file of project.files) {
+    const parts = file.split("/");
+    for (let depth = 1;depth < parts.length; depth++)
+      if (!folders.has(parts.slice(0, depth).join("/")))
+        folders.set(parts.slice(0, depth).join("/"), depth);
+  }
+  const atDepth = (depth) => [
+    ...[...folders].filter(([, at3]) => at3 === depth).map(([folder]) => [basename4(folder)]),
+    ...project.files.filter((file) => file.split("/").length === depth).map(fileForms)
+  ];
+  for (const forms of atDepth(1))
+    for (const form of forms)
+      add(form);
+  for (const name of project.dependencies)
+    add(name);
+  const deepest = Math.max(0, ...project.files.map((file) => file.split("/").length));
+  for (let depth = 2;depth <= deepest && picked.length < wordLimit; depth++)
+    for (const forms of atDepth(depth))
+      for (const form of forms)
+        add(form);
+  return picked;
+}
+var json5 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+async function voiceRoutes(voice, method, parts) {
+  if (!voice)
+    return json5({ message: "Voice words aren't running on this computer." }, 503);
+  const [what, session] = parts;
+  if (what !== "words" || !session || parts.length > 2)
+    return json5({ message: "Not found" }, 404);
+  if (method !== "GET")
+    return json5({ message: "Not allowed" }, 405);
+  if (!/^ses_[A-Za-z0-9_]+$/.test(session))
+    return json5({ message: "There's no such conversation here." }, 404);
+  try {
+    return json5({ data: { words: await voice.words(session) } });
+  } catch (error) {
+    if (error instanceof VoiceError)
+      return json5({ message: error.message }, error.status);
+    throw error;
+  }
+}
+
 // Packages/Box/src/agents/kuvotools.ts
 import { spawn as spawn2 } from "child_process";
 var server;
@@ -4764,11 +5049,11 @@ function kuvoToolName(name, args) {
 
 // Packages/Box/src/agents/snapshots.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync12, realpathSync as realpathSync2, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "fs";
-import { dirname as dirname3, join as join12, relative as relative4, resolve as resolve2, sep as sep9 } from "path";
+import { existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync6, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync2, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "fs";
+import { dirname as dirname4, join as join13, relative as relative4, resolve as resolve2, sep as sep9 } from "path";
 var quiet = { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" };
 var patchLimit2 = 50000;
-var fileLimit2 = 200;
+var fileLimit3 = 200;
 
 class Snapshots {
   root;
@@ -4801,7 +5086,7 @@ class Snapshots {
     return { top: root, prefix, exclude: exclude?.code === 0 ? exclude.stdout.trim() || undefined : undefined };
   }
   storeOf(repository) {
-    return join12(this.root, createHash2("sha1").update(repository.top).digest("hex").slice(0, 20));
+    return join13(this.root, createHash2("sha1").update(repository.top).digest("hex").slice(0, 20));
   }
   git(repository, args, options = {}) {
     const settings = ["-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false", "-c", "core.symlinks=true", "-c", "core.longpaths=true", "-c", "gc.pruneExpire=never", "-c", "gc.worktreePruneExpire=never"];
@@ -4829,7 +5114,7 @@ class Snapshots {
       return;
     return this.exclusive(repository, async () => {
       const store = this.storeOf(repository);
-      if (!existsSync5(join12(store, "HEAD"))) {
+      if (!existsSync5(join13(store, "HEAD"))) {
         mkdirSync6(store, { recursive: true });
         const made = await run("git", ["init", "--bare", "-q", store], { timeout: 30000, env: quiet });
         if (made.code !== 0)
@@ -4877,7 +5162,7 @@ class Snapshots {
       return [];
     return this.exclusive(repository, async () => {
       const files = [];
-      for (const path of paths.slice(0, fileLimit2)) {
+      for (const path of paths.slice(0, fileLimit3)) {
         const ran = await this.git(repository, ["diff", "--no-color", "--no-renames", "--no-ext-diff", from, to, "--", path]).catch(() => {
           return;
         });
@@ -4885,7 +5170,7 @@ class Snapshots {
           continue;
         const patch = ran.stdout.length > patchLimit2 ? ran.stdout.slice(0, patchLimit2) : ran.stdout;
         const status = /^new file mode/m.test(patch) ? "added" : /^deleted file mode/m.test(patch) ? "deleted" : "modified";
-        files.push(fromPatch(join12(repository.top, path), patch, status));
+        files.push(fromPatch(join13(repository.top, path), patch, status));
       }
       return files;
     });
@@ -4918,7 +5203,7 @@ class Snapshots {
       for (const path of goneRules)
         this.remove(repository.top, path);
       await this.checkout(repository, tree, paths.filter((path) => isRules(path) && there.has(path)));
-      let gone = paths.filter((path) => !isRules(path) && !there.has(path) && !repositories.has(path) && this.isInside(repository.top, join12(repository.top, path)));
+      let gone = paths.filter((path) => !isRules(path) && !there.has(path) && !repositories.has(path) && this.isInside(repository.top, join13(repository.top, path)));
       if (gone.length) {
         const ignored = await this.git(repository, ["check-ignore", "--no-index", "-z", "--stdin"], { input: gone.map((path) => `./${path}`).join("\x00"), patterns: true });
         if (ignored.code !== 0 && ignored.code !== 1)
@@ -4930,13 +5215,13 @@ class Snapshots {
       if (leftOut)
         gone = gone.filter((path) => !leftOut.has(path) && !ancestors(path).some((folder) => leftOut.has(`${folder}/`)));
       else if (since !== undefined)
-        gone = gone.filter((path) => !this.madeBefore(join12(repository.top, path), since));
+        gone = gone.filter((path) => !this.madeBefore(join13(repository.top, path), since));
       for (const path of gone.sort((a, b) => b.length - a.length))
         this.remove(repository.top, path);
       const back = paths.filter((path) => !isRules(path) && there.has(path));
       for (const path of back) {
-        const full = join12(repository.top, path);
-        if (this.isInside(repository.top, full) && existsSync5(full) && lstatSync2(full).isDirectory() && !existsSync5(join12(full, ".git")))
+        const full = join13(repository.top, path);
+        if (this.isInside(repository.top, full) && existsSync5(full) && lstatSync2(full).isDirectory() && !existsSync5(join13(full, ".git")))
           rmSync5(full, { recursive: true, force: true });
       }
       await this.checkout(repository, tree, back);
@@ -4952,16 +5237,16 @@ class Snapshots {
   }
   keepIgnored(store, tree, paths) {
     try {
-      const folder = join12(store, "kuvo-ignored");
+      const folder = join13(store, "kuvo-ignored");
       mkdirSync6(folder, { recursive: true });
-      const file = join12(folder, tree);
+      const file = join13(folder, tree);
       const known = existsSync5(file) ? readFileSync12(file, "utf8").split("\x00").filter(Boolean) : [];
       writeFileSync9(file, [...new Set([...known, ...paths])].join("\x00"));
     } catch {}
   }
   ignoredWith(store, tree) {
     try {
-      return new Set(readFileSync12(join12(store, "kuvo-ignored", tree), "utf8").split("\x00").filter(Boolean));
+      return new Set(readFileSync12(join13(store, "kuvo-ignored", tree), "utf8").split("\x00").filter(Boolean));
     } catch {
       return;
     }
@@ -4978,7 +5263,7 @@ class Snapshots {
     const target = resolve2(full);
     if (!target.startsWith(top + sep9))
       return false;
-    let folder = dirname3(target);
+    let folder = dirname4(target);
     while (folder.length > top.length) {
       try {
         if (lstatSync2(folder).isSymbolicLink())
@@ -4986,32 +5271,32 @@ class Snapshots {
       } catch {
         return true;
       }
-      folder = dirname3(folder);
+      folder = dirname4(folder);
     }
     return true;
   }
   remove(top, path) {
-    const full = join12(top, path);
+    const full = join13(top, path);
     if (!this.isInside(top, full))
       return;
     try {
-      const stat = lstatSync2(full);
-      if (stat.isDirectory() && !stat.isSymbolicLink() && existsSync5(join12(full, ".git")))
+      const stat2 = lstatSync2(full);
+      if (stat2.isDirectory() && !stat2.isSymbolicLink() && existsSync5(join13(full, ".git")))
         return;
-      rmSync5(full, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: true });
+      rmSync5(full, { recursive: stat2.isDirectory() && !stat2.isSymbolicLink(), force: true });
     } catch {
       return;
     }
-    let folder = dirname3(full);
+    let folder = dirname4(full);
     while (folder.length > top.length) {
       try {
-        if (readdirSync7(folder).length)
+        if (readdirSync8(folder).length)
           break;
         rmdirSync(folder);
       } catch {
         break;
       }
-      folder = dirname3(folder);
+      folder = dirname4(folder);
     }
   }
 }
@@ -5022,13 +5307,13 @@ function ancestors(path) {
 
 // Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash4 } from "crypto";
-import { chmodSync as chmodSync3, existsSync as existsSync9, mkdirSync as mkdirSync10, readdirSync as readdirSync9, readFileSync as readFileSync16, renameSync as renameSync8, rmSync as rmSync8, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
-import { join as join15 } from "path";
+import { chmodSync as chmodSync3, existsSync as existsSync9, mkdirSync as mkdirSync10, readdirSync as readdirSync10, readFileSync as readFileSync16, renameSync as renameSync8, rmSync as rmSync8, statSync as statSync6, writeFileSync as writeFileSync13 } from "fs";
+import { join as join16 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // Packages/Box/src/agents/acp.ts
 import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync13, writeFileSync as writeFileSync10 } from "fs";
-import { dirname as dirname4, resolve as resolve3 } from "path";
+import { dirname as dirname5, resolve as resolve3 } from "path";
 
 // Packages/Box/src/agents/rpc.ts
 class RPCError extends Error {
@@ -5945,7 +6230,7 @@ ${others.map((path) => `- ${path}`).join(`
         const file = resolve3(this.session.location.directory, params.path);
         if (active?.hooks.check({ action: "edit", resources: [file] }) === "deny")
           throw new RPCError(-32000, "Kuvo Code's settings don't allow this (Settings \u203A Permissions, or this session's rules).");
-        mkdirSync7(dirname4(file), { recursive: true });
+        mkdirSync7(dirname5(file), { recursive: true });
         writeFileSync10(file, params.content ?? "");
         return {};
       }
@@ -6173,11 +6458,11 @@ function questionFields(questions) {
 
 // Packages/Box/src/agents/signin.ts
 import { chmodSync as chmodSync2, existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync14, rmSync as rmSync6, writeFileSync as writeFileSync11 } from "fs";
-import { join as join13 } from "path";
+import { join as join14 } from "path";
 function catcher(temporary) {
-  const path = join13(temporary, "bin", "kuvo-catch-url");
+  const path = join14(temporary, "bin", "kuvo-catch-url");
   if (!existsSync7(path)) {
-    mkdirSync8(join13(temporary, "bin"), { recursive: true });
+    mkdirSync8(join14(temporary, "bin"), { recursive: true });
     writeFileSync11(path, `#!/bin/sh
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 `);
@@ -6186,7 +6471,7 @@ printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
   return path;
 }
 async function commandSignIn(options) {
-  const urlFile = join13(options.temporary, `${newID("att")}.url`);
+  const urlFile = join14(options.temporary, `${newID("att")}.url`);
   const child = Bun.spawn([options.command, ...options.args], {
     env: { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile },
     stdin: "pipe",
@@ -6303,8 +6588,8 @@ function lastLines(text2) {
 
 // Packages/Box/src/agents/skills.ts
 import { createHash as createHash3 } from "crypto";
-import { cpSync, existsSync as existsSync8, mkdirSync as mkdirSync9, readdirSync as readdirSync8, readFileSync as readFileSync15, renameSync as renameSync7, rmSync as rmSync7, statSync as statSync5, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
-import { dirname as dirname5, join as join14, resolve as resolve4, sep as sep10 } from "path";
+import { cpSync, existsSync as existsSync8, mkdirSync as mkdirSync9, readdirSync as readdirSync9, readFileSync as readFileSync15, renameSync as renameSync7, rmSync as rmSync7, statSync as statSync5, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
+import { dirname as dirname6, join as join15, resolve as resolve4, sep as sep10 } from "path";
 var link;
 var home;
 function setSkillSource(engine, folder) {
@@ -6332,7 +6617,7 @@ function engineSkills(directory) {
         const path = typeof skill?.path === "string" ? skill.path : undefined;
         if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync8(path))
           continue;
-        found2.push({ name, folder: dirname5(path) });
+        found2.push({ name, folder: dirname6(path) });
       }
       if (!list.length)
         listed.delete(directory);
@@ -6351,7 +6636,7 @@ function upward(directory) {
   let at3 = resolve4(directory);
   while (true) {
     folders.push(at3);
-    const up = dirname5(at3);
+    const up = dirname6(at3);
     if (up === at3)
       return folders;
     at3 = up;
@@ -6383,8 +6668,8 @@ function stamp2(folder) {
   let size = 0;
   let changed = 0;
   const visit = (at3, depth) => {
-    for (const name of readdirSync8(at3)) {
-      const path = join14(at3, name);
+    for (const name of readdirSync9(at3)) {
+      const path = join15(at3, name);
       const info = statSync5(path);
       changed = Math.max(changed, info.mtimeMs);
       if (info.isDirectory()) {
@@ -6437,26 +6722,26 @@ function skillsFolder(skills) {
     return;
   const set = createHash3("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
 `)).digest("hex").slice(0, 16);
-  const root = join14(home, "skills");
-  const folder = join14(root, set);
+  const root = join15(home, "skills");
+  const folder = join15(root, set);
   const now = new Date;
-  if (existsSync8(join14(folder, ".claude-plugin", "plugin.json"))) {
+  if (existsSync8(join15(folder, ".claude-plugin", "plugin.json"))) {
     try {
       utimesSync(folder, now, now);
     } catch {}
     return folder;
   }
   tidy(root);
-  const making = join14(root, `.${set}-${process.pid}`);
+  const making = join15(root, `.${set}-${process.pid}`);
   rmSync7(making, { recursive: true, force: true });
-  mkdirSync9(join14(making, "skills"), { recursive: true, mode: 448 });
-  mkdirSync9(join14(making, ".claude-plugin"), { recursive: true });
-  mkdirSync9(join14(making, ".cursor"), { recursive: true });
+  mkdirSync9(join15(making, "skills"), { recursive: true, mode: 448 });
+  mkdirSync9(join15(making, ".claude-plugin"), { recursive: true });
+  mkdirSync9(join15(making, ".cursor"), { recursive: true });
   for (const entry of list)
-    copy(entry.skill.folder, join14(making, "skills", entry.name));
-  writeFileSync12(join14(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
+    copy(entry.skill.folder, join15(making, "skills", entry.name));
+  writeFileSync12(join15(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
 `);
-  symlinkSync(join14("..", "skills"), join14(making, ".cursor", "skills"));
+  symlinkSync(join15("..", "skills"), join15(making, ".cursor", "skills"));
   try {
     renameSync7(making, folder);
   } catch {
@@ -6467,12 +6752,12 @@ function skillsFolder(skills) {
 function tidy(root) {
   let names = [];
   try {
-    names = readdirSync8(root);
+    names = readdirSync9(root);
   } catch {
     return;
   }
   for (const name of names) {
-    const path = join14(root, name);
+    const path = join15(root, name);
     try {
       if (Date.now() - statSync5(path).mtimeMs > 86400000)
         rmSync7(path, { recursive: true, force: true });
@@ -6481,7 +6766,7 @@ function tidy(root) {
 }
 function copySkillsInto(folder, skills) {
   const list = named(skills);
-  const record2 = join14(folder, ".kuvo-code");
+  const record2 = join15(folder, ".kuvo-code");
   let before = {};
   try {
     before = JSON.parse(readFileSync15(record2, "utf8"));
@@ -6493,11 +6778,11 @@ function copySkillsInto(folder, skills) {
     mkdirSync9(folder, { recursive: true, mode: 448 });
     for (const name of Object.keys(before))
       if (before[name] !== after[name])
-        rmSync7(join14(folder, folderName(name)), { recursive: true, force: true });
+        rmSync7(join15(folder, folderName(name)), { recursive: true, force: true });
     for (const entry of list) {
-      if (before[entry.name] === after[entry.name] && existsSync8(join14(folder, entry.name)))
+      if (before[entry.name] === after[entry.name] && existsSync8(join15(folder, entry.name)))
         continue;
-      if (!existsSync8(join14(folder, entry.name)) && !copy(entry.skill.folder, join14(folder, entry.name)))
+      if (!existsSync8(join15(folder, entry.name)) && !copy(entry.skill.folder, join15(folder, entry.name)))
         delete after[entry.name];
     }
     writeFileSync12(record2, JSON.stringify(after));
@@ -6574,20 +6859,20 @@ function generatedImages(folder, input, since) {
     return [];
   let names;
   try {
-    names = readdirSync9(folder);
+    names = readdirSync10(folder);
   } catch {
     return [];
   }
   const types3 = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
   const images2 = names.map((name) => ({ name, type: types3[name.split(".").pop()?.toLowerCase() ?? ""] })).filter((file) => file.type && (!stem || file.name.startsWith(`${stem}_`) || file.name.startsWith(`${stem}.`))).map((file) => ({ ...file, at: (() => {
     try {
-      return statSync6(join15(folder, file.name)).mtimeMs;
+      return statSync6(join16(folder, file.name)).mtimeMs;
     } catch {
       return 0;
     }
   })() })).filter((file) => stem || file.at >= since).sort((a, b) => b.at - a.at);
   const newest = images2[0];
-  return newest ? [{ type: "file", uri: pathToFileURL2(join15(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
+  return newest ? [{ type: "file", uri: pathToFileURL2(join16(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
 }
 
 class AntigravityFollower {
@@ -6627,7 +6912,7 @@ class AntigravityFollower {
   }
   steps(conversation) {
     try {
-      return readFileSync16(join15(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
+      return readFileSync16(join16(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
 `).flatMap((line3) => {
         try {
           const step = JSON.parse(line3);
@@ -6805,22 +7090,22 @@ class AntigravityAgent {
     this.providerID = providerID("antigravity", instance.id);
   }
   get root() {
-    return join15(this.context.home, "antigravity");
+    return join16(this.context.home, "antigravity");
   }
   get folder() {
-    return join15(this.root, version);
+    return join16(this.root, version);
   }
   get profile() {
-    return this.instance.home ? join15(this.instance.home, "profile") : join15(this.root, "profile");
+    return this.instance.home ? join16(this.instance.home, "profile") : join16(this.root, "profile");
   }
   get tokenFile() {
-    return join15(this.profile, "antigravity-acp", "acp_token.json");
+    return join16(this.profile, "antigravity-acp", "acp_token.json");
   }
   get modelsFile() {
-    return join15(this.profile, "kuvo-models.json");
+    return join16(this.profile, "kuvo-models.json");
   }
   get isInstalled() {
-    return existsSync9(join15(this.folder, ".complete"));
+    return existsSync9(join16(this.folder, ".complete"));
   }
   methods() {
     return [{ type: "oauth", id: "oauth-personal", label: "Sign in with Google" }];
@@ -6864,10 +7149,10 @@ class AntigravityAgent {
     const release = releases[`${process.platform}-${process.arch}`];
     if (!release)
       throw new Error("Google doesn't make Antigravity's agent for this computer.");
-    const staging = join15(this.root, `.install-${newID("att")}`);
+    const staging = join16(this.root, `.install-${newID("att")}`);
     mkdirSync10(staging, { recursive: true });
     try {
-      const archive = join15(staging, "download.zip");
+      const archive = join16(staging, "download.zip");
       const response = await fetch(release.url);
       if (!response.ok || !response.body)
         throw new Error(`Couldn't download Antigravity's agent (HTTP ${response.status}).`);
@@ -6895,13 +7180,13 @@ class AntigravityAgent {
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
       rmSync8(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync3(join15(staging, name), 493);
-      writeFileSync13(join15(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
+        chmodSync3(join16(staging, name), 493);
+      writeFileSync13(join16(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
       rmSync8(this.folder, { recursive: true, force: true });
       renameSync8(staging, this.folder);
-      for (const name of readdirSync9(this.root)) {
+      for (const name of readdirSync10(this.root)) {
         if (name !== version && name !== "profile" && /^\d/.test(name))
-          rmSync8(join15(this.root, name), { recursive: true, force: true });
+          rmSync8(join16(this.root, name), { recursive: true, force: true });
       }
     } finally {
       this.downloaded = undefined;
@@ -6909,14 +7194,14 @@ class AntigravityAgent {
     }
   }
   ownSkillFolders(directory) {
-    return [join15(this.profile, "antigravity-cli", "skills"), join15(directory, ".agents", "skills"), join15(directory, ".gemini", "skills")];
+    return [join16(this.profile, "antigravity-cli", "skills"), join16(directory, ".agents", "skills"), join16(directory, ".gemini", "skills")];
   }
   launch() {
-    mkdirSync10(join15(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
-    const settings = join15(this.profile, "antigravity-acp", "settings.json");
+    mkdirSync10(join16(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
+    const settings = join16(this.profile, "antigravity-acp", "settings.json");
     if (!existsSync9(settings))
       writeFileSync13(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
-    const temporary = join15(this.context.temporary, "antigravity", newID("att"));
+    const temporary = join16(this.context.temporary, "antigravity", newID("att"));
     mkdirSync10(temporary, { recursive: true });
     let env = {};
     for (const [key, value] of Object.entries(process.env))
@@ -6927,13 +7212,13 @@ class AntigravityAgent {
       GEMINI_HOME: this.profile,
       AGY_ACP_FORCE_FILE_STORAGE: "1",
       BROWSER: catcher(this.context.temporary),
-      KUVO_URL_FILE: join15(temporary, "url"),
+      KUVO_URL_FILE: join16(temporary, "url"),
       PYTHONUNBUFFERED: "1",
       TMPDIR: temporary,
-      ANTIGRAVITY_HARNESS_PATH: join15(this.folder, harnessName)
+      ANTIGRAVITY_HARNESS_PATH: join16(this.folder, harnessName)
     });
-    const argv = [join15(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
-    return { argv, env, cleanEnv: true, onExit: () => rmSync8(temporary, { recursive: true, force: true }), signInFile: join15(temporary, "url") };
+    const argv = [join16(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
+    return { argv, env, cleanEnv: true, onExit: () => rmSync8(temporary, { recursive: true, force: true }), signInFile: join16(temporary, "url") };
   }
   signsInRemotely = true;
   async signIn() {
@@ -6950,7 +7235,7 @@ class AntigravityAgent {
       if (cancelled)
         return;
       const launch = this.launch();
-      const cwd = join15(this.context.temporary, "antigravity", newID("att"));
+      const cwd = join16(this.context.temporary, "antigravity", newID("att"));
       mkdirSync10(cwd, { recursive: true });
       rpc = new RPC(launch.argv, {
         cwd,
@@ -7046,10 +7331,10 @@ class AntigravityAgent {
       writeFileSync13(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
   }
   removeSessionFiles(sessionID) {
-    const folder = join15(this.profile, "antigravity-acp");
+    const folder = join16(this.profile, "antigravity-acp");
     for (const suffix of [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"])
-      rmSync8(join15(folder, "conversations", sessionID + suffix), { force: true });
-    rmSync8(join15(folder, "brain", sessionID), { recursive: true, force: true });
+      rmSync8(join16(folder, "conversations", sessionID + suffix), { force: true });
+    rmSync8(join16(folder, "brain", sessionID), { recursive: true, force: true });
   }
   async models() {
     try {
@@ -7075,11 +7360,11 @@ class AntigravityAgent {
       follow: (sessionId, turn, hooks) => {
         let follower = followers.get(sessionId);
         if (!follower)
-          followers.set(sessionId, follower = new AntigravityFollower(join15(agent.profile, "antigravity-acp", "brain"), sessionId));
+          followers.set(sessionId, follower = new AntigravityFollower(join16(agent.profile, "antigravity-acp", "brain"), sessionId));
         return follower.follow(turn, hooks);
       },
       hides: (call) => /\b(start_subagent|invoke_subagent)\b/.test(`${call?.title ?? ""} ${call?.rawInput?.name ?? ""}`),
-      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join15(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
+      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join16(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
       authMethod: () => "oauth-personal",
       async command() {
         if (!agent.isInstalled)
@@ -7087,7 +7372,7 @@ class AntigravityAgent {
         return agent.launch();
       },
       async skills(directory, hooks) {
-        return copySkillsInto(join15(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
+        return copySkillsInto(join16(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
       },
       asksSignIn: (line3) => line3.includes(signInLine),
       limitReply: (text2) => {
@@ -7145,12 +7430,12 @@ function unzipper() {
 import { randomUUID } from "crypto";
 import { existsSync as existsSync11, readFileSync as readFileSync17, statSync as statSync7 } from "fs";
 import { homedir } from "os";
-import { join as join17 } from "path";
+import { join as join18 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
 import { existsSync as existsSync10, realpathSync as realpathSync3 } from "fs";
-import { basename as basename4, join as join16 } from "path";
+import { basename as basename5, join as join17 } from "path";
 var checked = new Map;
 var newest = new Map;
 var underWay = new Map;
@@ -7272,23 +7557,23 @@ async function resolveUpdater(definition) {
   try {
     realPath = realpathSync3(definition.executable);
   } catch {}
-  const name = basename4(definition.executable);
+  const name = basename5(definition.executable);
   const native = definition.nativeUpdate;
   const nativeUpdater = native ? { command: [definition.executable, ...native.args], shown: [name, ...native.args].join(" "), distTag: native.distTag?.() } : {};
   if (native?.isNative(realPath) || native && native.isNative(definition.executable))
     return nativeUpdater;
   const prefix = npmGlobalPrefix(realPath, definition.npmPackage);
   if (prefix) {
-    const npm = existsSync10(join16(prefix, "bin", "npm")) ? join16(prefix, "bin", "npm") : "npm";
+    const npm = existsSync10(join17(prefix, "bin", "npm")) ? join17(prefix, "bin", "npm") : "npm";
     return {
       command: [npm, "install", "-g", "--prefix", prefix, `--allow-scripts=${definition.npmPackage}`, `${definition.npmPackage}@latest`],
       shown: `npm install -g ${definition.npmPackage}@latest`,
-      env: { PATH: `${join16(prefix, "bin")}:${process.env.PATH ?? ""}` }
+      env: { PATH: `${join17(prefix, "bin")}:${process.env.PATH ?? ""}` }
     };
   }
   const keg = homebrewKeg(realPath);
   if (keg && keg.name.toLowerCase() !== "mise") {
-    const brew = existsSync10(join16(keg.prefix, "bin", "brew")) ? join16(keg.prefix, "bin", "brew") : which("brew");
+    const brew = existsSync10(join17(keg.prefix, "bin", "brew")) ? join17(keg.prefix, "bin", "brew") : which("brew");
     if (brew) {
       const said2 = (await run(brew, ["--prefix"], { timeout: 15000 }).catch(() => {
         return;
@@ -7332,9 +7617,9 @@ function homebrewKeg(realPath) {
     return;
   return { kind: match[2].toLowerCase() === "cellar" ? "formula" : "cask", name: match[3], prefix: match[1] };
 }
-function homebrewLatest(json5, cask) {
+function homebrewLatest(json6, cask) {
   try {
-    const info = JSON.parse(json5);
+    const info = JSON.parse(json6);
     const raw = cask ? info.casks?.[0]?.version?.split(",", 1)[0] : info.formulae?.[0]?.versions?.stable;
     return raw && raw !== "latest" ? raw : undefined;
   } catch {
@@ -7431,7 +7716,7 @@ async function stopShell(id) {
 
 // Packages/Box/src/agents/agents/claude.ts
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
-var places = [join17(homedir(), ".local/bin"), join17(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
+var places = [join18(homedir(), ".local/bin"), join18(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
 var outputLimit3 = 30000;
 
 class ClaudeAgent {
@@ -7526,7 +7811,7 @@ class ClaudeAgent {
   settingsWritten() {
     const folder = this.instance.home ?? homedir();
     try {
-      return statSync7(join17(folder, ".claude.json")).mtimeMs;
+      return statSync7(join18(folder, ".claude.json")).mtimeMs;
     } catch {
       return 0;
     }
@@ -7554,11 +7839,11 @@ class ClaudeAgent {
     return this.context.deps.load(this.id, SDK[0].name);
   }
   ownSkillFolders(directory) {
-    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join17(homedir(), ".claude");
-    return [join17(settings, "skills"), ...upward(directory).map((folder) => join17(folder, ".claude", "skills"))];
+    const settings = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR ?? join18(homedir(), ".claude");
+    return [join18(settings, "skills"), ...upward(directory).map((folder) => join18(folder, ".claude", "skills"))];
   }
   env() {
-    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join17(this.context.temporary, "claude") };
+    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join18(this.context.temporary, "claude") };
     if (this.instance.home)
       env.CLAUDE_CONFIG_DIR = this.instance.home;
     const own = onMachine ? ownFoldersScript(this.context.home) : undefined;
@@ -7709,8 +7994,8 @@ function family(name) {
 }
 function updateChannel() {
   try {
-    const folder = process.env.CLAUDE_CONFIG_DIR ?? join17(homedir(), ".claude");
-    const settings = JSON.parse(readFileSync17(join17(folder, "settings.json"), "utf8"));
+    const folder = process.env.CLAUDE_CONFIG_DIR ?? join18(homedir(), ".claude");
+    const settings = JSON.parse(readFileSync17(join18(folder, "settings.json"), "utf8"));
     return settings?.autoUpdatesChannel === "stable" ? "stable" : "latest";
   } catch {
     return "latest";
@@ -8850,10 +9135,10 @@ function safeBase642(path) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync11, readdirSync as readdirSync10, readFileSync as readFileSync18, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync12, lstatSync as lstatSync3, mkdirSync as mkdirSync11, readdirSync as readdirSync11, readFileSync as readFileSync18, readlinkSync, rmSync as rmSync9, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
-import { join as join18 } from "path";
-var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join18(homedir2(), ".local/bin"), join18(homedir2(), ".codex/bin")];
+import { join as join19 } from "path";
+var places2 = ["/opt/homebrew/bin", "/usr/local/bin", join19(homedir2(), ".local/bin"), join19(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 
@@ -9216,14 +9501,14 @@ class CodexAgent {
     return thread;
   }
   ownSkillFolders(directory) {
-    return [join18(this.home, "skills"), join18(homedir2(), ".agents", "skills"), ...upward(directory).map((folder) => join18(folder, ".agents", "skills"))];
+    return [join19(this.home, "skills"), join19(homedir2(), ".agents", "skills"), ...upward(directory).map((folder) => join19(folder, ".agents", "skills"))];
   }
   get home() {
-    return this.instance.home ?? process.env.CODEX_HOME ?? join18(homedir2(), ".codex");
+    return this.instance.home ?? process.env.CODEX_HOME ?? join19(homedir2(), ".codex");
   }
   async useSkills(sessionID, folder, rpc) {
     if (folder)
-      this.skillRoots.set(sessionID, join18(folder, "skills"));
+      this.skillRoots.set(sessionID, join19(folder, "skills"));
     else
       this.skillRoots.delete(sessionID);
     const roots = [...new Set(this.skillRoots.values())].sort();
@@ -9234,7 +9519,7 @@ class CodexAgent {
   }
   ownSkillSettings() {
     try {
-      const settings = Bun.TOML.parse(readFileSync18(join18(this.home, "config.toml"), "utf8"));
+      const settings = Bun.TOML.parse(readFileSync18(join19(this.home, "config.toml"), "utf8"));
       return Array.isArray(settings?.skills?.config) ? settings.skills.config : [];
     } catch {
       return [];
@@ -9298,7 +9583,7 @@ class CodexThread {
     const off = turnedOff(hooks);
     const skills = skillsFolder(await skillsFor(directory, own, off));
     await this.agent.useSkills(this.session.id, skills, rpc);
-    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join18(skill.folder, "SKILL.md"), enabled: false }));
+    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join19(skill.folder, "SKILL.md"), enabled: false }));
     const skillsKey = JSON.stringify([skills, turnedOffHere]);
     if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey)
       return rpc;
@@ -10316,26 +10601,26 @@ function agentTitle(path) {
   return words2 ? words2[0].toUpperCase() + words2.slice(1) : "";
 }
 function shadowHome(home2) {
-  const own = join18(homedir2(), ".codex");
+  const own = join19(homedir2(), ".codex");
   const kept2 = new Set(["auth.json", "models_cache.json"]);
   mkdirSync11(home2, { recursive: true, mode: 448 });
-  const wanted2 = existsSync12(own) ? readdirSync10(own).filter((name) => !kept2.has(name)) : [];
+  const wanted2 = existsSync12(own) ? readdirSync11(own).filter((name) => !kept2.has(name)) : [];
   for (const name of wanted2) {
-    const link2 = join18(home2, name);
-    const target = join18(own, name);
+    const link2 = join19(home2, name);
+    const target = join19(own, name);
     try {
-      const stat = lstatSync3(link2, { throwIfNoEntry: false });
-      if (stat?.isSymbolicLink() && readlinkSync(link2) === target)
+      const stat2 = lstatSync3(link2, { throwIfNoEntry: false });
+      if (stat2?.isSymbolicLink() && readlinkSync(link2) === target)
         continue;
-      if (stat && !stat.isSymbolicLink())
+      if (stat2 && !stat2.isSymbolicLink())
         continue;
-      if (stat)
+      if (stat2)
         rmSync9(link2, { force: true });
       symlinkSync2(target, link2);
     } catch {}
   }
-  for (const name of readdirSync10(home2)) {
-    const link2 = join18(home2, name);
+  for (const name of readdirSync11(home2)) {
+    const link2 = join19(home2, name);
     try {
       if (lstatSync3(link2).isSymbolicLink() && !wanted2.includes(name))
         rmSync9(link2, { force: true });
@@ -10358,7 +10643,7 @@ function firstLine2(text2) {
 // Packages/Box/src/agents/agents/cursor.ts
 import { existsSync as existsSync13, mkdirSync as mkdirSync12, readFileSync as readFileSync19, rmSync as rmSync10 } from "fs";
 import { homedir as homedir3 } from "os";
-import { join as join19 } from "path";
+import { join as join20 } from "path";
 var effortParameters = ["effort", "reasoning", "reasoning_effort"];
 var SDK2 = [{ name: "@cursor/sdk", version: "1.0.35" }];
 var outputLimit5 = 30000;
@@ -10380,13 +10665,13 @@ class CursorAgent {
     this.providerID = providerID("cursor", instance.id);
   }
   ownSkillFolders(directory) {
-    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join19(folder, name, "skills")));
+    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join20(folder, name, "skills")));
   }
   get folder() {
-    return this.instance.home ?? join19(this.context.home, "cursor");
+    return this.instance.home ?? join20(this.context.home, "cursor");
   }
   get authFile() {
-    return join19(this.folder, "auth.json");
+    return join20(this.folder, "auth.json");
   }
   methods() {
     return [
@@ -10396,10 +10681,10 @@ class CursorAgent {
   }
   async sdk() {
     const folder = await this.context.deps.ensure(this.id, SDK2);
-    process.argv[1] = join19(folder, "package.json");
-    process.env.CURSOR_DATA_DIR ??= join19(this.context.home, "cursor", "data");
-    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join19(this.context.home, "cursor", "sandbox-policies");
-    process.env.CUA_APP_SUPPORT_DIR ??= join19(this.context.home, "cursor", "computer-use");
+    process.argv[1] = join20(folder, "package.json");
+    process.env.CURSOR_DATA_DIR ??= join20(this.context.home, "cursor", "data");
+    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join20(this.context.home, "cursor", "sandbox-policies");
+    process.env.CUA_APP_SUPPORT_DIR ??= join20(this.context.home, "cursor", "computer-use");
     return this.context.deps.load(this.id, SDK2[0].name);
   }
   async store(sdk) {
@@ -10529,7 +10814,7 @@ class CursorAgent {
     } catch {}
   }
   agentStore(sdk) {
-    const root = join19(this.folder, "agents");
+    const root = join20(this.folder, "agents");
     mkdirSync12(root, { recursive: true });
     return new sdk.JsonlLocalAgentStore(root);
   }
@@ -11024,8 +11309,8 @@ function withTimeout2(promise, milliseconds) {
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync13, readFileSync as readFileSync20, writeFileSync as writeFileSync14 } from "fs";
-import { dirname as dirname6, join as join20 } from "path";
-var places3 = [join20(homedir4(), ".grok/bin"), join20(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+import { dirname as dirname7, join as join21 } from "path";
+var places3 = [join21(homedir4(), ".grok/bin"), join21(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 
 class GrokAgent {
   context;
@@ -11039,7 +11324,7 @@ class GrokAgent {
   status;
   promptCount = 0;
   get effortsFile() {
-    return join20(this.context.home, "grok", `efforts-${this.instance.id}.json`);
+    return join21(this.context.home, "grok", `efforts-${this.instance.id}.json`);
   }
   efforts() {
     try {
@@ -11059,7 +11344,7 @@ class GrokAgent {
     if (!Object.keys(known).length || JSON.stringify(known) === JSON.stringify(this.efforts()))
       return;
     try {
-      mkdirSync13(dirname6(this.effortsFile), { recursive: true });
+      mkdirSync13(dirname7(this.effortsFile), { recursive: true });
       writeFileSync14(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
@@ -11099,9 +11384,9 @@ class GrokAgent {
     return [{ type: "oauth", id: "grok", label: "Sign in with Grok" }];
   }
   ownSkillFolders(directory) {
-    const home2 = this.instance.home ?? process.env.GROK_HOME ?? join20(homedir4(), ".grok");
-    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join20(folder, name, "skills")));
-    return [join20(home2, "skills"), join20(homedir4(), ".claude", "skills"), join20(homedir4(), ".cursor", "skills"), ...projects];
+    const home2 = this.instance.home ?? process.env.GROK_HOME ?? join21(homedir4(), ".grok");
+    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join21(folder, name, "skills")));
+    return [join21(home2, "skills"), join21(homedir4(), ".claude", "skills"), join21(homedir4(), ".cursor", "skills"), ...projects];
   }
   env() {
     return withOwnFolders({ ...process.env, GROK_DISABLE_AUTOUPDATER: "1", ...this.instance.home ? { GROK_HOME: this.instance.home } : {} });
@@ -11296,7 +11581,7 @@ import { createHash as createHash5 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync21, statSync as statSync8 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname7, join as join21, resolve as resolve5 } from "path";
+import { dirname as dirname8, join as join22, resolve as resolve5 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -12261,19 +12546,19 @@ function hidesFromBlocks(blocks, ask) {
 }
 var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "glob"]);
 function ownPlaces() {
-  const places4 = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join21(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
+  const places4 = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join22(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places4.push(join21(dirname7(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places4.push(join22(dirname8(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places4, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces()) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve5(directory, resource.startsWith("~/") ? join21(homedir5(), resource.slice(2)) : resource));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve5(directory, resource.startsWith("~/") ? join22(homedir5(), resource.slice(2)) : resource));
   return paths.filter((path) => !within(path, [directory, ...own]) && !attached.has(path));
 }
 function outsideAsk(ask, paths) {
-  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join21(dirname7(path), "*")))], unclassified: false };
+  return { ...ask, action: "external_directory", resources: paths, save: [...new Set(paths.map((path) => join22(dirname8(path), "*")))], unclassified: false };
 }
 function partsOf2(ask) {
   return isShell(ask.action) ? ask.resources.flatMap(commandParts) : ask.resources;
@@ -13924,8 +14209,8 @@ function ownWords(message) {
 }
 
 // Packages/Box/src/agents/artifacts/routes.ts
-var json5 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message = (status, text2) => json5({ message: text2 }, status);
+var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message = (status, text2) => json6({ message: text2 }, status);
 var kinds2 = new Set(["memory", "skill", "image", "page", "document", "download", "code", "file"]);
 var seconds = (text2) => {
   if (!text2)
@@ -13981,7 +14266,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json5(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json6(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "events" || first === "timeline" && second === "events") {
     if (method !== "GET")
@@ -13997,7 +14282,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json5(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json6(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "storage") {
     if (!second && method === "POST") {
@@ -14005,14 +14290,14 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (typeof budget2 !== "number" || !Number.isFinite(budget2) || budget2 < 0)
         return message(400, "Say the budget for older versions, in bytes (budget).");
       store.setBudget(budget2);
-      return json5(store.storage());
+      return json6(store.storage());
     }
     if (!second)
-      return method === "GET" ? json5(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
+      return method === "GET" ? json6(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
     if (second === "clear" && method === "POST") {
       const { before } = await body() ?? {};
       const at3 = typeof before === "number" ? new Date(before * 1000).toISOString() : undefined;
-      return json5({ cleared: store.clearOlder(at3), ...store.storage() });
+      return json6({ cleared: store.clearOlder(at3), ...store.storage() });
     }
     return message(404, "No such route.");
   }
@@ -14020,7 +14305,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json5(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json6(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -14028,7 +14313,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return changed ? json5(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
+    return changed ? json6(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -14037,7 +14322,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (!Number.isInteger(version2))
       return message(400, "Say which version to put back (version).");
     const restored = await store.restore(artifact.id, version2);
-    return typeof restored === "string" ? message(409, restored) : json5(clientArtifact(restored, store));
+    return typeof restored === "string" ? message(409, restored) : json6(clientArtifact(restored, store));
   }
   if (second === "versions" && third !== undefined) {
     const n = Number(third);
@@ -14059,15 +14344,15 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (version2.reason && privateReasons.has(version2.reason))
         return message(410, notKept(version2));
       if (version2.patch)
-        return json5({ style: "lines", patch: version2.patch, added: version2.lines?.added ?? 0, removed: version2.lines?.removed ?? 0, from: from?.n ?? null, to: n });
+        return json6({ style: "lines", patch: version2.patch, added: version2.lines?.added ?? 0, removed: version2.lines?.removed ?? 0, from: from?.n ?? null, to: n });
       if (!isText(artifact.path)) {
-        return json5({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
+        return json6({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
       }
       const after = version2.status === "deleted" ? "" : store.bytes(artifact.id, n);
       const before = from ? from.status === "deleted" ? "" : store.bytes(artifact.id, from.n) : "";
       if (after === null || after === undefined || before === null || before === undefined)
         return message(410, version2.kept ? "The version before isn't kept, so what changed can't be shown." : notKept(version2));
-      return json5({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
+      return json6({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
     }
   }
   return message(404, "No such route.");
@@ -14084,7 +14369,7 @@ async function notedRoute(noted, method, body) {
     return message(400, "Say whose it is (session).");
   if (via !== "download")
     return message(400, "Say how it came (via: download).");
-  return await noted(session, path, via) ? json5({ ok: true }) : message(404, "There's no such conversation on this computer.");
+  return await noted(session, path, via) ? json6({ ok: true }) : message(404, "There's no such conversation on this computer.");
 }
 function notKept(version2) {
   if (version2.status === "deleted")
@@ -14718,8 +15003,8 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync14, readdirSync as readdirSync11, readFileSync as readFileSync22, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "fs";
-import { join as join22 } from "path";
+import { existsSync as existsSync14, mkdirSync as mkdirSync14, readdirSync as readdirSync12, readFileSync as readFileSync22, renameSync as renameSync9, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "fs";
+import { join as join23 } from "path";
 var version2 = 1;
 var strings = (value) => Array.isArray(value) && value.every((item) => typeof item === "string");
 var stringMap = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
@@ -14786,13 +15071,13 @@ class GroupStore {
     mkdirSync14(root, { recursive: true, mode: 448 });
   }
   folder(id) {
-    return join22(this.root, id);
+    return join23(this.root, id);
   }
   load() {
     const all = new Map;
     let names = [];
     try {
-      names = readdirSync11(this.root);
+      names = readdirSync12(this.root);
     } catch {}
     for (const id of names) {
       if (!/^grp_[a-z0-9]+$/.test(id))
@@ -14804,24 +15089,24 @@ class GroupStore {
     return all;
   }
   read(id) {
-    const record2 = read(join22(this.folder(id), "group.json"));
+    const record2 = read(join23(this.folder(id), "group.json"));
     if (!record2 || typeof record2.kuvo !== "number" || record2.kuvo > version2 || !isGroup(record2.group, id))
       return;
-    const messages2 = read(join22(this.folder(id), "messages.json")) ?? [];
+    const messages2 = read(join23(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages2))
       return;
     return { group: record2.group, status: record2.status === "held" ? "held" : "active", talking: record2.talking === true, messages: messages2 };
   }
   saveGroup(kept2) {
     mkdirSync14(this.folder(kept2.group.id), { recursive: true, mode: 448 });
-    write(join22(this.folder(kept2.group.id), "group.json"), { kuvo: version2, status: kept2.status, ...kept2.talking ? { talking: true } : {}, group: kept2.group });
+    write(join23(this.folder(kept2.group.id), "group.json"), { kuvo: version2, status: kept2.status, ...kept2.talking ? { talking: true } : {}, group: kept2.group });
   }
   saveMessages(kept2) {
     mkdirSync14(this.folder(kept2.group.id), { recursive: true, mode: 448 });
-    write(join22(this.folder(kept2.group.id), "messages.json"), kept2.messages);
+    write(join23(this.folder(kept2.group.id), "messages.json"), kept2.messages);
   }
   setAwake(id, awake) {
-    const file = join22(this.folder(id), "awake");
+    const file = join23(this.folder(id), "awake");
     if (awake && !existsSync14(file) && existsSync14(this.folder(id)))
       writeFileSync15(file, "");
     if (!awake)
@@ -14830,13 +15115,13 @@ class GroupStore {
   trash(id, trash) {
     if (!existsSync14(this.folder(id)))
       return;
-    const into = join22(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
+    const into = join23(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync14(into, { recursive: true, mode: 448 });
-    renameSync9(this.folder(id), join22(into, id));
+    renameSync9(this.folder(id), join23(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
-    const value = read(join22(this.root, "settings.json"));
+    const value = read(join23(this.root, "settings.json"));
     if (!value || typeof value !== "object")
       return;
     return {
@@ -14849,40 +15134,40 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    write(join22(this.root, "settings.json"), { kuvo: version2, ...settings });
+    write(join23(this.root, "settings.json"), { kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
     try {
-      names = readdirSync11(this.bots);
+      names = readdirSync12(this.bots);
     } catch {}
     return names.flatMap((name) => this.bot(name) ?? []);
   }
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
       return;
-    const folder = join22(this.bots, id);
-    const described = read(join22(folder, "bot.json"));
-    const sessionID = text2(join22(folder, "session"))?.trim();
+    const folder = join23(this.bots, id);
+    const described = read(join23(folder, "bot.json"));
+    const sessionID = text2(join23(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const job = read(join22(folder, "job.json"));
-    const directory = text2(join22(folder, "directory"))?.trim() || join22(folder, "workspace");
+    const job = read(join23(folder, "job.json"));
+    const directory = text2(join23(folder, "directory"))?.trim() || join23(folder, "workspace");
     return {
       id,
       name: String(described.name),
       job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
       instructions: typeof job?.details === "string" ? job.details : "",
-      memoryFile: join22(folder, "MEMORY.md"),
+      memoryFile: join23(folder, "MEMORY.md"),
       folder,
       sessionID,
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text2(join22(folder, "via"))?.trim() === "bridge",
+      agents: text2(join23(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text2(join22(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text2(join23(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -14894,7 +15179,7 @@ class GroupStore {
     return typeof at3 === "number" ? at3 : 0;
   }
   peerEntries(bot) {
-    const all = read(join22(this.root, "peer-memory.json"));
+    const all = read(join23(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
@@ -14910,7 +15195,7 @@ class GroupStore {
     });
   }
   changePeerMemory(bot, change) {
-    const all = read(join22(this.root, "peer-memory.json")) ?? {};
+    const all = read(join23(this.root, "peer-memory.json")) ?? {};
     const entries = { ...all[bot] ?? {} };
     change(entries);
     for (const [key, entry] of Object.entries(entries))
@@ -14920,10 +15205,10 @@ class GroupStore {
       delete all[bot];
     else
       all[bot] = entries;
-    write(join22(this.root, "peer-memory.json"), all);
+    write(join23(this.root, "peer-memory.json"), all);
   }
   peerWork() {
-    const all = read(join22(this.root, "peer-work.json"));
+    const all = read(join23(this.root, "peer-work.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
@@ -14937,29 +15222,29 @@ class GroupStore {
   changePeerWork(change) {
     const all = this.peerWork();
     change(all);
-    write(join22(this.root, "peer-work.json"), all);
+    write(join23(this.root, "peer-work.json"), all);
   }
   pendingMemory() {
-    const value = read(join22(this.root, "pending-memory.json"));
+    const value = read(join23(this.root, "pending-memory.json"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       return {};
     return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings(chats)));
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync11(join22(this.root, "pending-memory.json"), { force: true });
+      rmSync11(join23(this.root, "pending-memory.json"), { force: true });
     else
-      write(join22(this.root, "pending-memory.json"), pending);
+      write(join23(this.root, "pending-memory.json"), pending);
   }
   peerTurns() {
-    const all = read(join22(this.root, "peer-turns.json"));
+    const all = read(join23(this.root, "peer-turns.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerTurns(turns) {
-    write(join22(this.root, "peer-turns.json"), turns);
+    write(join23(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync14(join22(path, ".."), { recursive: true });
+    mkdirSync14(join23(path, ".."), { recursive: true });
     writeFileSync15(path + ".new", contents, { mode: 384 });
     renameSync9(path + ".new", path);
   }
@@ -15174,15 +15459,15 @@ function planMeeting(plan, before, zone2, now = Date.now()) {
 }
 
 // Packages/Box/src/agents/groups/routes.ts
-var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var error = (status, message2) => json6({ message: message2 }, status);
+var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var error = (status, message2) => json7({ message: message2 }, status);
 async function groupRoutes(runner, store, method, parts2, body) {
   if (!runner || !store)
     return error(404, "Group chats run on the Mac here.");
   const [id, action] = parts2;
   if (!id) {
     if (method === "GET")
-      return json6({ version: version2, data: runner.list() });
+      return json7({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
   if (id === "settings" && method === "PUT") {
@@ -15199,14 +15484,14 @@ async function groupRoutes(runner, store, method, parts2, body) {
     const after = store.settings();
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies]))
       runner.rulesChanged();
-    return json6({});
+    return json7({});
   }
   if (!/^grp_[a-z0-9]+$/.test(id))
     return error(404, "No such chat.");
   if (!action) {
     if (method === "GET") {
       const chat = runner.get(id);
-      return chat ? json6({ version: version2, data: chat }) : error(404, "No such chat.");
+      return chat ? json7({ version: version2, data: chat }) : error(404, "No such chat.");
     }
     if (method === "PUT") {
       const { group, messages: messages2, status, replace } = await body();
@@ -15214,7 +15499,7 @@ async function groupRoutes(runner, store, method, parts2, body) {
         return error(400, "That isn't a group chat.");
       if (!runner.put(group, messages2 ?? [], status === "active" ? "active" : "held", replace === true))
         return error(409, "That chat is here already.");
-      return json6({ data: runner.get(id) });
+      return json7({ data: runner.get(id) });
     }
     if (method === "PATCH") {
       const edits2 = await body();
@@ -15235,12 +15520,12 @@ async function groupRoutes(runner, store, method, parts2, body) {
         return error(400, "That isn't a meeting.");
       if (edits2?.members !== undefined && !(Array.isArray(edits2.members) && edits2.members.every((member) => typeof member === "string")))
         return error(400, "Those aren't bots.");
-      return await runner.update(id, edits2 ?? {}) ? json6({ data: runner.get(id) }) : error(404, "No such chat.");
+      return await runner.update(id, edits2 ?? {}) ? json7({ data: runner.get(id) }) : error(404, "No such chat.");
     }
     if (method === "DELETE") {
       if (runner.get(id)?.status === "held")
         return error(409, "That chat is moving.");
-      return await runner.delete(id) ? json6({}) : error(404, "No such chat.");
+      return await runner.delete(id) ? json7({}) : error(404, "No such chat.");
     }
     return error(405, "Not allowed");
   }
@@ -15252,12 +15537,12 @@ async function groupRoutes(runner, store, method, parts2, body) {
   switch (action) {
     case "activate":
       runner.activate(id);
-      return json6({ data: runner.get(id) });
+      return json7({ data: runner.get(id) });
     case "hold":
-      return json6({ data: runner.hold(id) });
+      return json7({ data: runner.hold(id) });
     case "release":
       runner.release(id);
-      return json6({});
+      return json7({});
   }
   if (found2.status !== "active")
     return error(409, "That chat is moving.");
@@ -15267,32 +15552,32 @@ async function groupRoutes(runner, store, method, parts2, body) {
       const members = new Set(found2.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []));
       const named2 = typeof text3 === "string" ? namedBlock(text3, readDirectory(store.agentsFile), members) : undefined;
       const message2 = typeof text3 === "string" ? runner.send(id, text3, named2) : undefined;
-      return message2 ? json6({ data: message2 }) : error(400, "Nothing to send.");
+      return message2 ? json7({ data: message2 }) : error(400, "Nothing to send.");
     }
     case "stop":
       runner.stop(id);
-      return json6({});
+      return json7({});
     case "keep-going":
       runner.keepGoing(id);
-      return json6({});
+      return json7({});
     case "undo": {
       const { message: message2 } = await body();
       const text3 = typeof message2 === "string" ? runner.undo(id, message2) : undefined;
-      return text3 === undefined ? error(404, "No such message.") : json6({ data: { text: text3 } });
+      return text3 === undefined ? error(404, "No such message.") : json7({ data: { text: text3 } });
     }
     case "start-work": {
       const { wrapUp } = await body();
       if (typeof wrapUp === "string")
         runner.startWork(wrapUp, id);
-      return json6({});
+      return json7({});
     }
   }
   return error(404, "Not found");
 }
 
 // Packages/Box/src/agents/groups/link.ts
-var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message2 = (status, text3) => json7({ message: text3 }, status);
+var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message2 = (status, text3) => json8({ message: text3 }, status);
 var seconds2 = (text3) => {
   const time = Date.parse(text3 ?? "");
   return Number.isFinite(time) ? time / 1000 : undefined;
@@ -15433,7 +15718,7 @@ function joinable(runner, store) {
 }
 async function linkRoutes(runner, store, method, parts2, body, signal) {
   if (!runner || !store)
-    return json7({}, 404);
+    return json8({}, 404);
   const [id, action] = parts2;
   const here = () => {
     const { here: here2, there } = bots(runner, store);
@@ -15441,21 +15726,21 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
   };
   if (!id || id === "events") {
     if (method === "GET")
-      return id ? following(() => list2(runner, store), false, signal) : json7(list2(runner, store));
+      return id ? following(() => list2(runner, store), false, signal) : json8(list2(runner, store));
     if (method === "POST" && !id)
       return await make(runner, store, await body().catch(() => {
         return;
       }), here());
-    return json7({}, 405);
+    return json8({}, 405);
   }
   if (id === "joinable")
-    return method === "GET" ? json7({ bots: joinable(runner, store) }) : json7({}, 405);
+    return method === "GET" ? json8({ bots: joinable(runner, store) }) : json8({}, 405);
   if (!/^grp_[a-z0-9]+$/.test(id))
-    return json7({}, 404);
+    return json8({}, 404);
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id))
-      return json7({}, 404);
-    return action ? following(() => chat(runner, id), true, signal) : json7(chat(runner, id));
+      return json8({}, 404);
+    return action ? following(() => chat(runner, id), true, signal) : json8(chat(runner, id));
   }
   if (method === "PATCH" && !action) {
     const given2 = await body().catch(() => {
@@ -15489,18 +15774,18 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
     const asked2 = await ask(runner, store, "PATCH", [id], edits2);
     if (asked2.status !== 200)
       return message2([400, 404, 409].includes(asked2.status) ? asked2.status : 503, asked2.value?.message ?? "The group chat couldn\u2019t be changed.");
-    return json7({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
+    return json8({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
   }
   if (method === "DELETE" && !action) {
     const asked2 = await ask(runner, store, "DELETE", [id]);
     if (asked2.status === 200 || asked2.status === 404 && asked2.value?.message === "No such chat.")
-      return json7({});
+      return json8({});
     if (asked2.status === 409)
       return message2(409, "That chat is moving. Try again once it\u2019s there.");
     return message2(503, asked2.value?.message ?? "The group chat couldn\u2019t be deleted. Try again in a moment.");
   }
   if (method !== "POST" || action === "events")
-    return json7({}, 405);
+    return json8({}, 405);
   const given = await body().catch(() => {
     return;
   }) ?? {};
@@ -15508,7 +15793,7 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
   switch (action) {
     case undefined:
       if (typeof given.text !== "string" || !trim(given.text))
-        return json7({}, 400);
+        return json8({}, 400);
       asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...typeof given.named === "string" ? { named: given.named } : {} });
       break;
     case "stop":
@@ -15520,21 +15805,21 @@ async function linkRoutes(runner, store, method, parts2, body, signal) {
       break;
     case "undo": {
       if (typeof given.message !== "string")
-        return json7({}, 404);
+        return json8({}, 404);
       asked = await ask(runner, store, "POST", [id, "undo"], { message: given.message });
       if (asked.status !== 200)
-        return json7({}, failed(asked.status));
-      return json7({ text: asked.value?.data?.text ?? "" });
+        return json8({}, failed(asked.status));
+      return json8({ text: asked.value?.data?.text ?? "" });
     }
     case "start":
       if (typeof given.message !== "string")
-        return json7({}, 404);
+        return json8({}, 404);
       asked = await ask(runner, store, "POST", [id, "start-work"], { wrapUp: given.message });
       break;
     default:
-      return json7({}, 404);
+      return json8({}, 404);
   }
-  return json7({}, asked.status === 200 ? 200 : failed(asked.status));
+  return json8({}, asked.status === 200 ? 200 : failed(asked.status));
 }
 async function make(runner, store, given, here) {
   if (!given || typeof given !== "object" || Array.isArray(given))
@@ -15561,7 +15846,7 @@ async function make(runner, store, given, here) {
   if (!runner.put({ id, name, ...purpose ? { purpose } : {}, members, seats: {}, heard: {}, created: now, viewed: now, ...meeting ? { meeting } : {} }, [], "active", false)) {
     return message2(409, "That chat is here already.");
   }
-  return json7({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
+  return json8({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
 }
 
 // Packages/Box/src/agents/groups/post.ts
@@ -18108,10 +18393,10 @@ function gaveUp(parts2, to, mail, at4) {
       return;
   }
 }
-var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 async function peerRoutes(parts2, method, path, body, signal) {
   if (!parts2)
-    return json8({ message: "Group chats don't run here." }, 404);
+    return json9({ message: "Group chats don't run here." }, 404);
   const [what2] = path;
   if (what2 === "mail" && method === "GET")
     return parts2.post.follow(signal);
@@ -18120,35 +18405,35 @@ async function peerRoutes(parts2, method, path, body, signal) {
       return;
     });
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
-      return json8({ message: "That isn't group chat mail." }, 400);
+      return json9({ message: "That isn't group chat mail." }, 400);
     receive(parts2, given.from, given.mail);
-    return json8({});
+    return json9({});
   }
   if (what2 === "gaveup" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail))
-      return json8({ message: "That isn't group chat mail." }, 400);
+      return json9({ message: "That isn't group chat mail." }, 400);
     if (!parts2.directory.told)
-      return json8({ message: "Not yet." }, 503);
+      return json9({ message: "Not yet." }, 503);
     gaveUp(parts2, given.to, given.mail, typeof given.at === "number" ? given.at : undefined);
-    return json8({});
+    return json9({});
   }
   if (what2 === "sent" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
     if (!Array.isArray(given?.ids) || !given.ids.every((id) => typeof id === "string"))
-      return json8({ message: "Those aren't mail." }, 400);
+      return json9({ message: "Those aren't mail." }, 400);
     parts2.post.sent(given.ids);
-    return json8({});
+    return json9({});
   }
   if (!what2 && method === "PUT")
     return parts2.directory.set(await body().catch(() => {
       return;
-    })) ? json8({}) : json8({ message: "That isn't who your computers are." }, 400);
-  return json8({ message: "Not found" }, 404);
+    })) ? json9({}) : json9({ message: "That isn't who your computers are." }, 400);
+  return json9({ message: "Not found" }, 404);
 }
 
 class LinkDirectory {
@@ -18220,9 +18505,9 @@ setInterval(() => {
     attempts.delete(id);
   }
 }, 60000).unref?.();
-var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var located = (value) => json9({ location: { directory: process.cwd() }, data: value });
-var error2 = (status, message3) => json9({ message: message3 }, status);
+var json10 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var located = (value) => json10({ location: { directory: process.cwd() }, data: value });
+var error2 = (status, message3) => json10({ message: message3 }, status);
 var lastSeen = new Map;
 var lastMaintained = new Map;
 async function maintainedSoon(agent, fresh) {
@@ -18321,7 +18606,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts2;
       if (area === "info")
-        return json9({ version: context.version, pid: process.pid });
+        return json10({ version: context.version, pid: process.pid });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -18367,12 +18652,12 @@ function handler(context) {
             if (!pending.attempt.complete)
               return error2(400, "This sign-in finishes in the browser.");
             await pending.attempt.complete(String(code ?? ""));
-            return json9({});
+            return json10({});
           }
           if (method === "DELETE") {
             pending.attempt.cancel();
             attempts.delete(d);
-            return json9({});
+            return json10({});
           }
         }
         if (b === "connect" && c === "key" && method === "POST") {
@@ -18380,7 +18665,7 @@ function handler(context) {
           if (!agent.signInWithKey)
             return error2(400, `${agent.name} doesn't take a key here.`);
           await agent.signInWithKey(String(key ?? "").trim());
-          return json9({});
+          return json10({});
         }
         if (b === "update" && method === "POST") {
           if (!agent.update)
@@ -18393,7 +18678,7 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json9({ data: result });
+          return json10({ data: result });
         }
         if (b === "install" && method === "POST") {
           if (!agent.installProgram)
@@ -18406,13 +18691,13 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json9({ data: result });
+          return json10({ data: result });
         }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut)
             return error2(400, `Sign out of ${agent.name} where you signed in.`);
           await agent.signOut();
-          return json9({});
+          return json10({});
         }
       }
       if (area === "model") {
@@ -18439,33 +18724,33 @@ function handler(context) {
           return read2 ? located(read2) : error2(404, "No such command.");
         }
         if (a && !b && method === "DELETE")
-          return await stopShell(a) ? json9({}) : error2(404, "No such command.");
+          return await stopShell(a) ? json10({}) : error2(404, "No such command.");
       }
       if (area === "session") {
         if (!a) {
           if (method === "POST")
-            return json9({ data: sessions.create(await body()) });
+            return json10({ data: sessions.create(await body()) });
           const directory = url.searchParams.get("directory") ?? undefined;
           const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
           const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
           const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
-          return json9(page(ordered, url));
+          return json10(page(ordered, url));
         }
         if (a === "active")
-          return json9({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
+          return json10({ data: Object.fromEntries(sessions.active().map((id2) => [id2, { type: "busy" }])) });
         if (a === "import" && method === "POST")
-          return json9({ data: sessions.importSession(await body()) });
+          return json10({ data: sessions.importSession(await body()) });
         const id = a;
         if (!b) {
           if (method === "GET")
-            return json9({ data: sessions.get(id) });
+            return json10({ data: sessions.get(id) });
           if (method === "PATCH") {
             sessions.update(id, await body());
-            return json9({ data: sessions.get(id) });
+            return json10({ data: sessions.get(id) });
           }
           if (method === "DELETE") {
             await sessions.remove(id);
-            return json9({});
+            return json10({});
           }
         }
         switch (b) {
@@ -18475,51 +18760,51 @@ function handler(context) {
             const ordered = asc ? messages2 : [...messages2].reverse();
             if (c) {
               const found2 = messages2.find((message3) => message3.id === c);
-              return found2 ? json9({ data: found2 }) : error2(404, "No such message.");
+              return found2 ? json10({ data: found2 }) : error2(404, "No such message.");
             }
-            return json9(page(ordered, url));
+            return json10(page(ordered, url));
           }
           case "inbox":
             if (method === "DELETE" && c) {
               sessions.cancelInput(id, c);
-              return json9({});
+              return json10({});
             }
             if (method === "PATCH" && c) {
               sessions.setDelivery(id, c, (await body()).delivery);
-              return json9({});
+              return json10({});
             }
-            return json9({ data: sessions.inbox(id) });
+            return json10({ data: sessions.inbox(id) });
           case "prompt": {
             const input = await body();
             sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json9({});
+            return json10({});
           }
           case "fork":
-            return json9({ data: sessions.fork(id, String((await body()).before ?? "")) });
+            return json10({ data: sessions.fork(id, String((await body()).before ?? "")) });
           case "revert":
             if (c === "stage" && method === "POST")
-              return json9({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
+              return json10({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
             if (!c && method === "DELETE") {
               await sessions.clearRevert(id);
-              return json9({});
+              return json10({});
             }
             break;
           case "shell":
             if (method !== "POST")
               break;
             sessions.runShell(id, String((await body()).command ?? ""));
-            return json9({});
+            return json10({});
           case "synthetic": {
             const input = await body();
             sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
-            return json9({});
+            return json10({});
           }
           case "generate": {
             const input = await body();
             const prompt = String(input.prompt ?? "");
             if (!prompt.trim())
               throw new BadRequest("Say what to write.");
-            return json9({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } });
+            return json10({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true }) } });
           }
           case "command": {
             const input = await body();
@@ -18528,44 +18813,44 @@ function handler(context) {
             const template = name ? await link2.commandTemplate(name, sessions.get(id).location.directory) : undefined;
             const text3 = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
             sessions.prompt(id, { id: newID("msg"), text: text3, files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json9({});
+            return json10({});
           }
           case "interrupt":
-            return json9({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
+            return json10({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
           case "model":
             sessions.selectModel(id, (await body()).model);
-            return json9({});
+            return json10({});
           case "agent":
             sessions.selectAgent(id, (await body()).agent);
-            return json9({});
+            return json10({});
           case "permission":
             if (!c)
-              return json9({ data: id === "global" ? [] : sessions.permissions(id) });
+              return json10({ data: id === "global" ? [] : sessions.permissions(id) });
             if (d === "reply") {
               const { decision } = await body();
               sessions.replyPermission(id, c, decision);
-              return json9({});
+              return json10({});
             }
             break;
           case "form":
             if (!c)
-              return json9({ data: id === "global" ? [] : sessions.forms(id) });
+              return json10({ data: id === "global" ? [] : sessions.forms(id) });
             if (d === "reply") {
               sessions.replyForm(id, c, (await body()).answer ?? {});
-              return json9({});
+              return json10({});
             }
             if (method === "DELETE") {
               sessions.replyForm(id, c, null);
-              return json9({});
+              return json10({});
             }
             break;
           case "view": {
             const { idle } = await body();
             sessions.view(id, Number(idle) || Date.now());
-            return json9({});
+            return json10({});
           }
           case "diff":
-            return json9({ data: [] });
+            return json10({ data: [] });
         }
       }
       if (area === "kuvo" && a === "accounts") {
@@ -18577,7 +18862,7 @@ function handler(context) {
           roster.sync();
           const added = roster.all().find((each) => each.instance.id === record2.id && each.id === agent);
           emit("integration.updated", { integrationID: added.providerID });
-          return json9({ data: { providerID: added.providerID } });
+          return json10({ data: { providerID: added.providerID } });
         }
         const target = b ? roster.find(b) : undefined;
         if (!target)
@@ -18588,7 +18873,7 @@ function handler(context) {
           roster.accounts.rename(target.providerID, (await body()).label);
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
-          return json9({});
+          return json10({});
         }
         if (method === "DELETE") {
           sessions.forgetProvider(target.providerID);
@@ -18598,7 +18883,7 @@ function handler(context) {
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
           emit("model.updated", {});
-          return json9({});
+          return json10({});
         }
       }
       if (area === "kuvo" && a === "goals")
@@ -18609,6 +18894,8 @@ function handler(context) {
         return await handoffRoutes(context.handoffs, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "reviews")
         return await reviewRoutes(context.reviews, method, parts2.slice(3), body);
+      if (area === "kuvo" && a === "voice")
+        return await voiceRoutes(context.voice, method, parts2.slice(3));
       if (area === "kuvo" && a === "groups")
         return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts2.slice(3), body);
       if (area === "kuvo" && a === "link" && b === "groups")
@@ -18622,12 +18909,12 @@ function handler(context) {
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body();
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
-        return json9({});
+        return json10({});
       }
       if (area === "kuvo" && a === "engine" && method === "PUT") {
         const { url: address, password } = await body();
         link2.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
-        return json9({});
+        return json10({});
       }
       if (area === "kuvo" && a === "auto") {
         if (b === "limits" && method === "DELETE") {
@@ -18637,7 +18924,7 @@ function handler(context) {
           else
             auto.clearLimits();
           emit("kuvo.auto.updated", {});
-          return json9({});
+          return json10({});
         }
         if (!b && method === "PUT") {
           const { entries, lists } = await body();
@@ -18654,20 +18941,20 @@ function handler(context) {
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json9({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+          return json10({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
         if (c === "instructions" && d === "entries" && !e && method === "GET")
-          return json9({ data: sessions.instructionEntries(id) });
+          return json10({ data: sessions.instructionEntries(id) });
         if (c === "instructions" && d === "entries" && e && (method === "PUT" || method === "DELETE")) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
-          return json9({});
+          return json10({});
         }
         if (c === "wait") {
           while (sessions.active().includes(id))
             await Bun.sleep(200);
-          return json9({});
+          return json10({});
         }
       }
       return error2(404, "Not available for this agent.");
@@ -18696,8 +18983,8 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync15, readdirSync as readdirSync12, readFileSync as readFileSync25, renameSync as renameSync11, rmSync as rmSync12, statSync as statSync9, writeFileSync as writeFileSync17 } from "fs";
-import { join as join23 } from "path";
+import { mkdirSync as mkdirSync15, readdirSync as readdirSync13, readFileSync as readFileSync25, renameSync as renameSync11, rmSync as rmSync12, statSync as statSync9, writeFileSync as writeFileSync17 } from "fs";
+import { join as join24 } from "path";
 
 class Store {
   root;
@@ -18706,17 +18993,17 @@ class Store {
   constructor(root) {
     this.root = root;
     mkdirSync15(root, { recursive: true });
-    for (const id of readdirSync12(root)) {
+    for (const id of readdirSync13(root)) {
       try {
-        const folder = join23(root, id);
-        const session = JSON.parse(readFileSync25(join23(folder, "session.json"), "utf8"));
+        const folder = join24(root, id);
+        const session = JSON.parse(readFileSync25(join24(folder, "session.json"), "utf8"));
         let messages2 = [];
         try {
-          messages2 = JSON.parse(readFileSync25(join23(folder, "messages.json"), "utf8"));
+          messages2 = JSON.parse(readFileSync25(join24(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync25(join23(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync25(join24(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages: messages2, agent });
       } catch {}
@@ -18730,7 +19017,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync9(join23(this.root, id, "messages.json")).mtimeMs;
+      return statSync9(join24(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -18743,7 +19030,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync12(join23(this.root, id), { recursive: true, force: true });
+    rmSync12(join24(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -18765,14 +19052,14 @@ class Store {
     const record2 = this.records.get(id);
     if (!record2)
       return;
-    const folder = join23(this.root, id);
+    const folder = join24(this.root, id);
     mkdirSync15(folder, { recursive: true });
     for (const [name, value] of [
       ["session.json", record2.session],
       ["messages.json", record2.messages],
       ["agent.json", record2.agent]
     ]) {
-      const file = join23(folder, name);
+      const file = join24(folder, name);
       writeFileSync17(file + ".new", JSON.stringify(value));
       renameSync11(file + ".new", file);
     }
@@ -18795,19 +19082,19 @@ if (onMachine) {
   takeOwnFolders();
   if (home2)
     dropCarriedSignIns(home2);
-  process.env.KUVO_BIN = join24(machineHome, "bin");
-  process.env.KUVO_BOTS ??= join24(machineHome, "bots");
-  process.env.KUVO_WAKES ??= join24(machineHome, "wakes");
+  process.env.KUVO_BIN = join25(machineHome, "bin");
+  process.env.KUVO_BOTS ??= join25(machineHome, "bots");
+  process.env.KUVO_WAKES ??= join25(machineHome, "wakes");
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
-var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join24(home2, "tmp");
+var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join25(home2, "tmp");
 mkdirSync16(temporary, { recursive: true });
-rmSync13(join24(temporary, "antigravity"), { recursive: true, force: true });
+rmSync13(join25(temporary, "antigravity"), { recursive: true, force: true });
 try {
-  for (const name of readdirSync13(join24(home2, "antigravity")))
+  for (const name of readdirSync14(join25(home2, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync13(join24(home2, "antigravity", name), { recursive: true, force: true });
+      rmSync13(join25(home2, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -18817,15 +19104,15 @@ process.on("uncaughtException", (error3) => {
   console.error("uncaught:", error3);
   process.exit(1);
 });
-var deps = new Deps(join24(home2, "runtime"), join24(home2, "cache"));
+var deps = new Deps(join25(home2, "runtime"), join25(home2, "cache"));
 if (onMachine) {
-  dropOwnPrograms(join24(home2, "runtime"));
+  dropOwnPrograms(join25(home2, "runtime"));
   refreshLoginPath();
 }
-rmSync13(join24(home2, "cache", "install"), { recursive: true, force: true });
+rmSync13(join25(home2, "cache", "install"), { recursive: true, force: true });
 var context = { home: home2, temporary, deps };
 var roster = new Roster(new Accounts(home2), context);
-var store = new Store(join24(home2, "sessions"));
+var store = new Store(join25(home2, "sessions"));
 var auto = new Auto(home2);
 var link2 = new EngineLink;
 if (machineEngine)
@@ -18840,21 +19127,21 @@ function engineAgent(providerID2) {
     engineAgents.set(providerID2, agent = new EngineAgent(link2, providerID2));
   return agent;
 }
-var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join24(home2, "snapshots")), (directory) => link2.titleModel(directory));
+var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link2.policies(directory), (name, directory) => link2.agent(name, directory), new Snapshots(join25(home2, "snapshots")), (directory) => link2.titleModel(directory));
 var self;
 var partGiven;
 var groups;
-var groupFolders = onMachine ? { root: join24(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join24(machineHome, "bots"), trash: join24(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupFolders = onMachine ? { root: join25(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join25(machineHome, "bots"), trash: join25(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-var artifactsFolder = onMachine ? join24(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
-var botsFolder = groupFolders?.bots ?? (onMachine ? join24(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
-var agentsFile = onMachine ? join24(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+var artifactsFolder = onMachine ? join25(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
+var botsFolder = groupFolders?.bots ?? (onMachine ? join25(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+var agentsFile = onMachine ? join25(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
 if (groupFolders) {
   try {
     const store2 = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile);
-    const post = new PeerPost(join24(groupFolders.root, "peer-outbox.json"));
+    const post = new PeerPost(join25(groupFolders.root, "peer-outbox.json"));
     const directory = new LinkDirectory(post);
     const runner = new GroupRunner({
       store: store2,
@@ -18898,10 +19185,11 @@ var places4 = {
     }
   }
 };
-var goals = new Goals(join24(home2, "goals.json"), places4);
-var sideQuestions = new SideQuestions(join24(home2, "side-questions.json"), places4);
+var goals = new Goals(join25(home2, "goals.json"), places4);
+var sideQuestions = new SideQuestions(join25(home2, "side-questions.json"), places4);
 var handoffs = new Handoffs(places4);
-var reviews = new Reviews(join24(home2, "reviews.json"), places4);
+var reviews = new Reviews(join25(home2, "reviews.json"), places4);
+var voice = new VoiceWords(places4);
 var artifacts;
 var noted;
 if (artifactsFolder) {
@@ -18948,7 +19236,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, artifacts, noted })
+    fetch: handler({ roster, sessions, auto, link: link2, password, version: version3, groups, goals, sideQuestions, handoffs, reviews, voice, artifacts, noted })
   });
 } catch (error3) {
   console.error("couldn't listen:", error3?.message ?? error3);
@@ -18971,7 +19259,7 @@ link2.whenReady().then(() => {
     console.error("group chats:", error3);
   }
 });
-var record2 = onMachine ? join24(machineHome, "run", "bridge.json") : undefined;
+var record2 = onMachine ? join25(machineHome, "run", "bridge.json") : undefined;
 if (record2) {
   writeFileSync18(record2 + ".new", JSON.stringify({ pid: process.pid, port: server3.port, password }), { mode: 384 });
   renameSync12(record2 + ".new", record2);
@@ -19009,4 +19297,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 03c1e0656f70e887aeb5ddfb88fbcb6e31697e13d9304c52ffe6224c83c211f2
+// Built from Packages/Box/src/agents 8ab8b8fa7079c394573e8cec6632dd09a03d3c382926c7f2e6e3205415fbc35d

@@ -1485,6 +1485,15 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     conversation's; `DELETE …/kuvo/reviews/<session>` puts it away (one under way is let go: its answer isn't kept).
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
 
+The same bridge also gives voice input the words to listen for in a conversation (a speech model
+is prompted with them), for the engine's sessions and the coding agents' alike:
+`GET …/kuvo/voice/words/<session>` → `{data: {words: [string]}}`, at most 100, most useful first
+(ask when listening starts). They're the project's own names: its folder's (and its repository's),
+the names said in the conversation's newest messages, its packages', the files changed lately (each
+with and without its extension), then its other folders and files. Never anything of `.env`
+files, nor long hex or random-looking strings. `404` for a conversation that isn't there, `409`
+for one with no folder.
+
 ### Features
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
