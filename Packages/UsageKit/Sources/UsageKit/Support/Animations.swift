@@ -147,7 +147,7 @@ private struct DenyShakeModifier: ViewModifier {
 /// container has room for it yet, and fading as it goes, so it never shows past the panel's edge
 /// as the panel closes over it. The panel grows and shrinks by it on the same spring, and the space
 /// above it is a padding of its own, not its stack's spacing, so the two edges stay together. The
-/// same as Kuvo Code's own (`KuvoCode/Design/Theme.swift`).
+/// same as Kuvo Code's own (KuvoClient's `ClientDesign`, `Theme.swift`).
 struct FoldTransition: Transition {
     func body(content: Content, phase: TransitionPhase) -> some View {
         content
