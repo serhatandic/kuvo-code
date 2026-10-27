@@ -834,3 +834,21 @@ nonisolated private extension String {
         addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~@"))) ?? self
     }
 }
+
+#if DEBUG
+extension OutsideAgents {
+    /// KUVO_DEMO_BARS: sample bars in the card over `session`'s composer, for a look at it:
+    /// `all` a goal, a handoff, a review that found three things and a side question answered (a
+    /// full card); `two` the review and the side question.
+    func showDemoBars(_ which: String, for session: String) {
+        func decode<T: Decodable>(_ json: String) -> T? { try? JSONDecoder().decode(T.self, from: Data(json.utf8)) }
+        let started = Date.now.timeIntervalSince1970 * 1000 - 720_000
+        reviews[session] = decode(#"{"id":"rev_demo","session":"\#(session)","state":"done","summary":"Two problems in the login changes","findings":[{"id":"f1","title":"The cookie is set after the redirect","explanation":"So the first request has no session.","severity":"bug","locations":[{"file":"src/auth/session.ts","line":42}]},{"id":"f2","title":"The error from fetchUser is swallowed","explanation":"","severity":"risk","locations":[{"file":"src/auth/login.ts","line":18}]},{"id":"f3","title":"The test's name says logout","explanation":"","severity":"nit","locations":[{"file":"test/auth.test.ts"}]}],"fix":"Fix these","started":0}"#)
+        let question: SideQuestion? = decode(#"{"id":"btw_demo","session":"\#(session)","question":"Which file sets the cookie?","state":"answered","answer":"`src/auth/session.ts`, in `startSession()`, after the redirect.","asked":0}"#)
+        sideQuestions[session] = question.map { [$0] } ?? []
+        guard which == "all" else { return }
+        goals[session] = decode(#"{"session":"\#(session)","condition":"All tests in test/auth pass","state":"working","started":\#(started),"turns":3,"checking":false}"#)
+        handoffs[session] = Handoff(from: session, state: .writing)
+    }
+}
+#endif
