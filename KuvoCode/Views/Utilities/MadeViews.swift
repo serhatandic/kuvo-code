@@ -1081,6 +1081,9 @@ struct ArtifactDetail: View {
                     ? try await things.bytes(of: artifact.id, version: version.n)
                     : try await things.box.file(artifact.path)
                 try data.write(to: url, options: .atomic)
+                // Done, which the popover may no longer be there to show: the Dock's Downloads
+                // stack bounces for it, as for a browser's download.
+                DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.resolvingSymlinksInPath().path)
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "\(artifact.name) couldn’t be saved"
