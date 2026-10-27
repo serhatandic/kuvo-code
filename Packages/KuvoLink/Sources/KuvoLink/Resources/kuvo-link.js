@@ -7915,7 +7915,7 @@ class LinkHost {
 import crypto16 from "node:crypto";
 import fs39 from "node:fs";
 import path38 from "node:path";
-async function attachedIn(body, session, modelInput, joinsNote = false) {
+async function attachedIn(body, session, modelInput, joinsNote = false, guesses = true) {
   let prompt;
   try {
     prompt = JSON.parse(Buffer.from(body ?? "").toString());
@@ -7938,8 +7938,8 @@ async function attachedIn(body, session, modelInput, joinsNote = false) {
       continue;
     }
     const saved = save(attachments, data.bytes, typeof file.name === "string" ? file.name : "");
-    if (reads(data.mime, data.bytes.length, input)) {
-      sent.push(file);
+    if (reads(data.mime, data.bytes.length, input, guesses)) {
+      sent.push(isText(data.mime) && data.mime !== "text/plain" ? { ...file, uri: `data:text/plain;base64,${data.bytes.toString("base64")}` } : file);
       if (saved)
         included.push(saved);
     } else if (saved) {
@@ -7959,15 +7959,16 @@ function inline(file) {
 }
 var MODEL_BYTES = 20 * 1024 * 1024;
 var TEXT_TYPES = new Set(["application/json", "application/javascript", "application/xml", "application/x-yaml", "application/yaml", "application/toml", "application/x-sh", "application/sql"]);
-function reads(mime, size, input) {
+var isText = (mime) => mime.startsWith("text/") || TEXT_TYPES.has(mime);
+function reads(mime, size, input, guess) {
   if (size > MODEL_BYTES)
     return false;
-  if (mime.startsWith("text/") || TEXT_TYPES.has(mime))
+  if (isText(mime))
     return true;
   if (mime === "application/pdf")
-    return input?.includes("pdf") ?? true;
+    return input?.includes("pdf") ?? guess;
   if (mime.startsWith("image/"))
-    return input?.includes("image") ?? true;
+    return input?.includes("image") ?? guess;
   return false;
 }
 var KEPT_DAYS = 14;
@@ -8043,7 +8044,7 @@ function modelInput(base, headers, signal) {
     return Array.isArray(input) ? input.filter((kind) => typeof kind === "string") : null;
   };
 }
-async function* forward(target, path, request, signal, allows, naming = null, down = engineDown) {
+async function* forward(target, path, request, signal, allows, naming = null, down = engineDown, toAgents = false) {
   const method = request.method.toUpperCase();
   const sent = canonicalPath(path);
   if (sent === null || !allows(sent, method)) {
@@ -8072,7 +8073,7 @@ async function* forward(target, path, request, signal, allows, naming = null, do
     if (!sending)
       return request.body;
     const session = decodeURIComponent(sending[1]);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, !toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response;
@@ -8132,7 +8133,7 @@ async function* agentsRoute(context) {
     yield { body: Buffer.from(JSON.stringify({ message: "The coding agents aren't running on this machine." })) };
     return;
   }
-  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.");
+  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);
 }
 async function* engineRoute(context) {
   const { request, signal, route, readEngine, bridge, json, text } = context;
@@ -10508,7 +10509,8 @@ async function box(command) {
         given = JSON.parse(await input());
       } catch {}
       const handle = engineHandler(readEngineFile, { name: os7.hostname() });
-      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json" }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
+      const folder = given?.headers?.["x-opencode-directory"];
+      const request = { method: String(given?.method ?? "GET"), path: String(given?.path ?? ""), headers: { "content-type": "application/json", ...typeof folder === "string" ? { "x-opencode-directory": folder } : {} }, body: Buffer.from(given?.body === undefined ? "" : JSON.stringify(given.body)), fromMac: true };
       let status = 502;
       let type = "";
       const chunks = [];

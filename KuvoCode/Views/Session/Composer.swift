@@ -121,6 +121,8 @@ struct Composer: View {
     @State private var dismissedLoop = false
     @State private var customLoop = false
     @State private var reviewerIndex = 0
+    /// The field has the keyboard: the shortcut's voice input would go here.
+    @State private var fieldHasKeyboard = false
     /// "/review"'s "Who reads it" was closed with Escape, or answered with the conversation's own.
     @State private var dismissedReviewer = false
     /// The model picked last there (`Model.key`), offered first next time.
@@ -258,11 +260,18 @@ struct Composer: View {
                 .opacity(listening == nil ? 1 : 0)
                 .accessibilityHidden(listening != nil)
                 if let voice = listening {
-                    VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "", before: text)
-                        // A long draft shows its end, where the words come.
-                        .lineLimit(8)
-                        .truncationMode(.head)
+                    // A long draft shows its end, where the words come; long, they scroll, the
+                    // newest in view, no taller than the field gets.
+                    let words = VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "",
+                                           before: text.count > 300 ? "…" + text.suffix(300) : text)
                         .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
+                    ViewThatFits(in: .vertical) {
+                        words.fixedSize(horizontal: false, vertical: true)
+                        ScrollView { words }
+                            .defaultScrollAnchor(.bottom, for: .initialOffset)
+                            .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                    }
+                    .frame(maxHeight: 220)
                 }
             }
             if keywordHint != nil {
@@ -345,9 +354,19 @@ struct Composer: View {
         .onChange(of: focusRequest) { focusAtEnd() }
         // A quote just added: its answer takes the keyboard.
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
+        // Gone (another kind of tab, Settings over it): what it was listening for stops, rather
+        // than going on unseen, and the shortcut has nowhere here to start.
+        .onDisappear {
+            if isDictating { app.dictation.cancel() }
+            app.dictation.withdraw(voiceOwner)
+        }
         .onChange(of: session) { old, _ in
-            // Listening for the session it showed: that stops, rather than going on unseen.
-            if app.dictation.isListening(for: old ?? "new:" + (folders.first ?? "")) { app.dictation.cancel() }
+            // Listening for the session it showed: that stops, rather than going on unseen; and
+            // the shortcut is this one's now, where you type.
+            let left = old ?? "new:" + (folders.first ?? "")
+            if app.dictation.isListening(for: left) { app.dictation.cancel() }
+            app.dictation.withdraw(left)
+            if fieldHasKeyboard { offerVoice() }
             historyIndex = nil
             mentionFiles = []
             mentionFilesRead = nil
@@ -386,18 +405,21 @@ struct Composer: View {
     /// The field or an answer took the keyboard, or let it go: where you type is where you work,
     /// so the window's commands follow.
     private func fieldFocused(_ focused: Bool) {
+        fieldHasKeyboard = focused
         if focused {
             composerFocused?()
-            // The shortcut's voice input goes where you type.
-            let text = $text
-            if !isOffline {
-                app.dictation.offer(voiceOwner) { [focusAtEnd] words in
-                    text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
-                    focusAtEnd()
-                }
-            }
-        } else if !isDictating {
+            offerVoice()
+        } else {
             app.dictation.withdraw(voiceOwner)
+        }
+    }
+
+    /// The shortcut's voice input goes where you type: here.
+    private func offerVoice() {
+        let text = $text
+        app.dictation.offer(voiceOwner) { [focusAtEnd] words in
+            text.wrappedValue = VoiceStyle.adding(words, to: text.wrappedValue)
+            focusAtEnd()
         }
     }
 
@@ -489,6 +511,7 @@ struct Composer: View {
     /// An answer's keys, and the field's with no list open: Return sends (Shift- or Option-Return
     /// starts a new line, ⌘Return queues); Escape closes an open Find bar, then stops the agent.
     private func answerKey(_ key: MessageField.Key) -> Bool {
+        if isDictating { return self.key(key) }
         switch key.name {
         case .return:
             if key.modifiers.contains(.shift) || key.modifiers.contains(.option) { return false }
@@ -534,7 +557,6 @@ struct Composer: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .disabled(isOffline)
         .help("Talk Instead of Typing (⇧⌘Space)")
         .accessibilityLabel("Voice Input")
     }
@@ -544,7 +566,7 @@ struct Composer: View {
         focusAtEnd()
         let text = $text
         app.dictation.start(for: voiceOwner) { [focusAtEnd] words in
-            text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+            text.wrappedValue = VoiceStyle.adding(words, to: text.wrappedValue)
             focusAtEnd()
         }
     }
