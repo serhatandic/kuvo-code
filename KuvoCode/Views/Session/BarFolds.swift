@@ -16,3 +16,43 @@ struct CardRow: ViewModifier {
         }
     }
 }
+
+/// In the place of what was put away: what went, with Undo where its ✕ was, until it's gone
+/// for good. `undo` is nil once it's on its way out.
+struct UndoLine: View {
+    let text: String
+    let undo: (() -> Void)?
+    /// A bar's line, or a row in a bar's list.
+    var isRow = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.uturn.backward.circle")
+                .font(.system(size: isRow ? 12 : 13))
+                .foregroundStyle(.secondary)
+                .frame(width: isRow ? nil : 18)
+            Text(text)
+                .font(.system(size: isRow ? 12 : 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let undo {
+                Button("Undo", action: undo)
+                    .buttonStyle(TextButtonStyle())
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .fixedSize()
+                    .help("Bring it back")
+            }
+        }
+        .padding(.leading, isRow ? 0 : 14)
+        // Undo ends where the ✕ did.
+        .padding(.trailing, isRow ? 0 : 8)
+        .frame(height: isRow ? nil : 36)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+        .accessibilityActions {
+            if let undo { Button("Undo", action: undo) }
+        }
+    }
+}

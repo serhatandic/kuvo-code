@@ -46,6 +46,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `TerminalColors`: a command's output colored as a terminal shows it.
 - `BarFolds`: which bar in the card over a conversation's composer is open once the card is full
   (three bars or more): the newest change, none while a card asks, one at a time.
+- `PutAways`: what a bar's ✕ put away, with Undo in its place for a few seconds: what goes only
+  once the moment passes (a goal, a wake-up), and what goes at once and comes back with Undo.
 
 ## What belongs here
 

@@ -328,6 +328,7 @@ when you're there to answer.
 | `KUVO_DEMO_OPEN_STEPS` | Every step in the conversation shows its details, opened, and so does the thinking |
 | `KUVO_DEMO_FOLDS` | Seconds: the conversation's lines of steps, and the bars over its composer and the usage panel's first bar, open and fold a few times, that far apart, to look at how they move (with `KUVO_DEMO_SLOW`) |
 | `KUVO_DEMO_BARS` | Sample bars in the card over the composer of the session in view: `all` a goal, a handoff, a review that found three things and an answered side question (a full card); `two` the review and the side question |
+| `KUVO_DEMO_UNDO` | Undo's lines in the card, held so they don't go: the goal put away and a message removed (with `KUVO_DEMO_BARS` and `KUVO_DEMO_WAITING`) |
 | `KUVO_DEMO_BOT_MODEL` | With `KUVO_DEMO_BOT`: the model a new bot gets, `<provider>/<model>` (a coding agent's, like `claude-code/haiku`, makes it run with the agents) |
 | `KUVO_DEMO_EDIT_BOT` | With `KUVO_DEMO_BOT`: that bot's editor, open (`bottom`: scrolled to its wake-ups and memory) |
 | `KUVO_DEMO_EDIT_BOT_SAVE` | With `KUVO_DEMO_EDIT_BOT`: its job in a few words changed to this, and saved, ten seconds on (with `KUVO_DEMO_BOX_FAILED`, to see what Save says while this Mac's box is down) |
