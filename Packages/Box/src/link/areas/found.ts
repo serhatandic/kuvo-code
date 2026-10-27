@@ -95,15 +95,21 @@ export async function found({ engine, bridge, authFile = readFrom() }: { engine:
       const label = integration.metadata.account;
       return { id: integration.id, name: integration.name, installed: integration.metadata.installed !== false, signedIn, ...(signedIn && typeof label === "string" && label ? { label } : {}) };
     });
+  // Signed in through the engine and working (a plan, a key), a key in the shell aside. The engine
+  // marks a sign-in that stopped working (`needs_auth`: expired, revoked) and gives a working one no
+  // status; the agents bridge says `connected`.
+  const working = (connection: Integration["connections"][number]) => {
+    const status = isObject(connection.status) ? connection.status.status : undefined;
+    return connection.type !== "env" && (status === undefined || status === "connected");
+  };
   const opencode = readOpencode(authFile).map((entry): Found["opencode"][number] => {
     const known = byID.get(entry.integrationID);
-    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: (known?.connections.length ?? 0) > 0 };
+    return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: known?.connections.some(working) ?? false };
   });
   const shell = engineList.flatMap(integration => integration.connections
     .filter(connection => connection.type === "env" && typeof connection.name === "string" && connection.name)
     .map((connection): Found["shell"][number] => ({ integrationID: integration.id, name: integration.name, variable: connection.name as string })));
-  // Signed in to through the engine already (a plan, a key): not a key in the shell.
-  const connected = engineList.filter(integration => integration.connections.some(connection => connection.type !== "env")).map(integration => integration.id);
+  const connected = engineList.filter(integration => integration.connections.some(working)).map(integration => integration.id);
   return { agents, opencode, shell, connected };
 }
 

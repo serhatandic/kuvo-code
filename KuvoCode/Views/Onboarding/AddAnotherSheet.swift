@@ -13,6 +13,9 @@ struct AddAnotherSheet: View {
     let offers: Offers
     /// Why a key couldn't come over.
     let failure: String?
+    /// The coding agents, as the step looks for them, and looking again.
+    let agents: Onboarding.AgentsLookup
+    let lookAgain: () -> Void
     /// A row's action, as the step does it; `signIn` opens a sign-in in this sheet.
     let perform: (_ row: Offers.Row, _ signIn: @escaping (String) -> Void) -> Void
     let isBusy: (Offers.Row) -> Bool
@@ -81,15 +84,27 @@ struct AddAnotherSheet: View {
     /// The plans to add: the ones it opened with, as they are now.
     private var morePlans: [Offers.Row] {
         let all = offers.more + offers.plans
+        // In the plans' own order, however late each was listed (the agents come with their bridge).
+        let order = Plans.agents + Plans.engine
         return (shown ?? offers.more.map(\.id)).compactMap { id in all.first { $0.id == id } }
+            .sorted { (order.firstIndex(of: $0.id) ?? .max) < (order.firstIndex(of: $1.id) ?? .max) }
     }
 
     @ViewBuilder private var plans: some View {
-        if offers.plans.isEmpty {
-            // Not listed yet.
+        if case .failed(let why) = agents {
+            // As the step says it: not looking for ever.
+            HStack(spacing: 8) {
+                Text("Couldn’t look for your coding agents: \(why)")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Try Again", action: lookAgain)
+            }
+            .foregroundStyle(.secondary)
+        } else if offers.plans.isEmpty || agents == .looking {
+            // Not listed yet, or the coding agents not yet.
             HStack(spacing: 8) {
                 Spinner(size: 12)
-                Text("Looking for what’s on your Mac…")
+                Text(offers.plans.isEmpty ? "Looking for what’s on your Mac…" : "Looking for your coding agents…")
             }
             .foregroundStyle(.secondary)
         } else if morePlans.isEmpty {

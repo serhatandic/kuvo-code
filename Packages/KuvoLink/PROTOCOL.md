@@ -743,9 +743,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
     apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
     `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
-    sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
+    sign each other out), and `connected` says the engine has a working one for it already (a key in the shell aside). `shell`: keys in
     the shell the engine uses (`{integrationID, name, variable}`). `connected` (from bridge 0.9.91):
-    the engine's providers signed in to already, by integration, a key in the shell aside. Names
+    the engine's providers signed in and working, by integration (an expired sign-in or a key in the
+    shell aside). Names
     only, never a key. `POST
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
@@ -1484,6 +1485,15 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   - `GET …/kuvo/reviews/<session>` → `{data: review}`, its latest; `GET …/kuvo/reviews` → every
     conversation's; `DELETE …/kuvo/reviews/<session>` puts it away (one under way is let go: its answer isn't kept).
   - Event `kuvo.review.updated` `{sessionID, review}`, `review` null once it's put away.
+
+The same bridge also gives voice input the words to listen for in a conversation (a speech model
+is prompted with them), for the engine's sessions and the coding agents' alike:
+`GET …/kuvo/voice/words/<session>` → `{data: {words: [string]}}`, at most 100, most useful first
+(ask when listening starts). They're the project's own names: its folder's (and its repository's),
+the names said in the conversation's newest messages, its packages', the files changed lately (each
+with and without its extension), then its other folders and files. Never anything of `.env`
+files, nor long hex or random-looking strings. `404` for a conversation that isn't there, `409`
+for one with no folder.
 
 ### Features
 

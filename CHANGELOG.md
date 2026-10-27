@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - The sidebar's marks are one quiet family: a turning ring while a session works, an orange dot that ripples when it needs you, and an accent dot that settles when it's done, plus still marks for a failed run, a wake-up, a watch and a machine that isn't connected. Your tabs show the same marks. The open session is a soft grey fill that starts at its title, so the lines of its subagents stay in view, and section headings stand out more.
+- Click the side questions count on a conversation in the sidebar to open the latest one, on the Mac and the iPhone.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.
@@ -26,6 +27,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - After an update with new features, **What's New** shows its highlights once, each with **Try It** where it opens something; **Help › What's New** shows them again. New keywords in the **/** list carry a small **New** until you use them.
 - Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.
 - An integration whose sign-in ended says **Sign In Again…** on its one button, and "Sign-in ended" under its name, rather than a Sign In button beside a Sign In Again in its menu.
+- With two bars or more over the composer, **Hide** on the card's top edge tucks them into one line that names each, with a dot on what changed; click it to bring them back. Each conversation keeps them as you left them, on your Mac and your phone.
 - Over the composer, what asks you something shows as solid cards, and the bars for what's under way, the messages waiting and the composer are one card. Each bar's chevron and ✕ sit at the end of its line; with three bars or more, each folds to its line but the newest change, and more than two waiting messages fold to one line. Stopping a goal asks first, since it stops the agent and takes the goal away. Putting away a goal that's over, removing a queued message or canceling a wake-up leaves a line saying so with **Undo** where the ✕ was, for a few seconds.
 - A first launch of its own: Kuvo Code's bots gather while it gets ready (only this once; it carries on by itself if you were offline), then it shows your plans first, one way into each (the coding agents as the model picker lists them, and GitHub Copilot), with OpenCode's free models always there, the API keys it finds on your Mac when you ask for them, and Add Another for the rest without leaving it, and turns on the usage panel in the menu bar if you like. Last, it asks for Screen Recording and Accessibility for agents: drag Kuvo Code's icon from the small window beside System Settings into its list, and it moves on once macOS says yes. Each step can be skipped. The usage panel's own welcome window is gone.
 - The usage panel's bars read in the system's own type, like the rest of Kuvo Code, sit snug in the panel's rounded corners, and a bar's details fold open and closed with the panel instead of sliding away before it.
@@ -122,6 +124,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - No more lighter band across a conversation behind the composer, as when you hovered a bar's button or opened the / list: the conversation fades out under the composer in the card's own color.
 - A widget opened larger shows its title clearly, rather than faded out like the conversation under a card's header.
 - A subagent's conversation shows the line under its title (whose it is, the way back, what it's doing) clearly, rather than faded like the conversation under a card's header.
+- What an agent draws for you (a chart, a small app) is part of its reply, with no frame or caption: Open Larger and Copy show at its corner when you point at it, and one that can't show says so, with Try Again.
+- Popovers, like a session's wake-ups (All), list their rows on the popover itself, without a card inside it.
 
 ## 0.7.2
 

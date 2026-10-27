@@ -70,6 +70,22 @@ import UsageKit
         #expect(onboarding.found != nil)
     }
 
+    /// A box that answers but can't list them says why, with Try Again: only a box still starting
+    /// is still looked for.
+    @Test func aBoxThatFailsSaysWhy() async {
+        let onboarding = Onboarding(defaults: defaults, launchedBefore: false, screen: ScreenAccess(source: Permissions().source))
+        let box = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 500, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(#"{"message":"The engine’s list of sign-ins couldn’t be read."}"#.utf8)))
+                continuation.finish()
+            }
+        })
+        await onboarding.look(in: box)
+        #expect(onboarding.lookFailure == "The engine’s list of sign-ins couldn’t be read.")
+        #expect(onboarding.found == nil)
+    }
+
     /// The coding agents' bridge never lists them (it didn't start, or answered with none): the
     /// step stops looking for them and says so, rather than spinning on.
     @Test func codingAgentsNeverListedSayItAndTryAgain() async {

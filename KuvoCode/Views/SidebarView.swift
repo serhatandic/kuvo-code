@@ -906,15 +906,7 @@ struct SidebarView: View {
                             .help("Works in a worktree, on \(tree.branch)")
                     }
                     if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: Keyword.btw.symbol)
-                            Text("\(count)")
-                                .monospacedDigit()
-                        }
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .help(count.counting("side question") + ", kept out of the conversation: Control-click to open one")
-                        .accessibilityLabel(count.counting("side question"))
+                        SideQuestionsButton(count: count) { showSideQuestion(nil, of: session, in: place) }
                     }
                     let children = workspace.subSessions[session.id] ?? []
                     if !children.isEmpty {
@@ -927,33 +919,30 @@ struct SidebarView: View {
         }
         .contextMenu { menu(for: session, in: place) }
         .modifier(SubSessionsAction(count: workspace.subSessions[session.id]?.count ?? 0, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) })
+        .modifier(SideQuestionsAction(count: workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id] ?? 0) { showSideQuestion(nil, of: session, in: place) })
     }
 
     /// A conversation's side questions ("/btw"), each opening it with its answer over the composer.
-    @ViewBuilder private func sideQuestionsMenu(for session: Session) -> some View {
+    @ViewBuilder private func sideQuestionsMenu(for session: Session, in place: Place?) -> some View {
         let bridge = workspace.agents(forFolder: session.location.directory)
         if let count = bridge?.sideQuestionCounts[session.id], count > 0 {
             Menu("Side Questions") {
                 let questions = bridge?.sideQuestions[session.id] ?? []
                 if questions.isEmpty {
-                    Button("Open the Latest") { showSideQuestion(nil, of: session) }
+                    Button("Open the Latest") { showSideQuestion(nil, of: session, in: place) }
                 }
                 ForEach(questions.reversed()) { question in
-                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session) }
+                    Button(String(question.question.prefix(60))) { showSideQuestion(question.id, of: session, in: place) }
                 }
             }
         }
     }
 
-    private func showSideQuestion(_ id: String?, of session: Session) {
+    /// `place`: the row it's opened from, highlighted as a click on it would be.
+    private func showSideQuestion(_ id: String?, of session: Session, in place: Place?) {
+        if let place { pickedIn[session.id] = place }
         selection = session.id
-        Task {
-            let bridge = workspace.agents(forFolder: session.location.directory)
-            await bridge?.loadSideQuestions(of: session.id)
-            guard let model = workspace.model(for: session.id) else { return }
-            model.shownSideQuestion = id ?? bridge?.sideQuestions[session.id]?.last?.id
-            model.hidesSideQuestion = false
-        }
+        Task { await workspace.model(for: session.id)?.showSideQuestion(id) }
     }
 
     /// Saves the conversation as a Markdown file where you choose.
@@ -1003,7 +992,7 @@ struct SidebarView: View {
         if let openBeside, session.id != selection {
             Button("Open Beside") { openBeside(session.id) }
         }
-        sideQuestionsMenu(for: session)
+        sideQuestionsMenu(for: session, in: place)
         // Moving to another computer: what would change it waits until it's there.
         let moving = app.moves.isMoving(session.id)
         if let place {
@@ -1969,6 +1958,45 @@ private struct SubSessionToggle: View {
         .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
         // The row it's in says so, with its action (see `SubSessionsAction`).
         .accessibilityHidden(true)
+    }
+}
+
+/// A conversation's side questions on its row: how many, opening the latest over its composer
+/// (the others are a menu away there, and in the row's menu).
+private struct SideQuestionsButton: View {
+    let count: Int
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 2) {
+                Image(systemName: Keyword.btw.symbol)
+                Text("\(count)")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11))
+        }
+        .buttonStyle(TextButtonStyle())
+        .help("Open the latest of \(count.counting("side question"))")
+        // The row it's in says so, with its action (see `SideQuestionsAction`).
+        .accessibilityHidden(true)
+    }
+}
+
+/// A row with side questions, for VoiceOver: how many, and the action that opens the latest, as
+/// the count inside it does.
+private struct SideQuestionsAction: ViewModifier {
+    let count: Int
+    let open: () -> Void
+
+    func body(content: Content) -> some View {
+        if count > 0 {
+            content
+                .accessibilityCustomContent("Side questions", "\(count)", importance: .high)
+                .accessibilityAction(named: "Open Side Questions", open)
+        } else {
+            content
+        }
     }
 }
 

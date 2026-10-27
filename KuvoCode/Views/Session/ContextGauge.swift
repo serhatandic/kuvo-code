@@ -46,6 +46,7 @@ struct ContextGauge: View {
                     showsDetails = false
                     model.compact()
                 })
+                .popoverContent()
             }
         }
     }

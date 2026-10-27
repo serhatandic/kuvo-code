@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ClientAccounts
 
@@ -118,6 +119,59 @@ import ClientAccounts
         #expect(!(starting.plans + starting.more).contains { Plans.agents.contains($0.integrationID) })
         #expect(starting.plans.map(\.name) == ["GitHub Copilot"])
         #expect(starting.keys.map(\.name) == ["Nvidia"])
+    }
+
+    @Test func aKeyForAPlanTheEngineSignsInToIsThatPlansWayIn() {
+        // OpenCode Zen and Poe sign in with a key: one found is the plan's row, never a second one.
+        let poe = Found.Opencode(id: "opencode:poe", integrationID: "poe", name: "Poe", kind: .key, connected: false)
+        let offers = Offers(found: found(agents: bridge, opencode: [poe], shell: [.init(integrationID: "opencode", name: "OpenCode", variable: "OPENCODE_API_KEY")]))
+        let poeRows = (offers.plans + offers.keys + offers.more).filter { $0.integrationID == "poe" }
+        #expect(poeRows.map(\.action) == [.use(poe)])
+        #expect(offers.plans.first { $0.integrationID == "poe" }?.detail == "Your key from opencode")
+        // A key in the shell the engine uses already: that plan's ready.
+        let zen = (offers.plans + offers.keys + offers.more).filter { $0.integrationID == "opencode" }
+        #expect(zen.map(\.action) == [.ready])
+        #expect(zen.first?.detail == "From OPENCODE_API_KEY in your shell")
+        #expect(offers.plans.contains { $0.integrationID == "opencode" })
+    }
+
+    @Test func aKeyTheShellAlreadyGivesIsReadyOnceNotOfferedAgain() {
+        // OpenCode Zen's key in opencode and in the shell, and Nvidia's too: the engine uses the
+        // shell's already, so each is one row, ready.
+        let zen = Found.Opencode(id: "opencode:opencode", integrationID: "opencode", name: "OpenCode", kind: .key, connected: false)
+        let nvidia = Found.Opencode(id: "opencode:nvidia", integrationID: "nvidia", name: "Nvidia", kind: .key, connected: false)
+        let offers = Offers(found: found(agents: bridge, opencode: [zen, nvidia], shell: [
+            .init(integrationID: "opencode", name: "OpenCode", variable: "OPENCODE_API_KEY"),
+            .init(integrationID: "nvidia", name: "Nvidia", variable: "NVIDIA_API_KEY"),
+        ]))
+        let all = offers.plans + offers.keys + offers.more
+        #expect(all.filter { $0.integrationID == "opencode" }.map(\.detail) == ["From OPENCODE_API_KEY in your shell"])
+        #expect(all.filter { $0.integrationID == "nvidia" }.map(\.detail) == ["From NVIDIA_API_KEY in your shell"])
+        #expect(all.filter { ["opencode", "nvidia"].contains($0.integrationID) }.allSatisfy { $0.action == .ready })
+    }
+
+    @Test func aPlansKeyBroughtOverStillSaysWhatItIs() {
+        let poe = Found.Opencode(id: "opencode:poe", integrationID: "poe", name: "Poe", kind: .key, connected: false)
+        let row = Offers(found: found(agents: bridge, opencode: [poe]), used: ["opencode:poe"]).plans.first { $0.integrationID == "poe" }
+        #expect(row?.action == .added)
+        #expect(row?.detail == "Your key from opencode")
+    }
+
+    @Test func everyPlanAnAgentSignsInToHasOnlyThatWayIn() {
+        // opencode signed in to Anthropic, xAI and Google too: each is its agent's row.
+        let offers = Offers(found: found(agents: bridge, opencode: ["anthropic", "xai", "google", "openai"].map {
+            Found.Opencode(id: "opencode:" + $0, integrationID: $0, name: $0, kind: .signIn, connected: false)
+        }))
+        let providers = Set(Plans.providers.values)
+        #expect(!(offers.plans + offers.keys + offers.more).contains { providers.contains($0.integrationID) })
+    }
+
+    @Test func aBoxFromBeforeConnectedStillReadsAndNothingIsReadyByIt() throws {
+        // A box before bridge 0.9.91 says nothing of what's signed in through the engine.
+        let json = #"{"agents":[],"opencode":[],"shell":[]}"#
+        let older = try JSONDecoder().decode(Found.self, from: Data(json.utf8))
+        #expect(older.connected.isEmpty)
+        #expect(Offers(found: older).plans.first { $0.integrationID == "github-copilot" }?.action == .signIn(integrationID: "github-copilot"))
     }
 
     @Test func notListedYetIsNotNothingFound() {
