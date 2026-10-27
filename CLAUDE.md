@@ -163,11 +163,11 @@ When you add or change something people use:
 
 ### It shares the Mac's look
 
-Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws with copies of the Mac's design
-files: `KuvoCode/Design/Spinner.swift`, the code block style (`CodeBlockStyle.swift`), and
-`Theme.swift`'s ShimmerText and DiffStat, in `KuvoCodeMobile/Design`. When you change one of those here, or how the
-conversation, cards, composer or sidebar look, change the phone's copy too (or tell the session
-working on the phone), so the two stay one app. The same goes for the app icon: the phone's
+Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws with copies of some of the Mac's
+design files: the code block style (`KuvoCode/Design/CodeBlockStyle.swift`), and `Theme.swift`'s
+ShimmerText and DiffStat, in `KuvoCodeMobile/Design`. When you change one of those
+here, or how the conversation, cards, composer or sidebar look, change the phone's copy too (or
+tell the session working on the phone), so the two stay one app. The same goes for the app icon: the phone's
 `KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
 
 What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds

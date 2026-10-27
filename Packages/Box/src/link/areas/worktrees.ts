@@ -307,9 +307,9 @@ export async function worktreesWhere(directory: unknown, engine: Target | null, 
     if (path.basename(gitFolder) !== ".git") continue;
     const checkout = realOr(path.dirname(gitFolder));
     // One the engine doesn't take for a repository has no worktrees: a repository with no commit
-    // yet is its "global" project.
+    // yet is its "global" project (asked of git when the engine hasn't said).
     const id = ids.get(checkout);
-    if (id === null) continue;
+    if (id === null || (id === undefined && !(await gitLater(project, ["rev-list", "-n", "1", "--all"])))) continue;
     // The engine's own: a folder for each project, named by the start of its id.
     const folder = value === null ? (id ? path.join(answer.default, id.slice(0, 6)) : null)
       : value.startsWith("~/") ? path.join(answer.home, value.slice(2)) : path.resolve(checkout, value);
@@ -325,7 +325,31 @@ export async function worktreesWhere(directory: unknown, engine: Target | null, 
     }
     answer.projects.push(entry);
   }
+  apart(answer.projects, answer.home);
   return answer;
+}
+
+/** Projects that share a name, told apart by the folders they're in, as few as it takes:
+ * "sums — scratchpad" and "sums — code" (the home folder as "~"). */
+function apart(projects: WhereProject[], home: string): void {
+  const parents = (project: string) => {
+    const folder = path.dirname(project);
+    const inHome = folder === home || folder.startsWith(home + path.sep);
+    const names = (inHome ? folder.slice(home.length) : folder).split(path.sep).filter(Boolean);
+    return (inHome ? ["~", ...names] : names).reverse();
+  };
+  for (const name of new Set(projects.map(each => each.name))) {
+    const same = projects.filter(each => each.name === name);
+    if (same.length < 2) continue;
+    const longest = Math.max(...same.map(each => parents(each.project).length));
+    for (let depth = 1; depth <= longest; depth++) {
+      const labels = same.map(each => parents(each.project).slice(0, depth).reverse().join("/"));
+      if (new Set(labels).size === same.length || depth === longest) {
+        same.forEach((each, at) => { if (labels[at]) each.name = `${name} — ${labels[at]}`; });
+        break;
+      }
+    }
+  }
 }
 
 /** A folder through any links in its path, as the engine names a checkout; as it is when it isn't there. */

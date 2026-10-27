@@ -35,10 +35,11 @@ git(drafts, "init", "-q", "-b", "main");
 // The engine: the projects it knows, each with its own checkout, said without a folder (a call
 // about a folder would start the engine there, which these never make).
 const asked = [];
+const known = [{ id: "4f1c9a2b7e", canonical: shop, vcs: "git" }, { id: "global", canonical: drafts, vcs: "git" }];
 const engine = http.createServer((request, response) => {
   asked.push({ path: new URL(request.url, "http://x").pathname, folder: request.headers["x-opencode-directory"] });
   response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify(new URL(request.url, "http://x").pathname === "/api/project" ? [{ id: "4f1c9a2b7e", canonical: shop, vcs: "git" }, { id: "global", canonical: drafts, vcs: "git" }] : {}));
+  response.end(JSON.stringify(new URL(request.url, "http://x").pathname === "/api/project" ? known : {}));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 const atEngine = { port: engine.address().port, password: "pw" };
@@ -96,6 +97,36 @@ test("with the engine not running, a named folder is still found from git; the e
   assert.equal((await where(null, [shop], null)).projects[0].folder, null);
 });
 
+test("two projects with the same name are told apart by the folder each is in; a repository with no commit yet stays out with the engine stopped too", async () => {
+  const sums = [path.join(home, "scratchpad", "sums"), path.join(home, "work", "sums")];
+  for (const folder of sums) {
+    fs.mkdirSync(folder, { recursive: true });
+    git(folder, "init", "-q", "-b", "main");
+    git(folder, "commit", "-q", "--allow-empty", "-m", "First");
+  }
+  const answer = await where("../worktrees", [...sums, shop, drafts], null);
+  assert.deepEqual(answer.projects.map(each => each.name), ["sums — scratchpad", "sums — work", "shop"]);
+  // As many folders as it takes; the home folder as ~.
+  const deeper = [path.join(home, "a", "x", "api"), path.join(home, "b", "x", "api"), path.join(home, "api")];
+  for (const folder of deeper) {
+    fs.mkdirSync(folder, { recursive: true });
+    git(folder, "init", "-q", "-b", "main");
+    git(folder, "commit", "-q", "--allow-empty", "-m", "First");
+  }
+  assert.deepEqual((await where("../worktrees", deeper, null)).projects.map(each => each.name), ["api — a/x", "api — b/x", "api — ~"]);
+});
+
+test("a repository on a branch with no commit yet, beside ones that have, keeps its worktrees, the engine running or not", async () => {
+  const fresh = path.join(home, "fresh");
+  fs.mkdirSync(fresh);
+  git(fresh, "init", "-q", "-b", "main");
+  git(fresh, "commit", "-q", "--allow-empty", "-m", "First");
+  git(fresh, "checkout", "-q", "--orphan", "redo");
+  known.push({ id: "77aa00bb11", canonical: fresh, vcs: "git" });
+  assert.equal((await where("../worktrees", [fresh])).projects.length, 1);
+  assert.equal((await where("../worktrees", [fresh], null)).projects.length, 1);
+});
+
 test("a client goes through this box's folders to choose one: repositories marked, hidden ones left out, and no folder said so", () => {
   fs.mkdirSync(path.join(code, ".cache"));
   fs.mkdirSync(path.join(code, "app10"));
@@ -126,4 +157,23 @@ test("a client makes a new folder to choose, as a folder panel's New Folder does
   assert.equal(link.makeFolder({ path: path.join(code, "nowhere", "trees") }).status, 404);
   assert.equal(fs.existsSync(path.join(code, "nowhere")), false);
   assert.equal(link.makeFolder({ path: "trees" }).status, 400);
+});
+
+test("an MCP server's program is found where the engine would run it from, or said to be missing", () => {
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "npx"), "#!/bin/sh\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "notes.txt"), "", { mode: 0o644 });
+  const PATH = ["/nowhere", bin].join(path.delimiter);
+  assert.deepEqual(link.findProgram("kuvo/programs?name=npx", PATH), { status: 200, value: { name: "npx", path: path.join(bin, "npx") } });
+  assert.equal(link.findProgram("kuvo/programs?name=uvx", PATH).value.path, null);
+  // Not a program: there, but it can't be run.
+  assert.equal(link.findProgram("kuvo/programs?name=notes.txt", PATH).value.path, null);
+  // A path, from the home folder too.
+  assert.equal(link.findProgram(`kuvo/programs?name=${encodeURIComponent("~/bin/npx")}`, "").value.path, path.join(home, "bin", "npx"));
+  assert.equal(link.findProgram("kuvo/programs?name=", PATH).status, 400);
+  // One the engine finds from the server's working folder, or a shell's variable: not known here.
+  for (const name of ["./server", "../bin/run", "$HOME/bin/x", "~other/x"]) {
+    assert.deepEqual(link.findProgram(`kuvo/programs?name=${encodeURIComponent(name)}`, PATH).value, { name, path: null, unknown: true }, name);
+  }
 });

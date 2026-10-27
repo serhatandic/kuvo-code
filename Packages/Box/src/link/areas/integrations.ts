@@ -65,11 +65,15 @@ async function integrationEntries(catalog: CatalogIntegration[], engine: EngineR
   const { settings } = readSettings();
   let servers: EngineServer[] | null = null;
   let signedIn: Set<string> = new Set();
+  // Integrations it has had a sign-in for, in use or not: one of them needing a sign-in had one that ended.
+  let hadSignIn: Set<string> = new Set();
   if (engine) {
     // (As the engine answers it: its MCP servers, a list.)
     servers = await call(engine, "GET", "/api/mcp", undefined, signal).catch(() => null) as EngineServer[] | null;
     const credentials = await call(engine, "GET", "/api/credential", undefined, signal).catch(() => []);
-    signedIn = new Set((Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.active && each?.value?.type === "oauth").map(each => each.integrationID));
+    const oauth = (Array.isArray(credentials) ? credentials as EngineCredential[] : []).filter(each => each?.value?.type === "oauth");
+    signedIn = new Set(oauth.filter(each => each.active).map(each => each.integrationID));
+    hadSignIn = new Set(oauth.map(each => each.integrationID));
   }
   const engineDown = !Array.isArray(servers);
   // Which keys it keeps, by name, never reading one (left unsaid where they can't be reached now).
@@ -91,6 +95,7 @@ async function integrationEntries(catalog: CatalogIntegration[], engine: EngineR
       // Without its engine, only one turned off can be told: it won't start whatever the engine says.
       if (!engineDown || off) shown.health = integrationHealth({ ...entry, signInFile }, server, off, signedIn);
       if (server?.integrationID) shown.signIn = server.integrationID;
+      if (shown.health === "needsSignIn" && server?.integrationID && hadSignIn.has(server.integrationID)) shown.signInEnded = true;
     }
     return shown;
   });

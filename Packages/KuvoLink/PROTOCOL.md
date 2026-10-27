@@ -855,7 +855,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   that use its own apps). Where its keys can't be reached now (this Mac's app not answering),
   `503 {"message"}`.
   - `GET kuvo/integrations` → `{"integrations": [{id, title, summary, kind, symbol, site, how,
-    way, keys?, help?, redirect?, by?, macOnly?, added, keysSaved?, health?, signIn?, siteSignedIn?}],
+    way, keys?, help?, redirect?, by?, macOnly?, added, keysSaved?, health?, signIn?, signInEnded?, siteSignedIn?}],
     "engineDown"?, "problem"?}`, by kind in the page's order (`kind` is its title: "Mail and Calendar", "Chat",
     "Social", "Code and Work"). `way`: `official` (connect, then sign in), `token` (its maker's
     server, with a token you bring), `app` (your app's client ID and secret, made with `redirect`,
@@ -874,7 +874,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     still says `disabled`). `signIn` is the
     engine's integration to sign in with, through
     `api/integration/<signIn>/connect/oauth` as any (its page returns to `127.0.0.1:19876`:
-    `kuvo/sign-in/return`). `problem`: the settings file can't be changed.
+    `kuvo/sign-in/return`). `signInEnded`: one that needs signing in had a sign-in, now ended or
+    set aside in Accounts (Settings says Sign In Again, not Sign In). `problem`: the settings
+    file can't be changed.
   - `POST kuvo/integrations/<id>` with `{"keys"?: {"<name>": "<value>"}}` adds it, as Connect
     (or Add Key…) does: with the keys given, or those the computer has; one added already is
     written again (the engine reads its keys again), and with new keys its server connects again a
@@ -1032,10 +1034,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     with `value` as `worktree.directory` (none: the engine's own), as the engine reads it, so
     Settings shows real folders before and after you choose one → `{"directory", "default", "home",
     "projects": [{project, name, folder, exists?, canMake?, inside?, ignored?}]}`, one for each of
-    the box's projects in a git repository. `default`: the engine's own folder, where each project
-    has one of its own (`folder` is null until the engine runs and says which). A relative value
-    starts at the repository's own checkout, not the project's folder in it; `~/` at the home
-    folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
+    the box's projects in a git repository with a commit. `name`: its folder's name, with the
+    folders it's in when another project has the same one ("sums — scratchpad", "api — ~").
+    `default`: the engine's own folder, where each project has one of its own (`folder` is null
+    until the engine runs and says which). A relative value starts at the repository's own
+    checkout, not the project's folder in it; `~/` at the home folder. `canMake` (for one not there yet): it can be made; `inside`: it's in the repository's
     checkout, and `ignored` whether git ignores it there (if not, git lists each worktree as new
     files).
 - `GET kuvo/folders[?path=<folder>&hidden=1]` (`folders`): the folders in one of this box's folders,
@@ -1047,6 +1050,19 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
+- `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
+  command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
+  from the home folder) → `{"name", "path"}`, `path` null when it hasn't; `"unknown": true` (and
+  `path` null) for one it can't tell from the box (`./server`, from the server's working folder;
+  `$HOME/x`); `400` without a name.
+- `POST kuvo/providers/models {"url", "api"?, "headers"?}` (`providers.models`): the models a provider
+  of your own lists at its address (`<url>/models`), asked from the box, so `localhost` is that
+  computer, as the engine reaches it → `{"reached": true, "models": [id…]}`; `{"reached": true,
+  "needsKey": true}` when it asks for its key first; `{"reached": false, "message"}` when nothing
+  answers or what answers isn't a list of models. `api` `anthropic` asks as Anthropic's API does;
+  `headers` are sent as given, except ones naming an environment variable or a file, and only to
+  that address (a redirect isn't followed: `message` says where it points). `400` for an address
+  that isn't http or https.
 - `GET kuvo/plugins/search?q=<text>` (`plugins.search`): npm's packages Settings › Engine offers as
   plugins, found from the box itself (its network) → `{"packages": [{name, version, description?,
   weekly?}], "missing"?}`: with no `q`, the most used opencode plugins; otherwise opencode's
@@ -1457,6 +1473,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
 | `phones.pair` | `kuvo/phones/pair` |
 | `plugins.search` | `kuvo/plugins/search` |
+| `programs` | `kuvo/programs` |
+| `providers.models` | `POST kuvo/providers/models` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |

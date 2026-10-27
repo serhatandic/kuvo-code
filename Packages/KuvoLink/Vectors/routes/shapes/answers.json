@@ -2168,6 +2168,12 @@
             "literal": "plugins.search"
            },
            {
+            "literal": "programs"
+           },
+           {
+            "literal": "providers.models"
+           },
+           {
             "literal": "personalities.events"
            },
            {
@@ -2369,6 +2375,12 @@
            },
            {
             "literal": "plugins.search"
+           },
+           {
+            "literal": "programs"
+           },
+           {
+            "literal": "providers.models"
            },
            {
             "literal": "personalities.events"
@@ -3864,7 +3876,8 @@
            }
           ]
          },
-         "signIn?": "string"
+         "signIn?": "string",
+         "signInEnded?": "bool"
         }
        }
       },
@@ -3960,7 +3973,8 @@
           }
          ]
         },
-        "signIn?": "string"
+        "signIn?": "string",
+        "signInEnded?": "bool"
        }
       }
      }
@@ -4026,6 +4040,38 @@
        }
       },
       "missing?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/programs",
+   "answers": {
+    "200": {
+     "object": {
+      "name": "string",
+      "path": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "unknown?": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/providers/models",
+   "answers": {
+    "200": {
+     "object": {
+      "reached": "bool",
+      "models?": {
+       "list": "string"
+      },
+      "needsKey?": "bool",
+      "message?": "string"
      }
     }
    }

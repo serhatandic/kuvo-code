@@ -89,6 +89,8 @@ export { messageID } from "./engine/sessions";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
+export { findProgram } from "./areas/programs";
+export { providerModels } from "./areas/providers";
 export { endedProviders, forgetPlan, noteSignIn } from "./areas/accounts";
 export { answerAsk, askAnswer, askNotice, listedAsk, readAsks, watchAsks } from "./areas/asks";
 export { BOT_MEMORY_RULE, addMacDefaults, changeSettings, deepMerged, keysNamedHere, ownsSettings, readSettings } from "./areas/config";

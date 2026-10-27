@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// Edit Bot's keys: for each integration you bring a key for, whether the bot uses one of its

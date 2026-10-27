@@ -19,12 +19,14 @@ const catalog = { integrations: [
   { id: "todoist", title: "Todoist", summary: "Tasks", kind: "Code and Work", symbol: "checklist", site: "https://todoist.com", how: "Open source · your key", way: "package",
     keys: [{ name: "API_KEY", label: "API token", prompt: "From Todoist" }], variables: { API_KEY: shared },
     settings: { type: "local", command: ["kuvo-npx", "@doist/todoist-mcp@1.0.0"], environment: { API_KEY: `{file:~/.kuvo-code/box/keys/${shared}}` }, codemode: false } },
+  { id: "notion", title: "Notion", summary: "Pages", kind: "Code and Work", symbol: "doc.text", site: "https://notion.so", how: "Official", way: "official",
+    settings: { type: "remote", url: "https://mcp.notion.com/mcp", codemode: false } },
   { id: "linkedin", title: "LinkedIn", summary: "Posts", kind: "Social", symbol: "person", site: "https://linkedin.com", how: "In the browser", way: "browser" },
 ] };
 
-/** An engine that lists its MCP servers as `servers()` says, with `folders` open, and notes what
- * it's asked (and for which folder). */
-export async function standInEngine(servers, folders = []) {
+/** An engine that lists its MCP servers as `servers()` says and its sign-ins as `credentials()`,
+ * with `folders` open, and notes what it's asked (and for which folder). */
+export async function standInEngine(servers, folders = [], credentials = () => []) {
   const asked = [];
   const server = http.createServer((request, response) => {
     const folder = request.headers["x-opencode-directory"];
@@ -32,7 +34,7 @@ export async function standInEngine(servers, folders = []) {
     asked.onAsked?.();
     response.writeHead(200, { "content-type": "application/json" });
     if (request.url === "/api/debug/location") return response.end(JSON.stringify(folders.map(directory => ({ directory }))));
-    response.end(JSON.stringify({ data: request.url === "/api/mcp" ? servers() : [] }));
+    response.end(JSON.stringify({ data: request.url === "/api/mcp" ? servers() : request.url === "/api/credential" ? credentials() : [] }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   after(() => { server.closeAllConnections(); server.close(); });
@@ -70,7 +72,7 @@ export function integrationScenarios({ link, home, mac, store }) {
 
   test("listed from the catalog, added with its keys or the ones it has, never one used on its site", async () => {
     const all = await listed();
-    const expected = [...(mac ? [["apple-calendar", false, undefined]] : []), ["microsoft-365", false, undefined], ["todoist", false, false], ["linkedin", false, undefined]];
+    const expected = [...(mac ? [["apple-calendar", false, undefined]] : []), ["microsoft-365", false, undefined], ["todoist", false, false], ["notion", false, undefined], ["linkedin", false, undefined]];
     assert.deepEqual(all.map(each => [each.id, each.added, each.keysSaved]), expected, mac ? "with those that use this Mac's own apps" : "without those that use a Mac's own apps");
     assert.ok(all.every(each => each.settings === undefined && each.variables === undefined && each.signInFile === undefined), "what it runs stays the box's");
 
@@ -131,6 +133,26 @@ export function integrationScenarios({ link, home, mac, store }) {
     fs.mkdirSync(path.join(store.data, "microsoft-365"), { recursive: true });
     fs.writeFileSync(path.join(store.data, "microsoft-365", "token-cache.json"), "{}");
     assert.equal(await health(), "connected");
+  });
+
+  test("one you sign in to on its own page: Sign In before it ever had a sign-in, Sign In Again once the one it had ended", async t => {
+    let status = "needs_auth";
+    let credentials = [];
+    const { engine } = await standInEngine(() => [{ name: "notion", status: { status }, integrationID: "mcp_notion" }], [], () => credentials);
+    assert.equal((await ask("POST", "kuvo/integrations/notion", {})).status, 200);
+    t.after(async () => { await ask("DELETE", "kuvo/integrations/notion"); });
+    const shown = async () => (await listed(engine)).find(each => each.id === "notion");
+    assert.deepEqual(await shown().then(each => [each.health, each.signIn, each.signInEnded]), ["needsSignIn", "mcp_notion", undefined], "never signed in");
+    // Signed in once; the engine can't use that sign-in any more (it ran out, or was taken back).
+    credentials = [{ id: "cred_1", integrationID: "mcp_notion", label: "you@example.com", active: true, value: { type: "oauth" } }];
+    assert.deepEqual(await shown().then(each => [each.health, each.signInEnded]), ["needsSignIn", true]);
+    // One set aside in Accounts is still one it had.
+    status = "connected";
+    credentials = [{ ...credentials[0], active: false }];
+    assert.deepEqual(await shown().then(each => [each.health, each.signInEnded]), ["needsSignIn", true]);
+    // Signed in again: nothing ended.
+    credentials = [{ ...credentials[0], active: true }];
+    assert.deepEqual(await shown().then(each => [each.health, each.signInEnded]), ["connected", undefined]);
   });
 
   test("its keys through kuvo/keys: listed, read, set and removed, never a bot's own", async () => {
