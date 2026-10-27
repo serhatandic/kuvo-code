@@ -19,7 +19,7 @@ export function record(store: ArtifactStore, { bots, watch = true, settle = 1000
       if (bot && folders) folders.turnEnded(bot, since, made)
       // A project's files a command changed (a bot's own folder is watched, or looked at above).
       if (folder && !(bots && (folder + sep).startsWith(bots + sep))) {
-        for (const path of changedSince(folder, since)) store.change(path, made("shell"))
+        void store.changeAll(changedSince(folder, since), made("shell"))
       }
     },
   })

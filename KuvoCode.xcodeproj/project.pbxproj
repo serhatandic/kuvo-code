@@ -11,6 +11,7 @@
 		4B0A00000000000000000015 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000016 /* Textual */; };
 		4B0A0000000000000000007E /* ClientText in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000007F /* ClientText */; };
 		4B0A0000000000000000008E /* ClientAccounts in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000008F /* ClientAccounts */; };
+		4B0A000000000000000000F0 /* ClientNews in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F1 /* ClientNews */; };
 		4B0A0000000000000000009E /* ClientDesign in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000009F /* ClientDesign */; };
 		4B0A00000000000000000060 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000061 /* SwiftUIMath */; };
 		4B0A00000000000000000018 /* UsageKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000019 /* UsageKit */; };
@@ -60,6 +61,7 @@
 				4B0A00000000000000000050 /* KuvoLink in Frameworks */,
 				4B0A0000000000000000007E /* ClientText in Frameworks */,
 				4B0A0000000000000000008E /* ClientAccounts in Frameworks */,
+				4B0A000000000000000000F0 /* ClientNews in Frameworks */,
 				4B0A0000000000000000009E /* ClientDesign in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -134,6 +136,7 @@
 				4B0A00000000000000000051 /* KuvoLink */,
 				4B0A0000000000000000007F /* ClientText */,
 				4B0A0000000000000000008F /* ClientAccounts */,
+				4B0A000000000000000000F1 /* ClientNews */,
 				4B0A0000000000000000009F /* ClientDesign */,
 			);
 			productName = KuvoCode;
@@ -597,6 +600,10 @@
 		4B0A0000000000000000008F /* ClientAccounts */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClientAccounts;
+		};
+		4B0A000000000000000000F1 /* ClientNews */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientNews;
 		};
 		4B0A0000000000000000009F /* ClientDesign */ = {
 			isa = XCSwiftPackageProductDependency;

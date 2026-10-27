@@ -55,7 +55,7 @@ test("by default each project's go in the engine's own folder, one for each proj
   const engineFolder = path.join(home, ".kuvo-code", "data", "opencode", "worktree");
   assert.equal(answer.directory, null);
   assert.equal(answer.default, engineFolder);
-  assert.equal(answer.home, os.homedir());
+  assert.equal(answer.home, home);
   assert.deepEqual(answer.projects, [{ project: shop, name: "shop", folder: path.join(engineFolder, "4f1c9a"), exists: false, canMake: true }]);
   assert.deepEqual(asked.map(each => each.folder), [undefined], "one call, about no project");
 });

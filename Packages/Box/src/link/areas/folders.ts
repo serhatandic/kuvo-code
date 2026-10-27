@@ -1,12 +1,12 @@
 // Folders (PROTOCOL.md, `kuvo/folders`): this box's folders, for a client to choose one.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { promptedFolders } from "../../shared/platform";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
+import { homeFolder } from "../home";
 
 /** One of this box's folders, as `kuvo/folders` lists it: its path, the home folder, the one it's
  * in (null for the top), and the folders in it. */
@@ -23,7 +23,7 @@ export interface FolderList {
  * `hidden=1`. `repository`: a git repository's own checkout. */
 export function listFolders(requestPath: string): JSONAnswer<FolderList | { message: string }> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
-  const home = os.homedir();
+  const home = homeFolder();
   const given = (query.get("path") ?? "").trim();
   const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
   if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
@@ -50,7 +50,7 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | { mess
  * makes one: `{path}` (`~/` starts at the home folder). */
 export function makeFolder(body: Body<"path">): JSONAnswer<{ path: string } | { message: string }> {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
-  const home = os.homedir();
+  const home = homeFolder();
   const folder = given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
   if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
   const at = path.resolve(folder);

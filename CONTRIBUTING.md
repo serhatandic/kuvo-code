@@ -386,6 +386,7 @@ when you're there to answer.
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |
 | `KUVO_DEMO_WIDGET_SNAPSHOTS` | A folder: each widget an agent made, once drawn, saved there as a picture (a background copy's window draws no web pages) |
+| `KUVO_DEMO_WHATS_NEW` | What's New's sheet over the window, with the newest highlights |
 | `KUVO_DEMO_WIDGET_LARGE` | The first widget shown opens larger, as Open Larger does |
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
@@ -494,7 +495,14 @@ Every change starts from an issue and lands on `main` through a pull request.
    - **If people using Kuvo Code would notice the change, add a line to
      `CHANGELOG.md`** under Unreleased, saying what they'll see. It becomes
      part of the next release's notes, on GitHub and in the app's update
-     window.
+     window. Something new people use (a keyword, a Settings page) can carry a
+     "New" mark until it's used: add `<!-- new: keyword/goal -->` (or
+     `settings/<page>`) after its line. A release with headline features lists
+     a few under `### Highlights` at the top of its section, each
+     `- **Title**: one line. <!-- symbol: <SF Symbol>; open: settings/<page> -->`,
+     which What's New shows once after an update; then run
+     `python3 scripts/whats-new.py` and commit `KuvoCode/Resources/whats-new.json`
+     (CI checks it, and the release workflow writes it again).
 4. **CI must pass**, and a maintainer reviews and approves the pull request.
    It's then squash-merged and the branch is deleted.
 

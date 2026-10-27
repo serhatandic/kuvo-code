@@ -1,13 +1,17 @@
-import AppKit
 import QuartzCore
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// A bot moving, played by Core Animation. BotPose works out its motion over one cycle of its
 /// mood, which goes to the window server as keyframes; it plays them on the GPU, so a moving bot
 /// costs the app nothing from one frame to the next (moving in SwiftUI, a frame at a time, the
 /// sidebar's bots at rest took a third of a core). Its pieces are pictures drawn once, by the
 /// same views a still bot is drawn with.
-struct BotMotion: NSViewRepresentable {
+struct BotMotion {
     let look: BotLook
     let size: CGFloat
     let mood: BotMood
@@ -16,14 +20,25 @@ struct BotMotion: NSViewRepresentable {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var scale
 
-    func makeNSView(context: Context) -> BotMotionView { BotMotionView() }
 
-    func updateNSView(_ view: BotMotionView, context: Context) {
-        view.show(BotMotionView.Spec(look: look, size: size, mood: mood, noticed: noticed, seed: seed, scheme: scheme, scale: scale))
+    fileprivate var spec: BotMotionView.Spec {
+        BotMotionView.Spec(look: look, size: size, mood: mood, noticed: noticed, seed: seed, scheme: scheme, scale: scale)
     }
 }
 
-final class BotMotionView: NSView {
+#if os(macOS)
+extension BotMotion: NSViewRepresentable {
+    func makeNSView(context: Context) -> BotMotionView { BotMotionView() }
+    func updateNSView(_ view: BotMotionView, context: Context) { view.show(spec) }
+}
+#else
+extension BotMotion: UIViewRepresentable {
+    func makeUIView(context: Context) -> BotMotionView { BotMotionView() }
+    func updateUIView(_ view: BotMotionView, context: Context) { view.show(spec) }
+}
+#endif
+
+final class BotMotionView: PlatformView {
     struct Spec: Equatable {
         var look: BotLook
         var size: CGFloat
@@ -54,11 +69,18 @@ final class BotMotionView: NSView {
 
     init() {
         super.init(frame: .zero)
+        #if os(macOS)
         wantsLayer = true
         layer?.masksToBounds = false
         root.isGeometryFlipped = true
-        root.masksToBounds = false
         layer?.addSublayer(root)
+        #else
+        // Touches go to what it's in (a row of the list).
+        isUserInteractionEnabled = false
+        layer.masksToBounds = false
+        layer.addSublayer(root)
+        #endif
+        root.masksToBounds = false
         for piece in [glow, figure, star] + zs { root.addSublayer(piece) }
         for piece in dots + [body, face] { figure.addSublayer(piece) }
         body.zPosition = 0
@@ -68,11 +90,22 @@ final class BotMotionView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    #if os(macOS)
     /// Clicks and the pointer go to what it's in (a row in the sidebar).
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func layout() {
         super.layout()
+        place()
+    }
+    #else
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        place()
+    }
+    #endif
+
+    private func place() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         root.frame = bounds
@@ -134,7 +167,8 @@ final class BotMotionView: NSView {
             pictures.dots = (0..<dots.count).map { index in picture(BotAvatar.sparkDot(step: index % 5, tint: tint, size: size)) }
             pictures.letter = picture(BotAvatar.zLetter(size: size).fixedSize())
             pictures.star = picture(BotAvatar.star(size: size))
-            if Self.pictureCache.count > 64 { Self.pictureCache = [:] }
+            // A few large ones (the editor's) weigh as much as many small ones (a list's).
+            if Self.pictureCache.count > (size > 60 ? 8 : 64) { Self.pictureCache = [:] }
             Self.pictureCache[key] = pictures
         }
         func place(_ layer: CALayer, _ image: CGImage?, at position: CGPoint) {
@@ -331,7 +365,7 @@ final class BotMotionView: NSView {
             }
             play(dot, "position", over: orbitPoses, round: orbitRound) { pose in
                 let offset = placement(pose)?.offset ?? .zero
-                return NSValue(point: CGPoint(x: center.x + offset.width, y: center.y + offset.height))
+                return NSValue.point(CGPoint(x: center.x + offset.width, y: center.y + offset.height))
             }
             play(dot, "transform.scale", over: orbitPoses, round: orbitRound) { Double(placement($0)?.scale ?? 1) }
             play(dot, "opacity", over: orbitPoses, round: orbitRound) { placement($0)?.opacity ?? 0 }
@@ -346,7 +380,7 @@ final class BotMotionView: NSView {
             }
             play(z, "position") { pose in
                 let offset = placement(pose)?.offset ?? .zero
-                return NSValue(point: CGPoint(x: center.x + offset.width, y: center.y + offset.height))
+                return NSValue.point(CGPoint(x: center.x + offset.width, y: center.y + offset.height))
             }
             play(z, "transform.scale") { Double(placement($0)?.scale ?? 1) }
             play(z, "opacity") { placement($0)?.opacity ?? 0 }
@@ -360,5 +394,16 @@ final class BotMotionView: NSView {
         apply(recipes)
         if Self.motionCache.count > 64 { Self.motionCache = [:] }
         Self.motionCache[key] = recipes
+    }
+}
+
+private extension NSValue {
+    /// A point as Core Animation takes it.
+    static func point(_ point: CGPoint) -> NSValue {
+        #if os(macOS)
+        NSValue(point: point)
+        #else
+        NSValue(cgPoint: point)
+        #endif
     }
 }

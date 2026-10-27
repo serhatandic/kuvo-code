@@ -175,6 +175,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # What's New as the changelog has it now (its section named for this version).
+          python3 scripts/whats-new.py
           SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" ./scripts/build-app.sh
 
       - name: Notarize

@@ -21,4 +21,5 @@ if [ -z "$notes" ]; then
 fi
 # An @word in the notes would mention that GitHub account and list it among the release's
 # contributors ("@User" named github.com/user): written as code, it's just text.
-printf '%s\n' "$notes" | perl -pe 's/(^|[^`\w])@([A-Za-z0-9-]+)/$1`\@$2`/g'
+# What's New's notes (<!-- symbol: … -->) are for the apps, not the release's page or the update window.
+printf '%s\n' "$notes" | perl -pe 's/\s*<!--.*?-->//g; s/(^|[^`\w])@([A-Za-z0-9-]+)/$1`\@$2`/g'

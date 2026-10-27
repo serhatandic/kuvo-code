@@ -1,3 +1,4 @@
+import ClientNews
 import SwiftUI
 import OpenCodeKit
 import UsageKit
@@ -334,7 +335,7 @@ struct AppCommands: Commands {
         }
         CommandGroup(replacing: .help) {
             Button("Kuvo Code Help") { NSWorkspace.shared.open(AppInfo.docs) }
-            Button("What\u{2019}s New") { NSWorkspace.shared.open(AppInfo.releases) }
+            Button("What’s New") { model.showWhatsNew() }
             Button("Report a Problem…") { model.reportProblem() }
             Button("Contact Us…") { NSWorkspace.shared.open(AppInfo.contact) }
         }

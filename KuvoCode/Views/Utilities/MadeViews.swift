@@ -865,7 +865,7 @@ struct ArtifactDetail: View {
                     .padding(.bottom, 6)
                 // A machine's file: what's missing here, and why.
                 if things.box.box != BoxClient.mac, artifact.gone == nil {
-                    Label("It’s on \(app.machines.list.first { $0.id == things.box.box }?.name ?? "a machine"), so Finder and the side panel can’t open it from here.", systemImage: "info.circle")
+                    Label("It’s on \(app.machines.list.first { $0.id == things.box.box }?.name ?? "a machine"), so Finder can’t show it from here.", systemImage: "info.circle")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -956,23 +956,28 @@ struct ArtifactDetail: View {
                 }
                 .buttonStyle(CardActionStyle())
                 .help(artifact.pinned == nil ? "Pin it to the top" : artifact.pinned?.by == "bot" ? "Unpin (its bot marked it final)" : "Unpin")
-                // This Mac's file, as it is now: in the panel's Files, or in Finder.
-                if things.box.box == BoxClient.mac, artifact.gone == nil, FileManager.default.fileExists(atPath: artifact.path) {
+                // The file as it is now: in the panel's Files (a machine's, read there over SSH), and
+                // this Mac's in Finder.
+                let onMac = things.box.box == BoxClient.mac
+                let known = onMac || app.machines.list.contains { $0.id == things.box.box }
+                if artifact.gone == nil, known, !onMac || FileManager.default.fileExists(atPath: artifact.path) {
                     Button {
                         close()
-                        app.utilities.revealFile(URL(fileURLWithPath: artifact.path))
+                        app.utilities.revealFile(onMac ? URL(fileURLWithPath: artifact.path) : RemoteFolder.url(RemoteFolder.folder(artifact.path, on: things.box.box)))
                     } label: {
                         Label("Open in the Side Panel", systemImage: "sidebar.right")
                     }
                     .buttonStyle(CardActionStyle())
                     .help("Open in the Side Panel")
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: artifact.path)])
-                    } label: {
-                        Label("Show in Finder", systemImage: "folder")
+                    if onMac {
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: artifact.path)])
+                        } label: {
+                            Label("Show in Finder", systemImage: "folder")
+                        }
+                        .buttonStyle(CardActionStyle())
+                        .help("Show in Finder")
                     }
-                    .buttonStyle(CardActionStyle())
-                    .help("Show in Finder")
                 }
             }
         }
