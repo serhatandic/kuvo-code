@@ -37,22 +37,36 @@ struct KeywordBars: View {
         return FileManager.default.fileExists(atPath: full) ? URL(filePath: full) : nil
     }
 
-    /// Where Fix… › Send To sends: the project's other conversations, newest first, then the bots.
+    /// Where Fix… › Send To sends: the project's other conversations (its worktrees' too),
+    /// newest first, then the bots on its computer, which can reach its files.
     private var sendTargets: [ReviewSendTarget] {
-        let folder = model.session.location.directory
+        let project = workspace.projectDirectory(of: model.session)
+        let machine = RemoteFolder.machine(of: model.session.location.directory)
         let sessions = workspace.sessions
-            .filter { $0.location.directory == folder && $0.id != model.id && $0.parentID == nil && !app.bots.sessionIDs.contains($0.id) }
+            .filter { workspace.projectDirectory(of: $0) == project && $0.id != model.id && $0.parentID == nil && !app.bots.sessionIDs.contains($0.id) }
             .sorted { $0.time.updated > $1.time.updated }
             .prefix(6)
-            .map { ReviewSendTarget(id: $0.id, name: $0.title?.isEmpty == false ? $0.title! : "Untitled", isBot: false) }
-        let bots = app.bots.list.filter { $0.sessionID != model.id }.prefix(6).map { ReviewSendTarget(id: $0.sessionID, name: $0.name, isBot: true) }
+            .map { ReviewSendTarget(id: $0.id, name: $0.title?.isEmpty == false ? $0.title! : "New Session", isBot: false) }
+        let bots = app.bots.list.filter { $0.sessionID != model.id && $0.machine == machine }.prefix(6).map { ReviewSendTarget(id: $0.sessionID, name: $0.name, isBot: true) }
         return sessions + bots
+    }
+
+    /// Findings as a list to paste, from what shows (nothing to ask its computer for).
+    private func copied(_ findings: [String]?) -> String? {
+        guard let review = model.review else { return nil }
+        let picked = findings.map { ids in review.findings.filter { ids.contains($0.id) } } ?? review.findings
+        return picked.map { finding in
+            let kind = finding.severity == .bug ? "Bug" : finding.severity == .risk ? "Risk" : "Small thing"
+            let places = finding.locations.isEmpty ? "" : " (" + finding.locations.map(\.text).joined(separator: ", ") + ")"
+            return "- \(kind): \(finding.title)\(places)" + (finding.explanation.isEmpty ? "" : ". " + finding.explanation)
+        }.joined(separator: "\n")
     }
 
     /// Fix… for `findings` (nil: all): the box writes what to tell the agent, and it goes where
     /// it was asked to.
     private func fix(_ findings: [String]?, _ target: ReviewFixTarget) {
         let model = model
+        if target == .copy, let text = copied(findings) { return Clipboard.copy(text) }
         Task {
             guard let text = await model.reviewFixText(findings) else { return }
             switch target {
@@ -62,14 +76,18 @@ struct KeywordBars: View {
                 model.send(text, files: [], for: nil, queue: false)
             case .newSession:
                 do {
-                    let session = try await workspace.createSession(in: model.session.location.directory, model: model.session.model, agent: nil)
+                    // As this conversation: its model and permissions, in its project's folder.
+                    let session = try await workspace.createSession(in: workspace.projectDirectory(of: model.session), model: model.session.model, agent: nil,
+                                                                    approval: ToolApproval(rules: model.session.permissions))
                     app.open(.session(session.id))
                     workspace.model(for: session.id)?.send(text, files: [], for: nil, queue: false)
                 } catch {
                     model.failure = "A new session couldn’t be started: \(error.localizedDescription)"
                 }
             case .session(let id):
+                // There, and open, so you see it go.
                 workspace.model(for: id)?.send(text, files: [], for: nil, queue: false)
+                app.open(.session(id))
             case .copy:
                 Clipboard.copy(text)
             }
@@ -288,6 +306,8 @@ struct ReviewBar: View {
             }
         }
         .animation(.ui, value: review.state)
+        // Done or gone meanwhile: nothing left to stop.
+        .onChange(of: review.state) { if review.state != .reviewing { confirmsCancel = false } }
     }
 
     @ViewBuilder private var mark: some View {
@@ -380,7 +400,7 @@ struct ReviewBar: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(review.findings) { finding in
-                                    FindingRow(finding: finding, fixMenu: { fixMenu([finding.id], label: "Fix…") }, open: open)
+                                    FindingRow(finding: finding, fixMenu: { fixMenu([finding.id], label: "Fix…") }, fix: { fix([finding.id], $0) }, open: open)
                                 }
                             }
                         }
@@ -438,13 +458,16 @@ private extension Review.Severity {
 private struct FindingRow: View {
     let finding: Review.Finding
     let fixMenu: () -> AnyView
+    /// Its Fix…'s choices, for VoiceOver, which can't hover.
+    let fix: (ReviewFixTarget) -> Void
     let open: (Review.Place) -> Void
     @State private var isOpen = false
     @State private var hovering = false
 
-    init(finding: Review.Finding, fixMenu: @escaping () -> some View, open: @escaping (Review.Place) -> Void) {
+    init(finding: Review.Finding, fixMenu: @escaping () -> some View, fix: @escaping (ReviewFixTarget) -> Void, open: @escaping (Review.Place) -> Void) {
         self.finding = finding
         self.fixMenu = { AnyView(fixMenu()) }
+        self.fix = fix
         self.open = open
     }
 
@@ -468,7 +491,6 @@ private struct FindingRow: View {
                         Text(finding.explanation)
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     PlacesLine(places: finding.locations, open: open)
@@ -490,6 +512,9 @@ private struct FindingRow: View {
         .accessibilityHint(isOpen ? "Hides why" : "Shows why and where")
         .accessibilityAddTraits(.isButton)
         .accessibilityActions {
+            Button("Fix in a New Session") { fix(.newSession) }
+            Button("Fix Here") { fix(.here) }
+            Button("Copy Finding") { fix(.copy) }
             ForEach(finding.locations, id: \.self) { place in
                 Button("Open \(place.text)") { open(place) }
             }
@@ -673,9 +698,8 @@ private struct StopReviewConfirmation: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Keep Reading", action: keep)
-                    .keyboardShortcut(.cancelAction)
                 Button("Stop the Review", role: .destructive, action: stop)
+                Button("Keep Reading", action: keep)
                     .keyboardShortcut(.defaultAction)
             }
         }

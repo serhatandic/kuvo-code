@@ -58,3 +58,21 @@ import Testing
     for _ in 0..<40 { level.take(rms: 0.0001) }
     #expect(level.value < 0.05)
 }
+
+// Finished, it says so to whoever listens, words or not: one finished before anything was heard
+// never stays listening, with its timer running and nothing to press but Cancel.
+@MainActor @Test func finishingTellsTheWordsAndFinishingWithNoneEndsToo() async {
+    let voice = VoiceInput()
+    var told: [String] = []
+    voice.ended = { told.append($0) }
+    voice.showSample(confirmed: "Make the timer pause", guess: "")
+    voice.finish()
+    while voice.phase != .idle { await Task.yield() }
+    #expect(told == ["Make the timer pause"])
+
+    voice.showSample(confirmed: "", guess: "")
+    voice.finish()
+    while voice.phase != .idle { await Task.yield() }
+    #expect(told == ["Make the timer pause", ""])
+    #expect(voice.listeningSince == nil)
+}

@@ -23,7 +23,7 @@ struct VoiceSettings: View {
             }
             .padding(.vertical, 4)
             LabeledContent {
-                Text("⌘⇧Space")
+                Text("⇧⌘Space")
                     .font(.system(size: 13))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)

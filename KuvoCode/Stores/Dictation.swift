@@ -89,19 +89,30 @@ final class Dictation {
 
     func isListening(for owner: String?) -> Bool { voice != nil && self.owner == owner }
 
-    /// The composer in view says it's there (and where its words go), for the shortcut.
+    /// The composer you're typing in says so (and where its words go), for the shortcut.
     func offer(_ owner: String, deliver: @escaping (String) -> Void) {
         focused = (owner, deliver)
     }
 
-    /// The shortcut, pressed: starts for the composer in view, or finishes what's listening.
-    func toggleFromShortcut() {
-        if voice != nil { return finish() }
-        guard let focused else { return }
-        start(for: focused.owner, deliver: focused.deliver)
+    /// It let the keyboard go: the shortcut has nowhere to start.
+    func withdraw(_ owner: String) {
+        if focused?.owner == owner { focused = nil }
     }
 
-    // MARK: The shortcut (⌘⇧Space)
+    /// The shortcut, pressed: finishes what's listening, or starts for the composer you're
+    /// typing in. False when there's neither, so the key goes on to what has it.
+    @discardableResult
+    func toggleFromShortcut() -> Bool {
+        if voice != nil {
+            finish()
+            return true
+        }
+        guard let focused else { return false }
+        start(for: focused.owner, deliver: focused.deliver)
+        return true
+    }
+
+    // MARK: The shortcut (⇧⌘Space)
 
     @ObservationIgnored private var shortcutMonitor: Any?
     /// When the shortcut started it, while it's held.
@@ -109,7 +120,7 @@ final class Dictation {
     /// Held longer than this, letting go finishes it; a tap leaves it listening until a pause.
     private static let hold: TimeInterval = 0.4
 
-    /// ⌘⇧Space while Kuvo Code is in front: held, it listens until you let go; tapped, until a
+    /// ⇧⌘Space in the composer you're typing in: held, it listens until you let go; tapped, until a
     /// pause or another tap. For the composer you're writing in.
     func installShortcut() {
         guard shortcutMonitor == nil else { return }
@@ -126,11 +137,10 @@ final class Dictation {
     /// Space, down or up: whether the shortcut took it.
     private func shortcut(isDown: Bool, isRepeat: Bool, commandShift: Bool) -> Bool {
         if isDown, commandShift {
-            if !isRepeat {
-                let wasListening = voice != nil
-                toggleFromShortcut()
-                heldSince = !wasListening && voice != nil ? Date() : nil
-            }
+            if isRepeat { return voice != nil }
+            let wasListening = voice != nil
+            guard toggleFromShortcut() else { return false }
+            heldSince = !wasListening && voice != nil ? Date() : nil
             return true
         }
         if !isDown, let since = heldSince {

@@ -258,7 +258,7 @@ struct VoiceFieldCover: View {
 
     var body: some View {
         if let voice = app.dictation.voice, app.dictation.style == .field {
-            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: Composer.openPrivacySettings)
+            VoiceField(voice: voice, cancel: { app.dictation.cancel() }, done: { app.dictation.finish() }, openSettings: { Composer.openPrivacySettings(for: voice.phase) })
                 .background {
                     Rectangle()
                         .fill(.ultraThinMaterial)

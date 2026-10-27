@@ -56,7 +56,8 @@ public final class VoiceInput {
     public private(set) var listeningSince: Date?
     /// How long a pause after speaking ends it.
     public var pauseSeconds: Double = 1.8
-    /// Told the words once it's ended by your pause or `finish`, never after `cancel`.
+    /// Told the words once it's ended by your pause or `finish` (none, when nothing was heard),
+    /// never after `cancel`.
     public var ended: ((String) -> Void)?
 
     public var isActive: Bool {
@@ -96,7 +97,13 @@ public final class VoiceInput {
 
     /// You're done: what was said last is settled, and `ended` gets the words.
     public func finish() {
-        guard phase == .listening || isPreparing else { return }
+        // Still getting ready: nothing was heard, and the microphone mustn't come on after.
+        if isPreparing {
+            cancel()
+            ended?("")
+            return
+        }
+        guard phase == .listening else { return }
         phase = .finishing
         let run = run
         stopMicrophone()
@@ -220,7 +227,7 @@ public final class VoiceInput {
         let words = transcript.text
         clear()
         phase = .idle
-        if !words.isEmpty { ended?(words) }
+        ended?(words)
     }
 
     private func fail(_ failure: Failure, run: Int) {
@@ -246,6 +253,7 @@ public final class VoiceInput {
         analyzer = nil
         listening = nil
         results = nil
+        listeningSince = nil
     }
 
     // MARK: Permission

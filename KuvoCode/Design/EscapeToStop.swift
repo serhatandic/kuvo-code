@@ -40,6 +40,8 @@ struct EscapeToStop: NSViewRepresentable {
             guard event.keyCode == 53,
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty,
                   let window, event.window === window, window.attachedSheet == nil else { return false }
+            // Voice input listening: Escape cancels it, in the composer or the voice field.
+            if AgentMail.shared.app?.dictation.voice != nil { return false }
             let responder = window.firstResponder
             // Escape is theirs: an input method composing, a field you type in (the composer
             // stops on its own), a page, a terminal.

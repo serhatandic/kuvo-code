@@ -256,8 +256,12 @@ struct Composer: View {
                 // Listening ("In the Composer"): what's written, then what you're saying, as it comes,
                 // in the field's place (it stays, unseen, as it was).
                 .opacity(listening == nil ? 1 : 0)
+                .accessibilityHidden(listening != nil)
                 if let voice = listening {
-                    VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty ? "Listening…" : "", before: text)
+                    VoiceWords(transcript: voice.transcript, font: Font(messageFont.field), placeholder: text.isEmpty && voice.phase == .listening ? "Listening…" : "", before: text)
+                        // A long draft shows its end, where the words come.
+                        .lineLimit(8)
+                        .truncationMode(.head)
                         .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
                 }
             }
@@ -270,7 +274,7 @@ struct Composer: View {
 
             if let voice = listening {
                 // The chips make way for the voice: how long, how loud, Cancel and Done.
-                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: Self.openPrivacySettings)
+                VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                     .transition(.opacity)
             } else {
                 HStack(spacing: 4) {
@@ -341,7 +345,9 @@ struct Composer: View {
         .onChange(of: focusRequest) { focusAtEnd() }
         // A quote just added: its answer takes the keyboard.
         .onChange(of: quoteFocus) { _, focus in answerFocus = focus.map { (id: $0.id, request: MessageField.FocusRequest()) } }
-        .onChange(of: session) {
+        .onChange(of: session) { old, _ in
+            // Listening for the session it showed: that stops, rather than going on unseen.
+            if app.dictation.isListening(for: old ?? "new:" + (folders.first ?? "")) { app.dictation.cancel() }
             historyIndex = nil
             mentionFiles = []
             mentionFilesRead = nil
@@ -384,10 +390,14 @@ struct Composer: View {
             composerFocused?()
             // The shortcut's voice input goes where you type.
             let text = $text
-            app.dictation.offer(voiceOwner) { [focusAtEnd] words in
-                text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
-                focusAtEnd()
+            if !isOffline {
+                app.dictation.offer(voiceOwner) { [focusAtEnd] words in
+                    text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
+                    focusAtEnd()
+                }
             }
+        } else if !isDictating {
+            app.dictation.withdraw(voiceOwner)
         }
     }
 
@@ -525,11 +535,13 @@ struct Composer: View {
         .buttonStyle(.plain)
         .clickablePointer()
         .disabled(isOffline)
-        .help("Talk Instead of Typing (⌘⇧Space)")
+        .help("Talk Instead of Typing (⇧⌘Space)")
         .accessibilityLabel("Voice Input")
     }
 
     private func startVoice() {
+        // The keyboard here: Return finishes, Escape cancels, nothing else types.
+        focusAtEnd()
         let text = $text
         app.dictation.start(for: voiceOwner) { [focusAtEnd] words in
             text.wrappedValue = Dictation.adding(words, to: text.wrappedValue)
@@ -537,9 +549,10 @@ struct Composer: View {
         }
     }
 
-    /// Privacy & Security, where the microphone and speech recognition are allowed.
-    static func openPrivacySettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+    /// Privacy & Security, on what wasn't allowed: the microphone, or speech recognition.
+    static func openPrivacySettings(for phase: VoiceInput.Phase) {
+        let pane = phase == .failed(.speechDenied) ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane)!)
     }
 
     private var actionButton: some View {
