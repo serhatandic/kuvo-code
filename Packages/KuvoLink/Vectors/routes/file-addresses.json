@@ -1,0 +1,25 @@
+{
+  "about": "How a client names a file on a box for kuvo/file (KuvoClient's FileAddresses): the route for a file named `name` in a folder is `kuvo/file?uri=file://<folder>/<encoded>`, for a folder whose path needs no encoding. The box reads each back to the file.",
+  "addresses": [
+    {
+      "name": "şeker.md",
+      "encoded": "%25C5%259Feker.md"
+    },
+    {
+      "name": "a b#1.txt",
+      "encoded": "a%2520b%25231.txt"
+    },
+    {
+      "name": "a&b+c=d?.txt",
+      "encoded": "a%26b%2Bc%3Dd%253F.txt"
+    },
+    {
+      "name": "100% done.md",
+      "encoded": "100%2525%2520done.md"
+    },
+    {
+      "name": "café 漢字 🙂.png",
+      "encoded": "caf%25C3%25A9%2520%25E6%25BC%25A2%25E5%25AD%2597%2520%25F0%259F%2599%2582.png"
+    }
+  ]
+}

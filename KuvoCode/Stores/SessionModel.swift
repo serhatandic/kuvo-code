@@ -924,9 +924,9 @@ final class SessionModel {
             await previous?.value
             do {
                 // Converting a photo takes a moment; keep it off the main thread. A machine's engine
-                // can't read this Mac's files: they go to it inline, or copied there.
+                // can't read this Mac's files: they go to its box with their contents.
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine.map { Attachments.prepare(files, for: model, machine: $0) } ?? Attachments.prepare(files, for: model) }.value
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
                 let message = Attachments.text(text, for: prepared)
                 await waitForTools()
                 // Removed meanwhile: it doesn't go.
@@ -936,7 +936,12 @@ final class SessionModel {
                 // Held while it was on its way: to the queue, not the next step.
                 let asked: InboxItem.Delivery = outgoing[id]?.heldAt != nil ? .queue : delivery
                 update(id) { $0.request = asked }
-                try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
+                if let machine, !prepared.files.isEmpty {
+                    try await MachineBox.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked,
+                                                withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                } else {
+                    try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
+                }
                 restoredFailed = ""
                 await requestDone(id)
             } catch {
@@ -1367,9 +1372,14 @@ final class SessionModel {
             await previous?.value
             do {
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let prepared = await Task.detached { machine.map { Attachments.prepare(files, for: model, machine: $0) } ?? Attachments.prepare(files, for: model) }.value
+                let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model) }.value
                 if Moves.isFrozen(id) { throw Moves.Failure.moving }
-                try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
+                if let machine, !prepared.files.isEmpty {
+                    try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,
+                                                 withAgents: OutsideAgents.isAgentSession(session), on: SSHConnection(destination: machine))
+                } else {
+                    try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
+                }
             } catch {
                 runningCommands.removeAll { $0.id == running.id }
                 notRun(written, files: files, because: error)
