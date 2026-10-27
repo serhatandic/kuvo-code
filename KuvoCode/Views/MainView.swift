@@ -76,7 +76,8 @@ struct MainView: View {
 
     /// When the sessions on screen last finished.
     private var idlesInView: [Milliseconds?] {
-        sessionsInView.map { workspace.session($0)?.time.idle }
+        // Its sub-sessions' too: one that finishes while you watch is seen.
+        sessionsInView.flatMap { id in [(workspace.session(id) ?? workspace.subSession(id))?.time.idle] + (workspace.subSessions[id] ?? []).map(\.time.idle) }
     }
 
     /// The sessions on screen count as seen.
@@ -413,6 +414,8 @@ struct MainView: View {
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
         // Another tab: a rename in the last one's header ends, keeping what was typed.
         .onChange(of: selection) { _, key in if renaming?.id != key?.sessionID { renaming = nil } }
+        // A tab of a sub-session's, as the app opens again: whose it is, so it shows as one.
+        .task(id: sessionID) { if let sessionID { await workspace.findParent(of: sessionID) } }
         #if DEBUG
         .task(id: workspace.isLoaded) { await DemoDirector.run(app: app, window: demoWindow) }
         #endif
@@ -528,6 +531,10 @@ struct MainView: View {
         case .session(let sessionID):
             if workspace.waitingMachine(for: sessionID) != nil {
                 return TabItem(id: id, title: workspace.remoteTitle(sessionID) ?? "Session", logo: nil, status: .idle)
+            }
+            // A sub-session: its task, with the sign of one.
+            if workspace.session(sessionID) == nil, let sub = workspace.subSession(sessionID) {
+                return TabItem(id: id, title: SubagentTask.title(sub.title ?? ""), logo: nil, status: status(of: sub), symbol: "arrow.turn.down.right")
             }
             guard let session = workspace.session(sessionID) else { return nil }
             if let bot = bots.bot(forSession: sessionID) {
@@ -708,6 +715,21 @@ struct MainView: View {
                 }
                 .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
                 .id(TabKey.group(id))
+            } else if let id = sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id) {
+                // A sub-session: the conversation of a subagent its session's agent started.
+                let root = workspace.session(workspace.root(of: id))
+                Card(title: SubagentTask.title(workspace.subSession(id)?.title ?? workspace.subagentTitle(id) ?? ""), detail: root.map { workspace.projectName($0.location.directory) }, isFocused: focus == .conversation) {
+                    Image(systemName: "arrow.turn.down.right")
+                } actions: {
+                    Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
+                        .help("Close Tab")
+                } content: {
+                    SubagentPane(id: id, folder: root?.location.directory ?? workspace.subSession(id)?.location.directory ?? "", parent: parent) {
+                        tabs.open(.session($0))
+                    }
+                }
+                .onAppear { workspace.rememberOpened(id) }
+                .id(id)
             } else if let id = sessionID, let model = workspace.model(for: id) {
                 let directory = model.session.location.directory
                 let machine = machine(for: directory)

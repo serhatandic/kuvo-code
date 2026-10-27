@@ -64,6 +64,8 @@ struct SidebarView: View {
     }
     /// Sessions whose title or project has this, instead of the usual lists.
     @State private var search = ""
+    /// Sessions whose sub-sessions show under them: folded until you unfold one, or open one of them.
+    @State private var unfolded: Set<String> = []
     /// How far a swipe has pulled the boxes' pages, which the name strip above them follows.
     @State private var boxMotion = BoxPagerMotion()
     /// Sessions whose conversations have the search, with the words around it.
@@ -194,6 +196,15 @@ struct SidebarView: View {
         #endif
         // Only the open session's place is remembered; picked elsewhere, it shows in its project.
         .onChange(of: selection) { pickedIn = pickedIn.filter { $0.key == selection } }
+        // A sub-session opened (from its conversation, say): the sessions above it unfold to show it.
+        .onChange(of: selection.map { "\($0)|\(workspace.parent(of: $0) ?? "")" }, initial: true) {
+            var id = selection
+            for _ in 0..<5 {
+                guard let current = id, let parent = workspace.parent(of: current) else { break }
+                unfolded.insert(parent)
+                id = parent
+            }
+        }
         // A tab on another box: its page slides in, so what's in view has its row in sight.
         .onChange(of: selection) { _, tag in
             guard let tag, let shown = box(of: tag), shown != box, boxes.contains(shown) else { return }
@@ -295,7 +306,7 @@ struct SidebarView: View {
     /// nil for what's on none.
     private func box(of tag: String) -> SidebarBox? {
         if let directory = Self.draftDirectory(from: tag) { return SidebarBox(directory: directory) }
-        if let session = workspace.session(tag) { return SidebarBox(directory: session.location.directory) }
+        if let session = workspace.session(workspace.root(of: tag)) { return SidebarBox(directory: session.location.directory) }
         if let bot = bots.list.first(where: { $0.sessionID == tag }) { return SidebarBox(machine: bot.machine) }
         if let group = groups.list.first(where: { BotGroups.tabKey($0.id) == tag }) { return SidebarBox(machine: groups.machine(of: group.id)) }
         if let terminal = app.mainTerminals.opened.first(where: { $0.key == tag }) { return SidebarBox(directory: terminal.entry.directory) }
@@ -784,7 +795,40 @@ struct SidebarView: View {
         return place == (Workspace.isChat(session.location.directory) ? .chats : .project)
     }
 
+    /// A session's row, and under it, unfolded, the sessions its agent started.
     private func sessionRow(_ session: Session, in place: Place) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            sessionOnlyRow(session, in: place)
+            if isUnfolded(session.id), !(workspace.subSessions[session.id] ?? []).isEmpty {
+                SubSessionRows(parent: session, titleInset: 10 + (place == .project ? SidebarMetrics.iconWidth + 10 : 0),
+                               isSelected: { child in
+                                   guard selection == child.id else { return false }
+                                   return (pickedIn[child.id] ?? (Workspace.isChat(session.location.directory) ? .chats : .project)) == place
+                               },
+                               open: { child in
+                                   pickedIn[child.id] = place
+                                   selection = child.id
+                               },
+                               isUnfolded: { isUnfolded($0) }, toggle: toggleSubSessions)
+            }
+        }
+    }
+
+    private func isUnfolded(_ id: String) -> Bool {
+        #if DEBUG
+        // KUVO_DEMO_UNFOLD: every session's sub-sessions shown, for a look at them.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_UNFOLD"] != nil { return true }
+        #endif
+        return unfolded.contains(id)
+    }
+
+    private func toggleSubSessions(of id: String) {
+        withAnimation(.ui) {
+            if unfolded.contains(id) { unfolded.remove(id) } else { unfolded.insert(id) }
+        }
+    }
+
+    private func sessionOnlyRow(_ session: Session, in place: Place) -> some View {
         SidebarRow(isSelected: isHighlighted(session, in: place), indented: place == .project, isEditing: renaming == RenameTarget(id: session.id, place: place), action: {
             pickedIn[session.id] = place
             selection = session.id
@@ -838,11 +882,17 @@ struct SidebarView: View {
                         .help(count.counting("side question") + ", kept out of the conversation: Control-click to open one")
                         .accessibilityLabel(count.counting("side question"))
                     }
-                    SessionStatus(session: session)
+                    let children = workspace.subSessions[session.id] ?? []
+                    if !children.isEmpty {
+                        SubSessionToggle(count: children.count, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) }
+                    }
+                    // Folded, a sub-session finished since you were here shows on it.
+                    SessionStatus(session: session, isUnread: session.isUnread || !isUnfolded(session.id) && workspace.hasNewSubSessions(session.id))
                 }
             }
         }
         .contextMenu { menu(for: session, in: place) }
+        .modifier(SubSessionsAction(count: workspace.subSessions[session.id]?.count ?? 0, isUnfolded: isUnfolded(session.id)) { toggleSubSessions(of: session.id) })
     }
 
     /// A conversation's side questions ("/btw"), each opening it with its answer over the composer.
@@ -1645,6 +1695,9 @@ private struct SessionStatus: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
     let session: Session
+    /// Finished and not seen: the session's own say, unless a row knows better (a sub-session's
+    /// seen through the session above it; a folded session has a sub-session's news).
+    var isUnread: Bool?
 
     var body: some View {
         if workspace.needsAttention(session.id) {
@@ -1660,7 +1713,7 @@ private struct SessionStatus: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.red)
                 .help("The last run failed")
-        } else if session.isUnread {
+        } else if isUnread ?? session.isUnread {
             Circle().fill(.tint).frame(width: 7, height: 7)
                 .help("Finished")
         } else if let next = app.wakeUps.wakes[session.id]?.first {
@@ -1674,6 +1727,178 @@ private struct SessionStatus: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tint)
                 .help("Watching for a change")
+        }
+    }
+}
+
+// MARK: Sub-sessions
+
+/// A session's sub-sessions (its subagents'), under its row while it's unfolded: hung from one
+/// line under the session's title, with a rounded elbow into each, each with its status. One with
+/// sub-sessions of its own folds and unfolds the same way.
+private struct SubSessionRows: View {
+    let parent: Session
+    /// Where the parent's title starts in its row: the line hangs under it.
+    let titleInset: CGFloat
+    let isSelected: (Session) -> Bool
+    let open: (Session) -> Void
+    let isUnfolded: (String) -> Bool
+    let toggle: (String) -> Void
+    @Environment(Workspace.self) private var workspace
+
+    @State private var showsAll = false
+    private static let shown = 8
+
+    private var all: [Session] { workspace.subSessions[parent.id] ?? [] }
+    private var children: [Session] { showsAll ? all : Array(all.prefix(Self.shown)) }
+    private var lineX: CGFloat { titleInset + 5 }
+    private var childInset: CGFloat { lineX + 14 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(children) { child in
+                VStack(alignment: .leading, spacing: 1) {
+                    SubSessionRow(session: child, inset: childInset, isSelected: isSelected(child),
+                                  isUnfolded: isUnfolded(child.id), toggle: { toggle(child.id) }) {
+                        open(child)
+                    }
+                    if isUnfolded(child.id), !(workspace.subSessions[child.id] ?? []).isEmpty {
+                        SubSessionRows(parent: child, titleInset: childInset, isSelected: isSelected, open: open, isUnfolded: isUnfolded, toggle: toggle)
+                    }
+                }
+                // Its piece of the line: from the gap above it (so the line runs on without a
+                // break) through its row, on to the next one's unless it's the last.
+                .background(alignment: .topLeading) {
+                    BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight / 2, runsOn: child.id != children.last?.id || all.count > children.count)
+                }
+            }
+            if all.count > children.count {
+                Button("Show \(all.count - children.count) More") { withAnimation(.ui) { showsAll = true } }
+                    .buttonStyle(TextButtonStyle())
+                    .font(.system(size: 12))
+                    .padding(.leading, childInset - 6)
+                    .frame(height: SidebarMetrics.rowHeight, alignment: .leading)
+                    .background(alignment: .topLeading) {
+                        BranchLine(x: lineX, elbowY: SidebarMetrics.rowHeight / 2, runsOn: false)
+                    }
+            }
+        }
+        .transition(.opacity)
+    }
+}
+
+/// A piece of the line sub-sessions hang from: down from 1pt above its top, a rounded elbow
+/// into its row, and on to its bottom when another follows. One stroke, so the pieces meet
+/// without a seam or a darker overlap.
+private struct BranchLine: View {
+    let x: CGFloat
+    let elbowY: CGFloat
+    let runsOn: Bool
+    private let radius: CGFloat = 6
+    private let reach: CGFloat = 9
+
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                path.move(to: CGPoint(x: x, y: -1))
+                path.addLine(to: CGPoint(x: x, y: elbowY - radius))
+                path.addQuadCurve(to: CGPoint(x: x + radius, y: elbowY), control: CGPoint(x: x, y: elbowY))
+                path.addLine(to: CGPoint(x: x + reach, y: elbowY))
+                if runsOn {
+                    path.move(to: CGPoint(x: x, y: elbowY - radius))
+                    path.addLine(to: CGPoint(x: x, y: geometry.size.height))
+                }
+            }
+            .stroke(.primary.opacity(0.26), lineWidth: 1.25)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A sub-session: its task, a step in from the line, and its status. Finished, it's new to you
+/// only if you haven't been in its session since.
+private struct SubSessionRow: View {
+    let session: Session
+    let inset: CGFloat
+    let isSelected: Bool
+    let isUnfolded: Bool
+    let toggle: () -> Void
+    let action: () -> Void
+    @Environment(Workspace.self) private var workspace
+
+    /// Finished and not seen; folded, one of its own that is.
+    private var isUnread: Bool { workspace.isNew(session) || !isUnfolded && workspace.hasNewSubSessions(session.id) }
+    private var count: Int { workspace.subSessions[session.id]?.count ?? 0 }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(SubagentTask.title(session.title ?? ""))
+                    .font(.system(size: 13))
+                    .fontWeight(isUnread ? .semibold : .regular)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                HStack(spacing: 6) {
+                    if count > 0 {
+                        SubSessionToggle(count: count, isUnfolded: isUnfolded, toggle: toggle)
+                    }
+                    SessionStatus(session: session, isUnread: isUnread)
+                }
+            }
+            .padding(.leading, inset)
+            .padding(.trailing, 10)
+            .frame(height: SidebarMetrics.rowHeight)
+            .modifier(RowHighlight(isSelected: isSelected))
+        }
+        .buttonStyle(.plain)
+        .clickablePointer()
+        .accessibilityHint("A subagent's conversation")
+        .modifier(SubSessionsAction(count: count, isUnfolded: isUnfolded, toggle: toggle))
+    }
+}
+
+/// How many sub-sessions a session has, and the chevron that folds them away or shows them.
+private struct SubSessionToggle: View {
+    let count: Int
+    let isUnfolded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("\(count)")
+                    .monospacedDigit()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(isUnfolded ? 0 : -90))
+            }
+            .font(.system(size: 11))
+        }
+        .buttonStyle(TextButtonStyle())
+        .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
+        // The row it's in says so, with its action (see `SubSessionsAction`).
+        .accessibilityHidden(true)
+    }
+}
+
+/// A row with sub-sessions, for VoiceOver: how many, and the action that shows or hides them,
+/// as the toggle inside it does.
+private struct SubSessionsAction: ViewModifier {
+    let count: Int
+    let isUnfolded: Bool
+    let toggle: () -> Void
+
+    func body(content: Content) -> some View {
+        if count > 0 {
+            content
+                .accessibilityValue(count.counting("subagent") + (isUnfolded ? ", shown" : ""))
+                .accessibilityAction(named: isUnfolded ? "Hide Subagents" : "Show Subagents", toggle)
+        } else {
+            content
         }
     }
 }

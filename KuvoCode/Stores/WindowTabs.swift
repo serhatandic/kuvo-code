@@ -329,7 +329,7 @@ final class WindowTabs {
         guard !isOpen(closed.key) else { return false }
         switch closed.key {
         case .draft: return true
-        case .session(let id): return workspace.session(id) != nil
+        case .session(let id): return workspace.session(id) != nil || workspace.subSession(id) != nil
         case .group(let id): return app.chats.group(id) != nil
         case .terminal: return false
         }
@@ -397,8 +397,14 @@ final class WindowTabs {
     func dropClosed() {
         guard workspace.isLoaded else { return }
         let known = Set(workspace.sessions.map(\.id))
-        // A machine's sessions wait for it to connect.
-        func isGone(_ id: String) -> Bool { !known.contains(id) && workspace.waitingMachine(for: id) == nil }
+        // A machine's sessions wait for it to connect; a sub-session stays while its session's
+        // list has it.
+        func isGone(_ id: String) -> Bool {
+            guard !known.contains(id), workspace.waitingMachine(for: id) == nil, workspace.subSession(id) == nil else { return false }
+            // A sub-session not listed yet stays while the session it's from does.
+            if let parent = workspace.parent(of: id), parent != id { return isGone(parent) }
+            return true
+        }
         for key in keys {
             switch key {
             case .draft: continue

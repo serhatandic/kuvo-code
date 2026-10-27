@@ -58,11 +58,11 @@ struct SubagentRow: View {
                 .help(isExpanded ? "Hide its steps" : "Show its steps")
                 if let session {
                     Button("Open") {
-                        app.utilities.showSubagent(session, folder: directory)
+                        app.tabs.open(.session(session))
                     }
                     .buttonStyle(TextButtonStyle())
                     .font(.callout)
-                    .help("Open it beside the conversation: watch it, talk to it, stop it or give it another model")
+                    .help("Open its conversation: watch it, talk to it, stop it or give it another model")
                 }
             }
 
