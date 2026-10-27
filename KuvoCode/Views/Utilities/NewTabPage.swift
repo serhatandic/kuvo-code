@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// What a new tab shows until you go somewhere: the panel's tools (and a way into their

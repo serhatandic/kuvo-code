@@ -1,3 +1,4 @@
+import ClientDesign
 import Foundation
 
 /// What the command palette opens with typed in it: KUVO_DEMO_PALETTE in debug builds, else nothing.

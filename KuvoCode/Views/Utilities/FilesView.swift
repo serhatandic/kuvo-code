@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import Quartz
 import SwiftUI
 import UniformTypeIdentifiers

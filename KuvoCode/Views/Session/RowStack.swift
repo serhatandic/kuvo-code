@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// A conversation's rows, laid out here rather than by a lazy stack: each row in view is a

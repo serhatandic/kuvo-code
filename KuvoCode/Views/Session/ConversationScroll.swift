@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// How a conversation scrolls, for the view showing it: whether it keeps to the end, and asking

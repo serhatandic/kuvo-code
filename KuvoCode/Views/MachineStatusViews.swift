@@ -1,3 +1,4 @@
+import ClientDesign
 import SwiftUI
 
 /// A machine's connection, as a dot and a word or two: green when connected, a spinner while

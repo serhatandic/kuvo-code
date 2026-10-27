@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// A page of a machine's browser, in its tab: the page live, with back, forward, reload and the

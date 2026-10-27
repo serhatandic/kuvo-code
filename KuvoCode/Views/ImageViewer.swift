@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Pictures you sent, looked at closer without leaving the window: over everything, fitted to it,

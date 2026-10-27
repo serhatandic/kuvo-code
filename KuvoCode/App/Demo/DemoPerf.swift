@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// The measured runs the `KUVO_PERF_*` launch variables ask for: tab switches, the sidebar and the
