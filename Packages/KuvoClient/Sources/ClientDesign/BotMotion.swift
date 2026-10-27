@@ -167,7 +167,8 @@ final class BotMotionView: PlatformView {
             pictures.dots = (0..<dots.count).map { index in picture(BotAvatar.sparkDot(step: index % 5, tint: tint, size: size)) }
             pictures.letter = picture(BotAvatar.zLetter(size: size).fixedSize())
             pictures.star = picture(BotAvatar.star(size: size))
-            if Self.pictureCache.count > 64 { Self.pictureCache = [:] }
+            // A few large ones (the editor's) weigh as much as many small ones (a list's).
+            if Self.pictureCache.count > (size > 60 ? 8 : 64) { Self.pictureCache = [:] }
             Self.pictureCache[key] = pictures
         }
         func place(_ layer: CALayer, _ image: CGImage?, at position: CGPoint) {

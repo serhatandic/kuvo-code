@@ -238,8 +238,8 @@ public struct MathBlockView: View {
     }
 }
 
-/// Markdown with its math drawn (a file's preview); replies use `FileLinkingParser`, which does
-/// the same.
+/// Markdown with its math drawn: a file's preview on the Mac (whose replies use its
+/// `FileLinkingParser`, which does the same), replies on the phone.
 public struct MathMarkdownParser: MarkupParser {
     public init() {}
 

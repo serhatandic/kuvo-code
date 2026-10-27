@@ -625,7 +625,8 @@ struct BotFace: View {
     private var ink: Color { deep ? Color.white.opacity(0.92) : Color(red: 0.09, green: 0.1, blue: 0.13).opacity(0.86) }
 
     var body: some View {
-        Canvas { context, size in
+        let ink = ink
+        return Canvas { context, size in
             let w = size.width, h = size.height
             let eye = CGSize(width: w * 0.17, height: h * 0.62)
             let left = CGPoint(x: w * (0.27 + glance), y: h * 0.5), right = CGPoint(x: w * (0.73 + glance), y: h * 0.5)
