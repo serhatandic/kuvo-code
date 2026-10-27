@@ -8240,7 +8240,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.76";
+var BRIDGE_VERSION = "0.9.77";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -8641,61 +8641,14 @@ async function* settingsRoute(context) {
 import crypto16 from "node:crypto";
 import fs44 from "node:fs";
 import path43 from "node:path";
-function takePhones(link, given) {
-  const phones = Array.isArray(given?.phones) ? given.phones.slice(0, 64) : [];
-  const removed = Array.isArray(given?.removed) ? given.removed.slice(0, MOST_KEPT) : [];
-  for (const entry of removed)
-    if (fits(entry, []) && typeof entry.pairing === "string")
-      takeOff(link, entry.key, entry.pairing);
-  for (const phone of phones) {
-    if (!isObject(phone) || !fits(phone, []) || removedAlready(link, phone.key, phone.pairing ?? ""))
-      continue;
-    const known = (link.phones ?? []).find((each) => each.key === phone.key);
-    if (known && (known.pairing ?? "") === (phone.pairing ?? ""))
-      continue;
-    pairPhone(link, {
-      key: phone.key,
-      name: String(phone.name ?? "").slice(0, 100),
-      added: Number.isFinite(phone.added) ? Math.floor(phone.added) : Math.floor(Date.now() / 1000),
-      from: "pair",
-      ...typeof phone.address === "string" && ADDRESS.test(phone.address) ? { address: phone.address } : {},
-      pairing: typeof phone.pairing === "string" ? phone.pairing : ""
-    });
-  }
-  return link;
-}
 var macPhones = () => {
   const link = readLink();
   return {
     phones: link?.phones ?? [],
     removed: link?.removed ?? [],
-    pairing: Boolean(link?.appPairing && Date.now() < link.appPairing.expires),
-    documents: { own: link?.own ?? {}, held: link?.docs ?? {}, views: link?.views ?? {}, left: link?.left ?? [] }
+    pairing: Boolean(link?.appPairing && Date.now() < link.appPairing.expires)
   };
 };
-function takeMacDocuments(link, given) {
-  if (!isObject(given))
-    return link;
-  for (const [kind, had] of Object.entries(isObject(given.own) ? given.own : {})) {
-    if (!DOC_KINDS.includes(kind) || !isObject(had) || !Number.isSafeInteger(had.n) || had.n < 1 || had.n > MOST_COUNT)
-      continue;
-    const now = link.own?.[kind];
-    if (!now || had.n > now.n)
-      link.own = { ...link.own ?? {}, [kind]: { n: had.n, h: String(had.h ?? ""), b: String(had.b ?? "") } };
-  }
-  for (const envelope of Object.values(isObject(given.held) ? given.held : {}).slice(0, 256))
-    takeDoc(link, envelope);
-  for (const [origin, seen] of Object.entries(isObject(given.views) ? given.views : {}).slice(0, 256)) {
-    if (!SIGN.test(origin) || !isObject(seen) || !Number.isSafeInteger(seen.n) || seen.n < 1)
-      continue;
-    if (!link.views?.[origin] || seen.n > link.views[origin].n)
-      link.views = { ...link.views ?? {}, [origin]: { n: seen.n, h: String(seen.h ?? "") } };
-  }
-  const left = Array.isArray(given.left) ? given.left.filter((key) => typeof key === "string" && KEY.test(key)) : [];
-  if (left.length)
-    link.left = [...new Set([...Array.isArray(link.left) ? link.left : [], ...left])].slice(-64);
-  return link;
-}
 function setMacPeers(link, given) {
   if (!isObject(given) || !Array.isArray(given.peers))
     return { link: null, gone: [] };
@@ -8768,17 +8721,6 @@ async function* macLinkRoute(route, request, signal) {
         return yield* json(405, {});
       yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
       return yield* followed(macPhones, macLink.phoneFollowers, signal);
-    case "kuvo/link/phones/take": {
-      if (method !== "POST")
-        return yield* json(405, {});
-      const given = parsed(request.body);
-      if (!isObject(given) || !Array.isArray(given.phones ?? []) || !Array.isArray(given.removed ?? []))
-        return yield* json(400, { message: "Send {phones, removed}." });
-      updateLink((link) => takeMacDocuments(takePhones(link ?? { phones: [] }, given), given.documents));
-      macLink.wake?.();
-      macDocsChanged();
-      return yield* json(200, macPhones());
-    }
     case "kuvo/link/peers": {
       if (method !== "PUT")
         return yield* json(405, {});
@@ -8836,7 +8778,7 @@ async function* macLinkRoute(route, request, signal) {
         return JSON.stringify(link.own ?? {}) === before ? null : link;
       });
       const link = readLink();
-      return yield* json(200, { ...macPhones().documents, have: link?.sign ? digestOf(link) : [] });
+      return yield* json(200, { own: link?.own ?? {}, held: link?.docs ?? {}, views: link?.views ?? {}, left: link?.left ?? [], have: link?.sign ? digestOf(link) : [] });
     }
     case "kuvo/link/letters": {
       if (method !== "POST")
@@ -10479,10 +10421,8 @@ export {
   takeDoc,
   takeLegacyPeers,
   takeLetter,
-  takeMacDocuments,
   takePersonalities,
   takePersonalitiesDocument,
-  takePhones,
   takeSeat,
   tellSeatPeers,
   tellWorktree,

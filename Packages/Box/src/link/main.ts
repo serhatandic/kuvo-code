@@ -145,7 +145,7 @@ export { FROM_PHONE, fromPhone } from "./server/forward";
 export { stopMacLink } from "./mac/link";
 export { macNoticeHold, macTell } from "./mac/notices";
 export { LETTER_WAIT, runMacPeers, stopMacPeers } from "./mac/peers";
-export { setMacPeers, takeMacDocuments, takePhones } from "./mac/routes";
+export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
 export { connectOnce, fromRelay } from "./relay/connection";
 export { MAC_BOX_ROUTES, macAnswers, macFront, runMacLink } from "./mac/relay";

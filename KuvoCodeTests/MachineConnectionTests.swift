@@ -191,7 +191,7 @@ import Testing
         UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
         // The app's own link keeps what it set up, and its keys, where the app keeps them: gone after.
         defer {
-            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+            for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
             try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
             _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
         }

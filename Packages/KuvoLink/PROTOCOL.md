@@ -175,9 +175,8 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   Mac's signing key (from the app, in memory only), takes its machines' and passes them on, and
   mails them on its relay connection, as a machine's bridge does; its peers are the machines its
   app set up (`kuvo/link/peers`, "This Mac's box: the relay"). It takes `peers` only of its own (a
-  copy it lost count of), and `phones` and `personalities` from its machines and itself. Before,
-  the app did this itself, with its counts in `phone-link.json`; the box takes them as it starts,
-  and its app writes the box's back there, so going back to an older Kuvo Code goes on from them.
+  copy it lost count of), and `phones` and `personalities` from its machines and itself. (No
+  released Kuvo Code signed documents before the box did, so it has no older counts to take.)
 - **`phones`**, one per box: `{phones: [{key, name, address?, pairing}], removed: [{key,
   pairing}]}`: the phones paired there, and every removal it knows of ("Paired phones"). A box
   lets in its own and its Macs' phones, less every pairing removed in any phones document it
@@ -1645,12 +1644,8 @@ For the app only (anyone else gets `403`):
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
   every removal, and whether Settings › Phone's pairing link is still waiting;
   `GET kuvo/link/phones/events` follows them.
-- `POST kuvo/link/phones/take {"phones", "removed", "documents"?}`: phones an older Kuvo Code kept
-  (`phone-link.json`), met with the box's: each in unless its pairing was removed, each removal
-  taking off what it removes; and how far this Mac's documents had come (`documents`, `{own, held,
-  views, left}`, as `phone-link.json` keeps them: the box's counts only ever go up). The app keeps
-  `phone-link.json` in step with the box (`kuvo/link/phones` carries `documents` too), so going back
-  to an older Kuvo Code finds your phones, and takes it again when an older one changed it.
+- `kuvo/link/phones/take` is gone (bridge 0.9.77): it took the phones and document counts an
+  earlier app kept in `phone-link.json`, and no released Kuvo Code had either.
 - `POST kuvo/link/letters {"peer", "from"?, "to", "text", "wait"?}` (bridge 0.9.63): a letter from
   one of this Mac's conversations (`from`) for an agent on another of your computers (`peer`, its
   key), left in the box's outbox and sent ("Peers": "Letters"). Answers `{"id"}` at once (with a

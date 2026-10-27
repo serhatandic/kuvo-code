@@ -7,8 +7,7 @@ import Testing
 @testable import KuvoCode
 
 /// This Mac's link to your phones is its box's (KuvoLink's PROTOCOL.md, "This Mac's box: the
-/// relay"), and the app is a client of it: the phones an older Kuvo Code paired come to the box,
-/// and stay where that version reads them, so going back to it and forward again loses none;
+/// relay"), and the app is a client of it: your phones are the box's, and the app keeps a copy;
 /// Settings › Phone's pairing link and removing a phone are the box's; what a phone asks of the
 /// Mac's own routes, the box hands the app, a followed one as it comes. The box is the real one
 /// (`kuvo-link.js serve`, with its keys from the app); its relay is one nobody listens on, so
@@ -26,25 +25,31 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         UserDefaults.standard.set(true, forKey: "phoneLink")
         UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
-        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
-        // As an older Kuvo Code kept them: two phones, one paired before pairings had an id.
+        // The app's copy of your phones, as it last heard them from the box (`paired`): two, one
+        // paired before pairings had an id.
         let phones = [(mine, "Mine", ""), (lost, "Lost", "p-lost")].map {
             #"{"key":"\#($0.0.publicBytes.base64URL)","name":"\#($0.1)","added":700000000,"pairing":"\#($0.2)"}"#
         }
         try Data(#"{"phones":[\#(phones.joined(separator: ","))],"removed":[],"machines":{}}"#.utf8).write(to: file)
     }
 
+    /// The phones paired with this Mac, as its box keeps them: those the app's copy has.
+    private func paired(_ box: SettingsBox) throws {
+        try box.box.paired([(mine.publicBytes.base64URL, "Mine", ""), (lost.publicBytes.base64URL, "Lost", "p-lost")])
+    }
+
     private func done(_ box: SettingsBox, _ links: PhoneLink...) {
         for link in links { link.stop() }
         box.stop()
         try? FileManager.default.removeItem(at: folder)
-        for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    /// This Mac's link, as the app starts it: reaching its box, which reaches it back. `refusing`:
-    /// a route the box doesn't take the first time (it's starting again just then).
-    /// `starting`: started now (else the test starts it, after what comes before).
-    private func link(on box: SettingsBox, refusing: String? = nil, times: Int = 1, starting: Bool = true) -> PhoneLink {
+    /// This Mac's link, as the app starts it: reaching its box (which has your phones), which
+    /// reaches it back. `refusing`: a route the box doesn't take the first time (it's starting
+    /// again just then). `starting`: started now (else the test starts it, after what comes before).
+    private func link(on box: SettingsBox, refusing: String? = nil, times: Int = 1, starting: Bool = true) throws -> PhoneLink {
+        try paired(box)
         let link = PhoneLink(file: file, identity: (mac, secret))
         let client = refusing.map { Self.flaky(box, refusing: $0, times: times) } ?? box.client
         link.box = { client }
@@ -131,61 +136,32 @@ import Testing
         })
     }
 
-    /// Once this Mac's box has been told, given its keys and taken your phones: its link tries
+    /// Once this Mac's box has been told and given its keys: its link tries
     /// the relay, which nobody answers here.
     private func linked(_ link: PhoneLink) async throws {
         // The box's own word on the relay, which the app hears only once it follows the box.
         try await until { if case .failed(let reason) = link.status { reason.contains("relay") } else { false } }
     }
 
-    /// The phones as an older Kuvo Code reads them from phone-link.json.
-    private func olderKeeps() throws -> [String] {
-        struct Saved: Decodable { var phones: [PairedPhones.Phone]; var removed: [PairedPhones.Removal]? }
-        return try JSONDecoder().decode(Saved.self, from: Data(contentsOf: file)).phones.map(\.name)
+    /// The phones the app's copy keeps (phone-link.json), as it reads them as it starts.
+    private func keptHere() -> [String] {
+        PhoneLink(file: file, identity: (mac, secret)).phones.map(\.name)
     }
 
-    @Test func yourPhonesFromBeforeComeToTheBoxAndStayWhereAnOlderVersionReadsThem() async throws {
+    @Test func yourPhonesAreTheBoxsAndOneYouRemoveStaysGone() async throws {
         let box = try await SettingsBox(port: 47_943)
-        let link = link(on: box)
+        let link = try link(on: box)
         defer { done(box, link) }
         try await linked(link)
-        struct Kept: Decodable { struct Phone: Decodable { var name: String }; var phones: [Phone] }
-        let kept = try await box.client.value(Kept.self, "GET", "kuvo/link/phones")
-        #expect(kept.phones.map(\.name).sorted() == ["Lost", "Mine"], "the box lets them in")
+        #expect(try await onTheBox(box).phones.map(\.name).sorted() == ["Lost", "Mine"])
         #expect(link.phones.first { $0.name == "Mine" }?.added == Date(timeIntervalSinceReferenceDate: 700_000_000), "as paired, then")
 
-        // Removed in Settings › Phone: the box takes it off, and an older version reads it gone too.
+        // Removed in Settings › Phone: the box takes it off, and the app's copy has it gone too.
         link.remove(try #require(link.phones.first { $0.name == "Lost" }))
         try await until { link.phones.map(\.name) == ["Mine"] }
-        #expect(try olderKeeps() == ["Mine"])
-
-        // Back on an older version meanwhile, which paired another: it comes too, the one removed
-        // stays out.
-        link.stop()
-        let new = LinkKey()
-        var older = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
-        var phones = older["phones"] as! [[String: Any]]
-        phones.append(["key": new.publicBytes.base64URL, "name": "New", "added": 760_000_000, "pairing": "p-new"])
-        phones.append(["key": lost.publicBytes.base64URL, "name": "Lost", "added": 700_000_000, "pairing": "p-lost"])
-        older["phones"] = phones
-        try JSONSerialization.data(withJSONObject: older).write(to: file)
-        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(60)], ofItemAtPath: file.path)
-        let again = self.link(on: box)
-        defer { again.stop() }
-        try await until { again.phones.map(\.name).sorted() == ["Mine", "New"] }
-    }
-
-    /// The box restarting just as the app first hands it your phones: they're handed again, and
-    /// none is lost, here or where an older version reads them.
-    @Test func yourPhonesSurviveTheBoxNotTakingThemTheFirstTime() async throws {
-        let box = try await SettingsBox(port: 47_948)
-        let link = link(on: box, refusing: "kuvo/link/phones/take")
-        defer { done(box, link) }
-        try await linked(link)
-        struct Kept: Decodable { struct Phone: Decodable { var name: String }; var phones: [Phone] }
-        #expect(try await box.client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.name).sorted() == ["Lost", "Mine"])
-        #expect(link.phones.map(\.name).sorted() == ["Lost", "Mine"])
-        #expect(try olderKeeps().sorted() == ["Lost", "Mine"])
+        await link.removalsTaken()
+        #expect(try await onTheBox(box).phones.map(\.name) == ["Mine"])
+        #expect(keptHere() == ["Mine"])
     }
 
     /// A phone removed while the box doesn't take it (restarting): gone from Settings › Phone at
@@ -194,7 +170,7 @@ import Testing
     @Test func aPhoneRemovedWhileTheBoxIsAwayIsRemovedOnceItsBack() async throws {
         let box = try await SettingsBox(port: 47_949)
         // Away long enough for Settings › Phone to say so (it waits a moment first).
-        let link = link(on: box, refusing: "kuvo/phones/remove", times: PhoneLink.graceTries)
+        let link = try link(on: box, refusing: "kuvo/phones/remove", times: PhoneLink.graceTries)
         defer { done(box, link) }
         try await linked(link)
         link.remove(try #require(link.phones.first { $0.name == "Lost" }))
@@ -205,14 +181,14 @@ import Testing
         struct Kept: Decodable { struct Phone: Decodable { var name: String }; var phones: [Phone] }
         #expect(try await box.client.value(Kept.self, "GET", "kuvo/link/phones").phones.map(\.name) == ["Mine"])
         #expect(link.phones.map(\.name) == ["Mine"])
-        #expect(try olderKeeps() == ["Mine"])
+        #expect(keptHere() == ["Mine"])
     }
 
-    /// A phone removed as Kuvo Code starts, before this Mac's box has the phones an older version
-    /// kept (a machine's document, say): that one stays out, and the others are all still there.
+    /// A phone removed as Kuvo Code starts, before this Mac's box has been told anything: that one
+    /// stays out, and the others are all still there.
     @Test func aPhoneRemovedBeforeTheBoxHasYourPhonesLeavesTheOthers() async throws {
         let box = try await SettingsBox(port: 47_954)
-        let link = link(on: box, starting: false)
+        let link = try link(on: box, starting: false)
         defer { done(box, link) }
         link.remove(try #require(link.phones.first { $0.name == "Lost" }))
         await link.removalsTaken()
@@ -220,20 +196,21 @@ import Testing
         try await linked(link)
         #expect(try await onTheBox(box).phones.map(\.name) == ["Mine"])
         try await until { link.phones.map(\.name) == ["Mine"] }
-        #expect(try olderKeeps() == ["Mine"])
+        #expect(keptHere() == ["Mine"])
     }
 
     /// A removal an earlier build kept that names no phone (the box refuses it) never holds the
-    /// link up: your phones still come to the box.
+    /// link up: your phones are still the box's, and the app hears them.
     @Test func aRemovalThatNamesNoPhoneDoesntHoldTheLinkUp() async throws {
         var kept = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
         kept["toRemove"] = [["key": "not-a-key"]]
         try JSONSerialization.data(withJSONObject: kept).write(to: file)
         let box = try await SettingsBox(port: 47_957)
-        let link = link(on: box)
+        let link = try link(on: box)
         defer { done(box, link) }
         try await linked(link)
         #expect(try await onTheBox(box).phones.map(\.name).sorted() == ["Lost", "Mine"])
+        #expect(link.phones.map(\.name).sorted() == ["Lost", "Mine"])
         #expect(link.removalProblem == nil)
     }
 
@@ -241,6 +218,7 @@ import Testing
     @Test func aPairingClosedWhileItWasMadeIsntShownAndEnds() async throws {
         let box = try await SettingsBox(port: 47_958)
         let gate = Gate()
+        try paired(box)
         let link = PhoneLink(file: file, identity: (mac, secret))
         let client = Self.gated(box, route: "kuvo/phones/pair", gate: gate)
         link.box = { client }
@@ -266,6 +244,7 @@ import Testing
     @Test func aLatePairingNeverEndsTheNextOne() async throws {
         let box = try await SettingsBox(port: 47_960)
         let gate = Gate()
+        try paired(box)
         let link = PhoneLink(file: file, identity: (mac, secret))
         let client = Self.gated(box, route: "kuvo/phones/pair", gate: gate)
         link.box = { client }
@@ -321,7 +300,7 @@ import Testing
 
     @Test func settingsPhonesPairingLinkIsTheBoxsAsYourPhonesKnowThisMac() async throws {
         let box = try await SettingsBox(port: 47_944)
-        let link = link(on: box)
+        let link = try link(on: box)
         defer { done(box, link) }
         try await linked(link)
         await link.beginPairing()
@@ -343,7 +322,7 @@ import Testing
 
     @Test func whatAPhoneAsksOfTheMacsOwnRoutesComesFromTheAppAFollowedOneAsItComes() async throws {
         let box = try await SettingsBox(port: 47_945)
-        let link = link(on: box)
+        let link = try link(on: box)
         defer { done(box, link) }
         // As this Mac's box asks its app (its host interface).
         let environment = try await box.box.host.start()

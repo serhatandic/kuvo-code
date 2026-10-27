@@ -8,10 +8,8 @@ import Testing
 /// This Mac's side of the documents your computers copy between them (PROTOCOL.md, "Documents"),
 /// as the app hands them to this Mac's box, which keeps the rules (the bridge's tests' mac-docs and
 /// two-boxes): your machines as Kuvo Code set them up, one you remove named so it lets this Mac go;
-/// how far this Mac's documents had come before the box kept them, never back; a phone removed on a
-/// machine leaving this Mac too; and the copy the app keeps for an older Kuvo Code, which reads it
-/// as it always has. The box is the real one, its relay one nobody answers; only the machines are
-/// stand-ins: documents signed with keys of their own.
+/// and a phone removed on a machine leaving this Mac too. The box is the real one, its relay one
+/// nobody answers; only the machines are stand-ins: documents signed with keys of their own.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PhoneDocumentsTests {
     let folder: URL
@@ -23,7 +21,6 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         UserDefaults.standard.set(true, forKey: "phoneLink")
         UserDefaults.standard.set("ws://127.0.0.1:9", forKey: "phoneLink.relay")
-        UserDefaults.standard.removeObject(forKey: "phoneLink.written")
     }
 
     /// A machine as this Mac keeps it, with the key it signs with.
@@ -40,17 +37,15 @@ import Testing
         }
     }
 
-    /// As an older Kuvo Code kept them: `phones` paired here, `machines` set up, and how far this
-    /// Mac's own documents had come (`counts`, by kind).
-    private func kept(phones: [[String: Any]] = [], machines: [Machine], also: [String: [String: Any]] = [:], counts: [String: Int] = [:]) throws {
-        let own = counts.mapValues { ["n": $0, "h": "", "b": ""] as [String: Any] }
-        let saved: [String: Any] = ["phones": phones, "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) }).merging(also) { $1 },
-                                    "documents": ["own": own, "held": [:], "views": [:], "left": []]]
+    /// As the app keeps them (phone-link.json): your `machines` as it set them up (`also`: more
+    /// names for them).
+    private func kept(machines: [Machine], also: [String: [String: Any]] = [:]) throws {
+        let saved: [String: Any] = ["phones": [], "removed": [], "machines": Dictionary(uniqueKeysWithValues: machines.map { ($0.id, $0.host) }).merging(also) { $1 }]
         try JSONSerialization.data(withJSONObject: saved).write(to: file)
     }
 
     /// This Mac's link, as the app starts it, on a box of the test's own: once the box has its
-    /// machines and what was kept, and tries the relay.
+    /// machines, and tries the relay.
     private func started(on box: SettingsBox) async throws -> PhoneLink {
         let link = PhoneLink(file: file, identity: (LinkKey(), RelaySecret()), signing: signing)
         let client = box.client
@@ -69,7 +64,7 @@ import Testing
         link.stop()
         box.stop()
         try? FileManager.default.removeItem(at: folder)
-        for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     /// This Mac's own documents as setting a machine up gives them, read.
@@ -111,48 +106,14 @@ import Testing
         #expect(peers["left"] as? [String] == [], "still one of this Mac's, so not told to let it go")
     }
 
-    /// How far this Mac's documents had come before its box kept them: the box goes on from there,
-    /// and the copy an older Kuvo Code reads says so, read as that version reads it.
-    @Test func thisMacsCountsGoOnFromBeforeAndAnOlderVersionReadsThem() async throws {
-        let lab = Machine(id: "lab.invalid")
-        try kept(machines: [lab], counts: ["peers": 30, "phones": 12])
-        let box = try await SettingsBox(port: 47_964)
-        let link = try await started(on: box)
-        defer { done(box, link) }
-        let now = try await own(box)
-        let peers = try #require(now["peers"]), phones = try #require(now["phones"])
-        #expect(peers.n > 30 && phones.n > 12, "past what your machines have")
-        // The copy: what an older Kuvo Code decodes, its counts the box's.
-        struct Older: Decodable { var documents: MacDocuments }
-        try await until { (try? JSONDecoder().decode(Older.self, from: Data(contentsOf: file)))?.documents.own["peers"]?.n == peers.n }
-        let older = try JSONDecoder().decode(Older.self, from: Data(contentsOf: file))
-        #expect(older.documents.own["phones"]?.n == phones.n)
-    }
-
-    /// The file was this version's own last (it's what this Mac's box keeps, copied): how far this
-    /// Mac's documents had come still goes to the box as it starts, so it never starts over below
-    /// what your machines have.
-    @Test func thisMacsCountsGoToTheBoxWhicheverVersionWroteTheFileLast() async throws {
-        let lab = Machine(id: "lab.invalid")
-        try kept(machines: [lab], counts: ["peers": 30, "phones": 12])
-        let date = try #require(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date)
-        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: "phoneLink.written")
-        let box = try await SettingsBox(port: 47_966)
-        let link = try await started(on: box)
-        defer { done(box, link) }
-        let now = try await own(box)
-        #expect(try #require(now["peers"]).n > 30)
-        #expect(try #require(now["phones"]).n > 12)
-    }
-
     /// Removed on a machine (its phones document, as setting it up brings it, or its mail): gone
-    /// from this Mac's box, here, and where an older version reads your phones.
+    /// from this Mac's box, and here, after a restart too.
     @Test func aPhoneRemovedOnAMachineLeavesThisMacToo() async throws {
         let lab = Machine(id: "lab.invalid")
         let lost = Data(repeating: 1, count: 32).base64URL, keep = Data(repeating: 2, count: 32).base64URL
-        let phone = { (key: String, pairing: String) -> [String: Any] in ["key": key, "name": "iPhone", "added": 0, "pairing": pairing] }
-        try kept(phones: [phone(lost, "p1"), phone(keep, "p2")], machines: [lab])
+        try kept(machines: [lab])
         let box = try await SettingsBox(port: 47_965)
+        try box.box.paired([(lost, "iPhone", "p1"), (keep, "iPhone", "p2")])
         let link = try await started(on: box)
         defer { done(box, link) }
         let from = lab.x25519.publicBytes.base64URL
@@ -166,7 +127,7 @@ import Testing
         try await until { link.phones.map(\.key) == [keep] }
         #expect(link.paired.removed.contains(.init(key: lost, pairing: "p1")))
         #expect(!link.paired.removed.contains(.init(key: keep, pairing: "p2")), "the forged one changed nothing")
-        #expect(PhoneLink(file: file).phones.map(\.key) == [keep], "kept so after a restart, and for an older version")
+        #expect(PhoneLink(file: file).phones.map(\.key) == [keep], "kept so after a restart")
     }
 
     /// The letters an earlier Kuvo Code delivered itself go to this Mac's box as the app starts,
@@ -190,7 +151,7 @@ import Testing
             try? FileManager.default.removeItem(at: seen)
             try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appending(path: "phone-link.json"))
             _ = Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
-            for key in ["phoneLink", "phoneLink.relay", "phoneLink.written"] { UserDefaults.standard.removeObject(forKey: key) }
+            for key in ["phoneLink", "phoneLink.relay"] { UserDefaults.standard.removeObject(forKey: key) }
         }
         link.start(endpoint: ServerEndpoint(url: URL(string: box.engine.url)!, password: "test"))
         // Its link up, trying the relay: what was kept went first.

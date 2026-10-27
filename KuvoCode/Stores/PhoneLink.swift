@@ -39,9 +39,6 @@ final class PhoneLink {
     /// Your machines' bridges, which phones reach directly (with the Mac closed), by machine:
     /// what `kuvo/hosts` tells a phone.
     private(set) var machineHosts: [String: MachineHost] = [:]
-    /// This Mac's documents as its box keeps them (PROTOCOL.md, "Documents"), copied into
-    /// phone-link.json for an older Kuvo Code, which goes on from these counts.
-    @ObservationIgnored private(set) var documents = MacDocuments()
     /// The machines that are connected now, for putting the bridge on them; set by AppModel.
     @ObservationIgnored var readyMachines: () -> [MachineEngine] = { [] }
     /// Your bots, for `kuvo/bots`: the phone draws and describes each as the Mac does; set by
@@ -83,16 +80,14 @@ final class PhoneLink {
         var phones: [Phone] = []
         var removed: [PairedPhones.Removal] = []
         var machines: [String: MachineHost] = [:]
-        var documents = MacDocuments()
         /// Removals this Mac's box hasn't taken yet (`removePhones`).
         var toRemove: [PairedPhones.Entry] = []
 
-        init(phones: [Phone] = [], removed: [PairedPhones.Removal] = [], machines: [String: MachineHost] = [:], documents: MacDocuments = MacDocuments(),
+        init(phones: [Phone] = [], removed: [PairedPhones.Removal] = [], machines: [String: MachineHost] = [:],
              toRemove: [PairedPhones.Entry] = []) {
             self.phones = phones
             self.removed = removed
             self.machines = machines
-            self.documents = documents
             self.toRemove = toRemove
         }
 
@@ -101,7 +96,6 @@ final class PhoneLink {
             phones = try container.decodeIfPresent([Phone].self, forKey: .phones) ?? []
             removed = try container.decodeIfPresent([PairedPhones.Removal].self, forKey: .removed) ?? []
             machines = try container.decodeIfPresent([String: MachineHost].self, forKey: .machines) ?? [:]
-            documents = try container.decodeIfPresent(MacDocuments.self, forKey: .documents) ?? MacDocuments()
             toRemove = try container.decodeIfPresent([PairedPhones.Entry].self, forKey: .toRemove) ?? []
         }
     }
@@ -149,7 +143,6 @@ final class PhoneLink {
         toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
         paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
         machineHosts = saved.machines
-        documents = saved.documents
         if let identity {
             self.identity = identity
             self.signing = signing ?? Documents.SigningKey()
@@ -266,19 +259,18 @@ final class PhoneLink {
         return (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
     }
 
-    /// Follows this Mac's box: tells it what's wanted of its link, takes what an older Kuvo Code
-    /// kept of your phones (once, or again after going back to one), and follows how its link
-    /// stands and its phones. Each time the box comes back (started again, it knows nothing of what
-    /// it was told), it's told again.
-    /// Its phones are followed only once what an older Kuvo Code kept of them, and what was
-    /// removed meanwhile, is the box's: its first word would otherwise stand for your phones.
+    /// Follows this Mac's box: tells it what's wanted of its link, and follows how its link stands
+    /// and its phones. Each time the box comes back (started again, it knows nothing of what it was
+    /// told), it's told again.
+    /// Its phones are followed only once what was removed meanwhile is the box's: its first word
+    /// would otherwise stand for your phones.
     private func follow() async {
         var missed = 0
         while !Task.isCancelled {
             if let client = box() { await handOver(client) }
             if let client = box(),
                (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
-               await tellPeers(client), await takePhonesFromFile(client), await sendRemovals(client) {
+               await tellPeers(client), await sendRemovals(client) {
                 missed = 0
                 // Told: your machines are set up with what it keeps (one that couldn't be before).
                 syncMachines()
@@ -318,8 +310,8 @@ final class PhoneLink {
         }
     }
 
-    /// The phones as the box keeps them, kept here too (what your machines are told, and what an
-    /// older Kuvo Code finds if you go back to one); a change here goes to your machines.
+    /// The phones as the box keeps them, kept here too (what your machines are told); a change here
+    /// goes to your machines.
     private func followed(phones line: Data) {
         struct Kept: Decodable {
             struct Phone: Decodable { var key: String; var name: String?; var added: Double?; var address: String?; var pairing: String? }
@@ -328,75 +320,23 @@ final class PhoneLink {
             var pairing: Bool?
         }
         guard let kept = try? JSONDecoder().decode(Kept.self, from: line) else { return }
-        // Read apart from the phones: one that doesn't read leaves the phones as they are.
-        struct Documented: Decodable { var documents: MacDocuments }
-        let documents = (try? JSONDecoder().decode(Documented.self, from: line))?.documents
         let now = Self.without(toRemove, PairedPhones(phones: kept.phones.map {
             Phone(key: $0.key, name: $0.name ?? "", added: Date(timeIntervalSince1970: $0.added ?? 0), address: $0.address, pairing: $0.pairing ?? "")
         }, removed: kept.removed))
         // The link shown was used, or ran out: it's done.
         if kept.pairing == false { pairing = nil }
-        // This Mac's documents as the box has them now, for an older Kuvo Code's copy: each count
-        // the higher of the two, so the copy never goes back.
-        if let documents {
-            let merged = self.documents.merged(with: documents)
-            if merged != self.documents {
-                self.documents = merged
-                if now == paired { save() }
-            }
-        }
         guard now != paired else { return }
         paired = now
         save()
         syncMachines()
     }
 
-    /// Tells this Mac's box who your machines are, as it starts (before it takes what an older
-    /// version kept of documents: what they signed is checked against them). False: it didn't take
-    /// it, so it's told again.
+    /// Tells this Mac's box who your machines are, as it starts. False: it didn't take it, so it's
+    /// told again.
     private func tellPeers(_ client: BoxClient) async -> Bool {
         guard let body = peersBody() else { return true }
         return (try? await client.send("PUT", "kuvo/link/peers", body: body))?.status == 200
     }
-
-    /// What phone-link.json keeps, met with the box's: your phones where an older Kuvo Code changed
-    /// them since this one last wrote it (the first time, and after going back to one), and how far
-    /// this Mac's documents had come, at every start, whatever the file's date (the box only ever
-    /// raises them, so a copy behind it changes nothing). False: the box didn't take them (it's
-    /// starting again), so they're tried again.
-    private func takePhonesFromFile(_ client: BoxClient) async -> Bool {
-        let written = UserDefaults.standard.double(forKey: Self.writtenKey)
-        let changed = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date
-        let phonesChanged = changed.map { $0.timeIntervalSince1970 > written + 0.5 } ?? false
-        let older = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
-        var given: [String: Any] = [
-            "phones": [],
-            "removed": [],
-            "documents": (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(older.documents))) ?? [:],
-        ]
-        if phonesChanged {
-            given["phones"] = older.phones.map { phone -> [String: Any] in
-                var entry: [String: Any] = ["key": phone.key, "name": phone.name, "added": phone.added.timeIntervalSince1970.rounded(), "pairing": phone.pairing]
-                if let address = phone.address { entry["address"] = address }
-                return entry
-            }
-            given["removed"] = older.removed.map { ["key": $0.key, "pairing": $0.pairing] }
-        }
-        guard let body = try? JSONSerialization.data(withJSONObject: given),
-              (try? await client.send("POST", "kuvo/link/phones/take", body: body))?.status == 200 else { return false }
-        if phonesChanged, let changed { UserDefaults.standard.set(changed.timeIntervalSince1970, forKey: Self.writtenKey) }
-        phonesTaken = true
-        return true
-    }
-
-    /// This Mac's box has what phone-link.json kept, this launch. Until then, what's saved leaves
-    /// the file's phones as they are and its date unrecorded (a machine set up, a phone removed:
-    /// each saves), so they're still taken, and never lost.
-    @ObservationIgnored private var phonesTaken = false
-
-    /// When this Kuvo Code last wrote phone-link.json (its file's date then): one newer was an
-    /// older Kuvo Code's.
-    private static let writtenKey = "phoneLink.written"
 
     /// A machine added or removed: with the first, this Mac's box meets your machines at the relay
     /// (and they each other); with the last gone (and no phone link), it stops. The others hear who
@@ -1371,18 +1311,10 @@ final class PhoneLink {
         }
     }
 
-    /// Kept in phone-link.json, as an older Kuvo Code reads it too (going back to one finds your
-    /// phones), with when this one wrote it.
+    /// Kept in phone-link.json.
     private func save() {
-        var saved = Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, documents: documents, toRemove: toRemove)
-        if !phonesTaken {
-            let kept = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
-            saved.phones = kept.phones
-            saved.removed = kept.removed
-        }
-        guard (try? JSONEncoder().encode(saved).write(to: savedFile, options: .atomic)) != nil, phonesTaken,
-              let written = (try? FileManager.default.attributesOfItem(atPath: savedFile.path))?[.modificationDate] as? Date else { return }
-        UserDefaults.standard.set(written.timeIntervalSince1970, forKey: Self.writtenKey)
+        let saved = Saved(phones: paired.phones, removed: paired.removed, machines: machineHosts, toRemove: toRemove)
+        try? JSONEncoder().encode(saved).write(to: savedFile, options: .atomic)
     }
 
     // MARK: Keychain

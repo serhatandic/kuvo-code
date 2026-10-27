@@ -143,18 +143,11 @@ test("a machine's view of your personalities comes in, an older or forged one ch
   assert.equal((await ask("POST", "kuvo/link/docs", { from: machine("stranger").peer.key, docs: { give: [] } })).status, 404);
 });
 
-test("this Mac's counts never go back: from before the move, past what a machine says it has, but never past what a box can count on", async () => {
+test("this Mac's counts go past what a machine says it has, but never past what a box can count on", async () => {
   const lab = machine("lab.invalid");
   await fresh(lab);
-  // What the app kept before this box held them: the next one goes past it.
-  const counts = { peers: { n: 3, h: "", b: "" }, phones: { n: 7, h: "", b: "" } };
-  assert.equal((await ask("POST", "kuvo/link/phones/take", { phones: [], removed: [], documents: { own: counts, held: {}, views: {}, left: [] } })).status, 200);
   let now = await own();
-  assert.ok(now.phones.n > 7 && now.peers.n > 3, JSON.stringify({ phones: now.phones.n, peers: now.peers.n }));
-  // An older copy taken again (the app's file from before) never moves them back.
   const was = now.phones.n;
-  assert.equal((await ask("POST", "kuvo/link/phones/take", { phones: [], removed: [], documents: { own: { phones: { n: 2, h: "", b: "" } } } })).status, 200);
-  assert.equal((await own()).phones.n, was);
   // A machine has this Mac's peers document further on (from a copy put back, say): the next goes past it.
   assert.equal((await ask("POST", "kuvo/link/docs", { from: lab.peer.key, docs: { have: [[macSign, "peers", 40, "x"]] } })).status, 200);
   assert.equal((await own()).peers.n, 41);
@@ -163,8 +156,8 @@ test("this Mac's counts never go back: from before the move, past what a machine
   now = await own();
   assert.equal(now.peers.n, 41);
   assert.equal(now.phones.n, was);
-  // What the app keeps for an older Kuvo Code: the counts as they are now.
-  const kept = (await ask("GET", "kuvo/link/phones")).json.documents;
+  // What the app reads of them: the counts as they are now.
+  const kept = (await ask("GET", "kuvo/link/documents")).json;
   assert.equal(kept.own.peers.n, 41);
   assert.equal(kept.own.phones.n, was);
 });
