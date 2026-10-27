@@ -145,6 +145,8 @@ struct MachinesSettings: View {
                 } else {
                     Button("Make This Mac Its Home…") { takingHome = engine }
                         .buttonStyle(TextButtonStyle(outset: true))
+                        // A way out, in the accent: not the grey of the lines above it.
+                        .foregroundStyle(.tint)
                         .fixedSize()
                 }
             }
