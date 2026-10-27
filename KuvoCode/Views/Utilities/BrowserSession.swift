@@ -43,6 +43,8 @@ final class BrowserSession: NSObject {
     /// Agent steps at work in this page now, and of them those told to accept confirmations: while
     /// any is, a dialog the page shows is answered at once (it would hold the page, and the step).
     @ObservationIgnored private var agentSteps = 0
+    /// When the agent's latest step here began or ended.
+    @ObservationIgnored private var agentSteppedAt: Date?
     @ObservationIgnored private var acceptingSteps = 0
     /// Of those steps, the ones waiting for you to answer the agent in Kuvo Code (a sign-in, a
     /// code, something only you can do on the page): meanwhile the page's dialogs are yours.
@@ -51,6 +53,7 @@ final class BrowserSession: NSObject {
     /// An agent's step begins in this page.
     func agentStepBegan(_ session: String?, accepting: Bool) {
         agentSteps += 1
+        agentSteppedAt = .now
         if accepting { acceptingSteps += 1 }
         agentWorks(session)
         answerWaitingDialog()
@@ -72,6 +75,7 @@ final class BrowserSession: NSObject {
     /// The step ended.
     func agentStepEnded(accepting: Bool) {
         agentSteps = max(0, agentSteps - 1)
+        agentSteppedAt = .now
         if accepting { acceptingSteps = max(0, acceptingSteps - 1) }
         if agentSteps == 0 { agentRests() }
     }
@@ -151,7 +155,11 @@ final class BrowserSession: NSObject {
         enum State: Equatable { case running, done, failed(String) }
     }
 
-    @ObservationIgnored private var running: [ObjectIdentifier: (download: WKDownload, id: UUID, progress: NSKeyValueObservation?)] = [:]
+    /// Downloads under way, each with the conversation whose agent was at work in the page as it
+    /// began (none when it's yours: no agent then, or you'd taken the page over).
+    @ObservationIgnored private var running: [ObjectIdentifier: (download: WKDownload, id: UUID, progress: NSKeyValueObservation?, session: String?)] = [:]
+    /// A download an agent's page finished, with that conversation, for the record of what agents made.
+    @ObservationIgnored var onAgentDownload: ((URL, String) -> Void)?
     /// Where each download is written until it's done, in the app's temporary folder.
     @ObservationIgnored private var writing: [UUID: URL] = [:]
 
@@ -433,7 +441,11 @@ extension BrowserSession: WKDownloadDelegate {
             let fraction = progress.fractionCompleted
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.update(entry.id) { $0.progress = fraction } } }
         }
-        running[ObjectIdentifier(download)] = (download, entry.id, progress)
+        // The agent's when one is at work in the page, or was in the last two minutes (a link's
+        // server can be slow to start sending), as a machine's browser decides it; not once you'd
+        // taken the page over.
+        let agents = !isHeld && (agentSteps > 0 || agentSteppedAt.map { Date.now.timeIntervalSince($0) < 120 } == true)
+        running[ObjectIdentifier(download)] = (download, entry.id, progress, agents ? agentSession : nil)
         withAnimation(.ui) { downloads = (downloads + [entry]).suffix(3) }
     }
 
@@ -476,6 +488,7 @@ extension BrowserSession: WKDownloadDelegate {
                     $0.name = file.lastPathComponent
                 }
                 agentNotes.append("Downloaded \(file.lastPathComponent) to \(file.path).")
+                if let session = entry.session { onAgentDownload?(file, session) }
             case .failure(let error):
                 update(id) { $0.state = .failed("Couldn't put it in Downloads: \(error.localizedDescription)") }
                 agentNotes.append("A download couldn't be saved: \(error.localizedDescription)")

@@ -83,6 +83,8 @@ final class Utilities {
     @ObservationIgnored var attachToMessage: (([URL]) -> Void)?
     /// A machine's browser, by the machine's ID.
     @ObservationIgnored var machineBrowser: ((String) -> MachineBrowser?)?
+    /// A file an agent downloaded in this Mac's browser, and its conversation. The app sets it.
+    @ObservationIgnored var agentDownloaded: ((URL, String) -> Void)?
 
     /// What's in view in the window, which the panel follows: the window sets it, all at once.
     struct InView: Equatable {
@@ -270,6 +272,7 @@ final class Utilities {
         let tab = Tab(kind: .browser, owner: owner)
         let browser = BrowserSession(configuration: configuration)
         browser.onVisit = { [weak history] url, title, icon in history?.record(url, title: title, iconURL: icon) }
+        browser.onAgentDownload = { [weak self] file, session in self?.agentDownloaded?(file, session) }
         browser.openWindow = { [weak self] configuration in
             self?.newBrowser(configuration: configuration, openedFrom: tab.id).webView
         }
