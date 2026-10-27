@@ -1423,9 +1423,11 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   out), read by a model with none of the
   conversation's context: on the engine, its own model afresh, or `model` when given; with the
   coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
-  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}}` → `{data: review}`, `state`
-    `reviewing`; `409` while one is under way. A review: `{id, session, state: "reviewing" | "done" |
-    "failed", model?, summary?, findings: [finding], error?, fix?, started, ended?}`, its findings
+  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?}` → `{data: review}`,
+    `state` `reviewing`; `409` while one is under way. `focus` is what to look at especially, as
+    the user wrote it ("/review with <model> <focus>"). A review: `{id, session, state: "reviewing"
+    | "done" | "failed", model?, focus?, summary?, findings: [finding], error?, fix?, started,
+    ended?}`, its findings
     bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
     [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
     says it all), and every place it's in, none when it's about the change as a whole (a missing

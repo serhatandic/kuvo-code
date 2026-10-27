@@ -1019,7 +1019,7 @@ final class SessionModel {
         case .handoff:
             startHandoff(next: rest, written: written)
         case .review:
-            startReview(written: written)
+            startReview(ReviewCommand(rest, readers: catalog()?.reviewReaders ?? [], preferring: Catalog.lastReviewer), written: written)
         }
         Analytics.shared.track("keyword_run", ["keyword": keyword.rawValue])
     }
@@ -1118,12 +1118,28 @@ final class SessionModel {
     /// Its latest review with fresh eyes ("/review"), until it's put away.
     var review: Review? { goalBridge()?.reviews[id] }
 
-    private func startReview(written: String) {
+    /// The catalog of the engine it runs on, whose models can read a review: the app's (a test
+    /// gives its own).
+    @ObservationIgnored var reviewCatalog: (() -> Catalog?)?
+    private func catalog() -> Catalog? {
+        if let reviewCatalog { return reviewCatalog() }
+        guard let app = AgentMail.shared.app else { return nil }
+        return RemoteFolder.machine(of: session.location.directory).flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
+    }
+
+    /// "/review [with <model>] [what to look at]": read by that model (the conversation's own
+    /// without one), looking especially there. A name it can't find comes back to the composer.
+    private func startReview(_ command: ReviewCommand, written: String) {
+        if let searching = command.searching {
+            restore(text: written)
+            failure = searching.isEmpty ? "Pick who reads it from the list, or write a model’s name after “with”." : "There’s no model called “\(searching)” here. Pick one from the list."
+            return
+        }
         guard let bridge = goalBridge(), let api = bridge.api else { return keywordUnavailable(written) }
         let session = id
         Task {
             do {
-                bridge.took(try await api.startReview(session: session))
+                bridge.took(try await api.startReview(session: session, model: command.reader?.ref, focus: command.focus))
             } catch {
                 restore(text: written)
                 fail(error)

@@ -334,6 +334,18 @@ describe("a review with fresh eyes", () => {
     second.stopAll()
   })
 
+  test("read by the model you pick, looking where you say", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+  setTimeout(tick, 1000)\n"))
+    reviews.onEnded = beat
+    engine.answers = [`{"summary": "Fine.", "findings": []}`]
+    const response = await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ model: { providerID: "deepseek", id: "v4.1-flash" }, focus: "  the pause handling\n" }))
+    expect(response.status).toBe(200)
+    await until(() => reviews.get("ses_work")?.state === "done")
+    expect(engine.checks[0].model).toEqual({ providerID: "deepseek", id: "v4.1-flash" })
+    expect(engine.checks[0].prompt).toContain("Look especially at what the user asked: the pause handling")
+    expect(reviews.get("ses_work")).toMatchObject({ model: { providerID: "deepseek", id: "v4.1-flash" }, focus: "the pause handling" })
+  })
+
   test("with nothing to review says so; one under way is waited for; put away, it's gone", async () => {
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes(""))
     reviews.onEnded = beat

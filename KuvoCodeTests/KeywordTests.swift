@@ -127,6 +127,47 @@ import Testing
         #expect(try await bridge.api?.reviews().isEmpty == true)
     }
 
+    @Test func aReviewIsReadByTheModelNamedAfterWithLookingWhereYouSay() async throws {
+        defer { clean() }
+        let repository = try TestRepository()
+        try repository.write("src/timer.ts", "export const tick = 1000\n")
+        try repository.git("add", "-A")
+        try repository.git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "a")
+        try repository.write("src/timer.ts", "export const tick = 1000\nsetInterval(tick)\n")
+        serve(directory: repository.path, answers: [#"{"summary": "Fine.", "findings": []}"#])
+        // The engine's models, as the composer's "Who reads it" lists them.
+        let location = ["directory": "/"]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_deepseek", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [[
+            "id": "v4.1-flash", "modelID": "v4.1-flash", "providerID": "deepseek", "name": "DeepSeek V4.1 Flash",
+            "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+            "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": NSNull()])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        let catalog = Catalog(isMac: true)
+        catalog.api = engine.api
+        await catalog.refresh()
+        #expect(catalog.reviewReaders.map(\.name) == ["DeepSeek V4.1 Flash"])
+        let model = try session(directory: repository.path)
+        model.reviewCatalog = { catalog }
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        // A name that's none of them comes back, saying so.
+        model.draftText = "/review with Gemini 9"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText == "/review with Gemini 9")
+        #expect(model.failure == "There’s no model called “Gemini 9” here. Pick one from the list.")
+
+        model.draftText = "/review with deepseek v4.1 flash the pause handling"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { model.review?.state == .done }
+        #expect(model.review?.model == ModelRef(id: "v4.1-flash", providerID: "deepseek"))
+        #expect(model.review?.focus == "the pause handling")
+    }
+
     @Test func theEnginesOwnReviewStaysReachableAsReviewQuick() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])

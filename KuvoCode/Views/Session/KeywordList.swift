@@ -180,6 +180,82 @@ struct LoopList: View {
     }
 }
 
+/// A row of "/review "'s "Who reads it": the conversation's own model, another one, or Other
+/// Model…, which writes "with " to look for any.
+enum ReviewerChoice: Identifiable, Equatable {
+    case same(String?)
+    /// `note`: "picked last time", or who serves it.
+    case reader(ReviewCommand.Reader, note: String)
+    case other
+
+    var id: String {
+        switch self {
+        case .same: "same"
+        case .reader(let reader, _): reader.ref.providerID + "/" + reader.ref.id
+        case .other: "other"
+        }
+    }
+}
+
+/// "/review "'s "Who reads it", as "/loop "'s "How often": who reads the changes with fresh eyes.
+struct ReviewerList: View {
+    let choices: [ReviewerChoice]
+    let selected: Int
+    let choose: (ReviewerChoice) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Who reads it")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                Button { choose(choice) } label: { row(choice) }
+                    .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+            }
+        }
+        .padding(.leading, -8)
+        .help("↑ ↓ to choose, Return to pick, Escape to close")
+    }
+
+    private func row(_ choice: ReviewerChoice) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                switch choice {
+                case .same: Image(systemName: "person")
+                case .reader: Image(systemName: "sparkle")
+                case .other: Color.clear
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .frame(width: 18)
+            switch choice {
+            case .same(let name):
+                Text("Same as this conversation")
+                    .font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 8)
+                if let name { Text(name).font(.system(size: 12)).foregroundStyle(.secondary) }
+            case .reader(let reader, let note):
+                Text(reader.name)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 8)
+                Text(note).font(.system(size: 12)).foregroundStyle(.secondary)
+            case .other:
+                Text("Other Model…")
+                    .font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 0)
+            }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// Custom…'s row, in place of the list: every so many minutes, hours or days, or weekdays, at a
 /// time of day for days and weekdays. Use writes it after "/loop ", as if typed.
 struct CustomLoopRow: View {
