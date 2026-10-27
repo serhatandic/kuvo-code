@@ -896,15 +896,7 @@ struct SidebarView: View {
                             .help("Works in a worktree, on \(tree.branch)")
                     }
                     if let count = workspace.agents(forFolder: session.location.directory)?.sideQuestionCounts[session.id], count > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: Keyword.btw.symbol)
-                            Text("\(count)")
-                                .monospacedDigit()
-                        }
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .help(count.counting("side question") + ", kept out of the conversation: Control-click to open one")
-                        .accessibilityLabel(count.counting("side question"))
+                        SideQuestionsButton(count: count) { showSideQuestion(nil, of: session) }
                     }
                     let children = workspace.subSessions[session.id] ?? []
                     if !children.isEmpty {
@@ -937,13 +929,7 @@ struct SidebarView: View {
 
     private func showSideQuestion(_ id: String?, of session: Session) {
         selection = session.id
-        Task {
-            let bridge = workspace.agents(forFolder: session.location.directory)
-            await bridge?.loadSideQuestions(of: session.id)
-            guard let model = workspace.model(for: session.id) else { return }
-            model.shownSideQuestion = id ?? bridge?.sideQuestions[session.id]?.last?.id
-            model.hidesSideQuestion = false
-        }
+        Task { await workspace.model(for: session.id)?.showSideQuestion(id) }
     }
 
     /// Saves the conversation as a Markdown file where you choose.
@@ -1906,6 +1892,28 @@ private struct SubSessionToggle: View {
         .help(isUnfolded ? "Hide its subagents" : "Show its \(count.counting("subagent"))")
         // The row it's in says so, with its action (see `SubSessionsAction`).
         .accessibilityHidden(true)
+    }
+}
+
+/// A conversation's side questions on its row: how many, opening the latest over its composer
+/// (the others are a menu away there, and in the row's menu).
+private struct SideQuestionsButton: View {
+    let count: Int
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 2) {
+                Image(systemName: Keyword.btw.symbol)
+                Text("\(count)")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11))
+        }
+        .buttonStyle(TextButtonStyle())
+        .help(count.counting("side question"))
+        .accessibilityLabel(count.counting("side question"))
+        .accessibilityHint("Opens the latest")
     }
 }
 

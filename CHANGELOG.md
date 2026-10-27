@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Click the side questions count on a conversation in the sidebar to open the latest one, on the Mac and the iPhone.
 - Codex in Kuvo Code no longer uses ChatGPT's Computer Use, even where your Codex settings turn it on, so it can't click around your Mac without asking.
 - A screenshot copied to the clipboard (⌃⇧⌘4) pastes into the composer with ⌘V, as a picture you attach.
 - Searching what was said in your conversations is done by each computer itself, so a machine's conversations come up as quickly as your Mac's, and your phone finds them too.

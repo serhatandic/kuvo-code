@@ -1138,6 +1138,15 @@ final class SessionModel {
         }
     }
 
+    /// Shows a side question's answer over the composer, the latest asked (`id` nil) or the one
+    /// picked, its list read first if it isn't yet (opened from the sidebar).
+    func showSideQuestion(_ id: String?) async {
+        guard let bridge = goalBridge() else { return }
+        await bridge.loadSideQuestions(of: self.id)
+        shownSideQuestion = id ?? bridge.sideQuestions[self.id]?.last?.id
+        hidesSideQuestion = false
+    }
+
     /// The side question bar's Ask Another: "/btw " in the composer, ready to finish.
     func askAnotherSideQuestion() {
         draftText = Keyword.btw.typed + " "
