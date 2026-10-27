@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- A session's subagents show under it in the sidebar, folded until you click the count beside it: on a line under the session, each with its status, opening its own conversation with the way back. A subagent you open no longer takes a tab in the side panel.
 - Searching the sidebar finds a bot by its name, and shows a bot as it is in the sidebar, with its face and what it's doing; found by what was said to it, the words found show under its name.
 - An integration whose sign-in ended says **Sign In Again…** on its one button, and "Sign-in ended" under its name, rather than a Sign In button beside a Sign In Again in its menu.
 - Over the composer, what asks you something shows as solid cards, and the bars for what's under way, the messages waiting and the composer are one card. Each bar's chevron and ✕ sit at the end of its line; with three bars or more, each folds to its line but the newest change, and more than two waiting messages fold to one line.
