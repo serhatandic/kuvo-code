@@ -91,8 +91,7 @@ struct SubscriptionsStep: View {
         }
         .sheet(item: $adding, onDismiss: lookAgain) { adding in
             AddAnotherSheet(tab: adding.tab, offers: offers, failure: onboarding.useFailure, perform: perform, isBusy: isBusy, changed: lookAgain) { self.adding = nil }
-                .frame(width: 480)
-                .frame(minHeight: 420, maxHeight: 560)
+                .frame(width: 480, height: 540)
         }
     }
 

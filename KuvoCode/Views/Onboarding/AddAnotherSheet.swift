@@ -55,6 +55,8 @@ struct AddAnotherSheet: View {
                     .padding(.vertical, 2)
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                // The list scrolls in the sheet; the buttons stay below it.
+                .frame(maxHeight: .infinity)
                 if let failure {
                     Text(failure)
                         .font(.callout)
@@ -63,12 +65,16 @@ struct AddAnotherSheet: View {
                 HStack {
                     Spacer()
                     Button("Done", action: done)
-                        .buttonStyle(.glass)
                         .keyboardShortcut(.cancelAction)
                 }
             }
             .padding(20)
-            .onAppear { if shown == nil { shown = offers.more.map(\.id) } }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // The plans to add as they're listed (one signed in to meanwhile stays, saying so).
+            .onChange(of: offers.more.map(\.id), initial: true) { _, ids in
+                let known = shown ?? []
+                shown = known + ids.filter { !known.contains($0) }
+            }
         }
     }
 
@@ -79,7 +85,14 @@ struct AddAnotherSheet: View {
     }
 
     @ViewBuilder private var plans: some View {
-        if morePlans.isEmpty {
+        if offers.plans.isEmpty {
+            // Not listed yet.
+            HStack(spacing: 8) {
+                Spinner(size: 12)
+                Text("Looking for what’s on your Mac…")
+            }
+            .foregroundStyle(.secondary)
+        } else if morePlans.isEmpty {
             Text("Every plan \(AppInfo.name) signs in to is on the list already.")
                 .foregroundStyle(.secondary)
         }

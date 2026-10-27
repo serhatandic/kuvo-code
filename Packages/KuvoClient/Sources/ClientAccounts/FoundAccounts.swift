@@ -126,7 +126,7 @@ public enum Plans {
         case "grok-cli": "SuperGrok or X Premium"
         case "antigravity": "A Google AI plan"
         case "github-copilot": "A Copilot plan"
-        case "gitlab": "GitLab Duo"
+        case "gitlab": "A GitLab Duo plan"
         case "poe": "A Poe subscription"
         case "opencode": "OpenCode Zen or Go"
         default: "A plan"
