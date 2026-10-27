@@ -65,10 +65,27 @@ public struct WhatsNew: Decodable, Equatable, Sendable {
         return try? JSONDecoder().decode(WhatsNew.self, from: data)
     }
 
-    /// The release this copy is: its own version's, or what's Unreleased for a beta (named once
-    /// it's released) and a build made before it's named.
+    /// The release this copy is: its own version's; what's Unreleased for a beta or a build made
+    /// before its version is named; or, for one with nothing to tell (a fix after a release), the
+    /// newest one before it, so updating past a release still shows what it brought.
     public func release(of version: String) -> Release? {
-        releases.first { $0.version == version } ?? releases.first { $0.version == "Unreleased" }
+        if let own = releases.first(where: { $0.version == version }) { return own }
+        let named = releases.filter { $0.version != "Unreleased" }
+        if let unreleased = releases.first(where: { $0.version == "Unreleased" }), named.allSatisfy({ Self.order($0.version, version) == .orderedAscending }) {
+            return unreleased
+        }
+        return named.first { Self.order($0.version, version) != .orderedDescending }
+    }
+
+    /// Two versions in order, by their numbers ("0.10.0" after "0.9.2"; "0.9.0-beta.1" as 0.9.0).
+    static func order(_ a: String, _ b: String) -> ComparisonResult {
+        let numbers = { (version: String) in version.split(whereSeparator: { !$0.isNumber && $0 != "." }).first.map { $0.split(separator: ".").compactMap { Int($0) } } ?? [] }
+        let (x, y) = (numbers(a), numbers(b))
+        for index in 0..<max(x.count, y.count) {
+            let (p, q) = (index < x.count ? x[index] : 0, index < y.count ? y[index] : 0)
+            if p != q { return p < q ? .orderedAscending : .orderedDescending }
+        }
+        return .orderedSame
     }
 
     /// The newest release that has highlights, for Help › What's New after its own has none.
@@ -162,9 +179,13 @@ public final class NewsMemory: @unchecked Sendable {
 @MainActor @Observable
 public final class NewMarks {
     public let news: WhatsNew?
-    @ObservationIgnored private let memory: NewsMemory
+    /// Where they're kept; the sheet's memory too.
+    @ObservationIgnored public let memory: NewsMemory
     /// What's been used, kept here too so a view showing a mark hears when it goes.
     private var used: Set<String>
+    /// Whether each mark still shows this time the app is open, once asked (not each time a list
+    /// is drawn).
+    @ObservationIgnored private var showing: [String: Bool] = [:]
 
     public init(news: WhatsNew?, memory: NewsMemory) {
         self.news = news
@@ -174,7 +195,11 @@ public final class NewMarks {
 
     /// Whether `mark` shows "New".
     public func isNew(_ mark: String) -> Bool {
-        !used.contains(mark) && memory.isNew(mark, in: news)
+        guard !used.contains(mark) else { return false }
+        if let known = showing[mark] { return known }
+        let isNew = memory.isNew(mark, in: news)
+        showing[mark] = isNew
+        return isNew
     }
 
     /// `mark` was used: its "New" goes.

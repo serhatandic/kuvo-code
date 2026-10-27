@@ -68,7 +68,9 @@ jobs:
           ../../scripts/route-shapes.sh --check
 
       - name: Check What's New is what CHANGELOG.md says
-        run: python3 scripts/whats-new.py --check
+        run: |
+          python3 scripts/whats-new.py --check
+          python3 -m unittest discover -s scripts -p test_whats_new.py
 
       - name: Test KuvoLink and the machines' bridge
         working-directory: Packages/KuvoLink

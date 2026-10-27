@@ -116,16 +116,23 @@ final class AppModel {
     func whatsNewAfterLaunch() {
         guard !lookedForWhatsNew, !AppInfo.isHostingTests else { return }
         lookedForWhatsNew = true
-        whatsNew = NewsMemory().afterLaunch(newMarks.news, version: AppInfo.version, ranBefore: !Analytics.shared.isFirstLaunch)
+        // Not over a demo, a test or a measurement, which never ask to be shown it.
+        let scripted = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KUVO_DEMO_") || $0.hasPrefix("KUVO_PERF_") || $0 == "KUVO_E2E" }
+        let shown = newMarks.memory.afterLaunch(newMarks.news, version: AppInfo.version, ranBefore: !Analytics.shared.isFirstLaunch)
+        if !scripted { whatsNew = shown }
         #if DEBUG
         // KUVO_DEMO_WHATS_NEW: the sheet, for a look at it.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_WHATS_NEW"] != nil { whatsNew = newMarks.news?.latestHighlights }
         #endif
     }
 
-    /// Help › What's New: this release's highlights, or the last ones a release had.
+    /// Help › What's New: this release's highlights, or the last ones a release had; every
+    /// release's notes, for a copy that carries none.
     func showWhatsNew() {
-        guard let news = newMarks.news, let release = news.release(of: AppInfo.version).flatMap({ $0.highlights.isEmpty ? nil : $0 }) ?? news.latestHighlights else { return }
+        guard let news = newMarks.news, let release = news.release(of: AppInfo.version).flatMap({ $0.highlights.isEmpty ? nil : $0 }) ?? news.latestHighlights else {
+            NSWorkspace.shared.open(AppInfo.releases)
+            return
+        }
         openMainWindow?()
         NSApp.activate()
         whatsNew = release

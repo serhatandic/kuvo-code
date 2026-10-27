@@ -53,6 +53,20 @@ struct WhatsNewTests {
         #expect(quiet.latestHighlights?.version == "0.9.0")
     }
 
+    @Test func updatingPastAReleaseToAFixAfterItStillShowsWhatItBrought() {
+        let memory = memory()
+        _ = memory.afterLaunch(news, version: "0.7.2", ranBefore: true)
+        // 0.9.1 tells nothing of its own (it isn't in the file): 0.9.0's, which you skipped.
+        #expect(memory.afterLaunch(news, version: "0.9.1", ranBefore: true)?.version == "0.9.0")
+        // Never one from after this copy.
+        #expect(news.release(of: "0.8.5")?.version == "0.8.0")
+        #expect(news.release(of: "0.7.0") == nil)
+        // A beta of the next one (its section still Unreleased): what's Unreleased.
+        let next = WhatsNew(releases: [.init(version: "Unreleased", highlights: [.init(title: "Next", line: "", symbol: "star")])] + news.releases)
+        #expect(next.release(of: "0.10.0-beta.1")?.version == "Unreleased")
+        #expect(next.release(of: "0.9.0")?.version == "0.9.0")
+    }
+
     @Test func aMarkStaysUntilUsed() {
         let memory = memory()
         _ = memory.afterLaunch(news, version: "0.9.0", ranBefore: true)
