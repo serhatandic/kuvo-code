@@ -94,6 +94,22 @@ enum PanelHeightBridge {
     }
 }
 
+/// Fork addition: moves the panel for a part of the dashboard opening (`opening` points tall) and
+/// another folding (`closing`). It returns the height of the rest of the dashboard's scroll content,
+/// so the parts can show only what the window has made room for, laid out with it; or nil where the
+/// panel can't move by as much (at its tallest), and they fold on their own. `done` once it's moved.
+struct PanelHeightChange {
+    let move: (_ opening: CGFloat, _ closing: CGFloat, _ done: @escaping () -> Void) -> CGFloat?
+
+    func callAsFunction(opening: CGFloat, closing: CGFloat, done: @escaping () -> Void) -> CGFloat? {
+        move(opening, closing, done)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var panelHeightChange = PanelHeightChange { _, _, _ in nil }
+}
+
 extension View {
     /// Make this view's enclosing menu-bar panel follow `height` on SwiftUI's animation clock. Attach
     /// at the body root, outside any `.animation(nil, …)` scope, so the height rides the active spring.

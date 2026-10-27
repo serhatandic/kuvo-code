@@ -87,9 +87,11 @@ final class PanelHeightController {
         }
         let height = clampedHeight(rawHeight)
         guard abs(panel.frame.height - height) > 1 else { return }
+        // Drawn with its new frame at once: left to the next display, the first frame of a fold
+        // now and then showed the old content a few points down from the panel's top.
         panel.setFrame(
             PanelGeometry.frame(topLeft: anchorTopLeft, width: Self.panelWidth, height: height),
-            display: false
+            display: true
         )
         isMorphing = true
         scheduleMorphSettle()

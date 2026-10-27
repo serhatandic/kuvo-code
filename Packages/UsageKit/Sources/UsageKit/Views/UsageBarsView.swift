@@ -47,6 +47,13 @@ struct UsageBarsView: View {
     @Binding var reorderLift: ReorderLift?
     /// The provider whose full card is open under its bar.
     @State private var expanded: String?
+    /// A card opening or folding with the panel: until the panel's done moving, the cards show
+    /// only as much as the window has room for yet.
+    @State private var fold: Fold?
+    /// How tall each card is, all of it shown.
+    @State private var detailHeights: [String: CGFloat] = [:]
+    @Environment(\.panelHeightChange) private var panelHeightChange
+    @Environment(\.popoverIsVisible) private var popoverIsVisible
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -62,15 +69,18 @@ struct UsageBarsView: View {
                         notice: dataStore.headerNotice(for: group.provider.id),
                         isExpanded: expanded == group.id
                     )
-                    .onTapGesture {
-                        withAnimation(Motion.spring) { expanded = expanded == group.id ? nil : group.id }
-                    }
+                    .onTapGesture { toggle(group.id) }
                     .contextMenu { menu(for: group) }
-                    if expanded == group.id {
-                        // Cut at the panel's edge as it closes, never sliding away ahead of it;
-                        // the space above it folds with it.
-                        ProviderBarDetail(group: group)
-                            .padding(.vertical, 4)
+                    if expanded == group.id || fold?.closing == group.id {
+                        // As tall as the panel has made room for, laid out with the window's own
+                        // height, so the bars below never run under the footer or past the
+                        // window's edge, however the window keeps up; cut at its bottom edge. The
+                        // space above it folds with it.
+                        detail(group)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured(group.id, $0) }
+                            .containerRelativeFrame(.vertical, alignment: .top) { length, _ in shown(group.id, in: length) }
+                            .clipped()
                             .transition(.fold)
                     }
                 }
@@ -78,18 +88,94 @@ struct UsageBarsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(Motion.spring, value: layout.displayGroups.map(\.provider.id))
+        // A fold the panel closed on is over: the card is open or not, as it was going.
+        .onChange(of: popoverIsVisible) { _, isVisible in
+            if !isVisible { fold = nil }
+        }
+        // Nor one whose bar went, or the panel moving to another page.
+        .onChange(of: layout.displayGroups.map(\.id)) { _, ids in
+            if let fold, ![fold.opening, fold.closing].compactMap({ $0 }).allSatisfy(ids.contains) { self.fold = nil }
+        }
+        .onChange(of: layout.screen) { fold = nil }
         #if DEBUG
-        .task {
+        .task(id: popoverIsVisible) {
             // KUVO_DEMO_FOLDS=<seconds>: the first bar's detail opens and folds eight times, to
-            // watch the fold with no one clicking.
-            guard let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
+            // watch the fold with no one clicking, once the panel shows.
+            guard popoverIsVisible, let wait = ProcessInfo.processInfo.environment["KUVO_DEMO_FOLDS"].flatMap(Double.init) else { return }
             for _ in 0..<8 {
                 try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled else { return }
                 guard let first = layout.displayGroups.first?.id else { continue }
-                withAnimation(Motion.spring) { expanded = expanded == nil ? first : nil }
+                toggle(first)
             }
         }
         #endif
+    }
+
+    private func detail(_ group: ProviderGroup) -> some View {
+        ProviderBarDetail(group: group)
+            .padding(.vertical, 4)
+    }
+
+    /// A card opening (`opening`), folding (`closing`), or one for the other, with the panel; once
+    /// the panel's moving, how tall each is and `base`, the height of everything in the panel's
+    /// scroll view but them.
+    private struct Fold {
+        var opening: String?
+        var closing: String?
+        var openingHeight: CGFloat = 0
+        var closingHeight: CGFloat = 0
+        var base: CGFloat?
+    }
+
+    /// Opens a provider's card, or folds it, with the panel. A card that opens is laid out first
+    /// with no room, to learn how tall it is; then the panel grows by as much.
+    private func toggle(_ id: String) {
+        guard fold == nil else { return }
+        if expanded == id {
+            fold = Fold(closing: id)
+            expanded = nil
+            move()
+        } else {
+            fold = Fold(opening: id, closing: expanded)
+            expanded = id
+            if detailHeights[id] != nil { move() }
+        }
+    }
+
+    private func measured(_ id: String, _ height: CGFloat) {
+        let isNew = detailHeights[id] == nil
+        detailHeights[id] = height
+        if isNew, fold?.opening == id, fold?.base == nil { move() }
+    }
+
+    /// Moves the panel by the fold, or, where it can't move by as much (at its tallest), folds the
+    /// card on its own.
+    private func move() {
+        guard var fold else { return }
+        fold.openingHeight = fold.opening.flatMap { detailHeights[$0] } ?? 0
+        fold.closingHeight = fold.closing.flatMap { detailHeights[$0] } ?? 0
+        if let base = panelHeightChange(opening: fold.openingHeight, closing: fold.closingHeight, done: { self.fold = nil }) {
+            fold.base = base
+            self.fold = fold
+        } else {
+            withAnimation(Motion.spring) { self.fold = nil }
+        }
+    }
+
+    /// How much of a card shows, in a scroll view `length` tall.
+    private func shown(_ id: String, in length: CGFloat) -> CGFloat {
+        let natural = detailHeights[id] ?? 0
+        guard let fold else { return natural }
+        guard let base = fold.base else { return fold.opening == id ? 0 : natural }
+        let room = max(0, length - base)
+        let opening = fold.openingHeight, closing = fold.closingHeight
+        if fold.opening != nil, fold.closing != nil, opening != closing {
+            // One opens as the other folds: shared out as far along as the panel is.
+            let along = min(1, max(0, (room - closing) / (opening - closing)))
+            return id == fold.opening ? along * opening : (1 - along) * closing
+        }
+        return min(id == fold.opening ? opening : closing, room)
     }
 
     /// The limit the bar shows, or the provider's first reading of any kind when it has no

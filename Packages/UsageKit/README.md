@@ -46,7 +46,9 @@ here.
 - **A Bars style for the dashboard**, the default (`Views/UsageBarsView.swift`): one compact bar
   per provider in a pastel of its brand color, in the system's type with lining digits, showing the limit closest to running out, and today's spend
   as one bar on top, the bars concentric with the panel's corners. Clicking a bar opens every metric underneath in the same style
-  (`Views/UsageBarDetail.swift`), not the card, folding open and closed with the panel (`FoldTransition` in `Support/Animations.swift`).
+  (`Views/UsageBarDetail.swift`), not the card. It folds open and closed with the panel: laid out with the window's own height while the
+  panel moves, so the bars below never run under the footer (`Fold` in `UsageBarsView`, `PanelHeightChange`), and the panel is drawn
+  with each new frame (`PanelHeightController`).
   Settings › Style switches back to the cards.
 - **Only the host's accounts** (`Stores/ProviderAvailability.swift`): the panel follows the providers whose accounts are connected in
   Kuvo Code (`HostAccounts.setConnectedProviders`), turning on newly connected ones, and leaves out tools signed in elsewhere on the
