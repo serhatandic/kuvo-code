@@ -77,6 +77,7 @@ test("a Mac with agents and an opencode of its own: each is offered for what it 
     { id: "openrouter", name: "OpenRouter", methods: [], connections: [credential] },
     { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [] },
     { id: "openai", name: "OpenAI", methods: [], connections: [{ type: "env", name: "OPENAI_API_KEY" }] },
+    { id: "gitlab", name: "GitLab Duo", methods: [], connections: [{ type: "oauth", label: "GitLab", method: "oauth", status: { status: "connected" } }] },
   ]);
   const authFile = opencode({
     anthropic: { type: "api", key: "sk-ant-1" },
@@ -100,13 +101,15 @@ test("a Mac with agents and an opencode of its own: each is offered for what it 
     { id: "opencode:openrouter", integrationID: "openrouter", name: "OpenRouter", kind: "key", connected: true },
   ]);
   expect(what.shell).toEqual([{ integrationID: "openai", name: "OpenAI", variable: "OPENAI_API_KEY" }]);
+  // Signed in to through the engine already (a key, a plan): a key in the shell isn't a sign-in.
+  expect(what.connected).toEqual(["openrouter", "gitlab"]);
   // No key leaves the box.
   expect(JSON.stringify(what)).not.toContain("sk-");
 });
 
 test("a fresh computer: nothing to bring over, and nothing fails", async () => {
   const what = await found({ engine: await serve([]), bridge: await serve([]), authFile: join(root, "none.json") });
-  expect(what).toEqual({ agents: [], opencode: [], shell: [] });
+  expect(what).toEqual({ agents: [], opencode: [], shell: [], connected: [] });
 });
 
 test("with the engine and the agents not running yet, opencode's keys are still listed", async () => {

@@ -115,9 +115,7 @@ final class OutsideAgents {
     static let autoProvider = "auto"
 
     /// The agent's own provider, without the account: "claude-code" for "claude-code@1f2e3d4c".
-    static func base(_ providerID: String) -> String {
-        providerID.split(separator: "@", maxSplits: 1).first.map(String.init) ?? providerID
-    }
+    static func base(_ providerID: String) -> String { Plans.base(providerID) }
 
     /// The account part of an added account's provider, if it is one.
     static func account(_ providerID: String) -> String? {

@@ -8219,7 +8219,8 @@ async function found({ engine, bridge, authFile = readFrom() }, signal) {
     return { id: `opencode:${entry.integrationID}`, integrationID: entry.integrationID, name: known?.name ?? entry.integrationID, kind: entry.kind, connected: (known?.connections.length ?? 0) > 0 };
   });
   const shell = engineList.flatMap((integration) => integration.connections.filter((connection) => connection.type === "env" && typeof connection.name === "string" && connection.name).map((connection) => ({ integrationID: integration.id, name: integration.name, variable: connection.name })));
-  return { agents, opencode, shell };
+  const connected = engineList.filter((integration) => integration.connections.some((connection) => connection.type !== "env")).map((integration) => integration.id);
+  return { agents, opencode, shell, connected };
 }
 async function useFound(id, { engine, authFile = readFrom() }, signal) {
   const entry = id.startsWith("opencode:") ? readOpencode(authFile).find((each) => `opencode:${each.integrationID}` === id) : undefined;
@@ -8726,7 +8727,7 @@ import fs43 from "node:fs";
 import path43 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.90";
+var BRIDGE_VERSION = "0.9.91";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

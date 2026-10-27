@@ -9,11 +9,25 @@ public struct Found: Decodable, Equatable, Sendable {
     public var agents: [Agent]
     public var opencode: [Opencode]
     public var shell: [Shell]
+    /// The engine's providers signed in to already (a plan, a key), by integration.
+    public var connected: [String]
 
-    public init(agents: [Agent], opencode: [Opencode], shell: [Shell]) {
+    public init(agents: [Agent], opencode: [Opencode], shell: [Shell], connected: [String] = []) {
         self.agents = agents
         self.opencode = opencode
         self.shell = shell
+        self.connected = connected
+    }
+
+    private enum CodingKeys: String, CodingKey { case agents, opencode, shell, connected }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agents = try c.decode([Agent].self, forKey: .agents)
+        opencode = try c.decode([Opencode].self, forKey: .opencode)
+        shell = try c.decode([Shell].self, forKey: .shell)
+        // A box from before bridge 0.9.91 doesn't say.
+        connected = try c.decodeIfPresent([String].self, forKey: .connected) ?? []
     }
 
     public struct Agent: Decodable, Equatable, Sendable {
@@ -78,7 +92,8 @@ public enum Plans {
     public static let ownPrograms: Set = ["claude-code", "codex-cli", "grok-cli"]
 
     /// The engine's provider whose plan an agent signs in to, by agent: ChatGPT's plan is used
-    /// through Codex, Claude's through Claude Code. One provider is one row, the agent's.
+    /// through Codex, Claude's through Claude Code. One way to sign in to a plan, the agent's (a
+    /// key for the provider is something else, and stays one).
     public static let providers = ["claude-code": "anthropic", "codex-cli": "openai", "grok-cli": "xai", "antigravity": "google"]
 
     /// The agent that signs in to `provider`'s plan, if one does.
@@ -120,8 +135,8 @@ public enum Plans {
 }
 
 /// The rows of "Bring your subscriptions", from what was found: each with the one thing it needs.
-/// Plans first, one row a provider (a plan wins over its provider's sign-in or key); keys found on
-/// the computer apart, offered on demand; and the plans not shown, to add another.
+/// Plans first, one way to sign in to each (an agent's plan wins over opencode's sign-in to it); keys
+/// found on the computer apart, offered on demand; and the plans not shown, to add another.
 public struct Offers: Equatable, Sendable {
     public struct Row: Equatable, Identifiable, Sendable {
         public enum Action: Equatable, Sendable {
@@ -143,23 +158,18 @@ public struct Offers: Equatable, Sendable {
         public var name: String
         public var detail: String
         public var action: Action
-
-        /// It works now, or comes over with one tap.
-        public var isYours: Bool {
-            switch action {
-            case .ready, .added, .use: true
-            case .signIn, .install: false
-            }
-        }
     }
 
     /// The coding agents the model picker lists (and Claude Code and Codex, to install), then the
     /// plans the engine signs in to that you have, and GitHub Copilot.
     public var plans: [Row] = []
-    /// API keys found on the computer (opencode's, the shell's) for providers no plan covers.
+    /// API keys found on the computer (opencode's, the shell's).
     public var keys: [Row] = []
     /// The plans not in `plans`, to add another.
     public var more: [Row] = []
+    /// The coding agents haven't been listed yet (their bridge is starting): none is offered, nor
+    /// installed again, until they are.
+    public var agentsPending = false
 
     public init(found: Found?, used: Set<String> = []) {
         guard let found else { return }
@@ -168,7 +178,8 @@ public struct Offers: Equatable, Sendable {
             let detail = item.kind == .key ? "API key" : item.connected ? "Signed in" : "Sign in again to use it here"
             return Row(id: item.id, integrationID: item.integrationID, name: item.name, detail: detail, action: action)
         }
-        for id in Plans.agents {
+        agentsPending = found.agents.isEmpty
+        for id in Plans.agents where !agentsPending {
             let accounts = found.agents.filter { Plans.base($0.id) == id }
             let own = accounts.first { $0.id == id }
             let name = own?.name ?? accounts.first?.name ?? Self.names[id] ?? id
@@ -184,27 +195,27 @@ public struct Offers: Equatable, Sendable {
         }
         let opencode = Dictionary(found.opencode.map { ($0.integrationID, $0) }, uniquingKeysWith: { first, _ in first })
         for id in Plans.engine {
-            if let item = opencode[id] {
+            if found.connected.contains(id) {
+                plans.append(Row(id: id, integrationID: id, name: opencode[id]?.name ?? Self.names[id] ?? id, detail: "Signed in", action: .ready))
+            } else if let item = opencode[id] {
                 plans.append(opencodeRow(item))
             } else {
                 let row = Row(id: id, integrationID: id, name: Self.names[id] ?? id, detail: Plans.plan(id), action: .signIn(integrationID: id))
                 if id == "github-copilot" { plans.append(row) } else { more.append(row) }
             }
         }
-        // The rest of opencode's: its keys apart, a sign-in with the plans. A provider a plan covers
-        // (ChatGPT's sign-in, an OpenAI key: Codex) is that plan's row, already there.
-        let covered = Set(Plans.providers.values).union(Plans.engine)
-        for item in found.opencode where !covered.contains(item.integrationID) {
-            if item.kind == .key { keys.append(opencodeRow(item)) } else { plans.append(opencodeRow(item)) }
+        // The rest of opencode's: its keys apart, a sign-in with the plans. Never two ways to sign in
+        // to one plan: opencode's sign-in to a plan an agent signs in to (ChatGPT's, Codex's) is
+        // that agent's row. A key is a key, even for a provider a plan covers.
+        let covered = Set(Plans.providers.values)
+        for item in found.opencode where !Plans.engine.contains(item.integrationID) {
+            if item.kind == .key { keys.append(opencodeRow(item)) } else if !covered.contains(item.integrationID) { plans.append(opencodeRow(item)) }
         }
-        // A key in the shell the engine uses already, unless opencode has that provider too.
-        for key in found.shell where !covered.contains(key.integrationID) && opencode[key.integrationID] == nil {
+        // A key in the shell the engine uses already, unless opencode has a key for it too.
+        for key in found.shell where !Plans.engine.contains(key.integrationID) && opencode[key.integrationID]?.kind != .key {
             keys.append(Row(id: "shell:" + key.variable, integrationID: key.integrationID, name: key.name, detail: "From \(key.variable) in your shell", action: .ready))
         }
     }
-
-    /// Something works already, or can be brought over with one tap.
-    public var hasSomething: Bool { (plans + keys).contains(where: \.isYours) }
 
     /// The plans' names before the box has listed them.
     private static let names = ["claude-code": "Claude Code", "codex-cli": "Codex", "cursor": "Cursor", "grok-cli": "Grok", "antigravity": "Antigravity",

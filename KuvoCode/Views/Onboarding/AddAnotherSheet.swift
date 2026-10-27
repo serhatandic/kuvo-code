@@ -11,6 +11,8 @@ struct AddAnotherSheet: View {
 
     @State var tab: Tab
     let offers: Offers
+    /// Why a key couldn't come over.
+    let failure: String?
     /// A row's action, as the step does it; `signIn` opens a sign-in in this sheet.
     let perform: (_ row: Offers.Row, _ signIn: @escaping (String) -> Void) -> Void
     let isBusy: (Offers.Row) -> Bool
@@ -19,7 +21,11 @@ struct AddAnotherSheet: View {
     let done: () -> Void
 
     @Environment(Catalog.self) private var catalog
+    /// A sign-in open in the sheet; `keysOnly`: from API Keys, its key only.
     @State private var connecting: String?
+    @State private var keysOnly = false
+    /// The plans the sheet opened with, by id: one signed in to here stays, saying so.
+    @State private var shown: [String]?
     @State private var search = ""
 
     var body: some View {
@@ -27,7 +33,7 @@ struct AddAnotherSheet: View {
             ConnectView(integrationID: connecting, onDone: {
                 self.connecting = nil
                 changed()
-            }, onCancel: { self.connecting = nil })
+            }, onCancel: { self.connecting = nil }, keysOnly: keysOnly)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Add Another")
@@ -49,6 +55,11 @@ struct AddAnotherSheet: View {
                     .padding(.vertical, 2)
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                if let failure {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Spacer()
                     Button("Done", action: done)
@@ -57,30 +68,54 @@ struct AddAnotherSheet: View {
                 }
             }
             .padding(20)
+            .onAppear { if shown == nil { shown = offers.more.map(\.id) } }
         }
     }
 
+    /// The plans to add: the ones it opened with, as they are now.
+    private var morePlans: [Offers.Row] {
+        let all = offers.more + offers.plans
+        return (shown ?? offers.more.map(\.id)).compactMap { id in all.first { $0.id == id } }
+    }
+
     @ViewBuilder private var plans: some View {
-        if offers.more.isEmpty {
-            Text("You have every plan \(AppInfo.name) signs in to.")
+        if morePlans.isEmpty {
+            Text("Every plan \(AppInfo.name) signs in to is on the list already.")
                 .foregroundStyle(.secondary)
         }
-        ForEach(offers.more) { row in
-            OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { connecting = $0 } }
+        ForEach(morePlans) { row in
+            OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { open($0, keysOnly: false) } }
         }
+    }
+
+    private func open(_ id: String, keysOnly: Bool) {
+        self.keysOnly = keysOnly
+        connecting = id
     }
 
     @ViewBuilder private var keys: some View {
         if !offers.keys.isEmpty {
             heading("On Your Mac")
             ForEach(offers.keys) { row in
-                OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { connecting = $0 } }
+                OfferRow(row: row, isBusy: isBusy(row)) { _ in perform(row) { open($0, keysOnly: true) } }
             }
             heading("Another Provider")
         }
         SearchField(text: $search, prompt: "Search providers")
+        if catalog.providers.isEmpty {
+            HStack(spacing: 8) {
+                Spinner(size: 12)
+                Text("Loading providers…")
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+        } else if providers.isEmpty {
+            Text("No provider matches “\(search)”.")
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+        }
         ForEach(providers) { provider in
-            Button { connecting = provider.id } label: {
+            Button { open(provider.id, keysOnly: true) } label: {
                 HStack(spacing: 10) {
                     ProviderLogo(id: provider.id, size: 18, colored: true)
                         .frame(width: 28, height: 28)
@@ -91,6 +126,7 @@ struct AddAnotherSheet: View {
                     } else {
                         Image(systemName: "chevron.right")
                             .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -101,13 +137,13 @@ struct AddAnotherSheet: View {
         }
     }
 
-    /// The engine's providers you sign in to with a key: not the ones a plan covers (the plans'
-    /// tab has those) and not the plans themselves.
+    /// The engine's providers that take an API key, not the plans themselves (a key for one a plan
+    /// covers, OpenAI's, is offered: only its sign-in is the plan's).
     private var providers: [Integration] {
-        let plans = Set(Plans.agents + Plans.engine + Plans.providers.values)
+        let plans = Set(Plans.agents + Plans.engine)
         let found = Set(offers.keys.map(\.integrationID))
         return catalog.providers
-            .filter { !plans.contains($0.id) && !found.contains($0.id) && !OutsideAgents.isAgent($0.id) && !$0.methods.isEmpty }
+            .filter { !plans.contains($0.id) && !found.contains($0.id) && !OutsideAgents.isAgent($0.id) && $0.takesKey }
             .filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -119,5 +155,12 @@ struct AddAnotherSheet: View {
             .padding(.horizontal, 4)
             .padding(.top, 6)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private extension Integration {
+    /// It can be signed in to with an API key.
+    var takesKey: Bool {
+        methods.contains { if case .key = $0 { true } else { false } }
     }
 }

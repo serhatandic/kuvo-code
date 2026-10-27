@@ -46,7 +46,8 @@ struct SubscriptionsStep: View {
             } else {
                 OnboardingPage(title: "Bring your subscriptions", detail: "Use the plans you pay for. Everything else works with free models.") {
                     VStack(alignment: .leading, spacing: 6) {
-                        heading("Your Plans")
+                        heading("Plans")
+                        if offers.agentsPending { AgentsPendingRow() }
                         ForEach(offers.plans) { row(for: $0) }
                         heading("Free")
                         FreeModelsRow()
@@ -72,14 +73,15 @@ struct SubscriptionsStep: View {
         }
         // Again once this Mac's box and its engine are up, or back: the box names what it finds as
         // the engine does, and can start a moment after it.
-        .task(id: [app.box.endpoint != nil, app.engine == .ready]) { await onboarding.look(in: box) }
+        // And once the coding agents' bridge is up: it lists them.
+        .task(id: [app.box.endpoint != nil, app.engine == .ready, app.agents.api != nil]) { await onboarding.look(in: box) }
         .sheet(item: $signingIn) { signIn in
             ConnectView(integrationID: signIn.id, onDone: { finishedSigningIn() }, onCancel: { signingIn = nil })
                 .frame(width: 480)
                 .frame(minHeight: 380)
         }
         .sheet(item: $adding, onDismiss: lookAgain) { adding in
-            AddAnotherSheet(tab: adding.tab, offers: offers, perform: perform, isBusy: isBusy, changed: lookAgain) { self.adding = nil }
+            AddAnotherSheet(tab: adding.tab, offers: offers, failure: onboarding.useFailure, perform: perform, isBusy: isBusy, changed: lookAgain) { self.adding = nil }
                 .frame(width: 480)
                 .frame(minHeight: 420, maxHeight: 560)
         }
@@ -171,6 +173,19 @@ struct SubscriptionsStep: View {
         Task {
             await catalog.refreshAgents(fresh: true)
             await onboarding.look(in: box)
+        }
+    }
+}
+
+/// The coding agents, while their bridge starts: looked for again once it's up.
+private struct AgentsPendingRow: View {
+    var body: some View {
+        OnboardingRow(title: "Coding agents", detail: "Looking for Claude Code, Codex, Cursor and the others…") {
+            Image(systemName: "terminal")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+        } trailing: {
+            Spinner(size: 12)
         }
     }
 }

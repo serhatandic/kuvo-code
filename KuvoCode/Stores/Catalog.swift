@@ -142,7 +142,8 @@ final class Catalog {
                 // An agent you don't have and haven't signed in to stays out of the way (as the first
                 // launch leaves it out).
                 if models.isEmpty, !Plans.shows(installed: account.metadata?["installed"]?.bool != false, signedIn: account.isConnected, providerID: account.id) { continue }
-                let why = models.isEmpty ? (account.isConnected ? "Its models are loading." : account.metadata?["message"]?.string ?? "Sign in to it in Settings › Accounts.") : nil
+                let installed = account.metadata?["installed"]?.bool != false
+                let why = models.isEmpty ? (account.isConnected && installed ? "Its models are loading." : account.metadata?["message"]?.string ?? "Sign in to it in Settings › Accounts.") : nil
                 var outdated: String?
                 if account.metadata?["outdated"]?.bool == true, let latest = account.metadata?["latestVersion"]?.string {
                     let installed = account.metadata?["version"]?.string.map { " \($0)" } ?? ""

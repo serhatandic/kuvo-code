@@ -738,13 +738,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     Settings › Accounts does it: that box's sign-ins and keys for that plan (`404` for one that
     isn't a plan there, an integration's server among them). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
-  - `GET kuvo/accounts/found` → `{agents, opencode, shell}`: what the computer already has, for
+  - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
     apart from Kuvo Code (its `auth.json`), each `{id, integrationID, name, kind, connected}`: a
     `key` can come over, a `signIn` is done again here (both apps renewing one refresh token would
     sign each other out), and `connected` says the engine has one for it already. `shell`: keys in
-    the shell the engine uses (`{integrationID, name, variable}`). Names only, never a key. `POST
+    the shell the engine uses (`{integrationID, name, variable}`). `connected` (from bridge 0.9.91):
+    the engine's providers signed in to already, by integration, a key in the shell aside. Names
+    only, never a key. `POST
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
     refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).

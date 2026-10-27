@@ -102,7 +102,9 @@ export async function found({ engine, bridge, authFile = readFrom() }: { engine:
   const shell = engineList.flatMap(integration => integration.connections
     .filter(connection => connection.type === "env" && typeof connection.name === "string" && connection.name)
     .map((connection): Found["shell"][number] => ({ integrationID: integration.id, name: integration.name, variable: connection.name as string })));
-  return { agents, opencode, shell };
+  // Signed in to through the engine already (a plan, a key): not a key in the shell.
+  const connected = engineList.filter(integration => integration.connections.some(connection => connection.type !== "env")).map(integration => integration.id);
+  return { agents, opencode, shell, connected };
 }
 
 /**

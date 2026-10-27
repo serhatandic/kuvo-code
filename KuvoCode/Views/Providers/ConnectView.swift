@@ -21,6 +21,9 @@ struct ConnectView: View {
     /// Leaves without connecting. When set (in a sheet), every step but the last has a Cancel
     /// beside its own buttons.
     var onCancel: (() -> Void)? = nil
+    /// Only its API key: a plan an agent signs in to (ChatGPT's) is signed in to there, never here
+    /// too (the first launch's API Keys).
+    var keysOnly = false
 
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
@@ -434,7 +437,11 @@ struct ConnectView: View {
     // MARK: Actions
 
     private var supportedMethods: [Integration.Method] {
-        integration?.offeredSignInMethods.filter(isSupported) ?? []
+        (integration?.offeredSignInMethods.filter(isSupported) ?? []).filter { method in
+            guard keysOnly else { return true }
+            if case .key = method { return true }
+            return false
+        }
     }
 
     private func chooseOnlyMethod() {

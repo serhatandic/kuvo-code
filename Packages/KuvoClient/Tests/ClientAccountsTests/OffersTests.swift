@@ -4,8 +4,8 @@ import ClientAccounts
 /// "Bring your subscriptions": which of what a computer has is offered, and how, from its box's
 /// list as `kuvo/accounts/found` answers it. The same rows on the Mac and the phone.
 @Suite struct OffersTests {
-    private func found(agents: [Found.Agent] = [], opencode: [Found.Opencode] = [], shell: [Found.Shell] = []) -> Found {
-        Found(agents: agents, opencode: opencode, shell: shell)
+    private func found(agents: [Found.Agent] = [], opencode: [Found.Opencode] = [], shell: [Found.Shell] = [], connected: [String] = []) -> Found {
+        Found(agents: agents, opencode: opencode, shell: shell, connected: connected)
     }
 
     /// The agents as the agents bridge lists them on a Mac with Codex signed in, Claude Code not
@@ -18,19 +18,21 @@ import ClientAccounts
         .init(id: "antigravity", name: "Antigravity", installed: true, signedIn: false),
     ]
 
-    @Test func aProviderAPlanCoversIsOneRowThePlans() {
-        // opencode signed in to ChatGPT and holding an OpenAI key, and OPENAI_API_KEY in the shell:
-        // all of it is Codex's, one row.
+    @Test func aPlanHasOneWayToSignInAndKeysStayKeys() {
+        // opencode signed in to ChatGPT and holding an Anthropic key, and OPENAI_API_KEY in the
+        // shell: ChatGPT's sign-in is Codex's row, and the keys are keys.
+        let anthropic = Found.Opencode(id: "opencode:anthropic", integrationID: "anthropic", name: "Anthropic", kind: .key, connected: false)
         let offers = Offers(found: found(agents: bridge, opencode: [
             .init(id: "opencode:openai", integrationID: "openai", name: "OpenAI", kind: .signIn, connected: false),
-            .init(id: "opencode:anthropic", integrationID: "anthropic", name: "Anthropic", kind: .key, connected: false),
+            anthropic,
         ], shell: [.init(integrationID: "openai", name: "OpenAI", variable: "OPENAI_API_KEY")]))
-        let everything = offers.plans + offers.keys + offers.more
-        #expect(!everything.contains { $0.name == "OpenAI" || $0.name == "Anthropic" })
+        #expect(!(offers.plans + offers.more).contains { $0.name == "OpenAI" || $0.name == "Anthropic" }, "no second way to sign in to a plan")
         #expect(offers.plans.filter { $0.integrationID == "codex-cli" }.map(\.action) == [.ready])
         #expect(offers.plans.first { $0.integrationID == "codex-cli" }?.detail == "Signed in as you@example.com · Plus")
         #expect(offers.plans.first { $0.integrationID == "claude-code" }?.action == .install(integrationID: "claude-code"))
-        #expect(offers.keys.isEmpty)
+        #expect(offers.keys.map(\.name) == ["Anthropic", "OpenAI"])
+        #expect(offers.keys.map(\.action) == [.use(anthropic), .ready])
+        #expect(offers.keys.last?.detail == "From OPENAI_API_KEY in your shell")
     }
 
     @Test func theAgentsArentTheModelPickersOnesOnly() {
@@ -42,7 +44,6 @@ import ClientAccounts
         #expect(offers.plans.first { $0.name == "Cursor" }?.detail == "A Cursor plan")
         #expect(offers.more.map(\.name) == ["Grok", "GitLab Duo", "Poe", "OpenCode"])
         #expect(offers.more.first?.action == .install(integrationID: "grok-cli"))
-        #expect(offers.hasSomething, "Codex works")
     }
 
     @Test func anAccountYouAddedWithAnAgentMakesItYours() {
@@ -69,23 +70,43 @@ import ClientAccounts
         #expect(Offers(found: found(opencode: [nvidia]), used: ["opencode:nvidia"]).keys.map(\.action) == [.added])
     }
 
-    @Test func opencodesPlanSignInsAreThePlansRows() {
+    @Test func aPlanTheEngineSignsInToIsReadyOnceSignedIn() {
+        // opencode's Copilot sign-in, to do again here; then signed in here.
         let copilot = Found.Opencode(id: "opencode:github-copilot", integrationID: "github-copilot", name: "GitHub Copilot", kind: .signIn, connected: false)
-        let offers = Offers(found: found(opencode: [copilot]))
-        let rows = offers.plans.filter { $0.integrationID == "github-copilot" }
-        #expect(rows.count == 1)
-        #expect(rows.first?.detail == "Sign in again to use it here")
-        #expect(rows.first?.action == .signIn(integrationID: "github-copilot"))
-        #expect(!offers.hasSomething)
+        let before = Offers(found: found(agents: bridge, opencode: [copilot])).plans.filter { $0.integrationID == "github-copilot" }
+        #expect(before.map(\.detail) == ["Sign in again to use it here"])
+        #expect(before.map(\.action) == [.signIn(integrationID: "github-copilot")])
+
+        let after = Offers(found: found(agents: bridge, opencode: [copilot], connected: ["github-copilot", "gitlab"]))
+        #expect(after.plans.filter { $0.integrationID == "github-copilot" }.map(\.action) == [.ready])
+        // GitLab Duo, signed in to from Add Another: on the list now, not among the others.
+        #expect(after.plans.first { $0.integrationID == "gitlab" }?.detail == "Signed in")
+        #expect(!after.more.contains { $0.integrationID == "gitlab" })
     }
 
-    @Test func aFreshComputerIsOfferedTheCommonPlans() {
-        let fresh = Offers(found: found())
-        #expect(!fresh.hasSomething)
-        #expect(fresh.plans.map(\.name) == ["Claude Code", "Codex", "GitHub Copilot"])
-        #expect(fresh.plans.map(\.action) == [.install(integrationID: "claude-code"), .install(integrationID: "codex-cli"), .signIn(integrationID: "github-copilot")])
+    @Test func aFreshMacIsOfferedTheCommonPlans() {
+        // The bridge lists every agent: none installed but the ones that come with Kuvo Code.
+        let fresh = Offers(found: found(agents: [
+            .init(id: "claude-code", name: "Claude Code", installed: false, signedIn: false),
+            .init(id: "codex-cli", name: "Codex", installed: false, signedIn: false),
+            .init(id: "cursor", name: "Cursor", installed: true, signedIn: false),
+            .init(id: "grok-cli", name: "Grok", installed: false, signedIn: false),
+            .init(id: "antigravity", name: "Antigravity", installed: false, signedIn: false),
+        ]))
+        #expect(fresh.plans.map(\.name) == ["Claude Code", "Codex", "Cursor", "GitHub Copilot"])
+        #expect(fresh.plans.map(\.action) == [.install(integrationID: "claude-code"), .install(integrationID: "codex-cli"), .signIn(integrationID: "cursor"), .signIn(integrationID: "github-copilot")])
         #expect(fresh.keys.isEmpty)
-        #expect(fresh.more.map(\.name) == ["Cursor", "Grok", "Antigravity", "GitLab Duo", "Poe", "OpenCode"])
+        #expect(fresh.more.map(\.name) == ["Grok", "Antigravity", "GitLab Duo", "Poe", "OpenCode"])
+    }
+
+    @Test func agentsNotListedYetArentOfferedToInstall() {
+        // The agents' bridge is still starting: Claude Code may well be there and signed in, so
+        // it isn't offered to install; the rest is.
+        let starting = Offers(found: found(opencode: [.init(id: "opencode:nvidia", integrationID: "nvidia", name: "Nvidia", kind: .key, connected: false)]))
+        #expect(starting.agentsPending)
+        #expect(!(starting.plans + starting.more).contains { Plans.agents.contains($0.integrationID) })
+        #expect(starting.plans.map(\.name) == ["GitHub Copilot"])
+        #expect(starting.keys.map(\.name) == ["Nvidia"])
     }
 
     @Test func notListedYetIsNotNothingFound() {
