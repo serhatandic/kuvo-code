@@ -21,12 +21,20 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 `kuvo/accounts/found` (`Found`), and the rows offered from it, each with the one thing it needs
 (`Offers`). The Mac's first launch and the phone's sheet after pairing a computer offer the same.
 
+## ClientDesign
+
+The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
+phone's copies of the Mac's design files, a piece at a time.
+
+- `FolderIcon`: a project's folder, open or closed.
+- `Color(hex:)`: a color written as 0xRRGGBB.
+
 ## What belongs here
 
 Only what both apps call, with a small public surface: rules and formatting both clients follow,
 tested here. Not:
 
-- views and text views (each app's composer field, reply renderers): AppKit and UIKit differ;
+- text views (each app's composer field, reply renderers), where AppKit and UIKit differ;
 - anything bound to an app's state, stores or settings (drafts, the site-icon cache and its
   network session);
 - what only one app uses.

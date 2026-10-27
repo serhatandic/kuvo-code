@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import SwiftUI
 
 /// Settings › Appearance, beyond light and dark: the accent color, the window's background, and

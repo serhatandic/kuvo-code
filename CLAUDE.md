@@ -164,7 +164,7 @@ When you add or change something people use:
 ### It shares the Mac's look
 
 Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws with copies of the Mac's design
-files: `KuvoCode/Design/Surfaces.swift`, `Spinner.swift`, `FolderIcon.swift`, the code block
+files: `KuvoCode/Design/Surfaces.swift`, `Spinner.swift`, the code block
 style and CodeColors (`CodeBlockStyle.swift`, `CodeHighlighter.swift`) and the shared bits of
 `Theme.swift`, in `KuvoCodeMobile/Design`. When you change one of those here, or how the
 conversation, cards, composer or sidebar look, change the phone's copy too (or tell the session
@@ -172,8 +172,10 @@ working on the phone), so the two stay one app. The same goes for the app icon: 
 `KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
 
 What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
-against from this checkout as it does OpenCodeKit. Today that's `ClientText`, the rules for what a
-message says (picture names, web links, the site a link is on); its README says what belongs there.
+against from this checkout as it does OpenCodeKit: `ClientText`, the rules for what a message says
+(picture names, web links, the site a link is on, a field's own typing), `ClientAccounts`, and
+`ClientDesign`, the look both draw with, moving there from the copies above a piece at a time. Its
+README says what belongs there.
 A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
 
 ## Upstreams stay up to date
