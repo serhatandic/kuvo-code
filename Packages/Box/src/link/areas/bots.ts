@@ -83,8 +83,6 @@ export async function* botsRoute(context: RouteContext): AsyncGenerator<AnswerPi
   const { request, info, text } = context;
   if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  // A Mac's read (`?memory=1`): with each one's job as its memory has it now.
-  const memory = /(^|[?&])memory=1(&|$)/.test(request.path.split("?")[1] ?? "");
-  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
+  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name) })) };
   return;
 }

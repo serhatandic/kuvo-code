@@ -1087,8 +1087,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     set_job tool (`{summary, details}`), and Edit Bot can change it (`PATCH` with `job`); its memory
     is its own to write as it likes. A job from before that is taken once from where it was: the
     Job section of its memory (left there as it is; its details without its line), or else what
-    Edit Bot wrote before memories kept jobs. `?memory=1` adds `memoryJob` (`{line, section}`, the
-    same job), which no released Kuvo Code asks for.
+    Edit Bot wrote before memories kept jobs.
   - A box keeps each of its bots told what it is (its instructions, from its kit's words): at once
     when it's made or changed, and otherwise when what its conversation is told now isn't what it
     would be told (new words in an update or a personality's, or words an older Mac gave it): as

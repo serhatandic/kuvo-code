@@ -1452,13 +1452,7 @@
          },
          "folder": "string",
          "project?": "string",
-         "created?": "string",
-         "memoryJob?": {
-          "object": {
-           "line": "string",
-           "section": "string"
-          }
-         }
+         "created?": "string"
         }
        }
       }
@@ -1572,13 +1566,7 @@
         },
         "folder": "string",
         "project?": "string",
-        "created?": "string",
-        "memoryJob?": {
-         "object": {
-          "line": "string",
-          "section": "string"
-         }
-        }
+        "created?": "string"
        }
       },
       "firstMessage": {
@@ -1861,13 +1849,7 @@
           },
           "folder": "string",
           "project?": "string",
-          "created?": "string",
-          "memoryJob?": {
-           "object": {
-            "line": "string",
-            "section": "string"
-           }
-          }
+          "created?": "string"
          }
         },
         "null"
@@ -1993,13 +1975,7 @@
           },
           "folder": "string",
           "project?": "string",
-          "created?": "string",
-          "memoryJob?": {
-           "object": {
-            "line": "string",
-            "section": "string"
-           }
-          }
+          "created?": "string"
          }
         },
         "null"

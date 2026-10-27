@@ -10,10 +10,8 @@ import { jobOf } from "./jobs";
 // This machine's bots, as the Mac lists them in `kuvo/bots`: each by its session, with its name,
 // look, job, personality and model as the app last described it (or as changed here), and what its
 // folder says now (paused, its next wake-up, how many things it watches, whether it runs with the
-// coding agents). One without a description or a session isn't listed. With `memory`, each also
-// with `memoryJob`, its job as its memory has it now (`{line, section}`, empty for none), left out
-// when its memory can't be read.
-export function listBots(machine?: string, { memory = false }: { memory?: boolean } = {}): ListedBot[] {
+// coding agents). One without a description or a session isn't listed.
+export function listBots(machine?: string): ListedBot[] {
   const bots: { created: string; bot: ListedBot }[] = [];
   for (const id of listOf(BOTS)) {
     const here = botHere(id);
@@ -44,8 +42,6 @@ export function listBots(machine?: string, { memory = false }: { memory?: boolea
         folder,
         project: typeof described.project === "string" ? described.project : undefined,
         created: typeof described.created === "string" ? described.created : undefined,
-        // What a Mac of an earlier version reads a machine's bots' jobs by.
-        memoryJob: memory && !IS_MAC ? { line: job.line, section: job.details } : undefined,
       },
     });
   }

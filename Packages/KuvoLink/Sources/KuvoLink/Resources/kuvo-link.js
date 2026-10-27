@@ -3143,7 +3143,7 @@ function detailsBeyond(job, details) {
 }
 
 // Packages/Box/src/link/bots/list.ts
-function listBots(machine, { memory = false } = {}) {
+function listBots(machine) {
   const bots = [];
   for (const id of listOf(BOTS)) {
     const here = botHere(id);
@@ -3170,8 +3170,7 @@ function listBots(machine, { memory = false } = {}) {
         model: isModel(described.model) ? described.model : undefined,
         folder,
         project: typeof described.project === "string" ? described.project : undefined,
-        created: typeof described.created === "string" ? described.created : undefined,
-        memoryJob: memory && !IS_MAC ? { line: job.line, section: job.details } : undefined
+        created: typeof described.created === "string" ? described.created : undefined
       }
     });
   }
@@ -4767,8 +4766,7 @@ var BOT = object({
   "model?": MODEL,
   folder: string,
   "project?": string,
-  "created?": string,
-  "memoryJob?": object({ line: string, section: string })
+  "created?": string
 });
 var BOTS2 = object({ bots: list(BOT) });
 var TEMPLATES = object({
@@ -8103,8 +8101,7 @@ async function* botsRoute(context) {
   if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
     return yield* text(405, "Read them with GET.");
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  const memory = /(^|[?&])memory=1(&|$)/.test(request.path.split("?")[1] ?? "");
-  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name, { memory }) })) };
+  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name) })) };
   return;
 }
 
@@ -8274,7 +8271,7 @@ import fs41 from "node:fs";
 import path40 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.75";
+var BRIDGE_VERSION = "0.9.76";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

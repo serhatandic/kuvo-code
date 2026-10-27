@@ -128,7 +128,7 @@ test("kuvo/bots lists the machine's described bots, each as its folder is now", 
   assert.equal((await ask(handle, "PUT", "kuvo/bots")).status, 405);
 });
 
-test("a bot's job is its record: taken once from its memory, read by a Mac of an earlier version, and never again from its memory", async () => {
+test("a bot's job is its record: taken once from its memory, and never again from its memory", async () => {
   const scout = bot("bot_scout00001");
   const memory = "# Scout's memory\n\n## Job\nWatches the nightly build.\nPosts when it breaks.\n\n## Notes\nx\n";
   write(path.join(scout, "MEMORY.md"), memory);
@@ -136,23 +136,20 @@ test("a bot's job is its record: taken once from its memory, read by a Mac of an
   const unread = bot("bot_unread0001", { name: "Unread" });
   fs.rmSync(path.join(unread, "MEMORY.md"));
   const handle = link.engineHandler(() => { throw new Error("not needed"); }, { name: "my-server" });
-  const read = await ask(handle, "GET", "kuvo/bots?memory=1");
+  const read = await ask(handle, "GET", "kuvo/bots");
   const byName = Object.fromEntries(read.json.bots.map(each => [each.name, each]));
   // (Its details without its line, which shows on its own.)
   assert.deepEqual([byName.Scout.job, byName.Scout.jobDetails], ["Watches the nightly build", "Posts when it breaks."]);
-  // What a Mac of an earlier version takes a machine's bots' jobs from.
-  assert.deepEqual(byName.Scout.memoryJob, { line: "Watches the nightly build", section: "Posts when it breaks." });
   // Without one in its memory: the job its description had (Edit Bot's, from before), kept.
-  assert.deepEqual(byName.First.memoryJob, { line: "Watches the build", section: "" });
-  assert.deepEqual(byName.Unread.memoryJob, { line: "Watches the build", section: "" });
+  assert.deepEqual([byName.First.job, byName.Unread.job], ["Watches the build", "Watches the build"]);
   // Its memory stays as it was, and its description says the job in a few words.
   assert.equal(fs.readFileSync(path.join(scout, "MEMORY.md"), "utf8"), memory);
   assert.equal(JSON.parse(fs.readFileSync(path.join(scout, "bot.json"), "utf8")).job, "Watches the nightly build");
   // From now on its memory is its own: what it writes there isn't its job.
   write(path.join(scout, "MEMORY.md"), "# Scout's memory\n\n## Job\nSomething else entirely.\n");
   assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.find(each => each.name === "Scout").job, "Watches the nightly build");
-  // A phone's list doesn't carry what a Mac reads.
-  assert.equal((await ask(handle, "GET", "kuvo/bots")).json.bots.some(each => "memoryJob" in each), false);
+  // Asked as a Mac of no released version did (`?memory=1`), it's the same list.
+  assert.equal((await ask(handle, "GET", "kuvo/bots?memory=1")).json.bots.some(each => "memoryJob" in each), false);
 });
 
 test("kuvo/wakes reads a bot's or a session's wake-ups, watches and pause", async () => {
