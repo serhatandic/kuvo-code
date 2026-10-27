@@ -1433,21 +1433,41 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
   - Event `kuvo.handoff` `{sessionID, handoff}` as it starts and ends: open `to` once it's `done`.
-- **Reviews** (`reviews`, "/review"): the conversation's changes not committed yet (its folder's
-  own, in its git: tracked files' diffs, against nothing before the first commit, and new files
-  whole; a big new file is named with its size, and links and files that aren't text are left
-  out), read by a model with none of the
-  conversation's context: on the engine, its own model afresh, or `model` when given; with the
-  coding agents, its own agent (another one you're signed in to when it can't), `model` left out.
-  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?}` → `{data: review}`,
-    `state` `reviewing`; `409` while one is under way. `focus` is what to look at especially, as
-    the user wrote it ("/review with <model> <focus>"). A review: `{id, session, state: "reviewing"
-    | "done" | "failed", model?, focus?, summary?, findings: [finding], error?, fix?, started,
-    ended?}`, its findings
-    bugs first. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit", locations:
-    [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""` when the title
-    says it all), and every place it's in, none when it's about the change as a whole (a missing
-    test). `fix` is what to send the agent, as your message, to fix them all.
+- **Reviews** (`reviews`, "/review"): what `scope` names in the conversation's folder, read by a
+  model with none of the conversation's context: on the engine, its own model afresh, or `model`
+  when given; with the coding agents, its own agent (another one you're signed in to when it
+  can't), `model` left out. A scope:
+  - `{"kind": "uncommitted"}`, the default: the changes not committed yet (the folder's own, in
+    its git: tracked files' diffs, against nothing before the first commit, and new files whole;
+    a big new file is named with its size, and links and files that aren't text are left out);
+  - `{"kind": "branch", "base"?}`: the branch's changes since it left `base` (main, master or
+    origin's HEAD when left out), with those not committed yet;
+  - `{"kind": "commits", "from", "to"?}`: what the commits after `from`, up to `to` (HEAD when
+    left out), changed, git's `from..to`;
+  - `{"kind": "folder", "path"}` and `{"kind": "project"}`: the files themselves, of a folder in
+    the project (a path inside it, never `..` or absolute: `400`) or all of it, numbered line by
+    line: those git keeps or would (all but hidden ones and `node_modules` out of a repository),
+    but for links, lock files, big files and ones that aren't text.
+
+  One too big to read at once is read in parts, one after another (at most 30; more is left out,
+  and its summary says how many files), each by a fresh model.
+  - `POST …/kuvo/reviews/<session>` with `{"model"?: {providerID, id}, "focus"?, "scope"?}` →
+    `{data: review}`, `state` `reviewing`; `409` while one is under way, `400` for a scope that
+    makes no sense. `focus` is what to look at especially, as the user wrote it ("/review with
+    <model> <focus>"), or `security`, `performance` or `accessibility`, which the box spells out
+    for the reviewer. A review: `{id, session, state: "reviewing" | "done" | "failed", model?,
+    scope?, focus?, progress?: {read, of}, summary?, findings: [finding], error?, fix?, started,
+    ended?}`, its findings bugs first; `scope` is left out for the changes not committed yet, and
+    `progress` is there while one read in parts is under way (`read` of `of` parts), its findings
+    so far in `findings`. A finding: `{id, title, explanation, severity: "bug" | "risk" | "nit",
+    locations: [{file, line?, endLine?}]}`: what's wrong in a line, why and how to fix it (`""`
+    when the title says it all), and every place it's in, none when it's about the change as a
+    whole (a missing test). `fix` is what to send the agent, as your message, to fix them all.
+  - `POST …/kuvo/reviews/<session>/measure` with `{"scope"?}` → `{data: {files, parts, leftOut}}`:
+    how much a review of it would read, to show before asking for a big one; `422` with what's
+    wrong when it can't be read (not a repository, no such commit or folder).
+  - `POST …/kuvo/reviews/<session>/stop` → `{data: review}`: one under way ends where it is,
+    `done`, keeping what it found so far (its summary says how far it got); `409` once it's over.
   - `POST …/kuvo/reviews/<session>/fix` with `{"findings"?: [id]}` → `{data: {text}}`: what to send
     an agent, as your message, to fix them all or those it names, wherever you send it (this
     conversation, a new one, another); `404` when the review found nothing, or none of them is

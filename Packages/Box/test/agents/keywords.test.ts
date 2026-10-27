@@ -9,7 +9,7 @@ import type { GoalPlaces } from "../../src/agents/goals"
 import { server } from "../../src/agents/groups/api"
 import { handoffMarker, handoffRoutes, Handoffs } from "../../src/agents/handoff"
 import { run } from "../../src/agents/proc"
-import { gitChanges, reviewRoutes, Reviews } from "../../src/agents/reviews"
+import { gitChanges, readScope, reviewRoutes, Reviews } from "../../src/agents/reviews"
 import type { ServerEvent } from "../../src/agents/wire"
 import { StandIn } from "./support/standin"
 
@@ -353,6 +353,50 @@ describe("a review with fresh eyes", () => {
     expect(bug.id).toBeTruthy()
   })
 
+  test("a scope: the branch, commits, a folder or the whole project, read in parts with progress", async () => {
+    const asked: any[] = []
+    const reviews = new Reviews(join(root, "reviews.json"), places(), async (_directory, scope) => {
+      asked.push(scope)
+      return scope.kind === "project" ? ["=== a.ts ===\n1  one", "=== b.ts ===\n1  two", "=== c.ts ===\n1  three"] : "+x\n"
+    })
+    reviews.onEnded = beat
+    const progress: string[] = []
+    const seen = events.length
+    engine.answers = [
+      `{"summary": "Part one.", "findings": [{"title": "Secret in a.ts", "explanation": "", "severity": "bug", "locations": [{"file": "a.ts", "line": 1}]}]}`,
+      `{"summary": "Part two.", "findings": []}`,
+      `{"summary": "Part three.", "findings": [{"title": "Slow loop in c.ts", "explanation": "", "severity": "nit", "locations": []}]}`,
+    ]
+    const route = (body: any) => reviewRoutes(reviews, "POST", ["ses_work"], async () => body)
+    expect((await route({ scope: { kind: "project" }, focus: "security" })).status).toBe(200)
+    await until(() => reviews.get("ses_work")?.state === "done")
+    const review = reviews.get("ses_work")!
+    expect(asked).toEqual([{ kind: "project" }])
+    expect(review.scope).toEqual({ kind: "project" })
+    // Each part read apart, the reviewer told which, what to look for in plain words.
+    expect(engine.checks.map((check) => check.prompt.match(/part (\d) of 3/)?.[1])).toEqual(["1", "2", "3"])
+    expect(engine.checks[0].prompt).toContain("secrets")
+    // Its findings, all together, bugs first; how far along it was, as it went.
+    expect(review.findings.map((each) => each.title)).toEqual(["Secret in a.ts", "Slow loop in c.ts"])
+    for (const event of events.slice(seen)) {
+      const told = (event.data as any)?.review?.progress
+      if (event.type === "kuvo.review.updated" && told) progress.push(`${told.read}/${told.of}`)
+    }
+    expect(progress).toEqual(["0/3", "1/3", "2/3", "3/3"])
+
+    // The branch against its base, and a range of commits, go as they're asked.
+    for (const scope of [{ kind: "branch", base: "main" }, { kind: "commits", from: "abc123", to: "def456" }, { kind: "folder", path: "src/auth" }]) {
+      engine.answers = [`{"summary": "Fine.", "findings": []}`]
+      expect((await route({ scope })).status).toBe(200)
+      await until(() => reviews.get("ses_work")?.state === "done")
+      expect(asked.at(-1)).toEqual(scope)
+    }
+    // One that makes no sense is refused, saying why.
+    expect((await route({ scope: { kind: "folder", path: "../outside" } })).status).toBe(400)
+    expect((await route({ scope: { kind: "commits" } })).status).toBe(400)
+    expect((await route({ scope: { kind: "everything" } })).status).toBe(400)
+  })
+
   test("read by the model you pick, looking where you say", async () => {
     const reviews = new Reviews(join(root, "reviews.json"), places(), changes("+  setTimeout(tick, 1000)\n"))
     reviews.onEnded = beat
@@ -435,6 +479,97 @@ describe("a review with fresh eyes", () => {
 
   test("a folder that isn't a repository says so", async () => {
     await expect(gitChanges(root)).rejects.toThrow("This folder isn't a git repository")
+  })
+
+  test("reads a branch against main, a range of commits, and a folder's or the project's files from its git", async () => {
+    const folder = join(root, "work")
+    const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
+    await run("git", ["init", "-q", "-b", "main", folder])
+    mkdirSync(join(folder, "src", "auth"), { recursive: true })
+    writeFileSync(join(folder, "src", "auth", "login.ts"), "check(password)\n")
+    writeFileSync(join(folder, "README.md"), "hello\n")
+    writeFileSync(join(folder, ".gitignore"), "build/\n")
+    await git("add", "-A")
+    await git("commit", "-qm", "first")
+    const first = (await git("rev-parse", "HEAD")).stdout.trim()
+    await git("checkout", "-qb", "feature")
+    writeFileSync(join(folder, "src", "auth", "login.ts"), "check(password)\nlog(password)\n")
+    await git("commit", "-qam", "log it")
+    writeFileSync(join(folder, "README.md"), "hello\nnot committed\n")
+
+    // The branch: what it changed since main, with what isn't committed yet.
+    const branch = (await readScope(folder, { kind: "branch" })) as string
+    expect(branch).toContain("+log(password)")
+    expect(branch).toContain("+not committed")
+    // Commits: only what they changed.
+    const commits = (await readScope(folder, { kind: "commits", from: first })) as string
+    expect(commits).toContain("+log(password)")
+    expect(commits).not.toContain("not committed")
+    await expect(readScope(folder, { kind: "commits", from: "nothere" })).rejects.toThrow("There's no commit nothere here.")
+    await expect(readScope(folder, { kind: "branch", base: "nothere" })).rejects.toThrow("no commit in common")
+
+    // Files: numbered, those git ignores, lock files, links and what isn't text left out.
+    mkdirSync(join(folder, "build"))
+    writeFileSync(join(folder, "build", "out.js"), "built\n")
+    writeFileSync(join(folder, "package-lock.json"), "{}\n")
+    writeFileSync(join(folder, "icon.png"), "\0\x01binary")
+    writeFileSync(join(root, "private.txt"), "the key\n")
+    symlinkSync(join(root, "private.txt"), join(folder, "src", "linked.txt"))
+    const project = (await readScope(folder, { kind: "project" })) as string[]
+    expect(project).toHaveLength(1)
+    expect(project[0]).toContain("=== src/auth/login.ts ===\n1  check(password)\n2  log(password)\n")
+    expect(project[0]).toContain("=== README.md ===")
+    for (const out of ["built", "package-lock", "binary", "the key"]) expect(project[0]).not.toContain(out)
+    // How much it would read, before it's asked for (the branch: its two files and the new lock file).
+    engine.directory = folder
+    const reviews = new Reviews(join(root, "reviews.json"), places())
+    const measure = async (scope: any) => (await (await reviewRoutes(reviews, "POST", ["ses_work", "measure"], async () => ({ scope }))).json()).data
+    expect(await measure({ kind: "project" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
+    expect(await measure({ kind: "branch" })).toEqual({ files: 3, parts: 1, leftOut: 0 })
+    reviews.stopAll()
+    const auth = (await readScope(folder, { kind: "folder", path: "src/auth" })) as string[]
+    expect(auth.join("")).toContain("=== src/auth/login.ts ===")
+    expect(auth.join("")).not.toContain("README")
+    // Never out of the project, through a link either.
+    symlinkSync(root, join(folder, "outside"))
+    await expect(readScope(folder, { kind: "folder", path: "outside" })).rejects.toThrow("isn't in this project")
+    await expect(readScope(folder, { kind: "folder", path: "missing" })).rejects.toThrow("There's no missing in this project.")
+  })
+
+  test("a big project is read in parts, and a folder that isn't a repository still has its files read", async () => {
+    const folder = join(root, "plain")
+    mkdirSync(join(folder, "node_modules"), { recursive: true })
+    writeFileSync(join(folder, "node_modules", "dep.js"), "theirs\n")
+    for (let each = 0; each < 6; each++) writeFileSync(join(folder, `file${each}.ts`), `const line = ${each}\n`.repeat(2_000))
+    const parts = (await readScope(folder, { kind: "project" })) as string[]
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts.every((part) => part.length <= 81_000)).toBe(true)
+    const all = parts.join("")
+    for (let each = 0; each < 6; each++) expect(all).toContain(`=== file${each}.ts ===`)
+    expect(all).not.toContain("theirs")
+  })
+
+  test("stopped while it reads, it keeps what it found so far", async () => {
+    const reviews = new Reviews(join(root, "reviews.json"), places(), async () => ["=== a.ts ===\n1  one", "=== b.ts ===\n1  two"])
+    let ended = 0
+    reviews.onEnded = () => (ended++, beat())
+    engine.answers = [`{"summary": "One.", "findings": [{"title": "Leak in a.ts", "explanation": "", "severity": "risk", "locations": []}]}`, `{"summary": "Two.", "findings": [{"title": "Too late", "explanation": "", "severity": "bug", "locations": []}]}`]
+    engine.holdingChecks = true
+    await reviewRoutes(reviews, "POST", ["ses_work"], async () => ({ scope: { kind: "project" } }))
+    await until(() => engine.checks.length === 1)
+    engine.answerChecks()
+    await until(() => reviews.get("ses_work")?.progress?.read === 1 && engine.checks.length === 2)
+    const stopped = await reviewRoutes(reviews, "POST", ["ses_work", "stop"], async () => ({}))
+    expect(stopped.status).toBe(200)
+    // The part it was reading when stopped, answered after: not taken.
+    engine.answerChecks()
+    await until(() => ended === 1)
+    const review = reviews.get("ses_work")!
+    expect(review.state).toBe("done")
+    expect(review.summary).toBe("Stopped after 1 of 2 parts. It found 1 thing to fix.")
+    expect(review.findings.map((each) => each.title)).toEqual(["Leak in a.ts"])
+    expect(review.fix).toContain("Leak in a.ts")
+    expect((await reviewRoutes(reviews, "POST", ["ses_work", "stop"], async () => ({}))).status).toBe(409)
   })
 })
 
